@@ -1,6 +1,7 @@
 import type { SourceModule } from '@grantspotter/core';
 import { ardcAwardTables } from './ardc-award-tables.js';
 import { ardcGrants } from './ardc-grants.js';
+import { ARRL_PAGE_SOURCES } from './arrl-pages.js';
 import { arrlNewsRss } from './arrl-news-rss.js';
 import { arrlScholarshipDescriptions } from './arrl-scholarship-descriptions.js';
 import { manualTierD } from './manual-tier-d.js';
@@ -24,6 +25,7 @@ import { yaesuDr2x } from './yaesu-dr2x.js';
 const MODULES: SourceModule[] = [
   ardcGrants,
   ardcAwardTables,
+  ...ARRL_PAGE_SOURCES,
   arrlNewsRss,
   arrlScholarshipDescriptions,
   manualTierD,
