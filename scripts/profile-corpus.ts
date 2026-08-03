@@ -1,9 +1,9 @@
 /**
  * Corpus profiler — "what does the matcher actually tell a real applicant?"
  *
- *   npx tsx packages/core/tools/profile-corpus.ts            # all profiles, summary + per-axis
- *   npx tsx packages/core/tools/profile-corpus.ts --detail   # ...plus every excluded program by name
- *   npx tsx packages/core/tools/profile-corpus.ts ee-undergrad
+ *   npm run profile-corpus              # all profiles, summary + per-axis
+ *   npm run profile-corpus -- --detail  # ...plus every excluded program by name
+ *   npm run profile-corpus -- ee-undergrad
  *
  * Why this exists: Plan 2's whole-branch review found the matcher's worst defects not by unit
  * test but by running the REAL matcher over the REAL corpus with a plausible applicant and
@@ -11,12 +11,11 @@
  * This is that sweep, kept as a tool so the measurement can be repeated after any change to
  * matcher.ts or to any extractor in packages/server/src/normalize/axes/.
  *
- * It is a DEV TOOL, not shipped library code. It deliberately reaches into packages/server
- * (source loading, normalization) which packages/core/src may never do — spec §14 purity applies
- * to packages/core/src only, and tsconfig.build.json only compiles src/**, so nothing here can
- * leak into the published @grantspotter/core surface. Its natural long-term home is the
- * repo-root scripts/ directory next to verify-sources.ts and capture-fixture.ts; it lives here
- * only because packages/core was the territory of the task that wrote it.
+ * It is a DEV TOOL, not shipped library code. It deliberately reaches into BOTH packages —
+ * core for the matcher, server for source loading and normalization — which is exactly why it
+ * lives at the repo root next to verify-sources.ts and capture-fixture.ts rather than inside
+ * either package. spec §14 purity binds packages/core/src, which may never import node: or
+ * reach into server; nothing under scripts/ is compiled into a published package surface.
  *
  * The corpus is built OFFLINE from the committed fixtures, never from the network, so the
  * numbers are reproducible and comparing two runs is meaningful. Sources whose only committed
@@ -26,14 +25,24 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { FetchRequest, FetchedPayload, Profile, Program, StudentProfile } from '../src/index.js';
-import { matchAll } from '../src/matcher.js';
-import { contextForSource } from '../../server/src/crawl/context.js';
-import { normalizeRaw } from '../../server/src/normalize/index.js';
-import { SOURCES } from '../../server/src/sources/registry.js';
-import { hasFollowUp, isSignalSource, resolveRequests } from '../../server/src/sources/types.js';
+import type {
+  FetchRequest,
+  FetchedPayload,
+  Profile,
+  Program,
+  StudentProfile,
+} from '../packages/core/src/index.js';
+import { matchAll } from '../packages/core/src/matcher.js';
+import { contextForSource } from '../packages/server/src/crawl/context.js';
+import { normalizeRaw } from '../packages/server/src/normalize/index.js';
+import { SOURCES } from '../packages/server/src/sources/registry.js';
+import {
+  hasFollowUp,
+  isSignalSource,
+  resolveRequests,
+} from '../packages/server/src/sources/types.js';
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_ROOT = path.join(REPO_ROOT, 'fixtures');
 /** Fixed so two runs of this tool differ only by the code under test. */
 export const PROFILE_NOW_ISO = '2026-08-02T00:00:00.000Z';
