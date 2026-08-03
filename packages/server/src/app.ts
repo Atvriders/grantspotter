@@ -1,8 +1,11 @@
 import cookieParser from 'cookie-parser';
 import express, { type Express } from 'express';
+import { createAuthRouter } from './api/auth.js';
 import { errorHandler, notFoundHandler, requestIdMiddleware } from './api/errors.js';
 import { createHealthRouter } from './api/health.js';
+import { createBootstrapState, type BootstrapState } from './auth/bootstrap.js';
 import { attachUser } from './auth/middleware.js';
+import { createRateLimiter, type RateLimiter } from './auth/rateLimit.js';
 import type { AppConfig } from './config.js';
 import { createSessionRepo } from './db/repositories/sessions.js';
 import { createUserRepo } from './db/repositories/users.js';
@@ -12,6 +15,8 @@ export interface AppDeps {
   db: Db;
   config: AppConfig;
   logger?: (line: string) => void;
+  bootstrap?: BootstrapState;
+  loginLimiter?: RateLimiter;
   /**
    * The ONLY way Plans 3-5 add routes. createApp seals the app with
    * notFoundHandler(), and Express matches in registration order, so calling
@@ -48,6 +53,11 @@ export function createApp(deps: AppDeps): Express {
   );
 
   app.use('/api', createHealthRouter(deps.db));
+
+  const bootstrap = deps.bootstrap ?? createBootstrapState(deps.db);
+  const loginLimiter =
+    deps.loginLimiter ?? createRateLimiter({ windowMs: 15 * 60 * 1000, maxFailures: 5 });
+  app.use('/api', createAuthRouter({ db: deps.db, config: deps.config, bootstrap, loginLimiter }));
 
   // Everything Plans 3, 4 and 5 mount goes here, and nowhere else. The
   // callback is filled incrementally (RESOLUTIONS R25): Plan 3 Task 14
