@@ -3,6 +3,10 @@ import { ardcAwardTables } from './ardc-award-tables.js';
 import { ardcGrants } from './ardc-grants.js';
 import { ARRL_PAGE_SOURCES } from './arrl-pages.js';
 import { arrlNewsRss } from './arrl-news-rss.js';
+import { grantsGovExtract } from './grants-gov-extract.js';
+import { grantsGovFederal } from './grants-gov-federal.js';
+import { nsfAwards } from './nsf-awards.js';
+import { usaSpending } from './usaspending.js';
 import { arrlScholarshipDescriptions } from './arrl-scholarship-descriptions.js';
 import { manualTierD } from './manual-tier-d.js';
 import { nsfFundingRss } from './nsf-funding-rss.js';
@@ -33,6 +37,10 @@ const MODULES: SourceModule[] = [
   ...TIER_C_A_SOURCES,
   ...TIER_C_B_SOURCES,
   yaesuDr2x,
+  grantsGovFederal,
+  grantsGovExtract,
+  nsfAwards,
+  usaSpending,
 ];
 
 export const SOURCES: readonly SourceModule[] = MODULES;
