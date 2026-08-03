@@ -1,14 +1,18 @@
 import { evaluateGeo } from './geo.js';
 import type {
   ActivityKind,
+  ApplicantEntity,
   Citizenship,
+  Constraint,
   ConstraintSpec,
   DegreeLevel,
   LicenseClass,
   OrgProfile,
   Profile,
+  Program,
   Stage,
   StudentProfile,
+  Verdict,
 } from './types.js';
 
 export type AxisStatus = 'pass' | 'fail' | 'unknown' | 'not_evaluable';
@@ -263,4 +267,127 @@ export function evaluateConstraint(
       // Long-tail requirements no schema captures. Plan 3 renders rawText.
       return NOT_EVALUABLE;
   }
+}
+
+export const APPLICANT_ENTITY_CONSTRAINT_SUFFIX = ':applicant-entity';
+
+/**
+ * `evaluateGeo`'s `county` and `call_district` axes report their missing
+ * field as `'county'` / `'callDistrict'` regardless of profile kind, but
+ * neither name is a field on `OrgProfile` (only `StudentProfile` has them —
+ * `matcher.ts`'s `geography` case even forces both to `undefined` for
+ * non-student profiles). For an organisation, that `unknown` is therefore
+ * permanently unresolvable: the UI could never find a matching input to
+ * jump to. Known carry-forward finding from Task 8 — handled here by
+ * treating those two field names as not-evaluable (silently dropped from
+ * `missingProfileFields`) whenever the profile is an organisation, rather
+ * than letting them surface as an actionable-looking missing field.
+ */
+const ORG_UNRESOLVABLE_GEO_FIELDS = new Set(['county', 'callDistrict']);
+
+function isResolvableMissingField(profile: Profile, field: string): boolean {
+  if (isOrg(profile) && ORG_UNRESOLVABLE_GEO_FIELDS.has(field)) return false;
+  return true;
+}
+
+function applicantEntityConstraint(program: Program, applyingAs: ApplicantEntity): Constraint {
+  const accepted =
+    program.applicantEntities.length > 0
+      ? program.applicantEntities.join(', ')
+      : '(none recorded)';
+  return {
+    id: `${program.id}${APPLICANT_ENTITY_CONSTRAINT_SUFFIX}`,
+    hard: true,
+    fallbackRank: 0,
+    rawText: `This program accepts applications from: ${accepted}.`,
+    spec: {
+      axis: 'other',
+      note: `Your profile applies as "${applyingAs}", which this program does not accept.`,
+    },
+  };
+}
+
+/**
+ * Verdict precedence, most decisive first — deliberate, and each rule has a
+ * dedicated test in `matcher.test.ts`:
+ *
+ * 1. The applicant-entity gate. Wrong entity type is definite and immediate:
+ *    an RCA nominee-only program can never accept a direct student
+ *    application no matter what else is true, so this is checked before any
+ *    per-axis constraint and short-circuits everything below.
+ * 2. Any hard `fail` -> `ineligible`. A hard fail is a definite, provable
+ *    exclusion (e.g. GPA below the floor) and outranks mere uncertainty:
+ *    filling in a missing field can never undo a fact already known to be
+ *    false, so `ineligible` beats `unknown` when both are present.
+ * 3. Any hard `unknown` -> `unknown`. Nothing is definitely wrong, but the
+ *    axis can't be decided without more profile data.
+ * 4. Any soft `pass` -> `eligible_preferred`. Soft constraints never
+ *    exclude (rule stated in the brief and enforced below); they only
+ *    promote a candidate that is otherwise fully eligible.
+ * 5. Otherwise -> `eligible`.
+ *
+ * Hard `not_evaluable` is treated as a pass (it cannot block — there is no
+ * schema field to ever resolve it, e.g. `recommendation`/`other`). Soft
+ * `fail`, `unknown` and `not_evaluable` are all simply "not met": a soft
+ * `unknown` must NOT escalate the verdict to `unknown`, or every program
+ * with an unanswered preference axis would demand a profile field before
+ * showing any result at all — defeating the point of preferences being
+ * optional upside, not gates.
+ */
+export function matchProgram(
+  profile: Profile,
+  program: Program,
+  nowISO: string = new Date().toISOString(),
+): Verdict {
+  const applyingAs: ApplicantEntity = isStudent(profile) ? 'individual' : profile.entity;
+  if (!program.applicantEntities.includes(applyingAs)) {
+    return { kind: 'ineligible', reasons: [applicantEntityConstraint(program, applyingAs)] };
+  }
+
+  const hardFailures: Constraint[] = [];
+  const missingFields = new Set<string>();
+  const metPreferences: Constraint[] = [];
+
+  for (const constraint of program.constraints) {
+    // Financial need is always a weighting, never a bar (spec §4.5 rule 11),
+    // so it is forced soft whatever the record says.
+    const isSoft = !constraint.hard || constraint.spec.axis === 'financial_need';
+    const result = evaluateConstraint(constraint.spec, profile, nowISO);
+
+    if (isSoft) {
+      if (result.status === 'pass') metPreferences.push(constraint);
+      continue;
+    }
+    if (result.status === 'fail') {
+      hardFailures.push(constraint);
+    } else if (result.status === 'unknown') {
+      for (const field of result.missing) {
+        if (isResolvableMissingField(profile, field)) missingFields.add(field);
+      }
+    }
+    // 'pass' and 'not_evaluable' do not block.
+  }
+
+  if (hardFailures.length > 0) return { kind: 'ineligible', reasons: hardFailures };
+  if (missingFields.size > 0) {
+    return { kind: 'unknown', missingProfileFields: [...missingFields].sort() };
+  }
+  if (metPreferences.length > 0) {
+    return {
+      kind: 'eligible_preferred',
+      rank: Math.min(...metPreferences.map((c) => c.fallbackRank)),
+      met: metPreferences.map((c) => c.id).sort(),
+    };
+  }
+  return { kind: 'eligible' };
+}
+
+export function matchAll(
+  profile: Profile,
+  programs: Program[],
+  nowISO: string = new Date().toISOString(),
+): Map<string, Verdict> {
+  const verdicts = new Map<string, Verdict>();
+  for (const program of programs) verdicts.set(program.id, matchProgram(profile, program, nowISO));
+  return verdicts;
 }
