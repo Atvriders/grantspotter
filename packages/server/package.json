@@ -10,6 +10,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.110.0",
     "@grantspotter/core": "*",
     "@node-rs/argon2": "2.0.2",
     "better-sqlite3": "12.11.1",

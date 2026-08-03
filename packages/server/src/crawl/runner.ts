@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { ChangeEvent, FetchedPayload, Program, RawOpportunity, SourceModule } from '@grantspotter/core';
+import type { AiAssist } from '../ai/assist.js';
 import {
   ProgramUpsertConflictError,
   insertChangeEvents,
@@ -24,6 +25,14 @@ export interface CrawlDeps {
   db: Database.Database;
   fetcher: Fetcher;
   nowISO: () => string;
+  /**
+   * Spec §9, strictly optional. Undefined behaves exactly as if this task did not exist: no
+   * salvage parse, no pre-score, the crawl is byte-identical. `createAiAssist(config)` (server
+   * index.ts) already returns a disabled, no-op assist when ANTHROPIC_API_KEY is unset, so
+   * production code can pass it unconditionally — this field only needs to be omitted in tests
+   * that want the old behaviour with zero setup.
+   */
+  assist?: AiAssist;
 }
 
 export interface SourceRunResult {
@@ -99,7 +108,30 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
       }
     }
 
-    const raws: RawOpportunity[] = module.parse(payloads);
+    let raws: RawOpportunity[] = module.parse(payloads);
+
+    // SALVAGE ONLY (spec §9). The deterministic parser already ran and found nothing, on a
+    // source that expects real records — never the primary path, never a substitute for a
+    // working parser. With no ANTHROPIC_API_KEY, `deps.assist` is either undefined or an
+    // assist whose isEnabled() is false, so this branch calls nothing and `raws` stays [],
+    // exactly as if this task did not exist.
+    if (raws.length === 0 && module.expectedMinRecords > 0 && deps.assist?.isEnabled()) {
+      const html = payloads.find((p) => p.status === 200 && p.body !== '')?.body ?? '';
+      if (html !== '') {
+        raws = await deps.assist.parseAssist(html, {
+          sourceId,
+          sourceUrl: payloads[0]?.url ?? '',
+          expectedFields: [
+            'Award Amount',
+            'Number of Awards',
+            'License Requirement',
+            'Field of Study',
+            'Region',
+          ],
+        });
+      }
+    }
+
     const events: ChangeEvent[] = [];
 
     const yieldAlarm = detectYieldDrop(sourceId, raws.length, module.expectedMinRecords, now);
@@ -140,11 +172,12 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
 
       const byId = new Map<string, Program>();
       for (const program of [...previous, ...next]) byId.set(program.id, program);
-      // buildReviewItems is async (optional AI pre-scoring, spec §9): no `assist` is passed here,
-      // so it resolves without ever awaiting anything itself, but the call must still be awaited
-      // — a bare call returns a Promise, and reading `.length` off that is a type error, not just
-      // a race.
-      reviewItemCount = (await buildReviewItems(deps.db, events, byId, module.tier, sourceId)).length;
+      // deps.assist is optional (spec §9): undefined or disabled leaves confidence exactly as
+      // confidenceFor computed it, and buildReviewItems must still be awaited regardless — a bare
+      // call returns a Promise, and reading `.length` off that is a type error, not just a race.
+      reviewItemCount = (
+        await buildReviewItems(deps.db, events, byId, module.tier, sourceId, deps.assist)
+      ).length;
     }
 
     recordPollSuccess(deps.db, sourceId, raws.length, now);

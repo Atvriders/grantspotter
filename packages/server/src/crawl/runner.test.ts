@@ -169,6 +169,75 @@ describe('runSource on a normal Tier C source', () => {
   });
 });
 
+describe('runSource — the AI assist is strictly optional (spec §9, Task 29)', () => {
+  const map = {
+    '/scholarship-descriptions': fixturePayload(
+      'arrl-scholarship-descriptions',
+      'pathological.html',
+      'http://www.arrl.org/scholarship-descriptions',
+    ),
+  };
+
+  it('behaves identically with a disabled assist and with none at all', async () => {
+    const { fetcher } = fixtureFetcher(map);
+    const disabled = { isEnabled: () => false, parseAssist: async () => [], preScore: async () => undefined };
+    const a = await runSource({ ...deps(fetcher), assist: disabled }, 'arrl-scholarship-descriptions');
+    db.exec('DELETE FROM review_items; DELETE FROM change_events; DELETE FROM programs; DELETE FROM sources; DELETE FROM snapshots;');
+    const b = await runSource(deps(fetcher), 'arrl-scholarship-descriptions');
+    expect(a.parsedCount).toBe(b.parsedCount);
+    expect(a.events).toBe(b.events);
+    expect(a.reviewItems).toBe(b.reviewItems);
+    expect(a.error).toBe(b.error);
+  });
+
+  it('never calls an enabled assist when the deterministic parser already found records', async () => {
+    const { fetcher } = fixtureFetcher(map);
+    const parseAssist = vi.fn(async () => []);
+    const preScore = vi.fn(async () => 0.9);
+    const assist = { isEnabled: () => true, parseAssist, preScore };
+    const result = await runSource({ ...deps(fetcher), assist }, 'arrl-scholarship-descriptions');
+    // The pathological fixture parses to 6 real records — salvage never fires, but preScore is
+    // still consulted per review item since the assist is enabled.
+    expect(result.parsedCount).toBe(6);
+    expect(parseAssist).not.toHaveBeenCalled();
+    expect(preScore).toHaveBeenCalled();
+  });
+
+  it('salvages a zero-yield parse only when the assist is enabled, never with no key', async () => {
+    // arrl-scholarship-descriptions expects far more than the pathological fixture yields, but a
+    // genuinely-empty/unparseable payload drives the deterministic parser itself to zero — the
+    // only condition under which the salvage path may fire.
+    const { fetcher } = fixtureFetcher({
+      '/scholarship-descriptions': {
+        url: 'http://www.arrl.org/scholarship-descriptions',
+        status: 200,
+        contentType: 'text/html',
+        body: '<html><body>nothing recognisable here</body></html>',
+        fetchedAt: NOW,
+      },
+    });
+
+    const disabledResult = await runSource(deps(fetcher), 'arrl-scholarship-descriptions');
+    expect(disabledResult.parsedCount).toBe(0); // no assist at all: salvage never fires
+
+    db.exec('DELETE FROM review_items; DELETE FROM change_events; DELETE FROM programs; DELETE FROM sources; DELETE FROM snapshots;');
+    const parseAssist = vi.fn(async () => [
+      {
+        sourceId: 'arrl-scholarship-descriptions',
+        externalKey: 'salvaged-1',
+        name: 'Salvaged Scholarship',
+        rawFields: { aiAssisted: 'true' },
+        sourceUrl: 'http://www.arrl.org/scholarship-descriptions',
+        rawText: '',
+      },
+    ]);
+    const enabled = { isEnabled: () => true, parseAssist, preScore: async () => undefined };
+    const salvagedResult = await runSource({ ...deps(fetcher), assist: enabled }, 'arrl-scholarship-descriptions');
+    expect(parseAssist).toHaveBeenCalledTimes(1);
+    expect(salvagedResult.parsedCount).toBe(1);
+  });
+});
+
 describe('runSource failure handling', () => {
   it('records the failure and does not throw', async () => {
     const fetcher = {

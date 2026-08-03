@@ -145,8 +145,8 @@ describe('confidenceFor', () => {
 describe('buildReviewItems', () => {
   const candidates = () => new Map([[program().id, program()]]);
 
-  it('creates one pending item per event that has a candidate', () => {
-    const items = buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+  it('creates one pending item per event that has a candidate', async () => {
+    const items = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
     expect(items).toHaveLength(1);
     expect(items[0].decision).toBe('pending');
     expect(items[0].changeEventId).toBe('evt-1');
@@ -154,13 +154,19 @@ describe('buildReviewItems', () => {
     expect(listReviewItems(db, 'pending')).toHaveLength(1);
   });
 
-  it('creates NO review item for a signal-style event with no candidate', () => {
-    const items = buildReviewItems(db, [event({ programId: undefined, after: undefined })], new Map(), 'B', 'arrl-news-rss');
+  it('creates NO review item for a signal-style event with no candidate', async () => {
+    const items = await buildReviewItems(
+      db,
+      [event({ programId: undefined, after: undefined })],
+      new Map(),
+      'B',
+      'arrl-news-rss',
+    );
     expect(items).toEqual([]);
   });
 
-  it('creates NO review item for parse_yield_dropped — that is an alarm, not a candidate', () => {
-    const items = buildReviewItems(
+  it('creates NO review item for parse_yield_dropped — that is an alarm, not a candidate', async () => {
+    const items = await buildReviewItems(
       db,
       [event({ id: 'evt-2', kind: 'parse_yield_dropped', programId: undefined, after: undefined })],
       new Map(),
@@ -170,19 +176,19 @@ describe('buildReviewItems', () => {
     expect(items).toEqual([]);
   });
 
-  it('suppresses a candidate whose rejectKey was already rejected', () => {
-    const first = buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+  it('suppresses a candidate whose rejectKey was already rejected', async () => {
+    const first = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
     rejectReviewItem(db, first[0].id, 'user-1', NOW, 'not relevant');
-    const second = buildReviewItems(db, [event({ id: 'evt-9' })], candidates(), 'C', 'qcwa');
+    const second = await buildReviewItems(db, [event({ id: 'evt-9' })], candidates(), 'C', 'qcwa');
     expect(second).toEqual([]);
     expect(listReviewItems(db, 'pending')).toHaveLength(0);
   });
 
-  it('does NOT suppress a candidate whose content actually changed', () => {
-    const first = buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+  it('does NOT suppress a candidate whose content actually changed', async () => {
+    const first = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
     rejectReviewItem(db, first[0].id, 'user-1', NOW, 'not relevant');
     const moved = program({ amount: { ...program().amount, amountRaw: '$4,000' } });
-    const second = buildReviewItems(
+    const second = await buildReviewItems(
       db,
       [event({ id: 'evt-9', kind: 'amount_changed', after: moved })],
       new Map([[moved.id, moved]]),
@@ -192,27 +198,43 @@ describe('buildReviewItems', () => {
     expect(second).toHaveLength(1);
   });
 
-  it('gives each item a deterministic id derived from the change event', () => {
-    const a = buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
-    const b = buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+  it('gives each item a deterministic id derived from the change event', async () => {
+    const a = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+    const b = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
     expect(a[0].id).toBe(b[0].id);
     expect(listReviewItems(db)).toHaveLength(1);
+  });
+
+  it('uses the deterministic confidence when no assist is supplied', async () => {
+    const [item] = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
+    expect(item.confidence).toBe(confidenceFor('C', 'new'));
+  });
+
+  it('lets an enabled assist refine the confidence, and ignores it when it returns undefined', async () => {
+    const refining = { isEnabled: () => true, parseAssist: async () => [], preScore: async () => 0.33 };
+    const silent = { isEnabled: () => true, parseAssist: async () => [], preScore: async () => undefined };
+    const [a] = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa', refining);
+    expect(a.confidence).toBeCloseTo(0.33, 5);
+    db.exec('DELETE FROM review_items');
+    const [b] = await buildReviewItems(db, [event({ id: 'evt-9' })], candidates(), 'C', 'qcwa', silent);
+    expect(b.confidence).toBe(confidenceFor('C', 'new'));
   });
 });
 
 describe('approve / reject / edit', () => {
-  const seed = () => buildReviewItems(db, [event()], new Map([[program().id, program()]]), 'C', 'qcwa')[0];
+  const seed = async () =>
+    (await buildReviewItems(db, [event()], new Map([[program().id, program()]]), 'C', 'qcwa'))[0];
 
-  it('approve is the ONLY path that writes into the published corpus', () => {
-    const item = seed();
+  it('approve is the ONLY path that writes into the published corpus', async () => {
+    const item = await seed();
     expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
     const published = approveReviewItem(db, item.id, 'user-1', NOW);
     expect(published).toEqual(program());
     expect(listProgramsBySource(db, 'qcwa')).toHaveLength(1);
   });
 
-  it('approve writes the source key, so tomorrow’s crawl sees the record as existing', () => {
-    approveReviewItem(db, seed().id, 'user-1', NOW);
+  it('approve writes the source key, so tomorrow’s crawl sees the record as existing', async () => {
+    approveReviewItem(db, (await seed()).id, 'user-1', NOW);
     expect(
       db.prepare('SELECT source_id, external_key FROM programs WHERE id = ?').get(program().id),
     ).toEqual({ source_id: 'qcwa', external_key: 'qcwa-memorial-scholarship' });
@@ -220,8 +242,8 @@ describe('approve / reject / edit', () => {
     expect(listProgramsBySource(db, 'qcwa')).toHaveLength(1);
   });
 
-  it('approve records who and when, and writes the provenance trail', () => {
-    const item = seed();
+  it('approve records who and when, and writes the provenance trail', async () => {
+    const item = await seed();
     approveReviewItem(db, item.id, 'user-1', NOW);
     const trail = provenanceFor(db, item.id);
     expect(trail).toHaveLength(1);
@@ -230,16 +252,16 @@ describe('approve / reject / edit', () => {
     expect(trail[0].detail).toContain('new');
   });
 
-  it('reject remembers the key and does not publish', () => {
-    const item = seed();
+  it('reject remembers the key and does not publish', async () => {
+    const item = await seed();
     rejectReviewItem(db, item.id, 'user-1', NOW, 'past award, not an opportunity');
     expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
     expect(isRejected(db, item.rejectKey ?? '')).toBe(true);
     expect(provenanceFor(db, item.id)[0].detail).toContain('past award');
   });
 
-  it('edit publishes the corrected candidate and stores it back on the item', () => {
-    const item = seed();
+  it('edit publishes the corrected candidate and stores it back on the item', async () => {
+    const item = await seed();
     const corrected = program({ name: 'QCWA Memorial Scholarship Fund' });
     const published = editReviewItem(db, item.id, 'user-1', NOW, corrected);
     expect(published.name).toBe('QCWA Memorial Scholarship Fund');
@@ -247,15 +269,17 @@ describe('approve / reject / edit', () => {
     expect(listInbox(db, 'edited')).toHaveLength(1);
   });
 
-  it('a vanished candidate is removed from the corpus on approval', () => {
-    const item = seed();
+  it('a vanished candidate is removed from the corpus on approval', async () => {
+    const item = await seed();
     approveReviewItem(db, item.id, 'user-1', NOW);
-    const vanish = buildReviewItems(
-      db,
-      [event({ id: 'evt-v', kind: 'vanished', before: program(), after: undefined })],
-      new Map([[program().id, program()]]),
-      'C',
-      'qcwa',
+    const vanish = (
+      await buildReviewItems(
+        db,
+        [event({ id: 'evt-v', kind: 'vanished', before: program(), after: undefined })],
+        new Map([[program().id, program()]]),
+        'C',
+        'qcwa',
+      )
     )[0];
     approveReviewItem(db, vanish.id, 'user-1', NOW);
     expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
@@ -268,8 +292,8 @@ describe('approve / reject / edit', () => {
 });
 
 describe('listInbox', () => {
-  it('returns everything by default and filters when asked', () => {
-    const item = buildReviewItems(db, [event()], new Map([[program().id, program()]]), 'C', 'qcwa')[0];
+  it('returns everything by default and filters when asked', async () => {
+    const item = (await buildReviewItems(db, [event()], new Map([[program().id, program()]]), 'C', 'qcwa'))[0];
     expect(listInbox(db)).toHaveLength(1);
     expect(listInbox(db, 'pending')).toHaveLength(1);
     approveReviewItem(db, item.id, 'user-1', NOW);

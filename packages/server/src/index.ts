@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { buildUserAgent, ConfigError, loadConfig, type AppConfig } from './config.js';
-import { runCrawl, startScheduler } from './crawl/index.js';
+import { createAiAssist, runCrawl, startScheduler } from './crawl/index.js';
 import { ensureIngestionSchema } from './db/ingestSchema.js';
 import { migrate, openDatabase } from './db/migrate.js';
 import { createFetcher } from './fetcher/index.js';
@@ -50,6 +50,9 @@ function main(): void {
           dataDir: config.dataDir,
         }),
         nowISO: () => new Date().toISOString(),
+        // Spec §9, strictly optional. Disabled and calls nothing when ANTHROPIC_API_KEY is
+        // unset — createAiAssist's own isEnabled() gate makes this safe to pass unconditionally.
+        assist: createAiAssist(config),
       }),
   );
   process.on('SIGTERM', () => crawlScheduler.stop());

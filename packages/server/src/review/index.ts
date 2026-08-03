@@ -9,6 +9,7 @@ import type {
   SourceTier,
 } from '@grantspotter/core';
 import { hashProgram } from '@grantspotter/core';
+import type { AiAssist } from '../ai/assist.js';
 import type { ProgramSourceKey } from '../db/repositories/programs.js';
 import {
   appendAuditLog,
@@ -78,13 +79,14 @@ function reviewItemId(event: ChangeEvent): string {
  * (ARRL news RSS) and alarms (parse_yield_dropped) carry no candidate and produce no item —
  * they are read directly from change_events by the Inbox.
  */
-export function buildReviewItems(
+export async function buildReviewItems(
   db: Database.Database,
   events: ChangeEvent[],
   candidatesById: Map<string, Program>,
   tier: SourceTier,
   sourceId: string,
-): ReviewItem[] {
+  assist?: AiAssist,
+): Promise<ReviewItem[]> {
   const out: ReviewItem[] = [];
   for (const event of events) {
     if (NO_CANDIDATE_KINDS.has(event.kind)) continue;
@@ -95,12 +97,16 @@ export function buildReviewItems(
     const rejectKey = rejectKeyFor(sourceId, candidate);
     if (isRejected(db, rejectKey)) continue;
 
+    const deterministic = confidenceFor(tier, event.kind);
+    // Optional (spec §9). undefined whenever ANTHROPIC_API_KEY is absent or the call failed,
+    // and then the deterministic number stands exactly as it did before this task existed.
+    const assisted = assist === undefined ? undefined : await assist.preScore(candidate);
     const item: ReviewItem = {
       id: reviewItemId(event),
       changeEventId: event.id,
       candidate,
       decision: 'pending',
-      confidence: confidenceFor(tier, event.kind),
+      confidence: assisted ?? deterministic,
       rejectKey,
     };
     insertReviewItem(db, item);
