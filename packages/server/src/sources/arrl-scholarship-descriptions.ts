@@ -13,13 +13,26 @@ const URL = 'http://www.arrl.org/scholarship-descriptions';
  * DROP a letter ("Scholarshps") do need an explicit alternate, since no amount of whitespace
  * tolerance recovers a missing character. Order inside a key does not matter — the matcher in
  * util/text.ts sorts every alternate longest-first so "License Requirement" beats "License".
+ *
+ * "Amount" and "License" carry a trailing literal colon that the fuller phrases do not.
+ * util/text.ts's buildLabelRegExp makes the colon after a matched alternate OPTIONAL and matches
+ * at the start of any line (post-<br>/block-boundary), not only after a real "Label:" — so a bare
+ * "Amount" or "License" would also match ordinary prose that merely starts a line with that word,
+ * e.g. an Other paragraph containing "Amount awarded may vary..." or "License to practice is not
+ * required...". Baking the colon into the alternate string itself (looseLabelPattern still
+ * tolerates whitespace before it, so "Amount :" also matches) makes it a REQUIRED part of the
+ * match for exactly these two ambiguous single-word alternates, closing that off without
+ * widening the shared, other-parsers-depend-on-it util/text.ts contract. The full-phrase
+ * alternates ("Award Amount", "License Requirement", ...) are left as-is: two-plus-word phrases
+ * beginning a line are not credible prose openers the way a single common word is, and every
+ * label on this page has in practice always carried a colon regardless.
  */
 export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
   'Field of Study': ['Field of Study', 'Fields of Study', 'Field of Studies'],
-  'License Requirement': ['License Requirement', 'License Requirements', 'License'],
+  'License Requirement': ['License Requirement', 'License Requirements', 'License:'],
   Region: ['Region', 'Regions'],
   Institution: ['Institution', 'Institutions'],
-  'Award Amount': ['Award Amount', 'Award Amounts', 'Amount'],
+  'Award Amount': ['Award Amount', 'Award Amounts', 'Amount:'],
   'Number of Awards': [
     'Number of Awards',
     'Number of Award',
@@ -31,6 +44,20 @@ export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
 };
 
 const FIELD_KEYS = Object.keys(ARRL_SCHOLARSHIP_LABELS);
+
+/** The site-wide "Go Now" call-to-action always links here, in absolute or relative form. */
+const APPLICATION_LINK_PATTERN = /scholarship-application/i;
+
+/**
+ * A real award figure ($1,000) or a recognisable date/year is corroborating evidence that an
+ * li with zero recognised labels is a genuine scholarship whose labels were all typo'd beyond
+ * what looseLabelPattern and the explicit alternates above can recover — not one of the site's
+ * real stubs (an untitled li, an nbsp-only body, or the "Click on a scholarship below..."
+ * boilerplate), none of which carry either.
+ */
+const DOLLAR_AMOUNT_RE = /\$[\d,]+(?:\.\d{2})?/;
+const DATE_RE =
+  /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b|\b(?:19|20)\d{2}\b/i;
 
 export interface ScholarshipParseResult {
   entries: RawOpportunity[];
@@ -66,7 +93,17 @@ export function parseScholarshipCatalog(html: string, sourceUrl: string): Schola
     items.each((__, li) => {
       const $li = $(li);
       const name = normalizeText($li.find('p.title').first().text());
-      const bodyHtml = $li.find('div.content').first().html() ?? '';
+      const $content = $li.find('div.content').first();
+      // The "Go Now" call-to-action (visible text varies: "Go Now", "Go now", " Go Now") is
+      // trailing site chrome that appears on ~80% of entries and has no closing label to stop
+      // it, so a naive flatten appends "\nGo Now" to whichever field happens to be last. Key on
+      // the href, not the visible text, so a future copy change ("Apply Now") cannot reopen
+      // this: the CTA always links to /scholarship-application (absolute or relative).
+      $content.find('a').each((___, a) => {
+        const href = $(a).attr('href') ?? '';
+        if (APPLICATION_LINK_PATTERN.test(href)) $(a).remove();
+      });
+      const bodyHtml = $content.html() ?? '';
       const rawText = flattenHtml(bodyHtml);
       const split = splitByLabels(rawText, ARRL_SCHOLARSHIP_LABELS);
 
@@ -87,10 +124,28 @@ export function parseScholarshipCatalog(html: string, sourceUrl: string): Schola
       // signal (that boilerplate is 60 characters, comfortably "long"). What every one of the
       // 111 real entries has in common, per the live label-frequency count, is a recognised
       // "Field of Study" — in fact all eight labels appear zero times together only on stubs.
-      // Zero recognised fields is therefore both necessary and sufficient for "stub" here.
-      const isStub = name === '' || recognisedFieldCount === 0;
+      //
+      // But zero recognised labels can also mean every label on a genuine entry got typo'd
+      // beyond what looseLabelPattern and the explicit alternates recover (this site's typo
+      // history — "R egion", "License   Requirement", "Scholarshps" — is real and ongoing).
+      // expectedMinRecords=100 leaves 11 records of slack before parse_yield_dropped fires, so a
+      // single bad copy-edit silently deleting one scholarship would otherwise go unnoticed. A
+      // dollar figure or a recognisable date in the body is corroborating evidence that this is
+      // a real, if mangled, entry rather than one of the three known stub shapes (none of which
+      // carry either) — so it overrides the stub verdict and the entry is kept with whatever
+      // fields (possibly zero) were recovered. Every rejection is logged either way (console.debug,
+      // not .warn — the crawl runner spies on console.warn for its own, unrelated deadline-
+      // inheritance diagnostics, and the 3 stub rejections that fire on literally every parse of
+      // the real page are routine, not alarms), so a genuine stub-shaped scholarship is at least
+      // visible instead of silently gone.
+      const hasCorroboratingEvidence = DOLLAR_AMOUNT_RE.test(rawText) || DATE_RE.test(rawText);
+      const isStub = name === '' || (recognisedFieldCount === 0 && !hasCorroboratingEvidence);
       if (isStub) {
         stubCount += 1;
+        const firstLine = rawText.split('\n')[0]?.slice(0, 80) ?? '';
+        console.debug(
+          `[${SOURCE_ID}] rejected as stub: name=${JSON.stringify(name)} firstLine=${JSON.stringify(firstLine)}`,
+        );
         return;
       }
 

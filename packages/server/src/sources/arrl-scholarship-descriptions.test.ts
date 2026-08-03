@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixturePayload, hasFixture, loadFixture } from '../../test/fixtures.js';
 import {
   arrlScholarshipDescriptions,
@@ -10,6 +10,10 @@ const URL = 'http://www.arrl.org/scholarship-descriptions';
 const LIVE = '00-www-arrl-org-scholarship-descriptions.html';
 
 const pathological = () => parseScholarshipCatalog(loadFixture(SOURCE_ID, 'pathological.html'), URL);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('parseScholarshipCatalog against the pathological fixture', () => {
   it('reads exactly the four catalog accordions and excludes EXPLORE ARRL chrome', () => {
@@ -41,6 +45,11 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
     expect(ardc?.rawFields['Number of Awards']).toBe('45');
   });
 
+  // Challenge Met's Other field doubles as the regression fixture for fix round 1, finding 3
+  // (see below) — its body now ends in two decoy sentences that open a line with a bare
+  // "Amount"/"License" and no colon. These three assertions (Field of Study, Award Amount,
+  // Number of Awards all exact) were already here before the fix and would themselves have
+  // failed under the old bug, since the decoy text used to get appended onto Award Amount.
   it('parses a flat <p>• Label: value<br> body identically to a <ul><li><strong>…</strong></li> body', () => {
     const flat = pathological().entries.find((e) => e.name === 'Challenge Met Scholarship');
     expect(flat?.rawFields['Field of Study']).toBe('Any');
@@ -86,6 +95,130 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
     expect(entry.sourceId).toBe(SOURCE_ID);
     expect(entry.sourceUrl).toBe(URL);
   });
+
+  // Fix round 1, finding 1 (CRITICAL): the site-wide "Go Now" application-link CTA has no
+  // closing label to stop it, so a naive flatten appends "\nGo Now" to whichever field happens
+  // to be last — 88 of 111 live entries (79%) carried it. QCWA's <div class="content"> now ends
+  // in exactly this shape: a trailing <p><a title="Go Now" href=".../scholarship-application">
+  // Go Now</a></p> after the real bullet list, reproducing the live markup byte-for-byte.
+  it('strips the trailing "Go Now" application-link CTA instead of appending it to the last field', () => {
+    const qcwa = pathological().entries.find((e) => e.name === 'QCWA Memorial Scholarship');
+    expect(qcwa?.rawFields.Other).toBe('Applicant must be sponsored by an active QCWA member.');
+    expect(qcwa?.rawText).not.toContain('Go Now');
+  });
+
+  // Fix round 1, finding 3 (IMPORTANT): util/text.ts makes the colon after a label optional and
+  // matches at the start of any line, not only after a real "Label:" — so the bare 'Amount' and
+  // 'License' alternates used to also match ordinary prose that merely started a line with that
+  // word. Before the fix, this appended the decoy text onto Award Amount and License Requirement
+  // and silently truncated Other to just its first sentence — exactly the shape the reviewer
+  // reported. These three exact-value assertions fail under the old bug and pass under the fix.
+  it('does not let a bare "Amount"/"License" sentence-opener steal text from Other or pollute a real field', () => {
+    const flat = pathological().entries.find((e) => e.name === 'Challenge Met Scholarship');
+    expect(flat?.rawFields['Award Amount']).toBe('$1,000');
+    expect(flat?.rawFields['License Requirement']).toBe('Technician or higher');
+    expect(flat?.rawFields.Other).toBe(
+      'Applicant must provide documentation of a diagnosed learning disability.\n' +
+        "Amount awarded may vary depending on the review committee's judgement.\n" +
+        'License to practice is not required for this field.',
+    );
+  });
+
+  it('logs every stub rejection by name/first-line so a dropped record is visible', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const result = pathological();
+    expect(debugSpy).toHaveBeenCalledTimes(result.stubCount);
+    const messages = debugSpy.mock.calls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes('Chicago FM Club Scholarship'))).toBe(true);
+    expect(messages.some((m) => m.includes('Placeholder'))).toBe(true);
+  });
+
+  // The lesson of fix round 1: presence/count assertions cannot catch a value silently
+  // corrupted by an over-eager or under-eager label match. Pin exact, whole-object field
+  // values for a couple of known entries so a future regression that mangles one field but
+  // keeps the field *present* still fails a test.
+  it('produces exact field values for QCWA end to end, not just presence', () => {
+    const qcwa = pathological().entries.find((e) => e.name === 'QCWA Memorial Scholarship');
+    expect(qcwa?.rawFields).toEqual({
+      'Field of Study': 'Any',
+      'License Requirement': 'Any',
+      Region: 'Any',
+      Institution: 'Accredited degree program',
+      'Award Amount': '$3,000',
+      'Number of Awards': '19',
+      Other: 'Applicant must be sponsored by an active QCWA member.',
+    });
+  });
+
+  it('produces exact field values for YASME end to end, not just presence', () => {
+    const yasme = pathological().entries.find((e) => e.name === 'YASME Foundation Scholarship');
+    expect(yasme?.rawFields).toEqual({
+      'Field of Study': 'Sciences or Engineering',
+      'License Requirement': 'General or higher, licensed at least two years',
+      Region: 'Any',
+      Institution: 'Any accredited institution',
+      'Award Amount': '$5,000',
+      'Number of Awards': 'Three',
+      Other:
+        'Applicant must rank in the top 5 to 10 percent of the class and submit a\n' +
+        'year-end activity report.',
+    });
+  });
+});
+
+// Fix round 1, finding 2 (IMPORTANT): a real entry whose labels are ALL typo'd beyond what
+// looseLabelPattern's whitespace tolerance and the explicit alternates recover
+// (recognisedFieldCount === 0, same shape as a stub) must not be silently dropped — this site's
+// typo history ("R egion", "License   Requirement", "Scholarshps") is real and ongoing, and
+// expectedMinRecords=100 leaves 11 records of slack before parse_yield_dropped would ever notice
+// one going missing. Deliberately a standalone, hand-built HTML snippet rather than an addition
+// to the shared pathological.html fixture: crawl/runner.test.ts pins that fixture's real-entry
+// count at exactly 6, and this scenario needs its own dedicated, uncoupled page.
+const TYPO_STORM_URL = 'http://www.arrl.org/scholarship-descriptions';
+const TYPO_STORM_HTML = `<!DOCTYPE html>
+<html><body>
+<div class="tabArea f-widget f-accordion">
+  <h3 class="tab">A - D</h3>
+  <ul class="accordion">
+    <li>
+      <p class="title"><a href="#">Typo Storm Memorial Scholarship</a></p>
+      <div class="content">
+        <p>&bull; Feild of Study: Any<br>
+        &bull; Lisence Requiremnt: General or higher<br>
+        &bull; Regoin: Any<br>
+        &bull; Institooshun: Any accredited institution<br>
+        &bull; Awrd Amunt: $2,500<br>
+        &bull; Numbr of Awards: 2<br>
+        &bull; Othr: Preference given to applicants pursuing wireless engineering.</p>
+      </div>
+    </li>
+    <li>
+      <p class="title"><a href="#">Untouched Stub</a></p>
+      <div class="content"><p>&nbsp;</p></div>
+    </li>
+  </ul>
+</div>
+</body></html>`;
+
+describe('the stub-rescue safety net (dollar amount / date corroboration)', () => {
+  it('rescues a real entry whose labels are all typoed beyond recognition when a dollar amount corroborates it', () => {
+    const result = parseScholarshipCatalog(TYPO_STORM_HTML, TYPO_STORM_URL);
+    expect(result.stubCount).toBe(1); // only "Untouched Stub" (nbsp-only body) is dropped
+    expect(result.entries).toHaveLength(1);
+    const stormed = result.entries[0];
+    expect(stormed.name).toBe('Typo Storm Memorial Scholarship');
+    const recognised = Object.keys(stormed.rawFields).filter((k) => k !== '__preamble');
+    expect(recognised).toEqual([]);
+    expect(stormed.rawText).toContain('$2,500');
+  });
+
+  it('does not log the rescued entry as a stub, but does log the genuine one', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    parseScholarshipCatalog(TYPO_STORM_HTML, TYPO_STORM_URL);
+    expect(debugSpy).toHaveBeenCalledTimes(1);
+    expect(String(debugSpy.mock.calls[0][0])).toContain('Untouched Stub');
+    expect(String(debugSpy.mock.calls[0][0])).not.toContain('Typo Storm');
+  });
 });
 
 describe('the SourceModule wrapper', () => {
@@ -126,5 +259,16 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
   it('does not contain the discontinued Chicago FM Club Scholarship', () => {
     const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
     expect(entries.map((e) => e.name).join('|')).not.toMatch(/Chicago FM Club/i);
+  });
+
+  // Fix round 1, finding 1: the "Go Now" application-link CTA appeared in div.content on 88 of
+  // 111 (79%) live entries, with no closing label to stop it, and used to append onto whichever
+  // field happened to be last. It must be gone from every field now, not merely reduced.
+  it('strips the "Go Now" CTA from every one of the 111 live entries', () => {
+    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const polluted = entries.filter((e) =>
+      Object.values(e.rawFields).some((v) => /go\s*now/i.test(v)),
+    );
+    expect(polluted.map((e) => e.name)).toEqual([]);
   });
 });
