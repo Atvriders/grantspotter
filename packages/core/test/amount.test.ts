@@ -207,3 +207,109 @@ describe('parseAmount — fix round 1 hardening', () => {
     expect(parseAmount('$3.25B')).toEqual({ amountMin: 3_250_000_000, amountMax: 3_250_000_000 });
   });
 });
+
+// Fix round 2 (2026-08-04): the scoped re-review confirmed all three round-1
+// findings addressed, but flagged that round-1's own bare poison terms (gift,
+// principal, trust, and fund by extension) silently drop an unambiguous award
+// when the sentence's only recipient noun isn't literally "student(s)" — the
+// same class of bug as the original endowment trap, just pointed the other
+// way. These tests cover the three failing strings quoted in that finding,
+// plus the coordinator's required fourth case and independent adversarial
+// cases in the same shape. All tests above (the 12 original fixtures and the
+// 15 round-1 hardening tests) must stay green.
+describe('parseAmount — fix round 2 hardening (recipient verbs and nouns)', () => {
+  it('rescues a trailing "is made to one recipient" verb-phrase past an intervening poison noun', () => {
+    // Regression: pre-round-2 this returned {} because "gift" poisoned the
+    // sentence and AWARD_ANCHOR_AFTER only recognized "student(s)".
+    expect(
+      parseAmount('A $1,000 gift is made to one recipient annually.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('rescues via the "receives" before-anchor against a "principal" poison term', () => {
+    expect(parseAmount('The Principal Investigator receives $5,000.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+  });
+
+  it('rescues via the "pays" before-anchor against a "trust" poison term, recipient noun "recipient"', () => {
+    expect(parseAmount('The trust pays $1,000 to each recipient.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('rescues via the "distributes" before-anchor against a "trust" poison term, recipient noun "winner"', () => {
+    expect(parseAmount('The trustee distributes $2,000 to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('rescues the generalized "to one winner" trailing noun against a bequest figure', () => {
+    // Exercises the plain "to <qualifier> <noun>" branch (no verb-phrase, no
+    // before-anchor) with the broadened recipient noun list.
+    expect(
+      parseAmount('A $60,000 bequest funds $2,000 to one winner each year.'),
+    ).toEqual({ amountMin: 2000, amountMax: 2000 });
+  });
+
+  it('rescues the "goes to each member" verb-phrase while the poisoned figure three tokens away stays excluded', () => {
+    // The poison figure ($100,000) sits far enough from "goes to each member"
+    // that the 1-word filler budget in AWARD_ANCHOR_AFTER cannot reach it —
+    // this is the guard against the cross-mention leakage regression noted in
+    // the AWARD_ANCHOR_AFTER doc comment.
+    expect(
+      parseAmount('A $100,000 trust provides that $500 goes to each member annually.'),
+    ).toEqual({ amountMin: 500, amountMax: 500 });
+  });
+
+  it('does not let a same-sentence award noun three tokens away rescue an endowment figure (round-1 regression guard)', () => {
+    // Re-verifies the original round-1 "rescues an award figure that shares a
+    // sentence with an endowment figure" fixture still excludes $100,000 even
+    // with the wider AWARD_ANCHOR_AFTER vocabulary from this round.
+    expect(parseAmount('A $100,000 endowment funds awards of $2,500.')).toEqual({
+      amountMin: 2500,
+      amountMax: 2500,
+    });
+  });
+});
+
+// Fix round 2: re-verification that every round-1 probe this ruling depends on
+// is still correct after the AWARD_ANCHOR / AWARD_ANCHOR_AFTER changes above.
+describe('parseAmount — round 1 probes re-verified after round 2', () => {
+  it('Finding 1 probe: "seeded with a $1,000,000 fund" still excludes the fund, keeps the award', () => {
+    expect(
+      parseAmount(
+        'The scholarship was seeded with a $1,000,000 fund. One award of $2,000 is made annually.',
+      ),
+    ).toEqual({ amountMin: 2000, amountMax: 2000 });
+  });
+
+  it('Finding 2 probe 1: before-anchor "gives $X to one student" still rescues', () => {
+    expect(
+      parseAmount(
+        'A $100,000 endowment supports the program, which gives $1,000 to one student.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('Finding 2 probe 2: after-anchor "$X award" still rescues', () => {
+    expect(
+      parseAmount('The program gives one $1,000 award annually, funded by a $100,000 endowment.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('Finding 2 probe 3: after-anchor "$X award" against a "corpus of $Y" figure still rescues', () => {
+    expect(
+      parseAmount("The fund's corpus of $500,000 supports a single $2,000 award each year."),
+    ).toEqual({ amountMin: 2000, amountMax: 2000 });
+  });
+
+  it('Finding 3 probes: K/M/million magnitude suffixes still scale correctly', () => {
+    expect(parseAmount('$1.5K')).toEqual({ amountMin: 1500, amountMax: 1500 });
+    expect(parseAmount('$2M')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+    expect(parseAmount('$2 million')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+  });
+});

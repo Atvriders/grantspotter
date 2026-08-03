@@ -54,19 +54,34 @@ export const NON_AWARD_CONTEXT_TERMS: readonly string[] = [
 /**
  * Rescues a per-award figure that shares a sentence with a non-award figure when
  * the award language precedes the amount: "A $100,000 endowment funds awards of
- * $2,500." / "...which provides $500 to each licensed student."
+ * $2,500." / "...which provides $500 to each licensed student." / "The trust
+ * pays $1,000 to each recipient." (fix round 2, 2026-08-04: added the recipient
+ * verbs receives/pays/distributes so a bare poison term like 'trust' or
+ * 'principal' doesn't drop an unambiguous, directly-adjacent award.)
  */
 export const AWARD_ANCHOR =
-  /\b(awards?|scholarships?|grants?|prizes?|stipends?|gives|give|provides|provide|offers?|presents?)\s+(?:of|to|:)?\s*$/i;
+  /\b(awards?|scholarships?|grants?|prizes?|stipends?|gives|give|provides|provide|offers?|presents?|receives?|pays?|distributes?)\s+(?:of|to|:)?\s*$/i;
 
 /**
  * Companion to AWARD_ANCHOR for the equally common trailing phrasing the brief's
  * original mechanism missed: "$1,000 award", "$2,000 scholarship each year",
- * "$500 to each licensed student". Tested against the text immediately following
- * a mention rather than immediately preceding it.
+ * "$500 to each licensed student", "$1,000 is made to one recipient", "$500 goes
+ * to each member". Tested against the text immediately following a mention
+ * rather than immediately preceding it.
+ *
+ * Fix round 2 (2026-08-04): generalized the recipient noun beyond bare
+ * 'student(s)' to recipient/applicant/winner/member/student, and added
+ * recipient verb-phrases (is made/awarded/given/presented to, goes to, paid
+ * to, payable to) that trail the amount rather than precede it. A single
+ * filler word is tolerated before the anchor phrase ("$1,000 gift is made to
+ * one recipient") but deliberately capped at one word — a wider filler budget
+ * was tried and rejected because it let an *unrelated* nearby anchor word (the
+ * "awards" in "...endowment funds awards of $2,500" that actually belongs to
+ * the following $2,500 mention) leak backward and rescue the endowment figure
+ * itself, which is precisely the trap this module exists to prevent.
  */
 export const AWARD_ANCHOR_AFTER =
-  /^\s*(?:(?:awards?|scholarships?|grants?|prizes?|stipends?)\b|to\s+(?:one|each|every|a|an|the|\d+)(?:\s+\S+){0,2}?\s+students?\b)/i;
+  /^\s*(?:\S+\s+)?(?:(?:awards?|scholarships?|grants?|prizes?|stipends?)\b|(?:is\s+(?:made|awarded|given|presented)\s+to|goes\s+to|paid\s+to|payable\s+to)\s+(?:one|each|every|a|an|the|\d+)?\s*(?:top\s+)?(?:recipients?|applicants?|winners?|members?|students?)\b|to\s+(?:one|each|every|a|an|the|\d+)(?:\s+\S+){0,2}?\s+(?:recipients?|applicants?|winners?|members?|students?)\b)/i;
 
 const MAGNITUDE_MULTIPLIERS: Record<string, number> = {
   k: 1_000,
@@ -137,7 +152,7 @@ function collectMentions(raw: string): Mention[] {
       // stripped/garbled number. Under-claiming beats over-claiming.
       if (amount === undefined) continue;
       const before = text.slice(Math.max(0, m.index - 25), m.index);
-      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 30);
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40);
       const rescued = AWARD_ANCHOR.test(before) || AWARD_ANCHOR_AFTER.test(after);
       mentions.push({
         value: amount,
