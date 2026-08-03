@@ -23,13 +23,22 @@ import type { AmountSpec, AwardTier } from './types.js';
  *   2. left attachment  "<head> of $N"              -> head noun decides
  *   3. right attachment "$N <noun compound>"        -> compound decides
  *        3a. compound is claimed by a following "of $M"  -> capital
- *        3b. compound contains a capital/total noun      -> capital
+ *        3b. compound contains a capital/total/cost noun -> capital
  *        3c. compound head is an award/person noun       -> award
- *   4. predicate: trailing award predicate, or the nearest governing verb
- *        outflow verb (money leaving a pool)             -> award
- *        inflow verb  (money entering a pool)            -> subject head decides
- *   5. clause-level capital vocabulary                  -> capital
- *   6. default                                          -> award
+ *   4. predicate: trailing award predicate, or the nearest governing verb;
+ *      BOTH directions consult the verb's subject head
+ *   5. clause-level non-award vocabulary, by token      -> capital
+ *   6. THE GATE: affirmative award evidence             -> award, else capital
+ *
+ * FINAL ROUND (2026-08-03). Rule 6 used to default to 'award', which made
+ * over-claiming the normal outcome: on 42 realistic granting-foundation
+ * sentences it produced 18 over-claims and 0 under-claims. Every gap in a
+ * hand-curated ~250-word vocabulary became a published over-claim, which is
+ * why each fix round kept finding "one more vector" — they were patching an
+ * open default one noun at a time. Award now requires affirmative evidence:
+ * a bare amount expression, membership in a tier structure, or an award/payee
+ * noun standing on its own account in the clause (not inside an aggregate
+ * "in grants" object). Absent all three, omit.
  *
  * The load-bearing invariant, and the one that closes the whole class of leak
  * the previous rounds kept reopening:
@@ -103,6 +112,37 @@ const TOTAL_NOUNS: ReadonlySet<string> = new Set([
   'balance',
   'aggregate',
   'proceeds',
+]);
+
+/**
+ * Nouns naming money that is neither an award nor the pool behind one: an
+ * operating figure, a cost, or money the APPLICANT pays.
+ *
+ * Final round (2026-08-03): none of this class was represented anywhere, which
+ * is why "A $35 application fee is required." and "The annual scholarship budget
+ * is $120,000." both published as awards.
+ */
+const NON_AWARD_NOUNS: ReadonlySet<string> = new Set([
+  'budget',
+  'budgets',
+  'cost',
+  'costs',
+  'expense',
+  'expenses',
+  'fee',
+  'fees',
+  'dues',
+  'tuition',
+  'salary',
+  'salaries',
+  'overhead',
+  'revenue',
+  'revenues',
+  'payout',
+  'payouts',
+  'capacity',
+  'deficit',
+  'surplus',
 ]);
 
 /** Nouns naming what a student actually receives. */
@@ -304,6 +344,15 @@ const INFLOW_OBJECT =
   /^in\s+(?:(?!\$)(?!(?:awards?|scholarships?|grants?|prizes?|stipends?|fellowships?|bursar(?:y|ies)|honorari(?:um|a))\b)\S+\s+){0,2}?(?:dues|contributions?|donations?|gifts?|funding|funds?|revenues?|income|fees?|pledges?|bequests?|endowments?|assets?|earnings|interest|proceeds|capital|principal)\b/i;
 
 /**
+ * An aggregate object: money described by the FORM it was handed out in rather
+ * than by what one recipient gets — "distributed $500,000 in grants",
+ * "$12,000,000 in scholarships". The award noun here belongs to a lump sum, so
+ * it is not evidence that this figure is one award.
+ */
+const AGGREGATE_OBJECT =
+  /\bin\s+(?:(?!\$)\S+\s+){0,2}?(?:grants?|scholarships?|awards?|prizes?|stipends?|fellowships?|gifts?|donations?|contributions?|dues|funding|funds?)\b/i;
+
+/**
  * A duration span: "$1.2M over 48 years", "over the past twenty years". The
  * span makes the figure an accumulation, not one award.
  *
@@ -335,19 +384,22 @@ const CUMULATIVE_TERMS: readonly string[] = [
   'all-time',
 ];
 
-/** Clause-level capital vocabulary — the last-resort tiebreak before defaulting. */
-const CAPITAL_CONTEXT_TERMS: readonly string[] = [
-  'endowment',
+/**
+ * Non-noun capital vocabulary — verbs, participles and set phrases that no noun
+ * class covers. The NOUNS are NOT listed here: rule 5 checks
+ * `CAPITAL_NOUNS ∪ TOTAL_NOUNS ∪ NON_AWARD_NOUNS` directly by token, so the two
+ * cannot drift.
+ *
+ * Final round (2026-08-03): this list used to duplicate the noun sets by hand and
+ * had already drifted — `reserve`, `portfolio`, `assets`, `annuity`, `treasury`
+ * and `legacy` were in `CAPITAL_NOUNS` but absent here, so
+ * "The reserve was $500,000 at year end." reached the default and over-claimed.
+ */
+const CAPITAL_CONTEXT_PHRASES: readonly string[] = [
   'endowed',
   'endowing',
-  'bequest',
   'bequeathed',
   'estate of',
-  'estate',
-  'corpus',
-  'principal',
-  'trust',
-  'fund',
   'seeded',
   'fund was established',
   'was established with',
@@ -359,17 +411,21 @@ const CAPITAL_CONTEXT_TERMS: readonly string[] = [
   'contributed',
   'memorial fund of',
   'in memory of',
-  'capital',
 ];
 
 /**
  * PLAN-LOCAL export (CONTRACT §4) consumed by `index.ts` and, per the task-4
  * brief, by Plan 2's normalizer when it explains a parse in the review queue.
- * Kept as the union of the two non-award vocabularies above so it cannot drift
- * from the classifier's own lexicons.
+ *
+ * Final round: this genuinely IS the union now. It previously claimed to be the
+ * union of the non-award vocabularies while omitting `CAPITAL_NOUNS` and
+ * `TOTAL_NOUNS` entirely.
  */
 export const NON_AWARD_CONTEXT_TERMS: readonly string[] = [
-  ...CAPITAL_CONTEXT_TERMS,
+  ...CAPITAL_NOUNS,
+  ...TOTAL_NOUNS,
+  ...NON_AWARD_NOUNS,
+  ...CAPITAL_CONTEXT_PHRASES,
   ...CUMULATIVE_TERMS,
 ];
 
@@ -378,25 +434,19 @@ function alternation(words: ReadonlySet<string>): string {
 }
 
 /**
- * PLAN-LOCAL export, retained for the frozen interface. Describes the
- * left-attachment shape rule 2 recognizes ("award of $X", "scholarship: $X").
- * Generated from `AWARD_NOUNS` so it stays in sync; the classifier itself walks
- * tokens rather than testing this against a character window, which is exactly
- * what made rounds 1-3 leak.
+ * PLAN-LOCAL export, retained for the frozen interface (`index.ts` re-exports
+ * it). Describes the left-attachment shape rule 2 recognizes: an award noun
+ * followed by whitespace and an optional `of`/`:` — "award of $X", "awards $X",
+ * "scholarship : $X".
+ *
+ * It does NOT match "scholarship: $X" with no space before the colon, because
+ * `\s+` sits before the optional `of|:`. The previous docstring claimed
+ * otherwise; `AWARD_ANCHOR.test('scholarship: ')` is `false`. The pattern is
+ * left as-is rather than widened because it is a frozen exported artifact and
+ * the classifier does not consume it — rule 2 walks tokens instead.
  */
 export const AWARD_ANCHOR = new RegExp(
   `\\b(${alternation(AWARD_NOUNS)})\\s+(?:of|:)?\\s*$`,
-  'i',
-);
-
-/**
- * PLAN-LOCAL export, retained for the frozen interface. Describes the
- * right-attachment and trailing-predicate shapes rules 3 and 4 recognize
- * ("$X award", "$X goes to each winner"). Generated from the lexicons for the
- * same reason as `AWARD_ANCHOR`.
- */
-export const AWARD_ANCHOR_AFTER = new RegExp(
-  `^\\s*(?:(?:${alternation(AWARD_NOUNS)})\\b|${TRAILING_PREDICATE_SOURCE()})`,
   'i',
 );
 
@@ -436,26 +486,27 @@ const TRAILING_RECIPIENT_PREDICATE = new RegExp(`^${TRAILING_PREDICATE_SOURCE()}
  */
 const TRAILING_PASSIVE_AWARD = /^(?:is|are|was|were)\s+(?:awarded|granted|presented)\b/i;
 
-const MAGNITUDE_MULTIPLIERS: Record<string, number> = {
-  k: 1_000,
-  thousand: 1_000,
-  m: 1_000_000,
-  million: 1_000_000,
-  b: 1_000_000_000,
-  billion: 1_000_000_000,
-};
-
 const MONEY = /\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(K|M|B|thousand|million|billion)?\b/gi;
 const TIER_RE = /([0-9]+)\s+(?:awards?\s+)?of\s+\$\s?([0-9][0-9,]*)/gi;
 const RANGE_RE = /\$\s?([0-9][0-9,]*)\s*(?:-|–|—|to|through)\s*\$?\s?([0-9][0-9,]*)/i;
 const UP_TO =
-  /(?:\b(?:up to|not to exceed|does not exceed|do not exceed|no more than|maximum of|maximum|max|under)|≤|<=)\s*$/i;
+  /(?:\b(?:up to|not to exceed|does not exceed|do not exceed|no more than|maximum of|maximum|max)|≤|<=)\s*$/i;
 const AT_LEAST = /(?:\b(?:at least|minimum of|starting at)|≥|>=)\s*$/i;
 
 const WORD_RE = /[A-Za-z][A-Za-z'’]*/g;
 
-/** Hard clause boundaries: sentence enders, semicolons, newlines. Never re-joined. */
-const HARD_BOUNDARY = /(?<=[.;])\s+|\n+/;
+/**
+ * Hard clause boundaries: sentence enders, semicolons, newlines. Never re-joined.
+ *
+ * Final round (2026-08-03): the period of a title or abbreviation is not a
+ * sentence end. "A bequest from Mr. Smith left the club $250,000." used to
+ * shatter into "A bequest from Mr." and "Smith left the club $250,000.", and the
+ * second fragment — stripped of the word `bequest` — published $250,000 as an
+ * award. The round-1 fixture with "the estate of Dr. Jane Doe" passed only
+ * because its $100,000 happens to sit BEFORE the "Dr.".
+ */
+const ABBREVIATIONS = 'Dr|Mr|Mrs|Ms|Messrs|St|Inc|Jr|Sr|Prof|Rev|Hon|Ltd|Co|Corp|Est|Ave|No|vs';
+const HARD_BOUNDARY = new RegExp(`(?<=[.;])(?<!\\b(?:${ABBREVIATIONS})\\.)\\s+|\\n+`);
 
 /** Soft clause boundaries: commas and subordinators. Subject to the re-join below. */
 const SOFT_BOUNDARY = /(?<=,)\s+|\s+(?=(?:while|whereas|although|though|however|but)\b)/i;
@@ -523,11 +574,21 @@ function toNumber(raw: string): number {
  */
 function toAmount(rawValue: string, rawSuffix: string | undefined): number | undefined {
   const base = Number(rawValue.replace(/,/g, ''));
+  // Reachable: a long enough digit run overflows to Infinity.
   if (!Number.isFinite(base)) return undefined;
   if (!rawSuffix) return base;
-  const multiplier = MAGNITUDE_MULTIPLIERS[rawSuffix.toLowerCase()];
-  if (multiplier === undefined) return undefined;
-  return base * multiplier;
+  return base * magnitudeOf(rawSuffix);
+}
+
+/**
+ * The MONEY pattern admits exactly K/M/B/thousand/million/billion, so this is
+ * total — the old lookup-plus-`undefined`-guard branch was unreachable.
+ */
+function magnitudeOf(suffix: string): number {
+  const s = suffix.toLowerCase();
+  if (s === 'k' || s === 'thousand') return 1_000;
+  if (s === 'm' || s === 'million') return 1_000_000;
+  return 1_000_000_000;
 }
 
 /* ------------------------------------------------------------------ *
@@ -554,7 +615,10 @@ interface Clause {
   readonly money: readonly MoneySpan[];
 }
 
-type NounRole = 'capital' | 'total' | 'award' | 'person' | 'ambiguous';
+type NounRole = 'capital' | 'total' | 'nonaward' | 'award' | 'person' | 'ambiguous';
+
+/** The three roles that mean "not a per-award figure" wherever they attach. */
+const NON_AWARD_ROLES: ReadonlySet<NounRole> = new Set<NounRole>(['capital', 'total', 'nonaward']);
 
 function normalizeWord(word: string): string {
   return word.toLowerCase().replace(/[’']s$/, '');
@@ -564,6 +628,7 @@ function nounRole(word: string): NounRole | undefined {
   const w = normalizeWord(word);
   if (CAPITAL_NOUNS.has(w)) return 'capital';
   if (TOTAL_NOUNS.has(w)) return 'total';
+  if (NON_AWARD_NOUNS.has(w)) return 'nonaward';
   if (AWARD_NOUNS.has(w)) return 'award';
   if (PERSON_NOUNS.has(w)) return 'person';
   if (AMBIGUOUS_NOUNS.has(w)) return 'ambiguous';
@@ -693,8 +758,9 @@ function rightRun(clause: Clause, span: MoneySpan): Token[] {
   let cursor = span.end;
   for (; i < clause.tokens.length; i += 1) {
     const t = clause.tokens[i];
+    // The whitespace-only gap check subsumes the "did we cross another dollar
+    // mention" test: any intervening mention puts "$" and digits in the gap.
     if (!/^[\s\-–]*$/.test(clause.text.slice(cursor, t.start))) break;
-    if (clause.money.some((s) => s.start >= cursor && s.end <= t.start)) break;
     if (nounRole(t.lower) === undefined) break;
     out.push(t);
     cursor = t.end;
@@ -779,7 +845,7 @@ type Verdict = 'award' | 'capital';
  * The whole classifier. Six ordered rules, first one that resolves wins.
  * Everything above this line exists to feed it.
  */
-function classify(clause: Clause, span: MoneySpan): Verdict {
+function classify(clause: Clause, span: MoneySpan, tierAmounts: ReadonlySet<number>): Verdict {
   // 1. Lifetime / cumulative totals are never a single award. A clause that
   //    NAMES an aggregate ("Total distributed: $1.2M", "the $2,000 prize fund
   //    total") is reporting a sum, whatever else it says — fix round 5 lifted
@@ -792,7 +858,7 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
   // 2. Explicit "<head> of $N" attachment.
   const left = leftHead(clause, span);
   const leftRole = left === undefined ? undefined : nounRole(left);
-  if (leftRole === 'capital' || leftRole === 'total') return 'capital';
+  if (leftRole !== undefined && NON_AWARD_ROLES.has(leftRole)) return 'capital';
   if (leftRole === 'award' || leftRole === 'person') return 'award';
 
   // 3. "$N <noun compound>" attachment.
@@ -801,7 +867,7 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
   if (run.length > 0) {
     if (claimedByLaterMention(clause, run)) return 'capital';
     const roles = run.map((t) => nounRole(t.lower));
-    if (roles.includes('capital') || roles.includes('total')) return 'capital';
+    if (roles.some((r) => r !== undefined && NON_AWARD_ROLES.has(r))) return 'capital';
     const head = roles[roles.length - 1];
     if (head === 'award' || head === 'person') return 'award';
     scanFrom = tokenIndexAfter(clause, run[run.length - 1].end);
@@ -823,11 +889,16 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
   const verb = governingVerb(clause, span);
   if (verb) {
     const subject = subjectHead(clause, verb);
+    const subjectRole = subject === undefined ? undefined : nounRole(subject);
     if (OUTFLOW_VERBS.has(verb.lower)) {
-      if (subject === undefined || !CAPITAL_NOUNS.has(subject)) return 'award';
-      // Capital-pool subject: fall through to rule 5, which will find the pool
-      // noun in the clause and omit.
-    } else if (subject !== undefined && PERSON_NOUNS.has(subject)) {
+      // Final round: the outflow branch is now an AFFIRMATIVE subject test, the
+      // mirror of the inflow branch, instead of "not a capital pool". Round 6
+      // excluded exactly five subject nouns, which closed the class for `fund`
+      // and left it open for "the Foundation", "the club", "we" and every other
+      // noun outside a hand-curated list. A subject that is itself an award or a
+      // payee claims; anything else falls through to the evidence gate.
+      if (subjectRole === 'award' || subjectRole === 'person') return 'award';
+    } else if (subjectRole === 'person') {
       // The subject is a payee, but the money's own object can still say the
       // money is capital income rather than an award: "student members receive
       // $50,000 in membership dues". Who receives it does not settle what it is.
@@ -837,13 +908,105 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
     }
   }
 
-  // 5. Clause-level capital vocabulary, or an accumulation spanning years —
-  //    last chance to omit before the default.
-  if (CAPITAL_CONTEXT_TERMS.some((t) => clause.lower.includes(t))) return 'capital';
+  // 5. Clause-level non-award vocabulary, or an accumulation spanning years.
+  //    The noun half is checked BY TOKEN against the noun classes themselves, so
+  //    it cannot drift from them the way the old hand-kept phrase list had.
+  if (clause.tokens.some((t) => {
+    const role = nounRole(t.lower);
+    return role !== undefined && NON_AWARD_ROLES.has(role);
+  })) {
+    return 'capital';
+  }
+  if (CAPITAL_CONTEXT_PHRASES.some((t) => clause.lower.includes(t))) return 'capital';
   if (CUMULATIVE_SPAN.test(clause.text)) return 'capital';
 
-  // 6. Nothing suggests a capital pool: a bare figure in this corpus is an award.
-  return 'award';
+  // 6. THE GATE. Award requires affirmative evidence — it is no longer the
+  //    default.
+  //
+  //    Final round (2026-08-03): rule 6 used to return 'award' for anything
+  //    unclassified, which made over-claiming the NORMAL outcome and every gap
+  //    in a ~250-word hand-curated vocabulary a published over-claim. On 42
+  //    realistic granting-foundation sentences that default produced 18
+  //    over-claims and 0 under-claims. Inverting it is what finally makes the
+  //    direction of error match the product requirement, and it is why each
+  //    earlier round kept finding "one more vector": they were patching an open
+  //    default one noun at a time.
+  //
+  //    Three forms of affirmative evidence, all structural:
+  return (
+    isBareAmountExpression(clause) ||
+    tierAmounts.has(span.value) ||
+    hasClauseAwardEvidence(clause)
+  )
+    ? 'award'
+    : 'capital';
+}
+
+/**
+ * Evidence 1 — the text is an AMOUNT EXPRESSION, not prose: "$1,000",
+ * "$500-$5,000", "$2,500 / $2,500 / $1,500", "up to $5,000", "$3,000 each",
+ * "4 of $15,000". `parseAmount` is fed a scraped award-amount FIELD, so a clause
+ * that is essentially just the figure is the award by construction.
+ *
+ * Structural test: no finite verb, at most five word tokens, and no aggregate
+ * "in <award-noun>" object. Prose about a foundation's disbursements always
+ * carries a verb ("distributed", "granted", "is") or more words than this.
+ */
+function isBareAmountExpression(clause: Clause): boolean {
+  if (clause.money.length === 0) return false;
+  if (clause.tokens.length > 5) return false;
+  if (AGGREGATE_OBJECT.test(clause.text)) return false;
+  if (
+    clause.tokens.some(
+      (t) =>
+        FINITE_VERB_MARKERS.has(t.lower) || OUTFLOW_VERBS.has(t.lower) || INFLOW_VERBS.has(t.lower),
+    )
+  ) {
+    return false;
+  }
+  // An amount expression LEADS with its amount. Prose puts a subject noun phrase
+  // in front of the money first. Only closed-class qualifier words may precede
+  // it ("up to $5,000", "at least $500", "4 of $15,000") — an unknown word there
+  // means this is a sentence about something, not a figure.
+  //
+  // Without this, "The organization handled $500,000 last year." read as a bare
+  // expression: short, and `handled` is in no verb lexicon. That is the same
+  // vocabulary-gap failure the gate exists to prevent, so the test is closed-class
+  // and unknown words BLOCK rather than pass.
+  const first = clause.money[0];
+  return clause.tokens.every((t) => t.start >= first.start || AMOUNT_QUALIFIER_WORDS.has(t.lower));
+}
+
+/**
+ * Closed-class words that may stand between the start of a clause and its amount.
+ *
+ * Written as one split string rather than a quoted list on purpose: a bare
+ * `'from'` literal followed by another quoted literal makes `purity.test.ts`'s
+ * import scanner read `from '...'` as an import specifier and fail the build.
+ */
+const AMOUNT_QUALIFIER_WORDS: ReadonlySet<string> = new Set(
+  (
+    'up to at least most no more than not exceed exceeding maximum max minimum min ' +
+    'of or and about approximately roughly around over under from starting a an the each per'
+  ).split(' '),
+);
+
+/**
+ * Evidence 3 — an award or payee noun stands somewhere in the clause on its own
+ * account: "Grants generally do not exceed $3,000", "each award is $3,000".
+ *
+ * An award noun inside an aggregate object ("distributed $500,000 IN GRANTS")
+ * does NOT count: there the award noun describes the FORM of a lump sum, not a
+ * per-award figure. That single exclusion is the difference between
+ * "The club distributed $500,000 in grants." (omit) and
+ * "Grants generally do not exceed $3,000." (award).
+ */
+function hasClauseAwardEvidence(clause: Clause): boolean {
+  if (AGGREGATE_OBJECT.test(clause.text)) return false;
+  return clause.tokens.some((t) => {
+    const role = nounRole(t.lower);
+    return role === 'award' || role === 'person';
+  });
 }
 
 interface Mention {
@@ -853,14 +1016,28 @@ interface Mention {
   readonly offsetInClause: number;
 }
 
+/**
+ * Evidence 2 — the figure is a member of an explicit tier structure
+ * ("20 awards of $25,000, 4 of $15,000, ..."). Counted per amount off the RAW
+ * text, because the tier list spans clauses.
+ */
+function tierAmountsOf(raw: string): ReadonlySet<number> {
+  const out = new Set<number>();
+  TIER_RE.lastIndex = 0;
+  let t: RegExpExecArray | null;
+  while ((t = TIER_RE.exec(raw)) !== null) out.add(toNumber(t[2]));
+  return out;
+}
+
 function collectMentions(raw: string): Mention[] {
   const mentions: Mention[] = [];
+  const tierAmounts = tierAmountsOf(raw);
   for (const text of splitClauses(raw)) {
     const clause = buildClause(text);
     for (const span of clause.money) {
       mentions.push({
         value: span.value,
-        isAward: classify(clause, span) === 'award',
+        isAward: classify(clause, span, tierAmounts) === 'award',
         clause: clause.text,
         offsetInClause: span.start,
       });

@@ -800,13 +800,30 @@ describe('parseAmount — fix round 5 (fronted adverbials, inflow objects, cumul
     });
   });
 
+  // The two tests below were rewritten in the final round. They previously used
+  // strings whose answer was the same with OR without the guard they claimed to
+  // cover — deleting either guard left both passing. Each now uses a string
+  // whose answer FLIPS when its guard is removed (verified by mutating the
+  // source and re-running), so the guard is genuinely pinned.
   it('V1 boundary: a leading fragment WITH a finite verb is a real clause and is not re-joined', () => {
+    // Mutation-pinned: delete the finite-verb check in isFrontedAdverbial and
+    // "The trust was created in 1980," merges forward, dragging `trust` into the
+    // award clause and turning this into {}.
+    expect(parseAmount('The trust was created in 1980, and each award is $1,000.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
     expect(
       parseAmount('The fund was established in 1980, and $1,000 is awarded to one student each year.'),
     ).toEqual({ amountMin: 1000, amountMax: 1000 });
   });
 
   it('V1 boundary: a leading clause holding its own capital figure is not re-joined', () => {
+    // Mutation-pinned: delete the MONEY_PRESENT check and "$3,000 each," merges
+    // into the trust clause, turning this into {}.
+    expect(
+      parseAmount('$3,000 each, from the scholarship trust maintained by the club.'),
+    ).toEqual({ amountMin: 3000, amountMax: 3000 });
     expect(parseAmount('The trust holds $2,000,000, and one award of $1,500 is made annually.')).toEqual({
       amountMin: 1500,
       amountMax: 1500,
@@ -1115,5 +1132,261 @@ describe('parseAmount — rounds 4 and 5 vectors re-verified after round 6', () 
     ).toEqual({});
     expect(parseAmount("The fund's board of trustees receives $500,000 in gifts each year.")).toEqual({});
     expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual({});
+  });
+});
+
+// FINAL ROUND (2026-08-03), from Plan 1's whole-branch review. The finding all
+// six earlier rounds were circling: rule 6 DEFAULTED unclassified money to
+// 'award', which made over-claiming the normal outcome and turned every gap in a
+// ~250-word hand-curated vocabulary into a published over-claim. On 42 realistic
+// granting-foundation sentences the old default produced 18 over-claims and 0
+// under-claims. Round 6 had closed the outflow case for exactly five subject
+// nouns — so the suite reported the class closed while the rest of English
+// stayed open. Real funders write "the Foundation", "the club", "we".
+//
+// Rule 6 is now an affirmative-evidence GATE: a figure is an award only with a
+// bare amount expression, a tier structure, or an award/payee noun standing on
+// its own account in the clause. Absent all of that, omit. The round-4
+// attachment core (rules 1-3) is untouched.
+describe('parseAmount — final round: award requires affirmative evidence', () => {
+  it('the nine verified over-claims all become {}', () => {
+    // Aggregate self-description: the pattern granting foundations actually use.
+    expect(parseAmount('The Foundation distributed $500,000 in grants.')).toEqual({});
+    expect(parseAmount('We distribute approximately $500,000 annually.')).toEqual({});
+    expect(parseAmount('The club distributed $500,000 in grants.')).toEqual({});
+    expect(parseAmount('ARDC granted $12,000,000 in 2024.')).toEqual({});
+    // Capital nouns that CAPITAL_CONTEXT_TERMS had drifted away from.
+    expect(parseAmount('The reserve was $500,000 at year end.')).toEqual({});
+    // NON_AWARD_NOUNS: an operating figure, and money the APPLICANT pays.
+    expect(parseAmount('The annual scholarship budget is $120,000.')).toEqual({});
+    expect(parseAmount('A $35 application fee is required.')).toEqual({});
+    // Abbreviation period no longer shatters the clause and strips `bequest`.
+    expect(parseAmount('A bequest from Mr. Smith left the club $250,000.')).toEqual({});
+    // Was only ever saved because `fund` happened to be in CAPITAL_NOUNS.
+    expect(parseAmount('The fund distributed $500,000 in grants.')).toEqual({});
+  });
+
+  it('shape — the subject noun no longer matters: any non-payee subject omits', () => {
+    for (const subject of ['The Foundation', 'The club', 'The program', 'The Society', 'We', 'ARDC']) {
+      expect(parseAmount(`${subject} distributed $500,000 in grants.`)).toEqual({});
+      expect(parseAmount(`${subject} awarded $500,000 in scholarships.`)).toEqual({});
+    }
+  });
+
+  it('shape — an award noun inside an aggregate object is not evidence', () => {
+    expect(parseAmount('The club distributed $500,000 in grants.')).toEqual({});
+    expect(parseAmount('The club distributed $500,000 in scholarships.')).toEqual({});
+    expect(parseAmount('The club distributed $500,000 in awards.')).toEqual({});
+    // ...but the same noun standing on its own account IS evidence.
+    expect(parseAmount('Grants generally do not exceed $3,000.')).toEqual({ amountMax: 3000 });
+    expect(parseAmount('Each award is $1,000.')).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  // --- The three proven-missing tests from mutation testing.
+  it('TRAILING_PASSIVE_AWARD is load-bearing: a passive award beats its own clause context', () => {
+    // Zero coverage before this. Rule 5 would call this capital via `endowment`;
+    // only the passive-award predicate saves it.
+    expect(parseAmount('From the endowment, $2,000 is awarded annually.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('the range guard rejects a range whose endpoints are not award mentions', () => {
+    expect(parseAmount('Each award is $1,000. The endowment grew from $500,000 to $900,000.')).toEqual(
+      { amountMin: 1000, amountMax: 1000 },
+    );
+  });
+
+  it('a single tier does not produce a one-element tiers array', () => {
+    const parsed = parseAmount('1 award of $2,000 is made annually.');
+    expect(parsed).toEqual({ amountMin: 2000, amountMax: 2000 });
+    expect(parsed.tiers).toBeUndefined();
+  });
+
+  // --- Abbreviation guard on HARD_BOUNDARY.
+  it('an abbreviation period is not a sentence end', () => {
+    expect(parseAmount('A gift from Mrs. Jones left the club $250,000.')).toEqual({});
+    expect(parseAmount('A bequest from Mr. Smith left the club $250,000.')).toEqual({});
+    expect(parseAmount('The trust of Dr. Doe holds $2,000,000.')).toEqual({});
+  });
+
+  it('a real sentence end still splits, so a later clean award still parses', () => {
+    expect(parseAmount('The award is $1,000. Dr. Smith chairs the committee.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    // The round-1 fixture that passed for the wrong reason — its $100,000 sits
+    // BEFORE the "Dr.". It must still exclude the endowment now that the
+    // abbreviation no longer splits the sentence.
+    expect(
+      parseAmount(
+        'The fund was established with a $100,000 endowment from the estate of Dr. Jane Doe, W1ABC. One award of $1,000 is made annually.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  // --- `under` dropped from UP_TO.
+  it('"under $N" is an eligibility cap on project size, not an award ceiling', () => {
+    expect(parseAmount('Projects under $5,000 are eligible; each award is $1,000.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    // The genuine ceiling words still work.
+    expect(parseAmount('up to $5,000')).toEqual({ amountMax: 5000 });
+    expect(parseAmount('no more than $3,000')).toEqual({ amountMax: 3000 });
+  });
+
+  // --- NON_AWARD_NOUNS.
+  it('costs, fees, budgets and payouts are not awards', () => {
+    expect(parseAmount('A $35 entry fee applies.')).toEqual({});
+    expect(parseAmount('The $120,000 budget covers all programs.')).toEqual({});
+    expect(parseAmount('Annual operating costs are $80,000.')).toEqual({});
+    expect(parseAmount('The payout was $45,000 last year.')).toEqual({});
+    expect(parseAmount('Tuition of $30,000 is not covered.')).toEqual({});
+  });
+
+  // --- CAPITAL_CONTEXT derived from the noun classes rather than hand-kept.
+  it('every capital noun works at clause level, including the ones the old list had dropped', () => {
+    for (const noun of ['reserve', 'portfolio', 'annuity', 'treasury', 'legacy', 'endowment', 'trust']) {
+      expect(parseAmount(`The ${noun} was $500,000 at year end.`)).toEqual({});
+    }
+  });
+
+  // --- The affirmative-evidence forms themselves.
+  it('evidence 1 — a bare amount expression is the award by construction', () => {
+    expect(parseAmount('$1,000')).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(parseAmount('$500-$5,000')).toEqual({ amountMin: 500, amountMax: 5000 });
+    expect(parseAmount('$2,500 / $2,500 / $1,500')).toEqual({ amountMin: 1500, amountMax: 2500 });
+    expect(parseAmount('$3,000 each')).toEqual({ amountMin: 3000, amountMax: 3000 });
+    expect(parseAmount('up to $5,000')).toEqual({ amountMax: 5000 });
+    expect(parseAmount('$1,450 (DR-2X) / $1,860 (with LAN-01A)')).toEqual({
+      amountMin: 1450,
+      amountMax: 1860,
+    });
+  });
+
+  it('evidence 1 boundary — prose is not a bare amount expression even when short', () => {
+    // Same figure, same length, but a finite verb makes it a claim about a pool.
+    expect(parseAmount('ARDC granted $12,000,000 in 2024.')).toEqual({});
+    expect(parseAmount('The reserve was $500,000.')).toEqual({});
+    expect(parseAmount('$12,000,000 in grants')).toEqual({});
+  });
+
+  it('evidence 2 — a tier structure carries its own members', () => {
+    expect(parseAmount('20 awards of $25,000, 4 of $15,000, 17 of $10,000, 4 of $5,000')).toEqual({
+      amountMin: 5000,
+      amountMax: 25000,
+      tiers: [
+        { count: 20, amount: 25000 },
+        { count: 4, amount: 15000 },
+        { count: 17, amount: 10000 },
+        { count: 4, amount: 5000 },
+      ],
+    });
+  });
+
+  it('evidence 3 — an award or payee noun standing on its own account', () => {
+    expect(parseAmount('Awards range from $1,000 to $25,000.')).toEqual({
+      amountMin: 1000,
+      amountMax: 25000,
+    });
+    expect(parseAmount('Grants generally do not exceed $3,000; up to $5,000 in 2026.')).toEqual({
+      amountMax: 5000,
+    });
+    expect(parseAmount('The current award is $2,500.')).toEqual({ amountMin: 2500, amountMax: 2500 });
+  });
+
+  it('no evidence at all — omit', () => {
+    expect(parseAmount('The organization handled $500,000 last year.')).toEqual({});
+    expect(parseAmount('Assets stood at $2,000,000.')).toEqual({});
+    expect(parseAmount('The 2024 figure was $57,000.')).toEqual({});
+  });
+});
+
+// FINAL ROUND: the whole accumulated regression sweep, re-run verbatim. Every
+// probe that has ever been load-bearing across six rounds.
+describe('parseAmount — full regression sweep re-verified after the gate inversion', () => {
+  it('round 4: the six attachment probes', () => {
+    expect(parseAmount('A $50,000 trust is made to one recipient of $1,000 annually.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(
+      parseAmount('A $50,000 fund goes to one recipient; a separate $1,000 prize is issued each term.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(
+      parseAmount('A $50,000 trust to one recipient near a $1,000 stipend awarded elsewhere.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(
+      parseAmount('A $75,000 endowment to each winner, separate from the $2,000 prize fund total.'),
+    ).toEqual({});
+    expect(parseAmount("The fund's board of trustees receives $500,000 in gifts each year.")).toEqual({});
+    expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual({});
+  });
+
+  it('round 5: the three vectors', () => {
+    expect(
+      parseAmount(
+        'Since 1978, the club has provided over $930,350 in scholarships; this year, one award of $1,000 is made.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(
+      parseAmount("The Society's student members receive $50,000 in membership dues each year."),
+    ).toEqual({});
+    expect(parseAmount("The club's youth members receive $500,000 in annual dues.")).toEqual({});
+    expect(parseAmount("The scholars' committee members receive $10,000 in program funding.")).toEqual({});
+    expect(parseAmount('$1.2M over 48 years')).toEqual({});
+    expect(parseAmount('Total distributed: $1.2M over 48 years.')).toEqual({});
+  });
+
+  it('round 6: capital-pool outflow and the funds/scholarship-funds discriminator', () => {
+    expect(parseAmount('The fund distributed $500,000 in grants.')).toEqual({});
+    expect(parseAmount('The endowment paid $500,000 to grantees this year.')).toEqual({});
+    expect(
+      parseAmount("The Society's student members receive $50,000 in membership funds each year."),
+    ).toEqual({});
+    expect(parseAmount('Students receive $1,000 in scholarship funds each year.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('The trust pays $1,000 to each recipient.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('the original 12 fixtures still hold end to end', () => {
+    expect(parseAmount('$1.5K')).toEqual({ amountMin: 1500, amountMax: 1500 });
+    expect(parseAmount('$2M')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+    expect(parseAmount('$2 million')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+    expect(parseAmount('A $100,000 endowment funds awards of $2,500.')).toEqual({
+      amountMin: 2500,
+      amountMax: 2500,
+    });
+    expect(parseAmount('Funded by a $100,000 endowment.')).toEqual({});
+    expect(parseAmount('A $100,000 endowment supports one award of $1,000 per year.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('Awards of $1,000 each; the program has awarded $930,350 since 1978.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('$3,000 each; 15 awards in 2024 totaling $57,000.')).toEqual({
+      amountMin: 3000,
+      amountMax: 3000,
+    });
+    expect(parseAmount('at least $500')).toEqual({ amountMin: 500 });
+    expect(parseAmount('none')).toEqual({});
+    expect(parseAmount('')).toEqual({});
+  });
+
+  it('the accepted under-claims still behave exactly as recorded', () => {
+    expect(parseAmount('The student selected by the committee receives $1,500.')).toEqual({});
+    expect(parseAmount('The $2,000 scholarship fund is awarded to one student each year.')).toEqual({});
+    expect(parseAmount('The total award is $2,000.')).toEqual({});
+    expect(parseAmount('Students receive $1,000 in funding for equipment.')).toEqual({});
+    expect(parseAmount('The fund distributes $2,500 annually.')).toEqual({});
   });
 });
