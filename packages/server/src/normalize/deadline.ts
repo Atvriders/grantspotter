@@ -167,7 +167,46 @@ const KNOWN_PROGRAM_STATUSES: ReadonlySet<string> = new Set([
  * how the FAR bug hid in the first place; the remaining generic recordType/deadlineKind inference
  * below is now a fallback for records that genuinely have no researched status (a live-crawled
  * source usually doesn't), not a substitute for one.
+ *
+ * FIX ROUND 3 (this task — remediation of the false 'open' the round 1/2 fix left in place).
+ * Two distinct holes, both proven by real, committed corpus data rather than a synthetic example:
+ *
+ * 1. `'manual'` and `'guided_workflow'` were added to `KNOWN_RECORD_TYPES` (so the "fail loud as
+ *    unknown" net at the bottom does not catch them — they are, correctly, KNOWN) but the switch
+ *    below never grew a case for either, so a record of either kind with no `rawFields.status`
+ *    override fell through every branch to the final `return 'open'`. Every current
+ *    `manual-tier-d.ts` record of these two kinds happens to carry an explicit override (see the
+ *    FIX ROUND 2 doc above), so this was latent, not currently firing on the shipped corpus — but
+ *    "happens not to fire today" is exactly the shape of the original FAR bug, and a manually-
+ *    tracked programme's status is never derivable from a date, and a guided workflow (52 NASA
+ *    Space Grant consortia, ~4,000 campus SGAs) has no single deadline by construction — that is
+ *    the entire reason it ships as a workflow instead of a feed. `'unknown'` is the honest
+ *    fallback for both; `'open'` asserts a live cycle nothing here can support.
+ *
+ * 2. The William C. Winscott, N6CHA, Memorial Scholarship — a real entry in the live,
+ *    111-record ARRL scholarship-descriptions catalog, with no `recordType` at all (it is an
+ *    ordinary scraped catalog entry, not a Tier D hand-curated record) — computed `'open'`. Its
+ *    own `Other:` field reads "This scholarship is not currently active. First award will be made
+ *    the year following Mr. Winscott's passing and receipt of the William C. Winscott Trust."
+ *    Nothing above catches this: no recordType, no deadlineKind override, no applicantEntity,
+ *    and `ctx.sourceId` is the ordinary catalog source, not one of the two hardcoded exceptions.
+ *    `statesInactivity` below closes this for good by reading the funder's own words instead of
+ *    relying on some future field ever being added for it — the fastest-growing category of bug
+ *    in this file has been "a record with no structured signal at all defaults to open".
  */
+const INACTIVITY_PATTERN =
+  /\bnot currently\s+active\b|\bno longer (?:offered|active|available)\b|\bdiscontinued\b|\bsuspended\b|\bon hiatus\b/i;
+
+/**
+ * True when the funder's own text says this programme is not accepting applications right now.
+ * Checked against `rawText` — the full flattened body every source's `rawFields` is itself split
+ * from (see `sources/util/text.ts`'s `splitByLabels`) — so this fires regardless of which label,
+ * if any, the sentence happens to land under on a given source's page.
+ */
+function statesInactivity(raw: RawOpportunity): boolean {
+  return INACTIVITY_PATTERN.test(raw.rawText);
+}
+
 export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): ProgramStatus {
   const override = raw.rawFields.status;
   if (override !== undefined && KNOWN_PROGRAM_STATUSES.has(override)) {
@@ -192,6 +231,22 @@ export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): Program
   if (raw.rawFields.deadlineKind === 'no_application_exists') return 'no_application';
   if (raw.rawFields.applicantEntity === 'nominated_by_institution') return 'contact_only';
   if (ctx.sourceId === 'nasa-csli' || ctx.sourceId === 'arrl-club-grant') return 'unknown';
+
+  // FIX ROUND 3. The funder's own words say this programme is not currently active (e.g. the
+  // Winscott scholarship) — never let that compute 'open', regardless of recordType. 'dormant'
+  // is the honest read: the programme exists and is not permanently ended (Winscott names a
+  // specific future trigger), it simply has no live cycle right now.
+  if (statesInactivity(raw)) return 'dormant';
+
+  // FIX ROUND 3. 'manual'/'guided_workflow' reach here only when none of the more specific
+  // signals above resolved them (no deadlineKind of no_application_exists, no
+  // nominated_by_institution applicant, no inactivity text) — i.e. exactly the case where a
+  // record of one of these kinds carries no researched rawFields.status at all (every real
+  // manual-tier-d.ts record of these kinds currently does — see the doc comment above; this is
+  // the defensive fallback for when one is absent). Neither kind's status is derivable from a
+  // date or a generic bucket, so 'unknown' is the honest answer; 'open' asserts a live cycle
+  // nothing here can support.
+  if (recordType === 'manual' || recordType === 'guided_workflow') return 'unknown';
 
   // A recordType WAS set, but nothing above resolved it — fail loud as 'unknown', never silently
   // 'open'.
