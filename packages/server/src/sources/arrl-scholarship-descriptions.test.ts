@@ -84,6 +84,8 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
     expect(hodges?.rawFields['Field of Study']).toBe('Any, except for Liberal Arts');
   });
 
+  // Also doubles as fix round 2 regression coverage: Hodges' Other field now ends in a decoy
+  // "Region-specific rules..." line (see below), which used to append onto this exact value.
   it('keeps the radius region verbatim so the geography extractor can read it', () => {
     const hodges = pathological().entries.find((e) => e.name === 'Larry Hodges Memorial Scholarship');
     expect(hodges?.rawFields.Region).toBe('Residing within 250 miles of Seaford, Delaware');
@@ -121,6 +123,36 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
       'Applicant must provide documentation of a diagnosed learning disability.\n' +
         "Amount awarded may vary depending on the review committee's judgement.\n" +
         'License to practice is not required for this field.',
+    );
+  });
+
+  // Fix round 2 (correcting an inaccuracy in the round 1 report): Region, Institution, Age and
+  // Other were ALSO left as bare, colon-optional single-word alternates — the same exploit class
+  // as Amount/License, just not yet fixed. Hodges' Other field now ends in four decoy lines, one
+  // per label, each opening a line with the bare word and no colon:
+  //   "Age is not a factor in this award."
+  //   "Region-specific rules may apply in exceptional cases."
+  //   "Institution transfer students remain eligible."
+  //   "Other scholarships may also be combined with this one."
+  // Before the fix these fabricated an Age field, appended onto Region and Institution (see the
+  // two tests above), and fragmented Other. Verified red before the fix and green after by
+  // temporarily reverting the colon requirement and re-running this file.
+  it('does not let bare "Age"/"Region"/"Institution"/"Other" sentence-openers fabricate or corrupt fields', () => {
+    const hodges = pathological().entries.find((e) => e.name === 'Larry Hodges Memorial Scholarship');
+    // "Age is not a factor..." must not fabricate an Age field — Hodges never had one.
+    expect(hodges?.rawFields.Age).toBeUndefined();
+    // Institution must stay exactly what it was, not "Any\ntransfer students remain eligible.".
+    expect(hodges?.rawFields.Institution).toBe('Any');
+    // Other must retain everything, including the trailing "Other scholarships..." decoy line
+    // itself (its own bare "Other" must not consume itself as a second label match).
+    expect(hodges?.rawFields.Other).toBe(
+      'Preference will be given to applicants residing in Louisiana. If no qualified\n' +
+        'applicant is identified, the award is open to any eligible applicant. A letter describing an\n' +
+        'at-risk-youth turnaround is required.\n' +
+        'Age is not a factor in this award.\n' +
+        'Region-specific rules may apply in exceptional cases.\n' +
+        'Institution transfer students remain eligible.\n' +
+        'Other scholarships may also be combined with this one.',
     );
   });
 
@@ -218,6 +250,43 @@ describe('the stub-rescue safety net (dollar amount / date corroboration)', () =
     expect(debugSpy).toHaveBeenCalledTimes(1);
     expect(String(debugSpy.mock.calls[0][0])).toContain('Untouched Stub');
     expect(String(debugSpy.mock.calls[0][0])).not.toContain('Typo Storm');
+  });
+});
+
+// Discovered while re-verifying the live page for fix round 2: requiring a colon on the bare
+// "Region" alternate (so it can no longer match "Regional" as a substring) also stopped an
+// EXISTING silent false positive — the live "Edmond A. Metzger Scholarship" entry uses the label
+// "Regional Preference:", which the old colon-optional "Region" alternate matched as a substring,
+// capturing "al Preference: Resident of ARRL Central Division (IL, IN, WI)" (garbage prefix and
+// all) as its Region value. The colon requirement alone would have left this entry's Region
+// unrecovered instead, so "Regional Preference:" was added as an explicit alternate to recover
+// the clean value. Standalone snippet, not the shared fixture, for the same reason as the typo
+// storm test above.
+const REGIONAL_PREFERENCE_HTML = `<!DOCTYPE html>
+<html><body>
+<div class="tabArea f-widget f-accordion">
+  <h3 class="tab">E - L</h3>
+  <ul class="accordion">
+    <li>
+      <p class="title"><a href="#">Regional Preference Scholarship</a></p>
+      <div class="content">
+        <ul>
+          <li>License Requirement: Any active Amateur Radio License Class</li>
+          <li>Regional Preference: Resident of ARRL Central Division (IL, IN, WI)</li>
+          <li>Field of Study: Any</li>
+        </ul>
+      </div>
+    </li>
+  </ul>
+</div>
+</body></html>`;
+
+describe('the "Regional Preference" label variant', () => {
+  it('recovers the clean value instead of matching "Region" as a substring of "Regional"', () => {
+    const result = parseScholarshipCatalog(REGIONAL_PREFERENCE_HTML, TYPO_STORM_URL);
+    const entry = result.entries.find((e) => e.name === 'Regional Preference Scholarship');
+    expect(entry?.rawFields.Region).toBe('Resident of ARRL Central Division (IL, IN, WI)');
+    expect(entry?.rawFields.Region).not.toContain('al Preference');
   });
 });
 

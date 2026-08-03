@@ -14,24 +14,39 @@ const URL = 'http://www.arrl.org/scholarship-descriptions';
  * tolerance recovers a missing character. Order inside a key does not matter — the matcher in
  * util/text.ts sorts every alternate longest-first so "License Requirement" beats "License".
  *
- * "Amount" and "License" carry a trailing literal colon that the fuller phrases do not.
- * util/text.ts's buildLabelRegExp makes the colon after a matched alternate OPTIONAL and matches
- * at the start of any line (post-<br>/block-boundary), not only after a real "Label:" — so a bare
- * "Amount" or "License" would also match ordinary prose that merely starts a line with that word,
- * e.g. an Other paragraph containing "Amount awarded may vary..." or "License to practice is not
- * required...". Baking the colon into the alternate string itself (looseLabelPattern still
- * tolerates whitespace before it, so "Amount :" also matches) makes it a REQUIRED part of the
- * match for exactly these two ambiguous single-word alternates, closing that off without
- * widening the shared, other-parsers-depend-on-it util/text.ts contract. The full-phrase
- * alternates ("Award Amount", "License Requirement", ...) are left as-is: two-plus-word phrases
- * beginning a line are not credible prose openers the way a single common word is, and every
- * label on this page has in practice always carried a colon regardless.
+ * EVERY bare single-word alternate below ("Amount:", "License:", "Region:", "Regions:",
+ * "Institution:", "Institutions:", "Age:", "Other:") carries a trailing literal colon that the
+ * multi-word phrase alternates do not. util/text.ts's buildLabelRegExp makes the colon after a
+ * matched alternate OPTIONAL and matches at the start of any line (post-<br>/block-boundary),
+ * not only after a real "Label:" — so a bare "Region", "Institution", "Age", "Other", "Amount"
+ * or "License" would also match ordinary prose that merely starts a line with that common word,
+ * e.g. "Age is not a factor...", "Region-specific rules...", "Institution transfer...", "Other
+ * scholarships...", "Amount awarded may vary...", "License to practice is not required...".
+ * (Fix round 1 corrected only Amount/License and rationalised leaving Region/Institution/Age/
+ * Other colon-optional on the theory that "a single common word" was the risk and those four
+ * were somehow different — they are not: they are ALSO single common words, and round 2 fixed
+ * that inconsistency. There is no bare-word alternate left colon-optional in this table.)
+ * Baking the colon into the alternate string itself (looseLabelPattern still tolerates
+ * whitespace before it, so "Amount :" or "R egion:" both still match) makes it a REQUIRED part
+ * of the match for every one of these single-word alternates, closing this off without widening
+ * the shared, other-parsers-depend-on-it util/text.ts contract. The full-phrase alternates
+ * ("Award Amount", "License Requirement", "Age Requirement", "Other Requirements", "Additional
+ * Requirements") are left colon-optional: a two-plus-word phrase beginning a line is not a
+ * credible prose opener the way a single common word is, and every label on this page has in
+ * practice always carried a colon regardless.
  */
 export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
   'Field of Study': ['Field of Study', 'Fields of Study', 'Field of Studies'],
   'License Requirement': ['License Requirement', 'License Requirements', 'License:'],
-  Region: ['Region', 'Regions'],
-  Institution: ['Institution', 'Institutions'],
+  // "Regional Preference:" (The Edmond A. Metzger Scholarship, live page) used to be a SILENT
+  // false-positive match on the bare "Region" alternate before this file required a colon: old
+  // code matched "Region" as a substring of "Regional" and captured "al Preference: Resident of
+  // ARRL Central Division (IL, IN, WI)" as the Region value, garbage prefix and all. Requiring
+  // the colon correctly stopped that substring match, which would otherwise have left this
+  // entry's Region unrecovered — so it is listed here explicitly instead, recovering the clean
+  // value ("Resident of ARRL Central Division (IL, IN, WI)") rather than leaving it dropped.
+  Region: ['Region:', 'Regions:', 'Regional Preference:'],
+  Institution: ['Institution:', 'Institutions:'],
   'Award Amount': ['Award Amount', 'Award Amounts', 'Amount:'],
   'Number of Awards': [
     'Number of Awards',
@@ -39,8 +54,8 @@ export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
     'Number of Scholarships',
     'Number of Scholarshps',
   ],
-  Age: ['Age Requirement', 'Age'],
-  Other: ['Other Requirements', 'Additional Requirements', 'Other'],
+  Age: ['Age Requirement', 'Age:'],
+  Other: ['Other Requirements', 'Additional Requirements', 'Other:'],
 };
 
 const FIELD_KEYS = Object.keys(ARRL_SCHOLARSHIP_LABELS);
