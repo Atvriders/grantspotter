@@ -16,7 +16,8 @@
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @grantspotter/server",
     "dev:web": "npm run dev -w @grantspotter/web",
-    "capture-fixture": "tsx scripts/capture-fixture.ts"
+    "capture-fixture": "tsx scripts/capture-fixture.ts",
+    "verify-sources": "tsx scripts/verify-sources.ts"
   },
   "devDependencies": {
     "@types/node": "20.19.43",
