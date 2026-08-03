@@ -92,7 +92,7 @@ describe('funder repository', () => {
     expect(repo.count()).toBe(1);
 
     repo.upsert({ id: 'arrl-foundation', name: 'ARRL Foundation', homepage: 'https://www.arrl.org/' });
-    expect(repo.list().map((f) => f.id)).toEqual(['arrl-foundation', 'ardc']);
+    expect(repo.list().map((f) => f.id)).toEqual(['ardc', 'arrl-foundation']);
 
     repo.remove('ardc');
     expect(repo.get('ardc')).toBeUndefined();

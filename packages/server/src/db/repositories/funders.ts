@@ -38,9 +38,8 @@ export function createFunderRepo(db: Db): FunderRepo {
        ein = excluded.ein, note = excluded.note, updated_at = excluded.updated_at`,
   );
   const getStmt = db.prepare('SELECT id, name, homepage, ein, note FROM funders WHERE id = ?');
-  const listStmt = db.prepare(
-    'SELECT id, name, homepage, ein, note FROM funders ORDER BY name DESC',
-  );
+  // Ascending by name: A-Z browse order, same convention as programs.list().
+  const listStmt = db.prepare('SELECT id, name, homepage, ein, note FROM funders ORDER BY name');
   const removeStmt = db.prepare('DELETE FROM funders WHERE id = ?');
   const countStmt = db.prepare('SELECT COUNT(*) AS n FROM funders');
 
