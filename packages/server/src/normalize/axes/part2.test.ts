@@ -37,6 +37,20 @@ describe('extractArrlMembership', () => {
   it('returns [] when ARRL membership is not mentioned', () => {
     expect(extractArrlMembership(raw({ Other: 'Any licensed amateur.' }))).toEqual([]);
   });
+
+  it('reads the plural requirement form: "open to ARRL members" (regression: word-boundary plural gap)', () => {
+    const cs = extractArrlMembership(raw({ Other: 'This scholarship is open to ARRL members.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
+  });
+
+  it('reads a preference-form plural: "preference is given to ARRL members" and keeps it soft', () => {
+    const cs = extractArrlMembership(raw({ Other: 'Preference is given to ARRL members.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
+  });
 });
 
 describe('extractRecommendation', () => {
@@ -94,6 +108,20 @@ describe('extractCitizenship', () => {
     expect(
       extractCitizenship(raw({ Region: 'Any', Other: 'Open worldwide; US residence is not required.' }))[0].spec,
     ).toMatchObject({ allowed: ['ANY'] });
+  });
+
+  it('reads the plural requirement form: "open to US citizens" (regression: word-boundary plural gap)', () => {
+    const cs = extractCitizenship(raw({ Other: 'This scholarship is open to US citizens.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toMatchObject({ axis: 'citizenship', allowed: ['US_CITIZEN'] });
+  });
+
+  it('reads a preference-form plural: "preference is given to US citizens" and keeps it soft', () => {
+    const cs = extractCitizenship(raw({ Other: 'Preference is given to US citizens.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].spec).toMatchObject({ axis: 'citizenship', allowed: ['US_CITIZEN'] });
   });
 });
 

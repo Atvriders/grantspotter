@@ -1,7 +1,7 @@
 import type { Constraint, RawOpportunity } from '@grantspotter/core';
 import { makeConstraint } from './preference.js';
 
-const ARRL_MEMBER = /\bARRL\s+member(?:ship)?\b/i;
+const ARRL_MEMBER = /\bARRL\s+member(?:s|ship)?\b/i;
 const AT_LEAST_YEARS = /(?:at least|for)\s+(one|two|three|\d+)\s+years?/i;
 const WORD_YEARS: Record<string, number> = { one: 1, two: 2, three: 3 };
 

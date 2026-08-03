@@ -9,7 +9,7 @@ export function extractCitizenship(raw: RawOpportunity): Constraint[] {
   const text = [raw.rawFields.Other, raw.rawFields.Region, raw.rawFields.eligibility, raw.rawText]
     .filter(Boolean)
     .join('\n');
-  const hasCitizen = /\bcitizen(?:ship)?\b/i.test(text);
+  const hasCitizen = /\bcitizen(?:s|ship)?\b/i.test(text);
   const worldwide = WORLDWIDE.test(text);
   if (!hasCitizen && !worldwide) return [];
 
