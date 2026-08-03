@@ -1,0 +1,25 @@
+{
+  "name": "grantspotter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A self-hosted funding desk for collegiate and educational amateur radio.",
+  "license": "MIT",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run build -w @grantspotter/core && npm run build -w @grantspotter/server",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm run dev -w @grantspotter/server",
+    "dev:web": "echo \"web workspace arrives in Task 18\""
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "concurrently": "10.0.4",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  },
+  "engines": { "node": ">=20.11.0" }
+}
