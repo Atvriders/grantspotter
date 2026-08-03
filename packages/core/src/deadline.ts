@@ -49,6 +49,19 @@ export class RecurrenceParseError extends Error {
   }
 }
 
+// Calendar-aware max day per month, used to validate MM-DD values that carry
+// no year. Feb is deliberately given 29: a bare "02-29" is a real calendar
+// date in leap years, and a recurrence rule has no year to test it against.
+// So parseMonthDay ACCEPTS 02-29 — rejecting the one MM-DD that is merely
+// *sometimes* invalid, on the same footing as 02-30 which is *never* valid,
+// would be the wrong kind of loud. The non-leap-year case is deferred to
+// projection time, where expandCycles's clampDay (year-aware) already clamps
+// Feb 29 down to Feb 28 for the years it doesn't exist in — the same
+// mechanism that clamps "close of month" dates in general. What parseMonthDay
+// must still reject outright is a day with no calendar meaning in ANY year
+// for that month, e.g. 02-30, 04-31, 06-31, 09-31, 11-31.
+const MONTH_MAX_DAY = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
 function parseMonthDay(raw: string, context: string): MonthDay {
   const m = /^(\d{2})-(\d{2})$/.exec(raw);
   if (m === null) {
@@ -56,8 +69,14 @@ function parseMonthDay(raw: string, context: string): MonthDay {
   }
   const month = Number(m[1]);
   const day = Number(m[2]);
-  if (month < 1 || month > 12 || day < 1 || day > 31) {
-    throw new RecurrenceParseError(`${context}: "${raw}" is out of range`);
+  if (month < 1 || month > 12) {
+    throw new RecurrenceParseError(`${context}: "${raw}" has an invalid month ${m[1]}`);
+  }
+  const maxDay = MONTH_MAX_DAY[month - 1];
+  if (day < 1 || day > maxDay) {
+    throw new RecurrenceParseError(
+      `${context}: "${raw}" — month ${m[1]} has no day ${m[2]} (that month runs 01 to ${String(maxDay).padStart(2, '0')})`,
+    );
   }
   return { month, day };
 }
@@ -191,6 +210,14 @@ function offsetMinutesAt(utcMs: number, timeZone: string): number {
  * Convert a wall-clock time in an IANA zone to a UTC ISO instant. Two passes:
  * the first offset estimate can be wrong within a few hours of a DST
  * transition, and re-reading the offset at the corrected instant fixes it.
+ *
+ * A wall time inside the fall-back window (e.g. 2026-11-01 01:30 in
+ * America/New_York, which occurs twice as clocks repeat that hour) is
+ * ambiguous by construction — this always resolves to the pre-fallback
+ * (still-DST) occurrence, because the second pass re-reads the offset at an
+ * instant that is still inside DST for times in that hour. No deadline in
+ * this corpus falls at 1–2 AM, so the ambiguity is unreachable in practice;
+ * documented here so nobody has to re-derive it if that ever changes.
  */
 export function zonedWallTimeToUtcISO(
   year: number,

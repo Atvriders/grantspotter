@@ -103,6 +103,55 @@ describe('parseRecurrence', () => {
       parseRecurrence('RECUR n_fixed_dates tz=America/New_York dates=13-45'),
     ).toThrow(RecurrenceParseError);
   });
+
+  // parseMonthDay validates the day against the actual length of that month
+  // (not a flat 1-31), so a nonexistent date is rejected on its own — not
+  // only when the month happens to be out of range too. Each case below
+  // isolates exactly one invalid day in an otherwise-valid month.
+  describe('rejects a day that does not exist in that month, in isolation', () => {
+    it.each([
+      ['02-30', 'February has no 30th'],
+      ['04-31', 'April has no 31st'],
+      ['06-31', 'June has no 31st'],
+      ['09-31', 'September has no 31st'],
+      ['11-31', 'November has no 31st'],
+    ])('rejects %s (%s)', (mmdd) => {
+      expect(() =>
+        parseRecurrence(`RECUR n_fixed_dates tz=America/New_York dates=${mmdd}`),
+      ).toThrow(RecurrenceParseError);
+    });
+  });
+
+  // Feb 29 is a deliberate accept, not an oversight: a RECUR date carries no
+  // year, so "02-29" cannot be checked against a specific calendar — it IS a
+  // real date in leap years. Non-leap-year clamping is expandCycles's job
+  // (Task 6's clampDay), not the parser's. See the comment on MONTH_MAX_DAY
+  // in src/deadline.ts.
+  it('accepts 02-29 at parse time (leap-year clamping happens downstream, not here)', () => {
+    const r = parseRecurrence('RECUR n_fixed_dates tz=America/New_York dates=02-29');
+    expect(r).toEqual({
+      kind: 'n_fixed_dates',
+      timezone: 'America/New_York',
+      dates: [{ month: 2, day: 29 }],
+      closeTime: { hour: 23, minute: 59 },
+    });
+  });
+
+  // Each month's real last day must still parse — the calendar-aware check
+  // must not be off by one in the other direction.
+  it.each([
+    ['01-31', { month: 1, day: 31 }],
+    ['04-30', { month: 4, day: 30 }],
+    ['02-28', { month: 2, day: 28 }],
+  ])('accepts %s, a real last-of-month day', (mmdd, expected) => {
+    const r = parseRecurrence(`RECUR n_fixed_dates tz=America/New_York dates=${mmdd}`);
+    expect(r).toEqual({
+      kind: 'n_fixed_dates',
+      timezone: 'America/New_York',
+      dates: [expected],
+      closeTime: { hour: 23, minute: 59 },
+    });
+  });
 });
 
 describe('resolveDeadlineOwner', () => {
