@@ -3,7 +3,9 @@ import { ardcAwardTables } from './ardc-award-tables.js';
 import { ardcGrants } from './ardc-grants.js';
 import { arrlNewsRss } from './arrl-news-rss.js';
 import { arrlScholarshipDescriptions } from './arrl-scholarship-descriptions.js';
+import { manualTierD } from './manual-tier-d.js';
 import { nsfFundingRss } from './nsf-funding-rss.js';
+import { TIER_C_A_SOURCES } from './tier-c-a.js';
 import { TIER_C_B_SOURCES } from './tier-c-b.js';
 import { yaesuDr2x } from './yaesu-dr2x.js';
 
@@ -24,7 +26,9 @@ const MODULES: SourceModule[] = [
   ardcAwardTables,
   arrlNewsRss,
   arrlScholarshipDescriptions,
+  manualTierD,
   nsfFundingRss,
+  ...TIER_C_A_SOURCES,
   ...TIER_C_B_SOURCES,
   yaesuDr2x,
 ];
