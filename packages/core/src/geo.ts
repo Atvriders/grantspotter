@@ -84,10 +84,28 @@ export function withinRadius(lat: number, lon: number, geo: GeoSpec): boolean {
   return haversineMiles(lat, lon, geo.centerLat, geo.centerLon) <= geo.radiusMiles;
 }
 
+const US_SINGLE_LETTER_PREFIXES = new Set(['K', 'N', 'W']);
+
+/**
+ * True if `prefix` (1 or 2 letters) falls in a US ITU prefix block: the
+ * whole K/N/W blocks, or the AA-AL slice of the A block (AM-AZ belongs to
+ * other countries, e.g. AM-AO Spain, AP-AS Pakistan, AY-AZ Argentina).
+ */
+function isUsPrefix(prefix: string): boolean {
+  const first = prefix[0];
+  if (first === undefined) return false;
+  if (US_SINGLE_LETTER_PREFIXES.has(first)) return true;
+  if (first !== 'A') return false;
+  const second = prefix[1];
+  return second !== undefined && second >= 'A' && second <= 'L';
+}
+
 /** The digit in a US callsign is its call district: W5XYZ is district 5. */
 export function callDistrictFromCallsign(callsign: string): string | undefined {
-  const m = /^[A-Z]{1,2}(\d)[A-Z]{1,4}$/.exec(callsign.trim().toUpperCase());
-  return m === null ? undefined : m[1];
+  const m = /^([A-Z]{1,2})(\d)[A-Z]{1,4}$/.exec(callsign.trim().toUpperCase());
+  if (m === null) return undefined;
+  const [, prefix, digit] = m;
+  return isUsPrefix(prefix) ? digit : undefined;
 }
 
 function parseCountyValue(value: string): { county: string; state?: string } {

@@ -141,10 +141,30 @@ describe('callDistrictFromCallsign', () => {
     expect(callDistrictFromCallsign('  kh6abc ')).toBe('6');
   });
 
+  it('extracts the digit from US two-letter A-block prefixes (AA-AL)', () => {
+    expect(callDistrictFromCallsign('AB4Q')).toBe('4');
+    expect(callDistrictFromCallsign('AB4XY')).toBe('4');
+  });
+
   it('returns undefined for anything that is not a US-shaped callsign', () => {
     expect(callDistrictFromCallsign('2E0ABC')).toBeUndefined();
     expect(callDistrictFromCallsign('')).toBeUndefined();
     expect(callDistrictFromCallsign('NOTACALL')).toBeUndefined();
+    expect(callDistrictFromCallsign('W5X5')).toBeUndefined();
+  });
+
+  it('returns undefined for non-US callsigns that merely share the ITU letter(s)+digit+letters shape', () => {
+    // Regression: these all matched the old prefix-agnostic regex and
+    // confidently misreported a district that doesn't apply to them.
+    expect(callDistrictFromCallsign('VE3ABC')).toBeUndefined(); // Canada
+    expect(callDistrictFromCallsign('JA1ABC')).toBeUndefined(); // Japan
+    expect(callDistrictFromCallsign('G0ABC')).toBeUndefined(); // UK
+    expect(callDistrictFromCallsign('VK2ABC')).toBeUndefined(); // Australia
+    expect(callDistrictFromCallsign('DL1ABC')).toBeUndefined(); // Germany
+    expect(callDistrictFromCallsign('ZL1ABC')).toBeUndefined(); // New Zealand
+    expect(callDistrictFromCallsign('F5ABC')).toBeUndefined(); // France
+    expect(callDistrictFromCallsign('EA1ABC')).toBeUndefined(); // Spain
+    expect(callDistrictFromCallsign('PY2ABC')).toBeUndefined(); // Brazil
   });
 });
 
@@ -196,5 +216,17 @@ describe('evaluateGeo across all five GeoSpec shapes', () => {
     expect(evaluateGeo(geo, { callsign: 'K5UTD' }).status).toBe('pass');
     expect(evaluateGeo(geo, { callsign: 'W1AW' }).status).toBe('fail');
     expect(evaluateGeo(geo, {})).toEqual({ status: 'unknown', missing: ['callDistrict'] });
+  });
+
+  it('reports unknown, not a false exclusion, when the callsign cannot be classified as US', () => {
+    // A foreign callsign that happens to share the ITU shape (e.g. VE3ABC,
+    // district digit 3) must not be silently scored as pass or fail against
+    // a call_district constraint -- the district genuinely can't be
+    // determined, so the matcher must say so rather than guess.
+    const geo: GeoSpec = { type: 'call_district', values: ['3'] };
+    expect(evaluateGeo(geo, { callsign: 'VE3ABC' })).toEqual({
+      status: 'unknown',
+      missing: ['callDistrict'],
+    });
   });
 });
