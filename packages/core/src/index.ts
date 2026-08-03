@@ -1,12 +1,21 @@
 export const CORE_VERSION = '0.1.0';
 
+// Domain types (CONTRACT §3) and their zod mirrors.
 export * from './types.js';
 export * from './schema.js';
-export { hashProgram } from './hash.js';
-export { AWARD_ANCHOR, AWARD_ANCHOR_AFTER, NON_AWARD_CONTEXT_TERMS, parseAmount } from './amount.js';
+
+// Reference data.
+export { ARRL_DIVISIONS, ARRL_SECTIONS } from './arrlSections.js';
+export type { ArrlSection } from './arrlSections.js';
+
+// CONTRACT §4 — amounts.
+export { AWARD_ANCHOR, NON_AWARD_CONTEXT_TERMS, parseAmount } from './amount.js';
+
+// CONTRACT §4 — deadlines, plus the RECUR notation Plans 2 and 5 emit.
 export {
   DEFAULT_CLOSE_TIME,
   DEFAULT_OPEN_TIME,
+  expandCycles,
   parseRecurrence,
   RECURRENCE_PREFIX,
   RecurrenceParseError,
@@ -14,8 +23,8 @@ export {
   zonedWallTimeToUtcISO,
 } from './deadline.js';
 export type { DateWindow, MonthDay, Recurrence, TimeOfDay } from './deadline.js';
-export { ARRL_DIVISIONS, ARRL_SECTIONS } from './arrlSections.js';
-export type { ArrlSection } from './arrlSections.js';
+
+// CONTRACT §4 — geography.
 export {
   callDistrictFromCallsign,
   evaluateGeo,
@@ -25,7 +34,17 @@ export {
   withinRadius,
 } from './geo.js';
 export type { GeoDecision, GeoLocation } from './geo.js';
-export { expandCycles } from './deadline.js';
-export { ageAt, evaluateConstraint, monthsBetween } from './matcher.js';
+
+// CONTRACT §4 — matcher.
+export {
+  ageAt,
+  APPLICANT_ENTITY_CONSTRAINT_SUFFIX,
+  evaluateConstraint,
+  matchAll,
+  matchProgram,
+  monthsBetween,
+} from './matcher.js';
 export type { AxisResult, AxisStatus } from './matcher.js';
-export { APPLICANT_ENTITY_CONSTRAINT_SUFFIX, matchAll, matchProgram } from './matcher.js';
+
+// CONTRACT §4 — content hashing. sha256.ts stays internal on purpose.
+export { hashProgram } from './hash.js';
