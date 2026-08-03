@@ -207,6 +207,49 @@ describe('extractFieldOfStudy', () => {
   });
 });
 
+describe('extractFieldOfStudy — real corpus regression (Task 17 fix round 1, Important #3)', () => {
+  // fixtures/arrl-scholarship-descriptions/00-www-arrl-org-scholarship-descriptions.html:2086,
+  // "The Robert A. Rodriguez K5AUW Scholarship". Before the fix, splitFields had no preamble
+  // stripping, so `fields[0]` was the whole unusable sentence
+  // "Preference will be given to applicants pursuing studies in Electrical Engineering" — a UI
+  // would have rendered that as a field of study.
+  it('strips the leading preference preamble from Rodriguez\'s field list (line 2086)', () => {
+    const c = extractFieldOfStudy(
+      raw({
+        'Field of Study':
+          'Preference will be given to applicants pursuing studies in Electrical Engineering, Electronics Engineering, Computer Engineering, Electrical Technology, Electronics Technology, or Computer Technology',
+      }),
+    );
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({
+      axis: 'field_of_study',
+      fields: [
+        'Electrical Engineering',
+        'Electronics Engineering',
+        'Computer Engineering',
+        'Electrical Technology',
+        'Electronics Technology',
+        'Computer Technology',
+      ],
+      excludedFields: [],
+    });
+  });
+
+  // Same corpus, line 1177, "The Michael Holt, K8MJH, and Mary Holt, KC8OIP, Scholarship" — a
+  // second, shorter real preamble shape ("Preference for an X discipline") found while sweeping
+  // the whole 111-entry corpus for regressions. Before the fix this produced
+  // fields: ["Preference for an Engineering discipline"].
+  it('strips "Preference for an X discipline" down to the field name (line 1177)', () => {
+    const c = extractFieldOfStudy(raw({ 'Field of Study': 'Preference for an Engineering discipline' }));
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({
+      axis: 'field_of_study',
+      fields: ['Engineering'],
+      excludedFields: [],
+    });
+  });
+});
+
 describe('extractInstitution', () => {
   it('reads degree levels, trade school, part-time and accreditation', () => {
     const spec = extractInstitution(
@@ -253,6 +296,80 @@ describe('extractGpa', () => {
 
   it('returns [] when there is no GPA language at all', () => {
     expect(extractGpa(raw({ Other: 'Applicant must own a soldering iron.' }))).toEqual([]);
+  });
+});
+
+describe('extractGpa — real corpus regression (Task 17 fix round 1)', () => {
+  // fixtures/arrl-scholarship-descriptions/00-www-arrl-org-scholarship-descriptions.html:1230,
+  // "IRARC Memorial, Joseph P. Rubino, WA4MMD, Scholarship". CRITICAL bug: the old sentence
+  // regex treated the decimal point in "2.5" as a sentence boundary, so it matched starting
+  // AFTER that period ("5 GPA on a 4.") — losing the leading "2." and, because that also cut off
+  // the whole field before the semicolon-joined "preference given to" clause, wrongly extracted
+  // { min: 4, hard: true }: an unreachable hard 4.0 floor built from the "on a 4.0 scale"
+  // qualifier, not the actual 2.5 requirement, and blind to the preference language that should
+  // have made it soft.
+  it('reads the 2.5 GPA / "on a 4.0 scale" / semicolon-joined preference clause correctly (line 1230)', () => {
+    const c = extractGpa(
+      raw({ Other: 'Minimum 2.5 GPA on a 4.0 scale; preference given to need and higher GPA' }),
+    );
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 2.5 });
+    expect(c[0].rawText).toBe('Minimum 2.5 GPA on a 4.0 scale; preference given to need and higher GPA');
+  });
+
+  // Same corpus, line 372, "The Rev. Paul E. Bittner, WØAIH, Memorial Scholarship". IMPORTANT
+  // bug: the old GPA regex only scanned forward from the word "GPA" for a digit; here the number
+  // precedes GPA and nothing numeric follows ("3.0 GPA or higher"), so extraction returned []
+  // and the whole constraint was silently dropped — a student below 3.0 would have been shown
+  // this scholarship as if it had no GPA floor at all.
+  it('reads "N.N GPA or higher" with the number BEFORE the word GPA, not dropped (line 372)', () => {
+    const c = extractGpa(raw({ Other: 'Applicant must be a U.S. citizen with a 3.0 GPA or higher' }));
+    expect(c.length).toBe(1);
+    expect(c[0].hard).toBe(true);
+    expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 3 });
+    // "U.S." must not be mistaken for two sentence-ending periods.
+    expect(c[0].rawText).toBe('Applicant must be a U.S. citizen with a 3.0 GPA or higher');
+  });
+
+  // Line 1568, "The Fred R. McDaniel Memorial Scholarship" — same "number before GPA" shape as
+  // line 372, but also in preference (not requirement) form, so both bugs land on one line: it
+  // was dropped entirely before the fix, and once fixed must come out soft, not hard.
+  it('reads "N.N GPA or higher" in preference form without dropping it (line 1568)', () => {
+    const c = extractGpa(raw({ Other: 'Preference given to student with 3.0 GPA or higher.' }));
+    expect(c.length).toBe(1);
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 3 });
+  });
+
+  // Line 1702, "The Wilse Morgan, WX7P, Memorial ARRL Northwestern Division Scholarship" — a
+  // third real "number before GPA" preference-form line, with extra trailing prose between the
+  // number and the end of the sentence.
+  it('reads "N.N GPA or higher" through trailing prose, in preference form (line 1702)', () => {
+    const c = extractGpa(
+      raw({
+        Other:
+          'Preference to applicants with 3.0 GPA or higher for the academic year immediately prior to application (high school or college).',
+      }),
+    );
+    expect(c.length).toBe(1);
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 3 });
+  });
+
+  // Line 2088, "The Robert A. Rodriguez K5AUW Scholarship" — a multi-sentence Other field where
+  // the GPA sentence is correctly bounded by two ordinary (non-decimal) periods, on both sides
+  // of unrelated sentences about prior awardees and re-application. Regression guard: the fix
+  // must not over-correct into swallowing the whole field.
+  it('bounds the GPA clause to just its own sentence inside a longer Other field (line 2088)', () => {
+    const c = extractGpa(
+      raw({
+        Other:
+          'The scholarship is open to graduating high school seniors, and to previous awardees. A previous awardee must show evidence of satisfactory academic performance. Satisfactory performance is defined as a GPA of 2.5 on a 4 point scale. An awardee may apply annuallyt for the scholarship, up to the completion of studies or four years, whichever comes first, and will be given preference over new applicants.',
+      }),
+    );
+    expect(c[0].hard).toBe(true);
+    expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 2.5 });
+    expect(c[0].rawText).toBe('Satisfactory performance is defined as a GPA of 2.5 on a 4 point scale.');
   });
 });
 
