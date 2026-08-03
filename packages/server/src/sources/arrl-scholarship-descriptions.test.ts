@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixturePayload, hasFixture, loadFixture } from '../../test/fixtures.js';
 import {
+  ARRL_SCHOLARSHIP_LABELS,
   arrlScholarshipDescriptions,
+  findAlternatePrefixCollisions,
   parseScholarshipCatalog,
 } from './arrl-scholarship-descriptions.js';
 
@@ -13,6 +15,47 @@ const pathological = () => parseScholarshipCatalog(loadFixture(SOURCE_ID, 'patho
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+// Fix round 3: the reviewer's point was that rounds 1-2 proved the table clean EMPIRICALLY
+// (against today's page) but nothing made a future prefix collision structurally impossible or
+// loud when it happens. This is the "registry-completeness" pattern applied to labels instead
+// of source ids (see sources/registry.test.ts's "every registered source has a fixture
+// directory" and "no source module performs I/O" tests): a static invariant over the table
+// itself, checked every run, that fails with a diagnosable message instead of a silently
+// mangled value.
+describe('the no-alternate-is-a-prefix-of-another invariant', () => {
+  it('holds for the real ARRL_SCHOLARSHIP_LABELS table shipped in this file', () => {
+    expect(findAlternatePrefixCollisions(ARRL_SCHOLARSHIP_LABELS)).toEqual([]);
+  });
+
+  // Proves the checker itself is not vacuously trivial — mirrors "deliberately break it and
+  // confirm the test goes red", but as a permanent, self-contained test rather than a one-time
+  // manual verification step that evaporates once this session ends. Reproduces the exact
+  // historical defect: "Region" is a literal prefix of "Regional Preference", the same relation
+  // that silently corrupted the Metzger entry before "Regional Preference:" was added.
+  it('flags a deliberately reintroduced collision — e.g. a future "Age Requirement:" alongside a stray bare "Age" with no colon', () => {
+    const broken: Record<string, string[]> = {
+      ...ARRL_SCHOLARSHIP_LABELS,
+      Age: ['Age Requirement:', 'Age'], // colon dropped from the bare alternate — reintroduces the bug class
+    };
+    const collisions = findAlternatePrefixCollisions(broken);
+    expect(collisions).toContainEqual({ shorter: 'Age', longer: 'Age Requirement:' });
+  });
+
+  it('flags the historical "Region" / "Regional Preference" collision directly', () => {
+    const broken: Record<string, string[]> = {
+      ...ARRL_SCHOLARSHIP_LABELS,
+      Region: ['Region', 'Regions:', 'Regional Preference:'], // colon dropped from "Region" itself
+    };
+    const collisions = findAlternatePrefixCollisions(broken);
+    expect(collisions).toContainEqual({ shorter: 'Region', longer: 'Regional Preference:' });
+  });
+
+  it('does not flag unrelated alternates, or two alternates of equal length', () => {
+    expect(findAlternatePrefixCollisions({ A: ['Region:'], B: ['Institution:'] })).toEqual([]);
+    expect(findAlternatePrefixCollisions({ A: ['Foo:'], B: ['Bar:'] })).toEqual([]);
+  });
 });
 
 describe('parseScholarshipCatalog against the pathological fixture', () => {

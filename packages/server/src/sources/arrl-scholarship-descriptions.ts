@@ -14,32 +14,34 @@ const URL = 'http://www.arrl.org/scholarship-descriptions';
  * tolerance recovers a missing character. Order inside a key does not matter — the matcher in
  * util/text.ts sorts every alternate longest-first so "License Requirement" beats "License".
  *
- * EVERY bare single-word alternate below ("Amount:", "License:", "Region:", "Regions:",
- * "Institution:", "Institutions:", "Age:", "Other:") carries a trailing literal colon that the
- * multi-word phrase alternates do not. util/text.ts's buildLabelRegExp makes the colon after a
- * matched alternate OPTIONAL and matches at the start of any line (post-<br>/block-boundary),
- * not only after a real "Label:" — so a bare "Region", "Institution", "Age", "Other", "Amount"
- * or "License" would also match ordinary prose that merely starts a line with that common word,
- * e.g. "Age is not a factor...", "Region-specific rules...", "Institution transfer...", "Other
- * scholarships...", "Amount awarded may vary...", "License to practice is not required...".
- * (Fix round 1 corrected only Amount/License and rationalised leaving Region/Institution/Age/
- * Other colon-optional on the theory that "a single common word" was the risk and those four
- * were somehow different — they are not: they are ALSO single common words, and round 2 fixed
- * that inconsistency. There is no bare-word alternate left colon-optional in this table.)
- * Baking the colon into the alternate string itself (looseLabelPattern still tolerates
- * whitespace before it, so "Amount :" or "R egion:" both still match) makes it a REQUIRED part
- * of the match for every one of these single-word alternates, closing this off without widening
- * the shared, other-parsers-depend-on-it util/text.ts contract. The full-phrase alternates
- * ("Award Amount", "License Requirement", "Age Requirement", "Other Requirements", "Additional
- * Requirements") are left colon-optional: a two-plus-word phrase beginning a line is not a
- * credible prose opener the way a single common word is, and every label on this page has in
- * practice always carried a colon regardless.
+ * EVERY alternate below carries a trailing literal colon — not just the historically-bare
+ * single words ("Amount:", "License:", "Region:", "Institution:", "Age:", "Other:", ...) but
+ * also every multi-word phrase ("Award Amount:", "License Requirement:", "Field of Study:", ...).
+ * util/text.ts's buildLabelRegExp makes the colon after a matched alternate OPTIONAL and matches
+ * at the start of any line — fix rounds 1 and 2 baked a mandatory colon into the bare single-word
+ * alternates for exactly that reason (a bare "Region" or "Other" would otherwise match ordinary
+ * prose that merely starts a line with that common word, e.g. "Region-specific rules..." or
+ * "Other scholarships..."), but left the multi-word phrases colon-optional on the reasoning that
+ * a two-plus-word phrase isn't a credible prose opener.
+ *
+ * That reasoning was correct as a PROBABILITY judgement, but it left the table's safety resting
+ * on "this collision looks unlikely today" rather than on anything checked. Requiring the colon
+ * everywhere closes the whole class of PREFIX COLLISION by construction, not just the bare-word
+ * subset of it: "License Requirement" is a literal string prefix of "License Requirements" (and
+ * "Award Amount" of "Award Amounts", and "Number of Award" of "Number of Awards") — harmless
+ * today only because util/text.ts's global longest-first alternate sort happens to always try
+ * the longer one first, but with the colon appended to EVERY alternate, "License Requirement:"
+ * is no longer a literal prefix of "License Requirements:" at all (they diverge at the colon vs.
+ * "s"), so the two can never collide regardless of sort order or any future edit to this table.
+ * `noAlternateIsAProperPrefixOfAnother()` below is the executable version of this invariant —
+ * import it and run it (or read arrl-scholarship-descriptions.test.ts) to see it fail loudly
+ * against a deliberately reintroduced collision.
  */
 export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
-  'Field of Study': ['Field of Study', 'Fields of Study', 'Field of Studies'],
-  'License Requirement': ['License Requirement', 'License Requirements', 'License:'],
+  'Field of Study': ['Field of Study:', 'Fields of Study:', 'Field of Studies:'],
+  'License Requirement': ['License Requirement:', 'License Requirements:', 'License:'],
   // "Regional Preference:" (The Edmond A. Metzger Scholarship, live page) used to be a SILENT
-  // false-positive match on the bare "Region" alternate before this file required a colon: old
+  // false-positive match on the bare "Region" alternate before fix round 2 required a colon: old
   // code matched "Region" as a substring of "Regional" and captured "al Preference: Resident of
   // ARRL Central Division (IL, IN, WI)" as the Region value, garbage prefix and all. Requiring
   // the colon correctly stopped that substring match, which would otherwise have left this
@@ -47,18 +49,46 @@ export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
   // value ("Resident of ARRL Central Division (IL, IN, WI)") rather than leaving it dropped.
   Region: ['Region:', 'Regions:', 'Regional Preference:'],
   Institution: ['Institution:', 'Institutions:'],
-  'Award Amount': ['Award Amount', 'Award Amounts', 'Amount:'],
+  'Award Amount': ['Award Amount:', 'Award Amounts:', 'Amount:'],
   'Number of Awards': [
-    'Number of Awards',
-    'Number of Award',
-    'Number of Scholarships',
-    'Number of Scholarshps',
+    'Number of Awards:',
+    'Number of Award:',
+    'Number of Scholarships:',
+    'Number of Scholarshps:',
   ],
-  Age: ['Age Requirement', 'Age:'],
-  Other: ['Other Requirements', 'Additional Requirements', 'Other:'],
+  Age: ['Age Requirement:', 'Age:'],
+  Other: ['Other Requirements:', 'Additional Requirements:', 'Other:'],
 };
 
 const FIELD_KEYS = Object.keys(ARRL_SCHOLARSHIP_LABELS);
+
+/**
+ * Structural invariant: no alternate anywhere in the table (across every key — a cross-key
+ * collision is exactly as dangerous as a same-key one, since util/text.ts builds ONE combined
+ * regex over every alternate from every key) may be a proper prefix of another. If it were, the
+ * shorter alternate could match at a position where the longer one was the correct, intended
+ * label, truncating whichever field's value happened to precede the match and either polluting
+ * an existing field (same-key) or fabricating/corrupting a different one entirely (cross-key) —
+ * exactly the "Region" vs. "Regional Preference" defect class, just generalised to every pair
+ * instead of trusted to "no instance of it happens to exist today".
+ *
+ * Returns every colliding pair so a failure is diagnosable, not just "false".
+ */
+export function findAlternatePrefixCollisions(
+  labels: Record<string, string[]>,
+): Array<{ shorter: string; longer: string }> {
+  const all = Object.values(labels).flat();
+  const collisions: Array<{ shorter: string; longer: string }> = [];
+  for (const a of all) {
+    for (const b of all) {
+      if (a === b) continue;
+      if (a.length < b.length && b.startsWith(a)) {
+        collisions.push({ shorter: a, longer: b });
+      }
+    }
+  }
+  return collisions;
+}
 
 /** The site-wide "Go Now" call-to-action always links here, in absolute or relative form. */
 const APPLICATION_LINK_PATTERN = /scholarship-application/i;
