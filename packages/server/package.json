@@ -13,6 +13,7 @@
     "@grantspotter/core": "*",
     "@node-rs/argon2": "2.0.2",
     "better-sqlite3": "12.11.1",
+    "cheerio": "^1.2.0",
     "cookie-parser": "1.4.7",
     "express": "4.22.2",
     "zod": "3.25.76"
