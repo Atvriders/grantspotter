@@ -9,3 +9,4 @@ data/*.sqlite-*
 data/snapshots/
 coverage/
 .DS_Store
+.superpowers/
