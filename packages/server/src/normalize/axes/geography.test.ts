@@ -207,3 +207,56 @@ describe('the Louisiana preference cascade stays soft', () => {
     expect(cs[0].spec).toMatchObject({ geo: { type: 'arrl_division', values: ['Delta'] } });
   });
 });
+
+/**
+ * Round 2: the coordinator's narrower fix for the residual reported after round 1.
+ * "<Section> Section of the <Division> Division" is a specific phrase, not a general
+ * Division-vs-Section priority question — when a funder names a Section AND the Division it sits
+ * inside together, the Section is the operative (narrower) restriction. This does not change the
+ * general Division-before-Section priority the other describe blocks above depend on.
+ */
+describe('round 2 — "<Section> Section of the <Division> Division" resolves to the Section', () => {
+  it('the real Steel City ARC entry: Western Pennsylvania Section, not the whole Atlantic Division', () => {
+    expect(geoOf('ARRL Western Pennsylvania Section of the Atlantic Division')).toEqual({
+      type: 'arrl_section',
+      values: ['Western Pennsylvania'],
+    });
+  });
+
+  it('works without the "ARRL" prefix on either side', () => {
+    expect(geoOf('Western Pennsylvania Section of the Atlantic Division')).toEqual({
+      type: 'arrl_section',
+      values: ['Western Pennsylvania'],
+    });
+  });
+
+  it('does not disturb the general Division-before-Section priority elsewhere', () => {
+    // The real Robert A. Rodriguez K5AUW entry names a Section and a Division as separate tiers
+    // of a preference cascade ("ARRL South Texas Section (first preference); ... ARRL West Gulf
+    // Division (third preference)") — not the "X Section of the Y Division" phrase — so this
+    // must keep resolving to the Division exactly as it did before round 2.
+    expect(
+      geoOf(
+        'Preference will be given to applicants who reside in: ARRL South Texas Section (first preference); The State of Texas (second preference); ARRL West Gulf Division (third preference).',
+      ),
+    ).toEqual({ type: 'arrl_division', values: ['West Gulf'] });
+  });
+
+  it('a real Section paired with a Division it does NOT belong to is not silently reconciled', () => {
+    // "Western Pennsylvania" is a real Section, "Central" is a real Division, but Western
+    // Pennsylvania belongs to Atlantic, not Central — a wrong pairing must not be resolved by
+    // guessing which one the funder meant. It falls through to the general division scan, which
+    // still finds the (independently, literally stated) real "Central Division" text.
+    expect(geoOf('Western Pennsylvania Section of the Central Division')).toEqual({
+      type: 'arrl_division',
+      values: ['Central'],
+    });
+  });
+
+  it('a fabricated Section name in this phrase shape is not emitted as if it were real', () => {
+    expect(geoOf('Atlantis Section of the Atlantic Division')).toEqual({
+      type: 'arrl_division',
+      values: ['Atlantic'],
+    });
+  });
+});

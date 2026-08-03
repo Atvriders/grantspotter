@@ -102,6 +102,50 @@ function divisionsIn(text: string): string[] {
   return ARRL_DIVISIONS.filter((name) => found.has(name));
 }
 
+// ---------- Section-named-within-its-Division phrase ----------
+
+/**
+ * "<Section Name> Section of the <Division Name> Division" — e.g. "ARRL Western Pennsylvania
+ * Section of the Atlantic Division" (the real Steel City ARC Scholarship entry). This is a
+ * narrower question than the general Division-before-Section priority in geoFrom below, which
+ * several OTHER real entries genuinely depend on (a Section named as the first, narrowest tier of
+ * a multi-tier preference cascade with a Division as a broader fallback tier, e.g. Robert A.
+ * Rodriguez K5AUW: "ARRL South Texas Section (first preference); ... ARRL West Gulf Division
+ * (third preference)" — see geography.test.ts and the remediation report for why that priority is
+ * left alone globally). Here the funder states a Section AND names the Division it sits inside,
+ * together, in one phrase: the Section is unambiguously the operative (narrower) restriction —
+ * the Division mention describes the Section's context, not a second, broader eligibility area.
+ * Without this, the general division scan below matches "... Division" first and returns the
+ * whole (much broader) Division, silently widening a Section-only award to every Section in it
+ * (for Atlantic: Delaware, Eastern Pennsylvania, Maryland-DC, Northern New York, Southern New
+ * Jersey, Western New York, Western Pennsylvania — several states and DC, not just Western PA).
+ *
+ * Validated against the real table both ways: the captured Section name must be a real Section,
+ * the captured Division name must be a real Division, AND that Section must actually belong to
+ * that Division (arrlSections.ts). A phrase pairing a real Section with a Division it does NOT
+ * belong to is a data problem in the source text, not something for this function to silently
+ * reconcile by guessing which one the funder meant — it is left unmatched here and falls through
+ * to the general division/section scan below instead.
+ */
+const SECTION_OF_DIVISION =
+  /\b(?:ARRL\s+)?([A-Za-z][A-Za-z .'-]*?)\s+Section\s+of\s+the\s+(?:ARRL\s+)?([A-Za-z][A-Za-z .'-]*?)\s+Division\b/gi;
+
+function sectionOfDivisionIn(text: string): string[] {
+  const found = new Set<string>();
+  SECTION_OF_DIVISION.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SECTION_OF_DIVISION.exec(text))) {
+    const sectionName = m[1].trim().toLowerCase();
+    const divisionName = m[2].trim().toLowerCase();
+    const section = ARRL_SECTIONS.find((s) => s.name.toLowerCase() === sectionName);
+    const division = ARRL_DIVISIONS.find((d) => d.toLowerCase() === divisionName);
+    if (!section || !division || section.division !== division) continue;
+    found.add(section.name);
+  }
+  if (found.size === 0) return [];
+  return ARRL_SECTIONS.map((section) => section.name).filter((name) => found.has(name));
+}
+
 // ---------- ARRL Sections ----------
 
 const SECTION_CANDIDATES: ReadonlyArray<{ pattern: RegExp; canonical: string }> = ARRL_SECTIONS.map(
@@ -242,6 +286,12 @@ function geoFrom(text: string): GeoSpec {
 
   const callDistrict = CALL_DISTRICT.exec(text);
   if (callDistrict) return { type: 'call_district', values: [callDistrict[1]] };
+
+  // Checked before the general division scan, but ONLY fires for the specific "<Section> Section
+  // of the <Division> Division" phrase — every other Section/Division text still goes through the
+  // ordinary division-before-section priority below, unchanged.
+  const pairedSections = sectionOfDivisionIn(text);
+  if (pairedSections.length > 0) return { type: 'arrl_section', values: pairedSections };
 
   const divisions = divisionsIn(text);
   if (divisions.length > 0) return { type: 'arrl_division', values: divisions };
