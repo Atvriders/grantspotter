@@ -144,14 +144,25 @@ describe('first-run bootstrap', () => {
 
 describe('login, me and logout', () => {
   async function seedAdmin(app: ReturnType<typeof build>['app'], bootstrap: ReturnType<typeof build>['bootstrap']) {
-    await request(app)
+    const res = await request(app)
       .post('/api/auth/bootstrap')
       .send({ token: bootstrap.token(), email: 'admin@example.org', password: GOOD_PASSWORD });
+    return cookieFrom(res);
   }
 
   it('signs in, identifies the user, and signs out', async () => {
     const { app, bootstrap } = build();
-    await seedAdmin(app, bootstrap);
+    // Bootstrap auto-signs-in the new admin (its own session, tested
+    // separately). Log that session out here so the count() assertion below
+    // reflects only the login session under test, not an artifact of
+    // bootstrap also having created a row — see fix round 1 in the Task 17
+    // report: the previous version of this test asserted a global
+    // per-user session count of 0, which conflated "the bootstrap session
+    // was never cleaned up in this test" with "at most one session may ever
+    // exist" and drove an incorrect single-session-per-user fix in the
+    // implementation.
+    const bootstrapCookie = await seedAdmin(app, bootstrap);
+    await request(app).post('/api/auth/logout').set('Cookie', bootstrapCookie);
 
     const login = await request(app)
       .post('/api/auth/login')
@@ -228,10 +239,58 @@ describe('login, me and logout', () => {
     expect(blocked.body.error.details.retryAfterSec).toBeGreaterThan(0);
   }, 20_000);
 
+  // Fix round 1: the reviewer demonstrated that keying the limiter on
+  // `${req.ip}|${email}` let an attacker mint unlimited fresh buckets
+  // against one account by rotating X-Forwarded-For (trust proxy is set in
+  // app.ts, so req.ip follows that header). The lockout must be keyed on the
+  // account alone, so no header the client controls can reset it.
+  it('does not let rotating X-Forwarded-For reset the per-account lockout', async () => {
+    const { app, bootstrap } = build();
+    await seedAdmin(app, bootstrap);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await request(app)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', '198.51.100.10')
+        .send({ email: 'admin@example.org', password: 'wrong-password-here' });
+      expect(res.status).toBe(401);
+    }
+
+    const stillBlocked = await request(app)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '203.0.113.55')
+      .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(stillBlocked.status).toBe(429);
+    expect(stillBlocked.body.error.code).toBe('rate_limited');
+  }, 20_000);
+
   it('does not expose a signup route', async () => {
     const { app } = build();
     const res = await request(app).post('/api/auth/register').send({});
     expect(res.status).toBe(404);
+  });
+
+  // Fix round 1: login previously called sessions.removeAllForUser(user.id),
+  // silently 401ing any other still-valid cookie for that user (e.g.
+  // bootstrap's own session) the moment a second login happened. Reverted —
+  // a club officer, advisor or student may plausibly be signed in on a
+  // laptop and a phone at once, and nothing in spec §12 asks for
+  // single-session-per-user.
+  it('allows two concurrent sessions for the same user to both authenticate', async () => {
+    const { app, bootstrap } = build();
+    const deviceA = await seedAdmin(app, bootstrap);
+
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(login.status).toBe(200);
+    const deviceB = cookieFrom(login);
+
+    const meA = await request(app).get('/api/auth/me').set('Cookie', deviceA);
+    const meB = await request(app).get('/api/auth/me').set('Cookie', deviceB);
+    expect(meA.status).toBe(200);
+    expect(meB.status).toBe(200);
+    expect(createSessionRepo(harness.db).count()).toBe(2);
   });
 });
 

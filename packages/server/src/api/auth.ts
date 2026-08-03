@@ -100,7 +100,13 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
     '/auth/login',
     asyncHandler(async (req, res) => {
       const body = credentialsSchema.parse(req.body);
-      const key = `${req.ip ?? 'unknown'}|${normalizeEmail(body.email)}`;
+      // Keyed on the normalized email alone, deliberately not mixed with
+      // req.ip. req.ip is derived from X-Forwarded-For once trust proxy is
+      // set (app.ts), which the client controls: an IP-mixed key lets an
+      // attacker mint a fresh bucket per request just by rotating that
+      // header, making the lockout decorative. An account-side counter must
+      // not be resettable by anything the client controls.
+      const key = normalizeEmail(body.email);
 
       const decision = deps.loginLimiter.check(key);
       if (!decision.allowed) {
@@ -127,11 +133,10 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       deps.loginLimiter.reset(key);
       const at = new Date().toISOString();
       users.recordLogin(user.id, at);
-      // Single active session per user: without this, a session created at
-      // bootstrap (or any earlier login) lingers forever, invisible to the
-      // user who is now looking at a fresh cookie. removeAllForUser exists on
-      // SessionRepo for exactly this.
-      sessions.removeAllForUser(user.id);
+      // Deliberately does NOT call sessions.removeAllForUser here: multiple
+      // concurrent sessions per user (e.g. a laptop and a phone) are
+      // intended. Revocation-on-login was reverted per fix round 1 — see
+      // the Task 17 report.
       startSession(req, res, user.id);
       res.json({ user: toPublicUser({ ...user, lastLoginAt: at }) });
     }),
