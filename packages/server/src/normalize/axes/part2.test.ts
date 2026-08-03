@@ -163,6 +163,27 @@ describe('extractAgeStage', () => {
     )[0].spec as { stages: string[] };
     expect(spec.stages).toContain('RETRAINING_ADULT');
   });
+
+  it('reads "graduating seniors" standing alone, without "high school" (regression: word-boundary plural gap)', () => {
+    const c = extractAgeStage(raw({ Other: 'This award is open to graduating seniors only.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(true);
+    expect((c[0].spec as { stages: string[] }).stages).toEqual(['HS_SENIOR']);
+  });
+
+  it('reads "four-year students" standing alone, without "undergraduate" (regression: word-boundary plural gap)', () => {
+    const c = extractAgeStage(raw({ Other: 'Preference is given to four-year students.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(false);
+    expect((c[0].spec as { stages: string[] }).stages).toEqual(['UNDERGRAD']);
+  });
+
+  it('reads "PhDs" standing alone, without "graduate"/"doctoral" (regression: word-boundary plural gap)', () => {
+    const c = extractAgeStage(raw({ Other: 'Open to current PhDs.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(true);
+    expect((c[0].spec as { stages: string[] }).stages).toEqual(['GRAD']);
+  });
 });
 
 describe('extractHamActivity', () => {
@@ -193,6 +214,20 @@ describe('extractHamActivity', () => {
   it('returns [] when no activity is mentioned', () => {
     expect(extractHamActivity(raw({ Other: 'Any accredited institution.' }))).toEqual([]);
   });
+
+  it('reads "public services" plural (regression: word-boundary plural gap)', () => {
+    const c = extractHamActivity(raw({ Other: 'Applicant must be active in public services.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(true);
+    expect((c[0].spec as { activityKinds: string[] }).activityKinds).toEqual(['public_service']);
+  });
+
+  it('reads "Field Days" plural (regression: word-boundary plural gap)', () => {
+    const c = extractHamActivity(raw({ Other: 'Preference to applicants with a history of Field Days.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(false);
+    expect((c[0].spec as { activityKinds: string[] }).activityKinds).toEqual(['field_day']);
+  });
 });
 
 describe('extractFinancialNeed', () => {
@@ -206,6 +241,13 @@ describe('extractFinancialNeed', () => {
     const c = extractFinancialNeed(raw({ Other: 'Applicants must demonstrate financial need.' }));
     expect(c[0].hard).toBe(false);
   });
+
+  it('reads "financial needs" plural (regression: word-boundary plural gap)', () => {
+    const c = extractFinancialNeed(raw({ Other: 'Applicants with financial needs are prioritized.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({ axis: 'financial_need', weighted: true });
+  });
 });
 
 describe('extractGender', () => {
@@ -217,6 +259,13 @@ describe('extractGender', () => {
 
   it('returns [] for everything else, because no ARRL entry has a gender constraint', () => {
     expect(extractGender(raw({ Other: 'Open to all licensed amateurs.' }))).toEqual([]);
+  });
+
+  it('reads "females" plural (regression: word-boundary plural gap — the highest-harm instance of this bug class)', () => {
+    const c = extractGender(raw({ eligibility: 'Open to females only.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(true);
+    expect(c[0].spec).toMatchObject({ axis: 'gender', allowed: ['female'] });
   });
 });
 

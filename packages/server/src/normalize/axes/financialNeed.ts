@@ -1,6 +1,6 @@
 import type { Constraint, RawOpportunity } from '@grantspotter/core';
 
-const NEED = /\bfinancial(?:ly)?\s+need\b|\bneed[- ]based\b|\bdemonstrated need\b/i;
+const NEED = /\bfinancial(?:ly)?\s+needs?\b|\bneed[- ]based\b|\bdemonstrated needs?\b/i;
 
 /**
  * Financial need is ALWAYS a weighting and NEVER a bar — all four occurrences in the corpus

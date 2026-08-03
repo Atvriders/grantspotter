@@ -8,9 +8,9 @@ const AS_OF = /\bas of\s+([A-Z][a-z]+\.?\s+\d{1,2})/;
 
 function stagesFrom(text: string): Stage[] {
   const stages = new Set<Stage>();
-  if (/\bhigh school senior|graduating senior\b/i.test(text)) stages.add('HS_SENIOR');
-  if (/\bundergraduate|baccalaureate|four[- ]year student\b/i.test(text)) stages.add('UNDERGRAD');
-  if (/\bgraduate student|master|doctoral|phd\b/i.test(text)) stages.add('GRAD');
+  if (/\b(?:high school seniors?|graduating seniors?)\b/i.test(text)) stages.add('HS_SENIOR');
+  if (/\b(?:undergraduates?|baccalaureate|four[- ]year students?)\b/i.test(text)) stages.add('UNDERGRAD');
+  if (/\b(?:graduate students?|masters?|doctoral|phds?)\b/i.test(text)) stages.add('GRAD');
   if (/\bveterans?\b/i.test(text)) stages.add('VETERAN');
   if (/\bretrain|returning to school|career chang|adults? (?:re)?entering\b/i.test(text)) {
     stages.add('RETRAINING_ADULT');

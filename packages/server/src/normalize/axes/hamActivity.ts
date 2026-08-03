@@ -8,9 +8,9 @@ const KIND_PATTERNS: Array<[ActivityKind, RegExp]> = [
   ['ares_races_skywarn', /\b(ARES|RACES|SKYWARN)\b/],
   ['teaching', /\b(teach|instruct|licensing class|Elmer)\w*\b/i],
   ['on_air', /\bon[- ]air\b|\boperating activit\w*\b/i],
-  ['field_day', /\bField Day\b/i],
+  ['field_day', /\bField Days?\b/i],
   ['contesting', /\bcontest(?:ing|s)?\b/i],
-  ['public_service', /\bpublic service\b/i],
+  ['public_service', /\bpublic services?\b/i],
 ];
 
 export function extractHamActivity(raw: RawOpportunity): Constraint[] {
