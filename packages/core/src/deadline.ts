@@ -1,4 +1,4 @@
-import type { Program } from './types.js';
+import type { Cycle, DeadlineKind, Program } from './types.js';
 
 export interface MonthDay {
   month: number; // 1-12
@@ -226,4 +226,184 @@ export function resolveDeadlineOwner(program: Program, allPrograms: Program[]): 
     current = next;
   }
   return program;
+}
+
+const MONTH_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/** Only these three kinds carry enough information to be projected forward. */
+const PROJECTABLE_KINDS: ReadonlySet<DeadlineKind> = new Set<DeadlineKind>([
+  'n_fixed_dates',
+  'n_fixed_windows',
+  'annual_window',
+]);
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function clampDay(year: number, month: number, day: number): number {
+  return Math.min(day, daysInMonth(year, month));
+}
+
+function labelDate(year: number, month: number, day: number): string {
+  return `${MONTH_SHORT[month - 1]} ${day}, ${year}`;
+}
+
+function labelWindow(
+  openYear: number,
+  openMonth: number,
+  openDay: number,
+  closeYear: number,
+  closeMonth: number,
+  closeDay: number,
+): string {
+  if (openYear === closeYear && openMonth === closeMonth) {
+    return `${MONTH_SHORT[openMonth - 1]} ${openDay}–${closeDay}, ${openYear} window`;
+  }
+  if (openYear === closeYear) {
+    return `${MONTH_SHORT[openMonth - 1]} ${openDay} – ${MONTH_SHORT[closeMonth - 1]} ${closeDay}, ${openYear} window`;
+  }
+  return `${MONTH_SHORT[openMonth - 1]} ${openDay}, ${openYear} – ${MONTH_SHORT[closeMonth - 1]} ${closeDay}, ${closeYear} window`;
+}
+
+interface CycleDraft {
+  opensAt?: string;
+  closesAt: string;
+  label: string;
+}
+
+function projectWindow(
+  window: DateWindow,
+  openYear: number,
+  openTime: TimeOfDay,
+  closeTime: TimeOfDay,
+  timezone: string,
+): CycleDraft {
+  const crossesYearEnd =
+    window.close.month < window.open.month ||
+    (window.close.month === window.open.month && window.close.day < window.open.day);
+  const closeYear = crossesYearEnd ? openYear + 1 : openYear;
+  const openDay = clampDay(openYear, window.open.month, window.open.day);
+  const closeDay = clampDay(closeYear, window.close.month, window.close.day);
+  return {
+    opensAt: zonedWallTimeToUtcISO(
+      openYear,
+      window.open.month,
+      openDay,
+      openTime.hour,
+      openTime.minute,
+      0,
+      timezone,
+    ),
+    closesAt: zonedWallTimeToUtcISO(
+      closeYear,
+      window.close.month,
+      closeDay,
+      closeTime.hour,
+      closeTime.minute,
+      0,
+      timezone,
+    ),
+    label: labelWindow(
+      openYear,
+      window.open.month,
+      openDay,
+      closeYear,
+      window.close.month,
+      closeDay,
+    ),
+  };
+}
+
+/**
+ * Project concrete dated Cycle instances into [fromISO, toISO].
+ *
+ * Every projected cycle carries isEstimated: true — it comes from a recurrence
+ * rule, not from an observed page. Cycles actually seen on a funder's site are
+ * written to the cycles table by Plan 2 with isEstimated: false.
+ *
+ * Cycle ids are `${programId}:${closesAt}` so a nightly re-projection upserts
+ * over the previous run rather than duplicating rows.
+ */
+export function expandCycles(
+  program: Program,
+  allPrograms: Program[],
+  fromISO: string,
+  toISO: string,
+): Cycle[] {
+  const owner = resolveDeadlineOwner(program, allPrograms);
+  if (!PROJECTABLE_KINDS.has(owner.deadline.kind)) return [];
+
+  const recurrence = parseRecurrence(owner.deadline.note);
+  if (recurrence.kind === 'none') return [];
+
+  const fromMs = Date.parse(fromISO);
+  const toMs = Date.parse(toISO);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || toMs < fromMs) return [];
+
+  const inherited = owner.id !== program.id;
+  const firstYear = new Date(fromMs).getUTCFullYear() - 1;
+  const lastYear = new Date(toMs).getUTCFullYear() + 1;
+
+  const drafts: CycleDraft[] = [];
+  for (let year = firstYear; year <= lastYear; year += 1) {
+    if (recurrence.kind === 'n_fixed_dates') {
+      for (const date of recurrence.dates) {
+        const day = clampDay(year, date.month, date.day);
+        drafts.push({
+          closesAt: zonedWallTimeToUtcISO(
+            year,
+            date.month,
+            day,
+            recurrence.closeTime.hour,
+            recurrence.closeTime.minute,
+            0,
+            recurrence.timezone,
+          ),
+          label: `${labelDate(year, date.month, day)} deadline`,
+        });
+      }
+    } else if (recurrence.kind === 'n_fixed_windows') {
+      for (const window of recurrence.windows) {
+        drafts.push(
+          projectWindow(window, year, recurrence.openTime, recurrence.closeTime, recurrence.timezone),
+        );
+      }
+    } else {
+      drafts.push(
+        projectWindow(
+          recurrence.window,
+          year,
+          recurrence.openTime,
+          recurrence.closeTime,
+          recurrence.timezone,
+        ),
+      );
+    }
+  }
+
+  const cycles: Cycle[] = [];
+  for (const draft of drafts) {
+    const closesMs = Date.parse(draft.closesAt);
+    if (closesMs < fromMs || closesMs > toMs) continue;
+    const cycle: Cycle = {
+      id: `${program.id}:${draft.closesAt}`,
+      programId: program.id,
+      closesAt: draft.closesAt,
+      timezone: recurrence.timezone,
+      label: inherited ? `${draft.label} (via ${owner.name})` : draft.label,
+      isEstimated: true,
+    };
+    if (draft.opensAt !== undefined) cycle.opensAt = draft.opensAt;
+    cycles.push(cycle);
+  }
+
+  return cycles.sort((a, b) => {
+    const delta = Date.parse(a.closesAt as string) - Date.parse(b.closesAt as string);
+    if (delta !== 0) return delta;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 }
