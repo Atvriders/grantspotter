@@ -383,6 +383,113 @@ describe('status and instrument', () => {
   });
 });
 
+describe('status fix round 1 — a safety warning must never compute open', () => {
+  const tierD = (over: Partial<RawOpportunity> = {}): RawOpportunity =>
+    raw({
+      sourceId: 'manual-tier-d',
+      externalKey: 'placeholder',
+      name: 'placeholder',
+      rawFields: {},
+      sourceUrl: 'https://www.arrl.org/scholarship-program',
+      rawText: 'placeholder body text',
+      ...over,
+    });
+
+  const tierDCtx = (over: Partial<NormalizeContext> = {}): NormalizeContext =>
+    ctx({
+      sourceId: 'manual-tier-d',
+      funderId: 'various',
+      klass: 'ham_grant',
+      tier: 'D',
+      verificationMethod: 'manual_curation',
+      deadlineInheritsFrom: undefined,
+      ...over,
+    });
+
+  it('marks the FAR domain-takeover safety warning discontinued, never open', () => {
+    // Reproduces the actual manual-tier-d.ts record verbatim: recordType 'safety_warning' plus
+    // an explicit rawFields.status override. Before the fix this fell through every branch of
+    // inferStatus to 'open' — a domain-takeover warning rendered as a live opportunity.
+    const p = normalizeRaw(
+      tierD({
+        externalKey: 'far-farweb-org-compromised',
+        name: 'Foundation for Amateur Radio (FAR) — domain compromised, do not apply',
+        rawFields: { recordType: 'safety_warning', status: 'discontinued' },
+      }),
+      tierDCtx(),
+    );
+    expect(p.trust.status).toBe('discontinued');
+    expect(p.trust.status).not.toBe('open');
+  });
+
+  it('falls back to discontinued for a safety_warning record even with no explicit override', () => {
+    const p = normalizeRaw(
+      tierD({ externalKey: 'some-future-safety-warning', rawFields: { recordType: 'safety_warning' } }),
+      tierDCtx(),
+    );
+    expect(p.trust.status).toBe('discontinued');
+  });
+
+  it('marks the RCA Youth Activities permanent contact-only entry contact_only, never open', () => {
+    // manual-tier-d.ts's own rawText for this record reads "Permanent contact-only entry; do not
+    // poll." — nothing in recordType/deadlineKind alone said so, which is why it silently
+    // computed open before this fix.
+    const p = normalizeRaw(
+      tierD({
+        externalKey: 'rca-youth-activities',
+        name: 'Radio Club of America Youth Activities Program',
+        rawFields: { recordType: 'manual', deadlineKind: 'rolling' },
+      }),
+      tierDCtx(),
+    );
+    expect(p.trust.status).toBe('contact_only');
+    expect(p.trust.status).not.toBe('open');
+  });
+
+  it('does not let an unrecognised recordType default to open', () => {
+    const p = normalizeRaw(
+      tierD({ externalKey: 'a-record-type-nobody-taught-this-function-about', rawFields: { recordType: 'brand_new_kind_2027' } }),
+      tierDCtx(),
+    );
+    expect(p.trust.status).toBe('unknown');
+    expect(p.trust.status).not.toBe('open');
+  });
+
+  it('still defaults to open when no recordType is published at all', () => {
+    // The common case for a normal live-crawled record: no recordType field whatsoever. Must
+    // stay open, or every ordinary open opportunity in the corpus regresses to unknown.
+    const p = normalizeRaw(raw(), ctx());
+    expect(p.trust.status).toBe('open');
+  });
+
+  it('lets an explicit rawFields.status override win even over a distinct recordType-derived status', () => {
+    // Without the override this record's recordType/deadlineKind would resolve to
+    // 'no_application' (see the existing no-application test above) — proving the override wins
+    // over a DIFFERENT branch's inference, not just coincidentally agreeing with it.
+    const p = normalizeRaw(
+      tierD({
+        externalKey: 'override-wins-over-no-application',
+        rawFields: { recordType: 'manual', deadlineKind: 'no_application_exists', status: 'closed' },
+      }),
+      tierDCtx(),
+    );
+    expect(p.trust.status).toBe('closed');
+  });
+
+  it('does not attach a cost-share obligation to the Tier D NCDXF Youth Grant record', () => {
+    // Regression guard for the OBLIGATIONS_BY_RECORD drift found alongside the status bug: a
+    // dead entry keyed sourceKeyOf('manual-tier-d', 'ncdxf-dxpedition-grants') never matched any
+    // real record (that externalKey only exists under the separate 'ncdxf-grants' source) and has
+    // been removed rather than repointed, since the real Tier D record — ncdxf-youth-grant —
+    // "publishes no terms" and carries no known obligation.
+    const p = normalizeRaw(
+      tierD({ externalKey: 'ncdxf-youth-grant', name: 'NCDXF Youth Grant', rawFields: { recordType: 'manual', deadlineKind: 'unpublished' } }),
+      tierDCtx({ funderId: 'ncdxf' }),
+    );
+    expect(p.obligations.costShareRequired).toBe(false);
+  });
+});
+
 describe('disputed claims ship populated', () => {
   it('attaches all three ARRL Club Grant readings instead of picking one', () => {
     const p = normalizeRaw(

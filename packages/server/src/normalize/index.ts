@@ -59,12 +59,20 @@ const OBLIGATIONS_BY_SOURCE: Readonly<Record<string, Partial<Obligations>>> = Ob
  * This exists because seed records re-enter this same pipeline whenever a human presses
  * "Verify now" (Plan 3 Task 10). An obligation that only ever existed as a literal in Plan 5's
  * seed JSON is an obligation that gets silently dropped on the first re-verify.
+ *
+ * FIX ROUND 1 (Task 15 review, Important): this used to also carry
+ * `sourceKeyOf('manual-tier-d', 'ncdxf-dxpedition-grants')`, which was a no-op — no
+ * `TIER_D_RECORDS` entry has that externalKey. 'ncdxf-dxpedition-grants' is the externalKey of
+ * the REAL, separately-crawled NCDXF DXpedition Grants program, whose cost-share requirement is
+ * already applied above via `OBLIGATIONS_BY_SOURCE['ncdxf-grants']`. The Tier D record actually
+ * keyed `ncdxf-youth-grant` is a different NCDXF program (the Youth Grant) whose page "renders as
+ * navigation and a title only — it publishes no terms" per manual-tier-d.ts, so it carries no
+ * known obligation to encode here. Removed rather than repointed.
  */
 const OBLIGATIONS_BY_RECORD: Readonly<Record<string, Partial<Obligations>>> = Object.freeze({
   [sourceKeyOf('manual-tier-d', 'yasme-supporting-grants')]: {
     reportingObligation: 'Year-end activity report to the YASME Foundation board.',
   },
-  [sourceKeyOf('manual-tier-d', 'ncdxf-dxpedition-grants')]: { costShareRequired: true },
 });
 
 const RESTRICTIONS_BY_SOURCE: Readonly<Record<string, string[]>> = Object.freeze({

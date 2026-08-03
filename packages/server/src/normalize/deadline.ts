@@ -6,6 +6,7 @@ import type {
   RawOpportunity,
 } from '@grantspotter/core';
 import { RECURRENCE_PREFIX } from '@grantspotter/core';
+import { sourceKeyOf } from './disputed.js';
 import type { NormalizeContext } from './index.js';
 
 /**
@@ -111,22 +112,95 @@ export function inferDeadline(raw: RawOpportunity, ctx: NormalizeContext): Deadl
   return { kind, source: { kind: 'self' }, note: noteFor(ctx.sourceId, kind) };
 }
 
+/**
+ * recordType values this function actually knows how to resolve. Anything else that shows up in
+ * `rawFields.recordType` is, by definition, a value nobody taught this function about yet — see
+ * the FIX ROUND 1 note on `inferStatus` below for why that must fail loud as 'unknown' rather
+ * than silently fall through to 'open'.
+ */
+const KNOWN_RECORD_TYPES: ReadonlySet<string> = new Set([
+  'past_award',
+  'verified_negative',
+  'crosscheck',
+  'safety_warning',
+  'manual',
+  'guided_workflow',
+]);
+
+const KNOWN_PROGRAM_STATUSES: ReadonlySet<string> = new Set([
+  'open',
+  'closed',
+  'dormant',
+  'discontinued',
+  'contact_only',
+  'no_application',
+  'unknown',
+]);
+
+/**
+ * (sourceId, externalKey) pairs whose own prose says "contact-only" / "do not poll" but carry no
+ * structured field the recordType/deadlineKind checks below can key on. rca-youth-activities'
+ * rawText reads "Permanent contact-only entry; do not poll."
+ *
+ * FIX ROUND 1: a prior version of this function compared `ctx.sourceId` against the STRING
+ * 'rca-scholarship-program' to catch that sibling record — which can never match, because
+ * manual-tier-d.ts's SOURCE_ID is the constant 'manual-tier-d', and 'rca-scholarship-program' is
+ * only that record's externalKey. That record actually resolves via the applicantEntity check
+ * below (its rawFields.applicantEntity is 'nominated_by_institution'); this table exists for the
+ * one Tier D record applicantEntity does not cover.
+ */
+const CONTACT_ONLY_RECORDS: ReadonlySet<string> = new Set([
+  sourceKeyOf('manual-tier-d', 'rca-youth-activities'),
+]);
+
+/**
+ * FIX ROUND 1 (Task 15 review, Critical). Before this fix, `far-farweb-org-compromised` — a
+ * SAFETY WARNING that a compromised domain (farweb.org, now an Indonesian gambling site) is
+ * still linked from live QCWA/ARRL/club pages — computed `status: 'open'`, because
+ * `recordType: 'safety_warning'` fell through every branch below to the final `return 'open'`.
+ * Plan 3 renders status badges and filters directly on `trust.status`, so that bug would have
+ * tagged a domain-takeover warning as an open opportunity.
+ *
+ * Two changes close this:
+ *   1. `rawFields.status` is now read as an explicit per-record override and wins over every
+ *      inference below. far-farweb-org-compromised carries `status: 'discontinued'` for exactly
+ *      this reason — that field existed since Task 15 shipped but was never read anywhere.
+ *   2. The fallthrough at the bottom no longer defaults an UNRECOGNISED recordType to 'open'. A
+ *      recordType this function has never heard of now resolves to 'unknown' — the same honest,
+ *      already-rendered status this product uses everywhere else for "we don't know" — instead of
+ *      the single most misleading label available. Only the genuine default path (no recordType
+ *      set at all, the common case for a live-crawled record) still reaches plain 'open'.
+ */
 export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): ProgramStatus {
-  switch (raw.rawFields.recordType) {
+  const override = raw.rawFields.status;
+  if (override !== undefined && KNOWN_PROGRAM_STATUSES.has(override)) {
+    return override as ProgramStatus;
+  }
+
+  const recordType = raw.rawFields.recordType;
+  switch (recordType) {
     case 'past_award':
       return 'closed';
     case 'verified_negative':
       return 'discontinued';
     case 'crosscheck':
       return 'unknown';
+    case 'safety_warning':
+      // Reached only when no rawFields.status override is present above.
+      return 'discontinued';
     default:
       break;
   }
+
   if (raw.rawFields.deadlineKind === 'no_application_exists') return 'no_application';
-  if (ctx.sourceId === 'rca-scholarship-program' || raw.rawFields.applicantEntity === 'nominated_by_institution') {
-    return 'contact_only';
-  }
+  if (raw.rawFields.applicantEntity === 'nominated_by_institution') return 'contact_only';
+  if (CONTACT_ONLY_RECORDS.has(sourceKeyOf(ctx.sourceId, raw.externalKey))) return 'contact_only';
   if (ctx.sourceId === 'nasa-csli' || ctx.sourceId === 'arrl-club-grant') return 'unknown';
+
+  // A recordType WAS set, but nothing above resolved it — fail loud as 'unknown', never silently
+  // 'open'.
+  if (recordType !== undefined && !KNOWN_RECORD_TYPES.has(recordType)) return 'unknown';
+
   return 'open';
 }
 
