@@ -1,0 +1,12 @@
+{
+  "errorcode": 0,
+  "msg": "success",
+  "data": {
+    "hitCount": 3,
+    "oppHits": [
+      {"id": "354102", "number": "NSF 26-512", "title": "Geospace Facilities", "agencyCode": "NSF", "agency": "National Science Foundation", "openDate": "07/06/2026", "closeDate": "11/14/2026", "oppStatus": "posted", "docType": "synopsis", "cfdaList": ["47.050"]},
+      {"id": "354199", "number": "NSF 26-540", "title": "Advanced Technological Education (ATE)", "agencyCode": "NSF", "agency": "National Science Foundation", "openDate": "05/01/2026", "closeDate": "10/02/2026", "oppStatus": "posted", "docType": "synopsis", "cfdaList": ["47.076"]},
+      {"id": "351020", "number": "HHS-2026-RAD", "title": "Radiation Oncology Outcomes Research", "agencyCode": "HHS", "agency": "Department of Health and Human Services", "openDate": "03/01/2026", "closeDate": "09/01/2026", "oppStatus": "posted", "docType": "synopsis", "cfdaList": ["93.395"]}
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "errorcode": 0,
+  "msg": "success",
+  "data": {
+    "id": 354102,
+    "opportunityNumber": "NSF 26-512",
+    "opportunityTitle": "Geospace Facilities",
+    "synopsis": {
+      "opportunityId": 354102,
+      "awardCeiling": "none",
+      "awardFloor": "none",
+      "responseDate": "Nov 14, 2026",
+      "postingDate": "Jul 06, 2026",
+      "lastUpdatedDate": "Jul 21, 2026",
+      "synopsisDesc": "<p>Supports facilities for ionospheric and space weather observation, including incoherent scatter radar and distributed instrument networks engaging undergraduate researchers.</p>",
+      "applicantTypes": [
+        {"id": "25", "description": "Others (see text field entitled \"Additional Information on Eligibility\" for clarification)"},
+        {"id": "06", "description": "Public and State controlled institutions of higher education"}
+      ]
+    }
+  }
+}
