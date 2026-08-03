@@ -56,11 +56,12 @@ export const NON_AWARD_CONTEXT_TERMS: readonly string[] = [
  * the award language precedes the amount: "A $100,000 endowment funds awards of
  * $2,500." / "...which provides $500 to each licensed student." / "The trust
  * pays $1,000 to each recipient." (fix round 2, 2026-08-04: added the recipient
- * verbs receives/pays/distributes so a bare poison term like 'trust' or
- * 'principal' doesn't drop an unambiguous, directly-adjacent award.)
+ * verbs pays/distributes so a bare poison term like 'trust' doesn't drop an
+ * unambiguous, directly-adjacent award. `receives` was tried here too but
+ * removed in round 3 — see `receivesRescue` below.)
  */
 export const AWARD_ANCHOR =
-  /\b(awards?|scholarships?|grants?|prizes?|stipends?|gives|give|provides|provide|offers?|presents?|receives?|pays?|distributes?)\s+(?:of|to|:)?\s*$/i;
+  /\b(awards?|scholarships?|grants?|prizes?|stipends?|gives|give|provides|provide|offers?|presents?|pays?|distributes?)\s+(?:of|to|:)?\s*$/i;
 
 /**
  * Companion to AWARD_ANCHOR for the equally common trailing phrasing the brief's
@@ -72,16 +73,59 @@ export const AWARD_ANCHOR =
  * Fix round 2 (2026-08-04): generalized the recipient noun beyond bare
  * 'student(s)' to recipient/applicant/winner/member/student, and added
  * recipient verb-phrases (is made/awarded/given/presented to, goes to, paid
- * to, payable to) that trail the amount rather than precede it. A single
- * filler word is tolerated before the anchor phrase ("$1,000 gift is made to
- * one recipient") but deliberately capped at one word — a wider filler budget
- * was tried and rejected because it let an *unrelated* nearby anchor word (the
- * "awards" in "...endowment funds awards of $2,500" that actually belongs to
- * the following $2,500 mention) leak backward and rescue the endowment figure
- * itself, which is precisely the trap this module exists to prevent.
+ * to, payable to) that trail the amount rather than precede it.
+ *
+ * Fix round 3 (2026-08-05, CRITICAL): round 2 applied its "tolerate one filler
+ * word" allowance to the *entire* alternation, including the original bare-noun
+ * branch (award(s)/scholarship(s)/grant(s)/prize(s)/stipend(s)) that round 1
+ * correctly required to match with zero-word adjacency. That let the filler
+ * word — including the poison word itself, e.g. "endowment" — hop over a
+ * capital-pool noun and rescue it using an anchor phrase that actually belongs
+ * to a *different, later* mention: "A $100,000 trust award of $2,500 is made
+ * annually." rescued BOTH $100,000 and $2,500, reopening the endowment trap
+ * this module exists to prevent. The fix scopes the one-word filler allowance
+ * to *only* the two branches added in round 2 (the verb-phrase and "to ...
+ * noun" branches) — the bare-noun branch is back to strict zero-word
+ * adjacency, exactly as round 1 shipped it. See the regression-guard tests in
+ * amount.test.ts for the four strings this reopened plus the one-word variant
+ * of the round-1/2 guard fixture.
  */
 export const AWARD_ANCHOR_AFTER =
-  /^\s*(?:\S+\s+)?(?:(?:awards?|scholarships?|grants?|prizes?|stipends?)\b|(?:is\s+(?:made|awarded|given|presented)\s+to|goes\s+to|paid\s+to|payable\s+to)\s+(?:one|each|every|a|an|the|\d+)?\s*(?:top\s+)?(?:recipients?|applicants?|winners?|members?|students?)\b|to\s+(?:one|each|every|a|an|the|\d+)(?:\s+\S+){0,2}?\s+(?:recipients?|applicants?|winners?|members?|students?)\b)/i;
+  /^\s*(?:(?:awards?|scholarships?|grants?|prizes?|stipends?)\b|(?:\S+\s+)?(?:(?:is\s+(?:made|awarded|given|presented)\s+to|goes\s+to|paid\s+to|payable\s+to)\s+(?:one|each|every|a|an|the|\d+)?\s*(?:top\s+)?(?:recipients?|applicants?|winners?|members?|students?)\b|to\s+(?:one|each|every|a|an|the|\d+)(?:\s+\S+){0,2}?\s+(?:recipients?|applicants?|winners?|members?|students?)\b))/i;
+
+/**
+ * `receives` is uniquely dangerous as a before-anchor verb (fix round 3,
+ * 2026-08-05, CRITICAL): "X receives $Y" is the standard way to describe a
+ * capital pool taking in contributions ("The endowment receives $500,000 in
+ * gifts each year") just as readily as it describes a person receiving an
+ * award ("The Principal Investigator receives $5,000"). Unlike pays/
+ * distributes, which must sit immediately before the `$` and in practice only
+ * ever describe money going OUT to an awardee, `receives` is symmetric: both
+ * readings put the capital-pool noun or the recipient noun in the exact same
+ * grammatical slot, immediately before "receives".
+ *
+ * Rather than guess, this checks that slot directly: `receives`/`receive`
+ * rescues a mention only when the single word immediately before it is not
+ * itself one of the capital-pool nouns this module already treats as poison
+ * subjects (endowment/fund/trust/corpus/estate/principal). "Investigator
+ * receives" rescues; "endowment receives" / "fund receives" / "trust
+ * receives" do not.
+ */
+const RECEIVES_ANCHOR = /\b(\w+)\s+receives?\s*$/i;
+const CAPITAL_POOL_SUBJECT_NOUNS = new Set([
+  'endowment',
+  'fund',
+  'trust',
+  'corpus',
+  'estate',
+  'principal',
+]);
+
+function receivesRescue(before: string): boolean {
+  const m = RECEIVES_ANCHOR.exec(before);
+  if (!m) return false;
+  return !CAPITAL_POOL_SUBJECT_NOUNS.has(m[1].toLowerCase());
+}
 
 const MAGNITUDE_MULTIPLIERS: Record<string, number> = {
   k: 1_000,
@@ -153,7 +197,8 @@ function collectMentions(raw: string): Mention[] {
       if (amount === undefined) continue;
       const before = text.slice(Math.max(0, m.index - 25), m.index);
       const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40);
-      const rescued = AWARD_ANCHOR.test(before) || AWARD_ANCHOR_AFTER.test(after);
+      const rescued =
+        AWARD_ANCHOR.test(before) || AWARD_ANCHOR_AFTER.test(after) || receivesRescue(before);
       mentions.push({
         value: amount,
         isAward: !sentenceIsNonAward || rescued,
