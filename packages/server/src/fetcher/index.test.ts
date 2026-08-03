@@ -153,6 +153,76 @@ describe('createFetcher politeness', () => {
   });
 });
 
+describe('createFetcher headersByHost (Task 24)', () => {
+  it('applies a per-host header only to requests against that host', async () => {
+    const seen: Record<string, Record<string, string>> = {};
+    const transport = vi.fn(async (url: string, init: RequestInit) => {
+      seen[url] = Object.fromEntries(new Headers(init.headers).entries());
+      if (url.endsWith('/robots.txt')) return res('', { status: 404 });
+      return res('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+    });
+    const f = createFetcher({
+      ...baseOpts,
+      transport,
+      headersByHost: { 'api.simpler.grants.gov': { 'X-Auth': 'secret-key' } },
+    });
+    await f.fetch({
+      url: 'https://api.simpler.grants.gov/v1/opportunities/search',
+      method: 'POST',
+      accept: 'json',
+      body: { query: 'amateur radio' },
+    });
+    await f.fetch({ url: 'https://api.grants.gov/v1/api/search2', method: 'POST', accept: 'json' });
+
+    expect(seen['https://api.simpler.grants.gov/v1/opportunities/search']['x-auth']).toBe(
+      'secret-key',
+    );
+    // The unrelated host never sees the credential meant for the other one.
+    expect(seen['https://api.grants.gov/v1/api/search2']['x-auth']).toBeUndefined();
+  });
+
+  it('cannot override the User-Agent, even if headersByHost tries to set one', async () => {
+    let captured: Record<string, string> = {};
+    const transport = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/robots.txt')) return res('', { status: 404 });
+      captured = Object.fromEntries(new Headers(init.headers).entries());
+      return res('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+    });
+    const f = createFetcher({
+      ...baseOpts,
+      transport,
+      headersByHost: {
+        'api.simpler.grants.gov': { 'User-Agent': 'spoofed-agent/1.0', 'X-Auth': 'secret-key' },
+      },
+    });
+    await f.fetch({
+      url: 'https://api.simpler.grants.gov/v1/opportunities/search',
+      method: 'POST',
+      accept: 'json',
+      body: {},
+    });
+    // The X-Auth header still rides through headersByHost...
+    expect(captured['x-auth']).toBe('secret-key');
+    // ...but the descriptive, contact-URL-bearing User-Agent always wins. No UA spoofing, ever.
+    expect(captured['user-agent']).toContain('GrantSpotter');
+    expect(captured['user-agent']).toContain(CONTACT);
+    expect(captured['user-agent']).not.toBe('spoofed-agent/1.0');
+  });
+
+  it('adds nothing when headersByHost is unset — the optional key path costs nothing by default', async () => {
+    let captured: Record<string, string> = {};
+    const transport = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.endsWith('/robots.txt')) return res('', { status: 404 });
+      captured = Object.fromEntries(new Headers(init.headers).entries());
+      return res('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+    });
+    const f = createFetcher({ ...baseOpts, transport });
+    await f.fetch({ url: 'https://api.grants.gov/v1/api/search2', method: 'POST', accept: 'json' });
+    expect(captured['x-auth']).toBeUndefined();
+    expect(captured['user-agent']).toContain('GrantSpotter');
+  });
+});
+
 describe('createFetcher retries', () => {
   it('backs off and retries on 503, then succeeds', async () => {
     let n = 0;

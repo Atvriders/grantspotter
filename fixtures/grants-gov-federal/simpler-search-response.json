@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "opportunity_number": "NSF 26-512",
+      "opportunity_title": "Geospace Facilities",
+      "agency_name": "National Science Foundation",
+      "summary": {
+        "summary_description": "Support for the operation of geospace observing facilities, including incoherent scatter radar and ionospheric sounding instrumentation."
+      },
+      "relevancy_score": 0.91
+    },
+    {
+      "opportunity_number": "NSF 26-540",
+      "opportunity_title": "Advanced Technological Education (ATE)",
+      "agency_name": "National Science Foundation",
+      "summary": {
+        "summary_description": "Technician education in advanced technology fields, including electronics and telecommunications, at two-year colleges."
+      },
+      "relevancy_score": 0.42
+    }
+  ],
+  "pagination_info": { "page_offset": 1, "page_size": 25, "total_records": 2 }
+}
