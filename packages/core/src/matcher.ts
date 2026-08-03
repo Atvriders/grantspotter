@@ -72,6 +72,293 @@ function normText(value: string): string {
     .trim();
 }
 
+// ---------------------------------------------------------------------------
+// field_of_study matching
+//
+// The corpus does not hold tidy enum values. `Constraint.spec.fields` holds
+// prose the extractor lifted verbatim off funder pages, e.g.
+//   ["electronics", "communications", "related fields"]
+//   ["Bachelor's degree", "higher in engineering", "sciences", "similar field"]
+//   ["Electrical Engineering/Electronics"]     ["STEM (Science", "Technology", ...]
+//   ["Bachelor's degree", "higher"]            ["None"]
+// String equality against a student's "Electrical Engineering" matched none of
+// those, so 63 of 112 candidates hard-excluded an EE undergraduate — including
+// awards written specifically to fund EE students.
+//
+// DIRECTION OF ERROR governs every judgement call below. A false include shows
+// someone an award they may not win; they open the funder's page (whose verbatim
+// text this app always renders) and find out. A false exclude hides the money
+// forever, silently. So: match generously, exclude strictly, and when the
+// funder's own words widen the field ("or related field"), take the widening.
+// ---------------------------------------------------------------------------
+
+/**
+ * Splits one recorded field value into the alternatives it actually contains.
+ * The extractor already splits on `,` `/` `or` `and`, but not always (its
+ * preference and list-intro branches, and every non-ARRL source, can emit a
+ * whole clause), and re-splitting an already-split value is a no-op. Runs on the
+ * raw string because `normText` erases the `/` and `,` separators first.
+ */
+function splitFieldAlternatives(value: string): string[] {
+  return value
+    .split(/[,;/|]|\band\/or\b|\bor\b|\band\b/gi)
+    .map((part) => normText(part))
+    .filter((part) => part !== '');
+}
+
+/**
+ * Words that carry no field-of-study meaning: degree levels, institution types,
+ * list scaffolding and the extractor's own leakage ("Bachelor's degree or higher
+ * in electronics" splits into a "Bachelor's degree" alternative that names no
+ * field at all). They are ignored both when deciding whether an alternative says
+ * anything about a field AND when comparing two fields, so an award can never be
+ * matched — or missed — on the strength of the word "degree".
+ */
+// NOTE for whoever extends this list: packages/core/test/purity.test.ts scans
+// this file with a regex that reads `from'` + quote as an import specifier, so a
+// literal 'from' entry here fails the purity suite. It is omitted deliberately.
+const FIELD_NOISE_WORDS = new Set([
+  'a', 'an', 'the', 'of', 'in', 'at', 'on', 'to', 'for', 'with', 'that', 'would', 'which',
+  'toward', 'towards', 'into', 'as', 'be', 'is', 'are', 'was', 'must', 'may', 'can', 'will',
+  'should', 'shall', 'not', 'no', 'none', 'nor', 'any', 'all', 'other', 'others', 'else',
+  'applicant', 'applicants', 'student', 'students', 'candidate', 'candidates', 'enrolled',
+  'pursuing', 'pursue', 'studying', 'seeking', 'majoring', 'leading', 'earned', 'earning',
+  'degree', 'degrees', 'diploma', 'certificate', 'certification', 'certificates', 'program',
+  'programs', 'programme', 'course', 'courses', 'curriculum', 'coursework', 'major', 'majors',
+  'minor', 'minors', 'field', 'fields', 'study', 'studies', 'discipline', 'disciplines', 'area',
+  'areas', 'subject', 'subjects', 'career', 'careers', 'concentration', 'emphasis', 'track',
+  'bachelor', 'bachelors', 'baccalaureate', 'master', 'masters', 'associate', 'associates',
+  'doctoral', 'doctorate', 'phd', 'bs', 'ba', 'bsc', 'ms', 'msc', 'mba', 'aa', 'as', 'aas',
+  'undergraduate', 'undergrad', 'graduate', 'postgraduate', 'freshman', 'sophomore', 'junior',
+  'senior', 'year', 'years', 'level', 'higher', 'above', 'beyond', 'lower', 'full', 'time',
+  'accredited', 'accreditation', 'abet', 'college', 'colleges', 'university', 'universities',
+  'school', 'schools', 'institution', 'institutions', 'trade', 'vocational', 'campus',
+  'requirement', 'requirements', 'required', 'require', 'restriction', 'restrictions',
+  'restricted', 'unrestricted', 'open', 'eligible', 'eligibility', 'qualified', 'qualifying',
+  'given', 'award', 'awarded', 'scholarship', 'scholarships', 'regardless', 'declared',
+  'undeclared', 'undecided', 'general', 'various', 'etc', 'gpa', 'cumulative', 'average',
+  'grade', 'point', 'na', 'n', 'tbd', 'tba', 'unknown', 'unspecified', 'specified', 'this',
+]);
+
+/** "or a related field", "or similar field" — the funder's own widening. */
+const RELATEDNESS_WORDS = new Set([
+  'related', 'similar', 'allied', 'adjacent', 'comparable', 'equivalent', 'associated', 'akin',
+  'analogous', 'relevant', 'applicable',
+]);
+
+/**
+ * Abbreviations a student is likely to type, expanded into (not replaced by)
+ * their long forms, so "EE" matches "Electrical Engineering" and "Electronics"
+ * alike. Ambiguous ones (CE = computer OR civil engineering) expand to every
+ * reading: over-including one extra award beats hiding the right one.
+ */
+const FIELD_ABBREVIATIONS: Record<string, string> = {
+  ee: 'electrical engineering electronics',
+  eee: 'electrical electronics engineering',
+  ece: 'electrical computer engineering',
+  eecs: 'electrical engineering computer science',
+  cs: 'computer science',
+  ce: 'computer engineering civil engineering',
+  cpe: 'computer engineering',
+  cse: 'computer science engineering',
+  me: 'mechanical engineering',
+  che: 'chemical engineering',
+  ae: 'aerospace engineering',
+  bme: 'biomedical engineering',
+  it: 'information technology',
+  cis: 'computer information systems',
+  mis: 'management information systems',
+  stem: 'science technology engineering mathematics',
+  steam: 'science technology engineering arts mathematics',
+  rf: 'radio frequency',
+  comms: 'communications',
+  tech: 'technology',
+  math: 'mathematics',
+  maths: 'mathematics',
+  psych: 'psychology',
+};
+
+/**
+ * Words that mean the same thing to a funder but share no spelling, so neither
+ * the stem nor the shared-prefix rule below can pair them. Deliberately tiny:
+ * "engineering" and "technology"/"technical" are used interchangeably across
+ * this corpus ("Technical field of study that would support the radio art" is
+ * an award for engineers), and "math"/"mathematics" is pure abbreviation.
+ */
+const FIELD_SYNONYM_GROUPS: string[][] = [
+  ['engineering', 'engineer', 'engineered', 'technology', 'technologie', 'technical', 'tech'],
+  ['math', 'mathematic'],
+  // Domain-specific and deliberate: on a ham-radio funding desk, an award whose
+  // stated field is "Communications" (the Goldwater scholarship) is an award for
+  // radio engineers, and excluding an EE student from it is the exact failure
+  // this file exists to stop. The cost is the mirror case — a mass-communications
+  // student is shown an electronics award — which is the recoverable direction.
+  ['communication', 'telecommunication', 'radio', 'wireless', 'electrical', 'electronic'],
+];
+
+const FIELD_SYNONYM_KEY = new Map<string, number>();
+FIELD_SYNONYM_GROUPS.forEach((group, index) => {
+  for (const word of group) FIELD_SYNONYM_KEY.set(word, index);
+});
+
+/** Crude, deliberate: only a trailing plural "s". Both sides get the same treatment. */
+function stemWord(word: string): string {
+  return word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word;
+}
+
+interface FieldPhrase {
+  /** Normalized text with abbreviations expanded — used for containment. */
+  text: string;
+  /** Stemmed content words, noise removed — used for overlap. */
+  words: string[];
+}
+
+function analyzeFieldPhrase(value: string): FieldPhrase {
+  const expanded: string[] = [];
+  for (const word of normText(value).split(' ')) {
+    if (word === '') continue;
+    expanded.push(word);
+    const expansion = FIELD_ABBREVIATIONS[word];
+    if (expansion !== undefined) expanded.push(...expansion.split(' '));
+  }
+  const words: string[] = [];
+  for (const word of expanded) {
+    if (FIELD_NOISE_WORDS.has(word) || RELATEDNESS_WORDS.has(word)) continue;
+    if (/^\d+$/.test(word)) continue;
+    // A one-letter token is punctuation debris, never a field: normText turns
+    // "Bachelor's degree" into "bachelor s degree", and a stray "s" counted as
+    // content is what made a pure degree-level value look like a real field
+    // requirement and exclude everyone.
+    if (word.length < 2) continue;
+    const stem = stemWord(word);
+    if (!words.includes(stem)) words.push(stem);
+  }
+  return { text: expanded.join(' '), words };
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) i += 1;
+  return i;
+}
+
+/**
+ * Two content words mean the same field if they are the same word, share a
+ * synonym group, or share a 5-character prefix while both are at least 5 long —
+ * which is what pairs "electrical"/"electronics" (electr-), "computer"/
+ * "computing" (comput-) and "science"/"scientific" (scien-). Short words are
+ * excluded from the prefix rule because "media"/"medicine" would otherwise pair.
+ */
+function fieldWordsMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const keyA = FIELD_SYNONYM_KEY.get(a);
+  if (keyA !== undefined && keyA === FIELD_SYNONYM_KEY.get(b)) return true;
+  if (a.length < 5 || b.length < 5) return false;
+  return commonPrefixLength(a, b) >= 5;
+}
+
+/** Whole-phrase containment on word boundaries: "electrical engineering" contains "engineering". */
+function phraseContains(haystack: string, needle: string): boolean {
+  if (needle === '') return false;
+  return ` ${haystack} `.includes(` ${needle} `);
+}
+
+/** Generous: the applicant's field need only share one content word with the funder's. */
+function fieldPhrasesOverlap(mine: FieldPhrase, theirs: FieldPhrase): boolean {
+  if (mine.text === theirs.text) return true;
+  if (phraseContains(mine.text, theirs.text) || phraseContains(theirs.text, mine.text)) return true;
+  return mine.words.some((a) => theirs.words.some((b) => fieldWordsMatch(a, b)));
+}
+
+/**
+ * Strict, and deliberately NOT the same test as inclusion: an exclusion is the
+ * one direction where being wrong hides money, so it requires the applicant's
+ * field to actually BE the excluded one ("liberal arts" vs "Liberal Arts",
+ * "sports medicine" vs "medicine"), never a single shared word.
+ */
+function fieldPhraseExcluded(mine: FieldPhrase, excluded: FieldPhrase): boolean {
+  if (excluded.words.length === 0 || mine.words.length === 0) return false;
+  if (mine.text === excluded.text) return true;
+  if (phraseContains(mine.text, excluded.text) || phraseContains(excluded.text, mine.text)) {
+    return true;
+  }
+  return (
+    mine.words.length === excluded.words.length &&
+    excluded.words.every((word) => mine.words.some((theirs) => fieldWordsMatch(word, theirs)))
+  );
+}
+
+/** "Any", "All", "Any field", "None" — an explicit no-restriction marker. */
+function isAnyFieldMarker(value: string): boolean {
+  const analyzed = analyzeFieldPhrase(value);
+  return analyzed.words.length === 0 && /\b(any|all|every|none|no)\b/.test(analyzed.text);
+}
+
+/**
+ * Words that describe a KIND of field rather than a field: "or a related
+ * technical field" widens as completely as "or a related field" does. Kept
+ * separate from the noise list because "Technical field" standing alone, with no
+ * relatedness word, IS a requirement — one that an engineer meets and a music
+ * major does not (Wayne Nelson, KB4UT, Memorial Scholarship).
+ */
+const WIDENING_DESCRIPTOR_WORDS = new Set([
+  'technical', 'technological', 'professional', 'academic', 'accredited',
+]);
+
+/**
+ * "or related field", "or a related technical field", "or similar field" — a
+ * relatedness word in a phrase that names no field of its own. "Technology-
+ * related field" and "a Health Care-related field" are NOT widenings: they still
+ * name a field, and are matched normally.
+ */
+function isFieldWideningMarker(value: string): boolean {
+  const hasRelatedness = normText(value)
+    .split(' ')
+    .some((word) => RELATEDNESS_WORDS.has(word));
+  if (!hasRelatedness) return false;
+  return analyzeFieldPhrase(value).words.every((word) => WIDENING_DESCRIPTOR_WORDS.has(word));
+}
+
+interface FieldRequirement {
+  /** Alternatives that actually name a field. */
+  informative: FieldPhrase[];
+  /** The funder said "any"/"all"/"none", or every alternative was pure noise. */
+  unrestricted: boolean;
+  /** The funder said "or related field": adjacency we cannot adjudicate, so we include. */
+  widened: boolean;
+  excluded: FieldPhrase[];
+}
+
+function readFieldRequirement(fields: string[], excludedFields: string[]): FieldRequirement {
+  const informative: FieldPhrase[] = [];
+  let unrestricted = false;
+  let widened = false;
+  for (const alternative of fields.flatMap(splitFieldAlternatives)) {
+    if (isAnyFieldMarker(alternative)) {
+      unrestricted = true;
+      continue;
+    }
+    if (isFieldWideningMarker(alternative)) {
+      widened = true;
+      continue;
+    }
+    // Pure noise — "Bachelor's degree", "higher", "4-year program", "None" —
+    // names no field, so it is not a field requirement and must never be allowed
+    // to exclude the entire user base. (Two records in today's corpus record
+    // fields:["None"]; that is an upstream extractor bug, not a real bar, and it
+    // is left for the extractor to fix. This only stops it hiding every award.)
+    const phrase = analyzeFieldPhrase(alternative);
+    if (phrase.words.length > 0) informative.push(phrase);
+  }
+  const excluded = excludedFields
+    .flatMap(splitFieldAlternatives)
+    .map(analyzeFieldPhrase)
+    .filter((phrase) => phrase.words.length > 0);
+  if (informative.length === 0 && !widened) unrestricted = true;
+  return { informative, unrestricted, widened, excluded };
+}
+
 function isStudent(profile: Profile): profile is StudentProfile {
   return profile.kind === 'student';
 }
@@ -115,15 +402,29 @@ export function evaluateConstraint(
 
     case 'field_of_study': {
       if (!isStudent(profile)) return NOT_EVALUABLE;
-      if (profile.fieldOfStudy === undefined) {
-        if (spec.fields.length === 0 && spec.excludedFields.length === 0) return PASS;
-        return unknown('fieldOfStudy');
+      const required = readFieldRequirement(spec.fields, spec.excludedFields);
+      // Nothing here can decide anything: no field list worth the name and no
+      // exclusion. Answering "what do you study?" could not change the outcome,
+      // so do not make the applicant answer it — a wasted `unknown` reads to the
+      // user exactly like a locked door.
+      const decidable = required.excluded.length > 0 || (!required.unrestricted && !required.widened);
+      const mine =
+        profile.fieldOfStudy === undefined ? undefined : analyzeFieldPhrase(profile.fieldOfStudy);
+      // A profile field that survives normalization as nothing ("-", "undeclared")
+      // is not an answer; treat it like no answer at all rather than as a field
+      // that matches nothing.
+      if (mine === undefined || mine.words.length === 0) {
+        return decidable ? unknown('fieldOfStudy') : PASS;
       }
-      const mine = normText(profile.fieldOfStudy);
-      if (spec.excludedFields.some((f) => normText(f) === mine)) return FAIL;
-      if (spec.fields.length === 0) return PASS;
-      if (spec.fields.some((f) => normText(f) === 'any')) return PASS;
-      return spec.fields.some((f) => normText(f) === mine) ? PASS : FAIL;
+      if (required.excluded.some((phrase) => fieldPhraseExcluded(mine, phrase))) return FAIL;
+      if (required.unrestricted) return PASS;
+      if (required.informative.some((phrase) => fieldPhrasesOverlap(mine, phrase))) return PASS;
+      // The funder wrote "or a related field". They widened it themselves, and
+      // relatedness is not something this matcher can adjudicate — so include,
+      // and let the applicant read the funder's own wording (Constraint.rawText,
+      // which Plan 3 renders) to judge the fit.
+      if (required.widened) return PASS;
+      return FAIL;
     }
 
     case 'institution': {

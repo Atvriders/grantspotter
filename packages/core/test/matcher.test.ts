@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { APPLICANT_ENTITY_CONSTRAINT_SUFFIX, matchAll, matchProgram } from '../src/matcher.js';
+import {
+  APPLICANT_ENTITY_CONSTRAINT_SUFFIX,
+  evaluateConstraint,
+  matchAll,
+  matchProgram,
+} from '../src/matcher.js';
+import type { ConstraintSpec } from '../src/types.js';
 import { makeConstraint, makeOrg, makeProgram, makeStudent } from './fixtures.js';
 
 const NOW = '2027-03-01T00:00:00.000Z';
@@ -278,6 +284,114 @@ describe('matchProgram — the org/county/call_district carry-forward finding', 
       kind: 'unknown',
       missingProfileFields: ['county'],
     });
+  });
+});
+
+/**
+ * Every `fields` array below is REAL: it is what `extractFieldOfStudy` produces
+ * today from the committed ARRL scholarship-descriptions fixture, with the
+ * funder's own sentence quoted next to it. Before this axis learned to read
+ * prose, string equality made 63 of the 112 individual-facing candidates
+ * hard-exclude an electrical-engineering undergraduate.
+ */
+describe('field_of_study — free-text corpus values', () => {
+  const fos = (fields: string[], excludedFields: string[] = []): ConstraintSpec => ({
+    axis: 'field_of_study',
+    fields,
+    excludedFields,
+  });
+  const status = (spec: ConstraintSpec, fieldOfStudy?: string): string =>
+    evaluateConstraint(spec, makeStudent({ fieldOfStudy }), NOW).status;
+
+  it('matches an EE undergraduate against the three shapes the corpus actually holds', () => {
+    // "Electronics, communications, or a related technical field" — unsplit prose.
+    expect(status(fos(['electronics, communications, or a related technical field']), 'electrical engineering')).toBe('pass');
+    // ...and the same sentence after the extractor split it (Charles N. Fisher, Grauer, Lawson).
+    expect(status(fos(['Electronics', 'communications', 'related fields']), 'electrical engineering')).toBe('pass');
+    // "engineering or science" — one alternative is a strict superset of the applicant's field.
+    expect(status(fos(['engineering or science']), 'electrical engineering')).toBe('pass');
+    expect(status(fos(['Sciences', 'Engineering']), 'electrical engineering')).toBe('pass');
+    // "Electrical Engineering/Electronics" — slash-separated, never split by the extractor.
+    expect(status(fos(['Electrical Engineering/Electronics']), 'electrical engineering')).toBe('pass');
+    // The STEM list (Bittner, Steel City, Ware, and 15 more) and the degree-level
+    // leakage the extractor mints from "Bachelor's degree or higher in electrical
+    // engineering" (Metzger).
+    expect(status(fos(['Science', 'Technology', 'Engineering', 'Mathematics']), 'electrical engineering')).toBe('pass');
+    expect(status(fos(["Bachelor's degree", 'higher in electrical engineering']), 'electrical engineering')).toBe('pass');
+  });
+
+  it('takes the funder at their word when they say "or related field"', () => {
+    // The widening is the funder's own; relatedness is not ours to adjudicate,
+    // and the applicant reads their verbatim wording (Constraint.rawText) anyway.
+    expect(status(fos(['Electronics', 'communications', 'related fields']), 'physics')).toBe('pass');
+    expect(status(fos(['engineering', 'or a related technical field']), 'industrial design')).toBe('pass');
+    expect(status(fos(['engineering', 'sciences', 'similar field']), 'industrial design')).toBe('pass');
+    // Without the widening, the same list is a real bar.
+    expect(status(fos(['Electronics', 'communications']), 'industrial design')).toBe('fail');
+    // "Technology-related field" / "a Health Care-related field" still NAME a
+    // field: they are matched, not treated as a blanket widening.
+    expect(status(fos(['Technology-related field']), 'music performance')).toBe('fail');
+    expect(status(fos(['Technology-related field']), 'electrical engineering')).toBe('pass');
+  });
+
+  it('understands the abbreviations a student actually types', () => {
+    expect(status(fos(['Electrical Engineering', 'Computer Science']), 'EE')).toBe('pass');
+    expect(status(fos(['Electrical Engineering', 'Computer Science']), 'CS')).toBe('pass');
+    expect(status(fos(['Computer Engineering']), 'CE')).toBe('pass');
+    expect(status(fos(['Science', 'Technology', 'Engineering', 'Mathematics']), 'STEM')).toBe('pass');
+    expect(status(fos(['Music Performance']), 'EE')).toBe('fail');
+  });
+
+  it('still excludes a genuine non-match, and says so as a hard verdict', () => {
+    expect(status(fos(['Engineering']), 'Music Performance')).toBe('fail');
+    expect(status(fos(['Electrical Engineering', 'Computer Science']), 'Music Performance')).toBe('fail');
+    expect(status(fos(['Horticulture', 'environmental sciences']), 'electrical engineering')).toBe('fail');
+    const engineeringOnly = makeProgram({
+      constraints: [makeConstraint(fos(['Engineering']), { id: 'field', hard: true })],
+    });
+    const verdict = matchProgram(makeStudent({ fieldOfStudy: 'Music Performance' }), engineeringOnly, NOW);
+    expect(verdict.kind).toBe('ineligible');
+    if (verdict.kind !== 'ineligible') throw new Error('unreachable');
+    expect(verdict.reasons.map((r) => r.id)).toEqual(['field']);
+  });
+
+  it('never lets a value that names no field exclude the entire user base', () => {
+    // Two live records read fields:["None"] — an extractor defect, owned upstream.
+    // Whatever it means, it cannot mean "nobody may apply".
+    for (const applicant of ['electrical engineering', 'music performance', 'nursing']) {
+      expect(status(fos(['None']), applicant)).toBe('pass');
+      expect(status(fos(['No requirements']), applicant)).toBe('pass');
+      expect(status(fos(['All']), applicant)).toBe('pass');
+      // Degree-level and institution prose that leaked into `fields` (Mary Lou
+      // Brown, CARA Merit, Yankee Clipper) says nothing about a field either.
+      expect(status(fos(["Bachelor's degree", 'higher']), applicant)).toBe('pass');
+      expect(status(fos(['An accredited 2-', '4-year college', 'university', 'trade school']), applicant)).toBe('pass');
+      expect(status(fos(['2', '4-year program']), applicant)).toBe('pass');
+    }
+  });
+
+  it('only asks for the applicant field when the answer could change the outcome', () => {
+    expect(evaluateConstraint(fos(['Engineering']), makeStudent(), NOW)).toEqual({
+      status: 'unknown',
+      missing: ['fieldOfStudy'],
+    });
+    // Nothing to decide: do not make an undeclared high-school senior answer.
+    expect(status(fos(['None']))).toBe('pass');
+    expect(status(fos(["Bachelor's degree", 'higher']))).toBe('pass');
+    expect(status(fos(['Electronics', 'communications', 'related fields']))).toBe('pass');
+    // An answer that normalizes to nothing is no answer, not a field that matches nothing.
+    expect(status(fos(['Engineering']), '—')).toBe('unknown');
+  });
+
+  it('excludes strictly, where inclusion is generous', () => {
+    // Real catalogue entry: "Any, except for Liberal Arts".
+    expect(status(fos(['Any'], ['Liberal Arts']), 'liberal  arts')).toBe('fail');
+    expect(status(fos(['Any'], ['Liberal Arts']), 'Electrical Engineering')).toBe('pass');
+    expect(status(fos(['Any'], ['Medicine']), 'Sports Medicine')).toBe('fail');
+    // A single shared word includes, but must never exclude: "medical physics"
+    // is not "medicine", and an arts student is not a liberal-arts student here.
+    expect(status(fos(['Any'], ['Medicine']), 'Medical Physics')).toBe('pass');
+    expect(status(fos(['Any'], ['Liberal Arts']), 'Studio Arts')).toBe('pass');
   });
 });
 
