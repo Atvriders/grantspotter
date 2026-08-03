@@ -17,7 +17,7 @@ import { detectYieldDrop, diffPrograms, shouldSuppressVanished } from '../diff/i
 import type { Fetcher } from '../fetcher/index.js';
 import type { NormalizeContext } from '../normalize/index.js';
 import { normalizeRaw } from '../normalize/index.js';
-import { buildReviewItems } from '../review/index.js';
+import { buildReviewItems, reprojectAllCycles } from '../review/index.js';
 import { SOURCES, funderFor, getSource } from '../sources/registry.js';
 import { hasFollowUp, isSignalSource, resolveRequests } from '../sources/types.js';
 import { contextForSource } from './context.js';
@@ -229,5 +229,12 @@ export async function runCrawl(deps: CrawlDeps, sourceIds?: string[]): Promise<S
   const ids = (sourceIds ?? SOURCES.map((m) => m.id)).filter((id) => !disabled.has(id));
   const results: SourceRunResult[] = [];
   for (const id of ids) results.push(await runSource(deps, id));
+  // SEAM FIX round 2: the 18-month cycle horizon otherwise never refreshes for a program nobody
+  // ever touches again (no crawl diff, no re-approval), so it silently ages out of its own
+  // calendar. `runCrawl` is "where programs are already refreshed" (nightly, and also Plan 3's
+  // manual "run this one source" trigger), so it re-projects every already-published program's
+  // cycles forward from `nowISO` here, independent of whether tonight's crawl produced any review
+  // items at all. See `reprojectAllCycles` (review/index.ts) for the full reasoning.
+  reprojectAllCycles(deps.db, deps.nowISO());
   return results;
 }

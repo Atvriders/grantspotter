@@ -8,8 +8,9 @@ import type {
   ReviewItem,
   SourceTier,
 } from '@grantspotter/core';
-import { expandCycles, hashProgram } from '@grantspotter/core';
+import { expandCycles, hashProgram, resolveDeadlineOwner } from '@grantspotter/core';
 import type { AiAssist } from '../ai/assist.js';
+import type { CycleRepo } from '../db/repositories/cycles.js';
 import { createCycleRepo } from '../db/repositories/cycles.js';
 import {
   appendAuditLog,
@@ -152,26 +153,89 @@ export function cycleHorizonEndISO(nowISO: string): string {
 }
 
 /**
- * Projects `program`'s deadline into the `cycles` table against the CURRENTLY published corpus.
- * `deadline.source` may be `{kind:'inherited', fromProgramId}` — `expandCycles` resolves that
- * through `resolveDeadlineOwner`, which walks `allPublished` to find the owner and, per its own
- * contract, fabricates nothing when the owner is not (yet) published. That is correct here too: a
- * program approved before the program it inherits its deadline from just published gets no cycles
- * until it is next published again (e.g. the next time its content changes) — never a guessed
- * date.
+ * Projects one program's deadline into `cycles` against `allPublished`. `removeEstimatedForProgram`
+ * before `upsertMany`, not a bare upsert, is what makes a re-publish REPLACE rather than
+ * accumulate: a projected cycle's id is derived from its `closesAt`, so if the RECUR note itself
+ * changes (a funder moves its deadline) the old dates would otherwise never be removed. Observed
+ * cycles (`isEstimated: false` — nothing in this codebase writes those yet, per `cycles.ts`'s own
+ * doc comment) are deliberately left untouched.
+ */
+function writeProjectedCycles(
+  cycles: CycleRepo,
+  program: Program,
+  allPublished: Program[],
+  nowISO: string,
+): void {
+  const projected = expandCycles(program, allPublished, nowISO, cycleHorizonEndISO(nowISO));
+  cycles.removeEstimatedForProgram(program.id);
+  cycles.upsertMany(projected);
+}
+
+/**
+ * ROUND 2 (whole-branch review, 2026-08-03). `deadline.source` may be `{kind:'inherited',
+ * fromProgramId}`, resolved through `resolveDeadlineOwner`, which fabricates nothing when the
+ * owner is not (yet) published — correct per its own contract. But round 1 only re-projected the
+ * ONE program being published, so whether a program that inherits its deadline from `justPublished`
+ * ever got cycles depended entirely on approval ORDER: approve the dependent before its owner and
+ * it stayed cycle-less forever, because nothing ever touched it again once the owner became
+ * available. That is a product defect, not an edge case — 112 of 181 real ARRL-catalog candidates
+ * inherit from `arrl-foundation-scholarships`, so the calendar for the majority of the corpus
+ * depended on which Inbox row a human happened to click first, with no UI signal that order
+ * mattered and no prompt to fix it.
  *
- * `removeEstimatedForProgram` before `upsertMany`, not a bare upsert, is what makes a re-publish
- * REPLACE rather than accumulate: a projected cycle's id is derived from its `closesAt`, so if the
- * RECUR note itself changes (a funder moves its deadline) the old dates would otherwise never be
- * removed. Observed cycles (`isEstimated: false` — nothing in this codebase writes those yet, per
- * `cycles.ts`'s own doc comment) are deliberately left untouched.
+ * Fix: whenever a program publishes, also re-project every OTHER already-published program whose
+ * deadline resolves (through `resolveDeadlineOwner`, following inherited chains) to the one just
+ * published. Combined with the forward path in `projectCycles`, this makes `cycles` converge to
+ * the identical result regardless of approval order — a dependent approved before its owner
+ * self-heals the moment the owner is later published, with no manual republish required.
+ */
+function backfillInheritedDependents(
+  cycles: CycleRepo,
+  justPublished: Program,
+  allPublished: Program[],
+  nowISO: string,
+): void {
+  for (const other of allPublished) {
+    if (other.id === justPublished.id) continue;
+    if (other.deadline.source.kind !== 'inherited') continue;
+    const owner = resolveDeadlineOwner(other, allPublished);
+    if (owner.id !== justPublished.id) continue;
+    writeProjectedCycles(cycles, other, allPublished, nowISO);
+  }
+}
+
+/**
+ * Projects `program`'s deadline into the `cycles` table against the CURRENTLY published corpus,
+ * then backfills every already-published program that inherits from it (round 2 — see
+ * `backfillInheritedDependents`). `approveReviewItem` / `editReviewItem` are "the ONLY path that
+ * writes into the published corpus" (see the comment below), so this is the one place a program's
+ * cycle needs projecting: the moment its content (including its `deadline`) is published.
  */
 function projectCycles(db: Database.Database, program: Program, nowISO: string): void {
   const allPublished = createProgramRepo(db).list();
-  const projected = expandCycles(program, allPublished, nowISO, cycleHorizonEndISO(nowISO));
   const cycles = createCycleRepo(db);
-  cycles.removeEstimatedForProgram(program.id);
-  cycles.upsertMany(projected);
+  writeProjectedCycles(cycles, program, allPublished, nowISO);
+  backfillInheritedDependents(cycles, program, allPublished, nowISO);
+}
+
+/**
+ * ROUND 2 decision on the OTHER flagged residual: the 18-month horizon is not re-projected as time
+ * passes, so a program nobody ever touches again (no crawl diff, no re-approval) slowly ages out of
+ * its own calendar. DECISION: re-project rather than defer, because the fix is cheap (pure
+ * computation plus a handful of small writes, safe at this corpus's scale — under 200 programs) and
+ * "where programs are already refreshed" already exists: the nightly crawl. `crawl/runner.ts`'s
+ * `runCrawl` calls this once, after every source has run, to re-project EVERY published program's
+ * cycles forward from `nowISO` — independent of whether tonight's crawl produced any review items
+ * for it. A single pass over the whole published corpus with a shared `allPublished` snapshot also
+ * naturally handles every inherited chain correctly without needing the backfill logic above (every
+ * program, owners included, is re-projected in the same pass).
+ */
+export function reprojectAllCycles(db: Database.Database, nowISO: string): void {
+  const allPublished = createProgramRepo(db).list();
+  const cycles = createCycleRepo(db);
+  for (const program of allPublished) {
+    writeProjectedCycles(cycles, program, allPublished, nowISO);
+  }
 }
 
 /** The ONLY path that writes into the published corpus. */

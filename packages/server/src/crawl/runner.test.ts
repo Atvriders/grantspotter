@@ -746,3 +746,98 @@ describe('cycles end-to-end: real ARDC/ARRL fixtures through crawl -> approve ->
     expect(after).toBe(before);
   });
 });
+
+describe('SEAM FIX round 2 — real crawl+approve converges regardless of Inbox click order', () => {
+  // Round 1 only re-projected the ONE program being published, so whether the 112 real
+  // ARRL-catalog records that inherit from `arrl-foundation-scholarships` ever got cycles
+  // depended on whether a human happened to approve that owner before or after them in the
+  // Inbox. This runs the ACTUAL crawl pipeline (real `arrl-scholarship-program` fixture as the
+  // deadline owner, real `arrl-scholarship-descriptions` pathological fixture as 6 dependents —
+  // RESOLUTIONS R9's own reconciliation mechanism, exactly as Plan 5's seed corpus + the nightly
+  // crawl would produce it) in both orders and asserts the resulting `cycles` rows are IDENTICAL.
+  const map = {
+    '/scholarship-program': fixturePayload(
+      'arrl-scholarship-program',
+      '00-www-arrl-org-scholarship-program.html',
+      'http://www.arrl.org/scholarship-program',
+    ),
+    '/scholarship-descriptions': fixturePayload(
+      'arrl-scholarship-descriptions',
+      'pathological.html',
+      'http://www.arrl.org/scholarship-descriptions',
+    ),
+  };
+
+  /**
+   * Sets up one fresh database: funder seeded, the canonical owner id pre-seeded under its real
+   * source key (Plan 5's seed-corpus role — RESOLUTIONS R9 only resolves once this exists), then
+   * crawls both real sources. Returns every pending review item split into "the owner's" and "the
+   * six dependents'", so the caller controls approval order.
+   */
+  async function crawlOwnerAndDependents(freshDb: Database.Database) {
+    migrate(freshDb);
+    ensureIngestionSchema(freshDb);
+    const f = funderFor('arrl-foundation');
+    freshDb
+      .prepare('INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(f.id, f.name, f.homepage, NOW, NOW);
+
+    const placeholder = makeProgram({
+      id: 'arrl-foundation-scholarships',
+      funderId: 'arrl-foundation',
+      name: 'ARRL Foundation Scholarship Program (pre-seeded, Plan 5)',
+      tags: ['source:arrl-scholarship-program', 'key:scholarship-program'],
+    });
+    upsertProgram(freshDb, placeholder, {
+      sourceId: 'arrl-scholarship-program',
+      externalKey: 'scholarship-program',
+    });
+
+    const served = fixtureFetcher(map);
+    const localDeps = { db: freshDb, fetcher: served.fetcher, nowISO: () => NOW };
+    await runSource(localDeps, 'arrl-scholarship-program');
+    await runSource(localDeps, 'arrl-scholarship-descriptions');
+
+    const pending = listReviewItems(freshDb, 'pending');
+    const ownerItem = pending.find((i) => i.candidate.id === 'arrl-foundation-scholarships');
+    const dependentItems = pending.filter((i) => i.candidate.id !== 'arrl-foundation-scholarships');
+    if (!ownerItem) throw new Error('owner review item not found — fixture or reconciliation broke');
+    return { ownerItem, dependentItems };
+  }
+
+  function snapshotCycles(freshDb: Database.Database, programIds: string[]): Record<string, unknown> {
+    const cycles = createCycleRepo(freshDb);
+    const out: Record<string, unknown> = {};
+    for (const id of programIds) out[id] = cycles.listForProgram(id);
+    return out;
+  }
+
+  const countCycles = (d: Database.Database): number =>
+    (d.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n;
+
+  it('produces the identical `cycles` rows whether the owner is approved first or last', async () => {
+    const ownerFirstDb = new Database(':memory:');
+    const { ownerItem: ownerA, dependentItems: depsA } = await crawlOwnerAndDependents(ownerFirstDb);
+    approveReviewItem(ownerFirstDb, ownerA.id, 'user-1', NOW);
+    for (const item of depsA) approveReviewItem(ownerFirstDb, item.id, 'user-1', NOW);
+
+    const dependentsFirstDb = new Database(':memory:');
+    const { ownerItem: ownerB, dependentItems: depsB } = await crawlOwnerAndDependents(dependentsFirstDb);
+    for (const item of depsB) approveReviewItem(dependentsFirstDb, item.id, 'user-1', NOW);
+    approveReviewItem(dependentsFirstDb, ownerB.id, 'user-1', NOW);
+
+    const ids = [ownerA.candidate.id, ...depsA.map((i) => i.candidate.id)];
+    const snapOwnerFirst = snapshotCycles(ownerFirstDb, ids);
+    const snapDependentsFirst = snapshotCycles(dependentsFirstDb, ids);
+    expect(snapDependentsFirst).toEqual(snapOwnerFirst);
+
+    const totalOwnerFirst = countCycles(ownerFirstDb);
+    const totalDependentsFirst = countCycles(dependentsFirstDb);
+    // Real numbers, reported for the record, not just "equal": a real crawl + real approve of the
+    // real ARRL fixtures lands 14 cycle rows (owner's own 2 + 6 dependents x 2 each) — see round 2
+    // of remediation-seams-report.md.
+    console.log(`owner-first total cycles: ${totalOwnerFirst}; dependents-first total cycles: ${totalDependentsFirst}`);
+    expect(totalOwnerFirst).toBeGreaterThan(0);
+    expect(totalDependentsFirst).toBe(totalOwnerFirst);
+  });
+});

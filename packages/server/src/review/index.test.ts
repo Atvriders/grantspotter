@@ -437,3 +437,105 @@ describe('cycle projection on publish (SEAM FIX)', () => {
     expect(createCycleRepo(db).listForProgram(inheritor.id)).toEqual([]);
   });
 });
+
+describe('cycle backfill converges regardless of approval order (SEAM FIX round 2)', () => {
+  // Round 1 only re-projected the ONE program being published, so whether a program that inherits
+  // its deadline from that program ever got cycles depended entirely on approval order — approve
+  // the dependent before its owner and it stayed cycle-less forever. This block proves the round 2
+  // fix (backfillInheritedDependents) makes the two orders converge to IDENTICAL `cycles` rows, not
+  // just "both non-empty".
+
+  function freshDb(): Database.Database {
+    const d = new Database(':memory:');
+    migrate(d);
+    ensureIngestionSchema(d);
+    d.prepare(
+      'INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('qcwa', 'Quarter Century Wireless Association', 'https://www.qcwa.org/', NOW, NOW);
+    d.prepare(
+      'INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('arrl-foundation', 'ARRL Foundation', 'https://www.arrl.org/arrl-foundation', NOW, NOW);
+    return d;
+  }
+
+  function owner(): Program {
+    return program({
+      id: 'arrl-foundation-scholarships',
+      funderId: 'arrl-foundation',
+      name: 'ARRL Foundation Scholarship Program',
+      deadline: {
+        kind: 'annual_window',
+        source: { kind: 'self' },
+        note: 'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | owner window.',
+      },
+      tags: [],
+    });
+  }
+
+  function dependent(n: number): Program {
+    return program({
+      id: `qcwa--cycle-dep-${n}--0000000${n}`,
+      deadline: { kind: 'inherited', source: { kind: 'inherited', fromProgramId: owner().id }, note: '' },
+      tags: [],
+    });
+  }
+
+  async function approveOn(targetDb: Database.Database, p: Program, eventId: string): Promise<void> {
+    targetDb
+      .prepare(
+        'INSERT INTO change_events (id, source_id, program_id, kind, detected_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(eventId, 'qcwa', p.id, 'new', NOW);
+    const [item] = await buildReviewItems(
+      targetDb,
+      [{ id: eventId, sourceId: 'qcwa', programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    approveReviewItem(targetDb, item.id, 'user-1', NOW);
+  }
+
+  function snapshot(targetDb: Database.Database, ids: string[]): Record<string, unknown> {
+    const cycles = createCycleRepo(targetDb);
+    const out: Record<string, unknown> = {};
+    for (const id of ids) out[id] = cycles.listForProgram(id);
+    return out;
+  }
+
+  it('produces IDENTICAL cycles rows whether the owner is approved first or last', async () => {
+    const deps = [dependent(1), dependent(2), dependent(3)];
+    const ids = [owner().id, ...deps.map((d) => d.id)];
+
+    const ownerFirstDb = freshDb();
+    await approveOn(ownerFirstDb, owner(), 'evt-owner-a');
+    for (const [i, d] of deps.entries()) await approveOn(ownerFirstDb, d, `evt-dep-a-${i}`);
+
+    const dependentsFirstDb = freshDb();
+    for (const [i, d] of deps.entries()) await approveOn(dependentsFirstDb, d, `evt-dep-b-${i}`);
+    await approveOn(dependentsFirstDb, owner(), 'evt-owner-b');
+
+    const snapOwnerFirst = snapshot(ownerFirstDb, ids);
+    const snapDependentsFirst = snapshot(dependentsFirstDb, ids);
+    expect(snapDependentsFirst).toEqual(snapOwnerFirst); // identical, not merely "both non-empty"
+
+    const total = Object.values(snapOwnerFirst).reduce<number>((n, rows) => n + (rows as unknown[]).length, 0);
+    expect(total).toBeGreaterThan(0); // guards against a vacuous pass (two empty snapshots agreeing)
+
+    const countAll = (d: Database.Database) =>
+      (d.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n;
+    expect(countAll(dependentsFirstDb)).toBe(countAll(ownerFirstDb));
+  });
+
+  it('a dependent approved before its owner self-heals the moment the owner is later approved — no manual republish needed', async () => {
+    const d = freshDb();
+    await approveOn(d, dependent(1), 'evt-dep-solo');
+    expect(createCycleRepo(d).listForProgram(dependent(1).id)).toEqual([]); // owner absent: no fabrication
+
+    await approveOn(d, owner(), 'evt-owner-solo'); // publishing the owner alone must heal the dependent
+    const rows = createCycleRepo(d).listForProgram(dependent(1).id);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((c) => c.programId === dependent(1).id)).toBe(true);
+    expect(rows[0].label).toContain('via ARRL Foundation Scholarship Program');
+  });
+});
