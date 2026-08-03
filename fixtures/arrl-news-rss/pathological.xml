@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>ARRL News</title>
+  <link>http://www.arrl.org/news</link>
+  <item>
+    <title>ARRL Foundation Scholarship Applications Open October 30</title>
+    <link>http://www.arrl.org/news/scholarship-applications-open</link>
+    <guid isPermaLink="false">arrl-news-88121</guid>
+    <description><![CDATA[<p>Applications close <strong>December 30</strong> at 12:00 PM EST.</p>]]></description>
+    <pubDate>Mon, 27 Oct 2026 14:00:00 -0400</pubDate>
+  </item>
+  <item>
+    <title>Yasme Foundation Announces Supporting Grants</title>
+    <link>http://www.arrl.org/news/yasme-supporting-grants</link>
+    <guid isPermaLink="false">arrl-news-88099</guid>
+    <description>The Yasme Foundation has announced supporting grants to youth programs.</description>
+    <pubDate>Tue, 14 Jul 2026 09:30:00 -0400</pubDate>
+  </item>
+  <item>
+    <title>November Sweepstakes Results Posted</title>
+    <link>http://www.arrl.org/news/sweepstakes-results</link>
+    <guid isPermaLink="false">arrl-news-88010</guid>
+    <description>Full results are now available in the contest database.</description>
+    <pubDate>Fri, 06 Feb 2026 08:00:00 -0500</pubDate>
+  </item>
+  <item>
+    <title>Club Grant Program Deadline Extended</title>
+    <link>http://www.arrl.org/news/club-grant-deadline</link>
+    <description>The application window has been extended.</description>
+    <pubDate>Wed, 15 Apr 2026 12:00:00 -0400</pubDate>
+  </item>
+</channel></rss>

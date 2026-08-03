@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>NSF Upcoming Funding Opportunities</title>
+  <item>
+    <title>Advanced Technological Education (ATE)</title>
+    <link>https://www.nsf.gov/funding/opportunities/ate</link>
+    <guid>https://www.nsf.gov/funding/opportunities/ate</guid>
+    <description>Supports two-year college technician education programs.</description>
+    <pubDate>Tue, 21 Jul 2026 00:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Geospace Facilities</title>
+    <link>https://www.nsf.gov/funding/opportunities/geospace-facilities</link>
+    <guid>https://www.nsf.gov/funding/opportunities/geospace-facilities</guid>
+    <description>Ionospheric and space weather observing facilities.</description>
+    <pubDate>Mon, 06 Jul 2026 00:00:00 GMT</pubDate>
+  </item>
+</channel></rss>

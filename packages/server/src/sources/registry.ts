@@ -1,4 +1,9 @@
 import type { SourceModule } from '@grantspotter/core';
+import { ardcAwardTables } from './ardc-award-tables.js';
+import { ardcGrants } from './ardc-grants.js';
+import { arrlNewsRss } from './arrl-news-rss.js';
+import { nsfFundingRss } from './nsf-funding-rss.js';
+import { yaesuDr2x } from './yaesu-dr2x.js';
 
 /**
  * The complete source registry. 27 modules (Tasks 7-15, 24, 27 and 28 push into it).
@@ -12,7 +17,7 @@ import type { SourceModule } from '@grantspotter/core';
  * DO NOT add farweb.org, candid.org, fconline.foundationcenter.org, grantwatch.com,
  * grantstation.com or instrumentl.com. They are refused inside the fetcher.
  */
-const MODULES: SourceModule[] = [];
+const MODULES: SourceModule[] = [ardcGrants, ardcAwardTables, arrlNewsRss, nsfFundingRss, yaesuDr2x];
 
 export const SOURCES: readonly SourceModule[] = MODULES;
 
