@@ -733,3 +733,231 @@ describe('parseAmount — rounds 1-3 probes re-verified after round 4', () => {
     expect(parsed.tiers?.reduce((n, t) => n + t.count, 0)).toBe(45);
   });
 });
+
+// Fix round 5 (2026-08-06): the re-review confirmed the round-4 noun-phrase
+// attachment invariant durably closed the leak class rounds 1-3 kept reopening
+// (appositives, parentheticals, em-dash asides, relative clauses, nested "of"
+// phrases, 4-6 noun compounds — zero leaks), and ruled out restructuring again.
+// Three remaining Critical over-claims were ORTHOGONAL to the attachment
+// mechanism, two of them literal strings from the real corpus:
+//
+//   V1  a bare comma severed a FRONTED ADVERBIAL from its own clause, stranding
+//       the cumulative marker away from the figure (QCWA's real phrasing).
+//   V2  a PERSON_NOUNS subject head published capital income as an award,
+//       because rule 4 never looked at the money's own object ("in dues").
+//   V3  bare and labeled cumulative totals defaulted to award: TOTAL_NOUNS was
+//       never consulted at clause level, and the verb lexicons were
+//       present-tense only so `governingVerb` missed every participle
+//       (NCDXF's real ~$1.2M-over-48-years figure).
+//
+// As always these test the SHAPE, not the string.
+describe('parseAmount — fix round 5 (fronted adverbials, inflow objects, cumulative totals)', () => {
+  // --- V1: a fronted adverbial is a modifier, not a clause.
+  it('V1: a fronted "Since 1978," keeps its cumulative marker attached to its own figure', () => {
+    expect(
+      parseAmount(
+        'Since 1978, the club has provided over $930,350 in scholarships; this year, one award of $1,000 is made.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('V1 shape: fronted "Since 1980," with a different verb and award phrasing', () => {
+    expect(
+      parseAmount(
+        'Since 1980, the fund has awarded $500,000 in scholarships; one award of $2,000 is made each year.',
+      ),
+    ).toEqual({ amountMin: 2000, amountMax: 2000 });
+  });
+
+  it('V1 shape: fronted "To date," excludes the lifetime figure and keeps the current award', () => {
+    expect(parseAmount('To date, the program has distributed $1,000,000; the current award is $2,500.')).toEqual(
+      { amountMin: 2500, amountMax: 2500 },
+    );
+  });
+
+  it('V1 shape: fronted "Each year," does not sever a real award from its predicate', () => {
+    expect(parseAmount('Each year, $3,000 is awarded to one student.')).toEqual({
+      amountMin: 3000,
+      amountMax: 3000,
+    });
+  });
+
+  it('V1 shape: fronted "In 2024," with an "in total" marker in the same clause', () => {
+    expect(parseAmount('In 2024, over $57,000 was distributed in total; each award is $3,000.')).toEqual({
+      amountMin: 3000,
+      amountMax: 3000,
+    });
+  });
+
+  it('V1 shape: a fronted adverbial sentence with nothing but the lifetime total returns nothing', () => {
+    expect(parseAmount('Since 1978, over $930,350 has been distributed.')).toEqual({});
+  });
+
+  it('V1 shape: "In memory of W1XYZ," still re-joins without poisoning the award it modifies', () => {
+    expect(parseAmount('In memory of W1XYZ, the fund gives a $1,000 scholarship annually.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('V1 boundary: a leading fragment WITH a finite verb is a real clause and is not re-joined', () => {
+    expect(
+      parseAmount('The fund was established in 1980, and $1,000 is awarded to one student each year.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('V1 boundary: a leading clause holding its own capital figure is not re-joined', () => {
+    expect(parseAmount('The trust holds $2,000,000, and one award of $1,500 is made annually.')).toEqual({
+      amountMin: 1500,
+      amountMax: 1500,
+    });
+  });
+
+  // --- V2: who receives it does not settle what it is.
+  it('V2: "student members receive $N in membership dues" is capital income, not an award', () => {
+    expect(
+      parseAmount("The Society's student members receive $50,000 in membership dues each year."),
+    ).toEqual({});
+  });
+
+  it('V2: "youth members receive $N in annual dues" is capital income', () => {
+    expect(parseAmount("The club's youth members receive $500,000 in annual dues.")).toEqual({});
+  });
+
+  it('V2: "committee members receive $N in program funding" is capital income', () => {
+    expect(parseAmount("The scholars' committee members receive $10,000 in program funding.")).toEqual({});
+  });
+
+  it('V2 shape: a bare payee subject with an "in contributions" object', () => {
+    expect(parseAmount('Members receive $25,000 in contributions annually.')).toEqual({});
+  });
+
+  it('V2 shape: a payee subject with an "in donations" object', () => {
+    expect(parseAmount('Student recipients receive $100,000 in donations.')).toEqual({});
+  });
+
+  it('V2 shape: a payee subject with an "in gifts" object', () => {
+    expect(parseAmount('The winners receive $250,000 in gifts each year.')).toEqual({});
+  });
+
+  it('V2 shape: a past-tense inflow verb with a payee subject and an "in fees" object', () => {
+    expect(parseAmount('Our student members collected $75,000 in fees.')).toEqual({});
+  });
+
+  it('V2 control: a payee subject with NO inflow object is still an award', () => {
+    expect(parseAmount('Each winner receives $2,500.')).toEqual({ amountMin: 2500, amountMax: 2500 });
+    expect(parseAmount('Student members receive $1,000 each.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('The winner of the essay contest receives $1,000.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('V2 control: an award-side object is not an inflow object', () => {
+    expect(parseAmount('Students receive $1,000 in scholarship funds each year.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  // --- V3: bare and labeled cumulative totals.
+  it('V3: a bare "$1.2M over 48 years" is an accumulation, not an award', () => {
+    expect(parseAmount('$1.2M over 48 years')).toEqual({});
+  });
+
+  it('V3: "Total distributed: $1.2M over 48 years." is an accumulation', () => {
+    expect(parseAmount('Total distributed: $1.2M over 48 years.')).toEqual({});
+  });
+
+  it('V3 shape: a bare span with a different figure and year count', () => {
+    expect(parseAmount('$930,350 over 46 years')).toEqual({});
+  });
+
+  it('V3 shape: a "Total awarded:" label with no span at all', () => {
+    expect(parseAmount('Total awarded: $2,000,000.')).toEqual({});
+  });
+
+  it('V3 shape: a total noun buried mid-clause with a past participle', () => {
+    expect(parseAmount('The total distributed over the past 20 years is $1.2M.')).toEqual({});
+  });
+
+  it('V3 shape: a "Sum of" label', () => {
+    expect(parseAmount('Sum of all grants: $500,000.')).toEqual({});
+  });
+
+  it('V3 shape: a spelled-out span in decades', () => {
+    expect(parseAmount('$1.2M over the last four decades')).toEqual({});
+  });
+
+  it('V3 boundary: a genuine multi-year AWARD still parses — the span check sits at rule 5, below attachment', () => {
+    expect(parseAmount('A $5,000 scholarship paid over four years.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+    expect(parseAmount('The scholarship pays $5,000 over four years.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+    expect(parseAmount('One $2,000 award over two years is made to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  // --- V3, second half: participle and past-tense verb forms.
+  it('V3 verbs: a past-tense outflow verb governs correctly', () => {
+    expect(parseAmount('The club distributed $2,000 to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+    expect(parseAmount('The committee granted $1,500 to one applicant.')).toEqual({
+      amountMin: 1500,
+      amountMax: 1500,
+    });
+  });
+
+  it('V3 verbs: a past-tense inflow verb with a capital-pool subject still omits', () => {
+    expect(parseAmount('The endowment received $500,000 in gifts.')).toEqual({});
+    expect(parseAmount('The fund collected $250,000 in donations last year.')).toEqual({});
+  });
+});
+
+// Fix round 5: the round-4 probes re-run verbatim after the segmentation,
+// verb-lexicon and clause-level-total changes.
+describe('parseAmount — round 4 probes re-verified after round 5', () => {
+  it('leak 1: "$50,000 trust" still binds capital past a trailing recipient phrase', () => {
+    expect(parseAmount('A $50,000 trust is made to one recipient of $1,000 annually.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('leak 2: "$50,000 fund" still binds capital past "goes to one recipient"', () => {
+    expect(
+      parseAmount('A $50,000 fund goes to one recipient; a separate $1,000 prize is issued each term.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('leak 3: "$50,000 trust" still binds capital past a bare recipient PP', () => {
+    expect(
+      parseAmount('A $50,000 trust to one recipient near a $1,000 stipend awarded elsewhere.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('leak 4: endowment and prize-fund-total both stay capital', () => {
+    expect(
+      parseAmount('A $75,000 endowment to each winner, separate from the $2,000 prize fund total.'),
+    ).toEqual({});
+  });
+
+  it('receives probe 1: "the fund\'s board of trustees" is still not a payee', () => {
+    expect(parseAmount("The fund's board of trustees receives $500,000 in gifts each year.")).toEqual({});
+  });
+
+  it('receives probe 2: "the committee of trustees" is still not a payee', () => {
+    expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual({});
+  });
+});

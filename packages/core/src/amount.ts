@@ -202,54 +202,117 @@ const PERSON_NOUNS: ReadonlySet<string> = new Set([
   'persons',
 ]);
 
-/** Verbs describing money leaving a pool. Direction alone settles these. */
+/**
+ * Verbs describing money leaving a pool. Direction alone settles these.
+ *
+ * Fix round 5 (2026-08-06): past-tense and participle forms were missing, so
+ * `governingVerb` silently saw no verb at all in "the club has provided over
+ * $930,350" or "Total distributed: $1.2M" and fell through to rule 6's award
+ * default. Every form of every verb here and in `INFLOW_VERBS` is listed.
+ */
 const OUTFLOW_VERBS: ReadonlySet<string> = new Set([
   'gives',
   'give',
+  'gave',
+  'given',
   'provides',
   'provide',
+  'provided',
+  'providing',
   'offers',
   'offer',
+  'offered',
   'presents',
   'present',
+  'presented',
   'pays',
   'pay',
+  'paid',
+  'payable',
   'distributes',
   'distribute',
+  'distributed',
   'awards',
   'award',
+  'awarded',
   'grants',
   'grant',
+  'granted',
   'disburses',
   'disburse',
+  'disbursed',
   'confers',
   'confer',
+  'conferred',
   'bestows',
   'bestow',
+  'bestowed',
+  'issues',
+  'issue',
+  'issued',
 ]);
 
 /**
  * Verbs describing money ENTERING something. Symmetric between "the endowment
  * receives $500,000 in gifts" and "the scholar receives $2,000" — direction
- * cannot settle these, so the SUBJECT does (see `subjectHead`).
+ * cannot settle these, so the SUBJECT does (see `subjectHead`), and when the
+ * subject is a payee the money's own object gets the last word (see
+ * `INFLOW_OBJECT`).
  */
 const INFLOW_VERBS: ReadonlySet<string> = new Set([
   'receives',
   'receive',
   'received',
+  'receiving',
   'accepts',
   'accept',
+  'accepted',
   'collects',
   'collect',
+  'collected',
   'holds',
   'hold',
+  'held',
   'contains',
   'contain',
+  'contained',
   'earns',
   'earn',
+  'earned',
   'accrues',
   'accrue',
+  'accrued',
 ]);
+
+/**
+ * The prepositional object of a money mention naming what the money IS, when
+ * that is capital inflow: "receive $50,000 in membership dues", "$500,000 in
+ * annual dues", "$10,000 in program funding".
+ *
+ * Fix round 5 (2026-08-06), CRITICAL over-claim: rule 4 resolved an inflow verb
+ * on its subject head alone. `members` is a genuine payee-class noun, so "The
+ * Society's student members receive $50,000 in membership dues each year"
+ * passed the subject test and published dues income as a $50,000 award. The
+ * subject says who; this says what — and "what" wins when they disagree.
+ *
+ * DELIBERATELY EXCLUDES `grants` and `support`, which the finding listed:
+ * "students receive $10,000 in grants" is ordinary award phrasing, so including
+ * them would trade this over-claim for an under-claim on the commonest shape in
+ * the corpus. Every word kept here is unambiguously money entering a pool.
+ */
+const INFLOW_OBJECT =
+  /^in\s+(?:(?!\$)\S+\s+){0,2}?(?:dues|contributions?|donations?|gifts?|funding|revenues?|income|fees?|pledges?|bequests?|endowments?|assets?|earnings|interest|proceeds|capital|principal)\b/i;
+
+/**
+ * A duration span: "$1.2M over 48 years", "over the past twenty years". The
+ * span makes the figure an accumulation, not one award.
+ *
+ * Fix round 5: consulted at rule 5, NOT rule 1. A legitimate multi-year award
+ * ("a $5,000 scholarship paid over four years") resolves at rule 2/3 from its
+ * own noun phrase and never reaches here; only a figure nothing else explains
+ * is read as a cumulative span.
+ */
+const CUMULATIVE_SPAN = /\bover\s+(?:the\s+(?:past|last)\s+)?[\w-]+\s+(?:years?|decades?)\b/i;
 
 /** Phrases marking a figure as a lifetime/cumulative total rather than one award. */
 const CUMULATIVE_TERMS: readonly string[] = [
@@ -391,9 +454,61 @@ const AT_LEAST = /(?:\b(?:at least|minimum of|starting at)|≥|>=)\s*$/i;
 
 const WORD_RE = /[A-Za-z][A-Za-z'’]*/g;
 
-/** Clause boundaries: sentence enders, semicolons, commas, newlines, subordinators. */
-const CLAUSE_SPLIT =
-  /(?<=[.;,])\s+|\n+|\s+(?=(?:while|whereas|although|though|however|but)\b)/i;
+/** Hard clause boundaries: sentence enders, semicolons, newlines. Never re-joined. */
+const HARD_BOUNDARY = /(?<=[.;])\s+|\n+/;
+
+/** Soft clause boundaries: commas and subordinators. Subject to the re-join below. */
+const SOFT_BOUNDARY = /(?<=,)\s+|\s+(?=(?:while|whereas|although|though|however|but)\b)/i;
+
+/** Cheap "does this fragment hold a dollar figure of its own" test. Non-global on purpose. */
+const MONEY_PRESENT = /\$\s?[0-9]/;
+
+/**
+ * Finite verbs and auxiliaries. Only used to tell a fronted adverbial ("Since
+ * 1978,") from a real clause ("The fund was established in 1980,").
+ */
+const FINITE_VERB_MARKERS: ReadonlySet<string> = new Set([
+  'is',
+  'are',
+  'am',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'has',
+  'have',
+  'had',
+  'does',
+  'do',
+  'did',
+  'will',
+  'shall',
+  'may',
+  'might',
+  'can',
+  'could',
+  'would',
+  'should',
+  'must',
+  'makes',
+  'make',
+  'made',
+  'supports',
+  'support',
+  'supported',
+  'funds',
+  'funded',
+  'remains',
+  'remain',
+  'exceeds',
+  'exceed',
+  'ranges',
+  'range',
+  'totals',
+  'totaling',
+  'totalling',
+]);
 
 function toNumber(raw: string): number {
   return Number(raw.replace(/,/g, ''));
@@ -455,8 +570,49 @@ function nounRole(word: string): NounRole | undefined {
   return undefined;
 }
 
+/**
+ * A fronted adverbial is a leading phrase with no finite verb and no dollar
+ * figure of its own: "Since 1978,", "In 2024,", "Each year,", "To date,",
+ * "In memory of W1XYZ,". It is a modifier, not a clause.
+ */
+function isFrontedAdverbial(fragment: string): boolean {
+  if (MONEY_PRESENT.test(fragment)) return false;
+  const words = fragment.match(WORD_RE);
+  if (!words || words.length === 0 || words.length > 6) return false;
+  return !words.some((w) => {
+    const lower = w.toLowerCase();
+    return (
+      FINITE_VERB_MARKERS.has(lower) || OUTFLOW_VERBS.has(lower) || INFLOW_VERBS.has(lower)
+    );
+  });
+}
+
+/**
+ * Clause segmentation.
+ *
+ * Fix round 5 (2026-08-06), CRITICAL over-claim: a bare comma used to be a hard
+ * clause boundary, which severed a FRONTED ADVERBIAL from the clause it
+ * modifies. "Since 1978, the club has provided over $930,350 in scholarships"
+ * split into "Since 1978," and a remainder holding the figure but none of the
+ * cumulative vocabulary, so rule 1 never fired and rule 6 defaulted a lifetime
+ * total to an award. That is QCWA's real catalogue phrasing, and fronted
+ * adverbials recur throughout this prose.
+ *
+ * Sentence enders and semicolons stay hard boundaries. A comma-delimited
+ * leading fragment is re-joined to the clause it modifies when it carries no
+ * finite verb and no figure of its own — i.e. when it was never a clause.
+ */
 function splitClauses(raw: string): string[] {
-  return raw.split(CLAUSE_SPLIT).filter((c) => c.length > 0);
+  const out: string[] = [];
+  for (const sentence of raw.split(HARD_BOUNDARY)) {
+    if (sentence.length === 0) continue;
+    const parts = sentence.split(SOFT_BOUNDARY).filter((p) => p.length > 0);
+    while (parts.length >= 2 && isFrontedAdverbial(parts[0])) {
+      parts.splice(0, 2, `${parts[0]} ${parts[1]}`);
+    }
+    out.push(...parts);
+  }
+  return out;
 }
 
 function buildClause(text: string): Clause {
@@ -607,9 +763,13 @@ function subjectHead(clause: Clause, verb: Token): string | undefined {
  * arbitrary offset, so a predicate belonging to a neighbouring mention is
  * unreachable.
  */
+function trailingText(clause: Clause, scanFrom: number): string {
+  if (scanFrom < 0 || scanFrom >= clause.tokens.length) return '';
+  return clause.text.slice(clause.tokens[scanFrom].start);
+}
+
 function trailingAwardPredicate(clause: Clause, scanFrom: number): boolean {
-  if (scanFrom < 0 || scanFrom >= clause.tokens.length) return false;
-  const tail = clause.text.slice(clause.tokens[scanFrom].start);
+  const tail = trailingText(clause, scanFrom);
   return TRAILING_RECIPIENT_PREDICATE.test(tail) || TRAILING_PASSIVE_AWARD.test(tail);
 }
 
@@ -620,8 +780,14 @@ type Verdict = 'award' | 'capital';
  * Everything above this line exists to feed it.
  */
 function classify(clause: Clause, span: MoneySpan): Verdict {
-  // 1. Lifetime / cumulative totals are never a single award.
+  // 1. Lifetime / cumulative totals are never a single award. A clause that
+  //    NAMES an aggregate ("Total distributed: $1.2M", "the $2,000 prize fund
+  //    total") is reporting a sum, whatever else it says — fix round 5 lifted
+  //    TOTAL_NOUNS out of the noun-compound rules to clause level so that
+  //    "Total distributed:" is seen before `distributed` can read as an outflow
+  //    verb at rule 4.
   if (CUMULATIVE_TERMS.some((t) => clause.lower.includes(t))) return 'capital';
+  if (clause.tokens.some((t) => nounRole(t.lower) === 'total')) return 'capital';
 
   // 2. Explicit "<head> of $N" attachment.
   const left = leftHead(clause, span);
@@ -647,11 +813,17 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
   if (verb) {
     if (OUTFLOW_VERBS.has(verb.lower)) return 'award';
     const subject = subjectHead(clause, verb);
-    return subject !== undefined && PERSON_NOUNS.has(subject) ? 'award' : 'capital';
+    if (subject === undefined || !PERSON_NOUNS.has(subject)) return 'capital';
+    // The subject is a payee, but the money's own object can still say the
+    // money is capital income rather than an award: "student members receive
+    // $50,000 in membership dues". Who receives it does not settle what it is.
+    return INFLOW_OBJECT.test(trailingText(clause, scanFrom)) ? 'capital' : 'award';
   }
 
-  // 5. Clause-level capital vocabulary — last chance to omit.
+  // 5. Clause-level capital vocabulary, or an accumulation spanning years —
+  //    last chance to omit before the default.
   if (CAPITAL_CONTEXT_TERMS.some((t) => clause.lower.includes(t))) return 'capital';
+  if (CUMULATIVE_SPAN.test(clause.text)) return 'capital';
 
   // 6. Nothing suggests a capital pool: a bare figure in this corpus is an award.
   return 'award';
