@@ -29,6 +29,27 @@ describe('manualTierD module', () => {
       expect(r.rawFields.recordType).toBeDefined();
     }
   });
+
+  it('gives every record an explicit, honoured status — fix round 2', () => {
+    // normalize/deadline.ts's inferStatus reads rawFields.status as an override before it tries
+    // to infer anything from recordType/deadlineKind. A Tier D record is hand-researched
+    // specifically because it CANNOT be polled, so its status is a fact this file states, not a
+    // guess normalize/ reconstructs later from a generic recordType bucket. See
+    // normalize/index.test.ts's exhaustive per-record status table for why each value is correct.
+    const KNOWN_STATUSES = new Set([
+      'open',
+      'closed',
+      'dormant',
+      'discontinued',
+      'contact_only',
+      'no_application',
+      'unknown',
+    ]);
+    for (const r of TIER_D_RECORDS) {
+      expect(r.rawFields.status, `${r.externalKey} has no explicit status`).toBeDefined();
+      expect(KNOWN_STATUSES.has(r.rawFields.status), `${r.externalKey} has an unknown status "${r.rawFields.status}"`).toBe(true);
+    }
+  });
 });
 
 describe('the FAR safety record', () => {

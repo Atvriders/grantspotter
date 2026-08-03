@@ -19,12 +19,25 @@ function record(
  *
  * Plan 5's data/seed/*.json corpus (~150 records) must dedupe against these externalKeys and
  * must not restate them.
+ *
+ * FIX ROUND 2 (Task 15/16 review): every record below carries an explicit `rawFields.status`.
+ * `normalize/deadline.ts`'s `inferStatus` reads this as an override BEFORE it tries to infer
+ * anything from `recordType`/`deadlineKind`, so the correct status for a hand-researched record is
+ * a fact stated here, not a guess reconstructed later from a generic recordType bucket. Getting
+ * this wrong is not cosmetic: `'discontinued'` on `verified_negative` records for AMSAT, ARRL CARI,
+ * FlexRadio and DARA/Hamvention used to claim four ACTIVE organizations had shut down, and `'open'`
+ * on four contact-only/pointer records used to claim they were live application-ready
+ * opportunities. `status` is one of the seven `ProgramStatus` values (`open`, `closed`, `dormant`,
+ * `discontinued`, `contact_only`, `no_application`, `unknown`) — see `normalize/index.test.ts`'s
+ * exhaustive per-record status table for the reasoning behind each of the 16 below.
  */
 export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
   record(
     'far-farweb-org-compromised',
     'Foundation for Amateur Radio (FAR) — domain compromised, do not apply',
     'https://www.arrl.org/scholarship-program',
+    // The FAR intake this record intercepts is genuinely dead — the domain was taken over, and
+    // FAR's historical portfolio was absorbed elsewhere — so 'discontinued' is correct here.
     { recordType: 'safety_warning', status: 'discontinued' },
     'SAFETY WARNING. The Foundation for Amateur Radio’s domain no longer belongs to FAR: it ' +
       'now redirects to an Indonesian online-gambling site. Wayback pins the takeover between ' +
@@ -41,6 +54,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.yasme.org/news-releases/',
     {
       recordType: 'manual',
+      status: 'no_application',
       deadlineKind: 'no_application_exists',
       whyManual:
         'yasme.org 301s /feed/ and /wp-json/ to a 403 page for non-browser clients and a ' +
@@ -60,6 +74,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.yasme.org/news-releases/',
     {
       recordType: 'manual',
+      status: 'no_application',
       deadlineKind: 'no_application_exists',
       whyManual: 'See yasme-supporting-grants: yasme.org 403s non-browser clients and we do not spoof.',
     },
@@ -73,6 +88,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.radioclubofamerica.org/',
     {
       recordType: 'manual',
+      status: 'contact_only',
       applicantEntity: 'nominated_by_institution',
       deadlineKind: 'unpublished',
       whyManual:
@@ -93,6 +109,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.radioclubofamerica.org/',
     {
       recordType: 'manual',
+      status: 'contact_only',
       deadlineKind: 'rolling',
       whyManual: 'ClubExpress module_id query strings only; see rca-scholarship-program.',
     },
@@ -103,7 +120,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'nasa-space-grant-consortia',
     'NASA National Space Grant — 52 state consortia',
     'https://www.nasa.gov/learning-resources/national-space-grant-college-and-fellowship-project/',
-    { recordType: 'guided_workflow', deadlineKind: 'unpublished' },
+    { recordType: 'guided_workflow', status: 'contact_only', deadlineKind: 'unpublished' },
     'The most common real route to a campus ground station or cubesat, and structurally ' +
       'non-aggregatable: 52 independent consortia, 52 independent calendars, no national ' +
       'deadline, and heterogeneous university-hosted sites. Consortium-level student awards are ' +
@@ -114,7 +131,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'campus-sga-playbook',
     'Campus student government / student activity fee funding',
     'https://sga.fsu.edu/accounting/funding-your-rso',
-    { recordType: 'guided_workflow', deadlineKind: 'rolling' },
+    { recordType: 'guided_workflow', status: 'contact_only', deadlineKind: 'rolling' },
     'Where a typical collegiate club’s money actually comes from, and impossible to aggregate: ' +
       'roughly 4,000 campuses on Qualtrics, CampusGroups, Presence and Engage. The ham club ' +
       'applies like any other registered student organization. FSU, taken as representative: ' +
@@ -130,7 +147,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'ncdxf-youth-grant',
     'NCDXF Youth Grant',
     'https://www.ncdxf.org/pages/scholarships.html',
-    { recordType: 'manual', deadlineKind: 'unpublished' },
+    { recordType: 'manual', status: 'contact_only', deadlineKind: 'unpublished' },
     'The Youth Grant page renders as navigation and a title only — it publishes no terms, no ' +
       'amount and no deadline. Recorded as a contact-only entry so the app gives an honest ' +
       'answer instead of an empty page. Low-value polling target; also part of why ncdxf.org ' +
@@ -140,7 +157,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'hamsci-participation',
     'HamSCI — participate with a funded principal investigator',
     'https://hamsci.org/',
-    { recordType: 'manual', deadlineKind: 'no_application_exists' },
+    { recordType: 'manual', status: 'no_application', deadlineKind: 'no_application_exists' },
     'HamSCI has no club-facing application. It is a research collaboration funded by NSF ' +
       'awards held by university PIs (for example the Personal Space Weather Station network ' +
       'and the Scranton CAREER award on amateur radio and travelling ionospheric ' +
@@ -151,7 +168,7 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'ieee-society-funding-pages',
     'IEEE society funding pages (~39 societies)',
     'https://www.ieee.org/communities/societies/',
-    { recordType: 'manual', deadlineKind: 'unpublished' },
+    { recordType: 'manual', status: 'contact_only', deadlineKind: 'unpublished' },
     'Roughly 39 IEEE societies each publish their own chapter and student funding page on ' +
       'different templates and calendars, and mga.ieee.org itself returns HTTP 418 to bots. ' +
       'MTT-S is polled directly because it is the most RF-relevant; the rest are a ' +
@@ -163,6 +180,10 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'http://www.arrl.org/cari',
     {
       recordType: 'verified_negative',
+      // 'discontinued' would be false: CARI is running right now (Zoom meetups, the Collegiate
+      // QSO Party, Hamvention networking). It was never a funding program, so there is simply
+      // nothing to apply to — that is 'no_application', not "this used to exist and ended".
+      status: 'no_application',
       reason:
         'CARI is Zoom meetups, the Collegiate QSO Party and Hamvention networking. It is not a ' +
         'funding program. The W1YSM Snyder endowment funds CARI activities but has no open ' +
@@ -177,6 +198,9 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.amsat.org/university-participation/',
     {
       recordType: 'verified_negative',
+      // AMSAT is thriving — it is simply not a grantmaker. 'discontinued' would tell a student
+      // that an active organization has shut down, which is false.
+      status: 'no_application',
       reason:
         'AMSAT is a grant RECIPIENT (via ARISS/ARDC), not a grantmaker. /university-participation/ ' +
         'is a near-empty stub listing one RIT project. Confirmed by two researchers.',
@@ -190,6 +214,8 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.flexradio.com/purchasing-programs/',
     {
       recordType: 'verified_negative',
+      // FlexRadio exists and sells radios; it just has no education/nonprofit tier to apply to.
+      status: 'no_application',
       reason:
         'The purchasing-programs page was fetched directly to check. Only a CPO programme and ' +
         'a trade-in exist; there is no education, student, club or nonprofit purchasing tier.',
@@ -203,6 +229,9 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.icomamerica.com/',
     {
       recordType: 'verified_negative',
+      // Real giving happens through a person (the regional rep), not a form — 'contact_only',
+      // not 'discontinued': these vendors are actively giving equipment right now.
+      status: 'contact_only',
       reason:
         'Genuine collegiate giving happens — IC-7610s reached CMU W3VC, Penn State K3CR and ' +
         'Pitt W3YI — but there is no application programme, no page and no deadline. Kenwood ' +
@@ -218,6 +247,10 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://hamvention.org/',
     {
       recordType: 'verified_negative',
+      // The real DARA scholarship lives inside the ARRL catalog as its own program; THIS record
+      // is "there is no separate DARA/Hamvention-hosted application" — no_application, not
+      // discontinued (Hamvention itself is an active, ongoing event).
+      status: 'no_application',
       reason:
         'Zero hrefs containing "scholar" or "grant" on w8bi.org; hamvention.org has no ' +
         'scholarship page; daytonhamvention.org did not resolve. Only the DARA entry inside ' +
@@ -232,6 +265,9 @@ export const TIER_D_RECORDS: readonly RawOpportunity[] = Object.freeze([
     'https://www.chicagofmclub.org/',
     {
       recordType: 'verified_negative',
+      // The one negative record that is genuinely 'discontinued': the scholarship really did end
+      // (0 hits in the live ARRL catalog), which is also why it carries a stale-mirror warning.
+      status: 'discontinued',
       reason:
         'Zero hits in the live ARRL scholarship catalog, and 325 KB of chicagofmclub.org ' +
         'contains no occurrence of the word "scholarship".',

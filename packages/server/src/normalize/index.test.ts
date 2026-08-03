@@ -1,6 +1,7 @@
-import type { Program, RawOpportunity } from '@grantspotter/core';
+import type { Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
 import { expandCycles, hashProgram, parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
+import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
 import { programIdFor } from '../sources/util/ids.js';
 import { DEADLINE_INHERITANCE } from './deadline.js';
 import { DISPUTED_OVERRIDES, sourceKeyOf } from './disputed.js';
@@ -432,13 +433,15 @@ describe('status fix round 1 — a safety warning must never compute open', () =
 
   it('marks the RCA Youth Activities permanent contact-only entry contact_only, never open', () => {
     // manual-tier-d.ts's own rawText for this record reads "Permanent contact-only entry; do not
-    // poll." — nothing in recordType/deadlineKind alone said so, which is why it silently
-    // computed open before this fix.
+    // poll." Round 1 caught this with a name-keyed CONTACT_ONLY_RECORDS table in deadline.ts, a
+    // workaround; round 2 replaced it with a real rawFields.status on the source record itself
+    // (see sources/manual-tier-d.js, and the exhaustive per-record table below), which is what
+    // this override reproduces here.
     const p = normalizeRaw(
       tierD({
         externalKey: 'rca-youth-activities',
         name: 'Radio Club of America Youth Activities Program',
-        rawFields: { recordType: 'manual', deadlineKind: 'rolling' },
+        rawFields: { recordType: 'manual', status: 'contact_only', deadlineKind: 'rolling' },
       }),
       tierDCtx(),
     );
@@ -487,6 +490,92 @@ describe('status fix round 1 — a safety warning must never compute open', () =
       tierDCtx({ funderId: 'ncdxf' }),
     );
     expect(p.obligations.costShareRequired).toBe(false);
+  });
+});
+
+describe('status fix round 2 — every one of the 16 Tier D records carries an honoured, correct status', () => {
+  // RESOLUTIONS/coordinator review (round 2): round 1 fixed the two records it was told about but
+  // left the same class of bug live in the other 14. sources/manual-tier-d.ts now gives every
+  // record an explicit rawFields.status; this table is the single place that field's correctness
+  // is asserted, keyed by externalKey rather than array position, so a record can be reordered,
+  // added or removed without this test silently passing on the wrong entry.
+  const EXPECTED_STATUS: Readonly<Record<string, ProgramStatus>> = Object.freeze({
+    // A domain takeover that intercepts a live "apply at FAR" instruction. The FAR intake itself
+    // really is gone — the one safety-warning record where 'discontinued' is correct.
+    'far-farweb-org-compromised': 'discontinued',
+    // Yasme is an active board; there is simply no application to submit to.
+    'yasme-supporting-grants': 'no_application',
+    'yasme-excellence-award': 'no_application',
+    // RCA nominates through the student's institution — a path, but through a person/department.
+    'rca-scholarship-program': 'contact_only',
+    'rca-youth-activities': 'contact_only',
+    // Guided pointers into real, active, non-aggregatable programs — not a single open cash grant.
+    'nasa-space-grant-consortia': 'contact_only',
+    'campus-sga-playbook': 'contact_only',
+    'ncdxf-youth-grant': 'contact_only',
+    // HamSCI has no club-facing application at all: contact a funded PI, not a grant desk.
+    'hamsci-participation': 'no_application',
+    'ieee-society-funding-pages': 'contact_only',
+    // ARRL CARI runs live meetups right now; it was simply never a funding program.
+    'negative-arrl-cari': 'no_application',
+    // AMSAT is thriving — it is a grant RECIPIENT, not a grantmaker.
+    'negative-amsat': 'no_application',
+    // FlexRadio exists and sells radios; it just has no education/nonprofit tier.
+    'negative-flexradio': 'no_application',
+    // Icom/DXE/Kenwood give real equipment through a regional rep — a person, not a form.
+    'negative-icom-dxengineering-kenwood': 'contact_only',
+    // The real DARA scholarship lives inside the ARRL catalog; Hamvention itself is ongoing.
+    'negative-dara-hamvention': 'no_application',
+    // The one negative record that genuinely ended — hence also the stale-mirror warning.
+    'negative-chicago-fm-club': 'discontinued',
+  });
+
+  const tierDCtx: NormalizeContext = ctx({
+    sourceId: 'manual-tier-d',
+    funderId: 'various',
+    klass: 'ham_grant',
+    tier: 'D',
+    verificationMethod: 'manual_curation',
+    deadlineInheritsFrom: undefined,
+  });
+
+  it('has exactly one expectation per TIER_D_RECORDS externalKey — no record ships unexamined', () => {
+    const keys = TIER_D_RECORDS.map((r) => r.externalKey);
+    expect(new Set(keys)).toEqual(new Set(Object.keys(EXPECTED_STATUS)));
+    expect(keys.length).toBe(Object.keys(EXPECTED_STATUS).length);
+  });
+
+  it.each(TIER_D_RECORDS.map((r) => [r.externalKey, r] as const))(
+    'computes the researched status for %s',
+    (externalKey, record) => {
+      const p = normalizeRaw(record, tierDCtx);
+      expect(p.trust.status).toBe(EXPECTED_STATUS[externalKey]);
+    },
+  );
+
+  it('reserves discontinued for the one record that actually ended', () => {
+    // AMSAT, ARRL CARI, FlexRadio and DARA/Hamvention are all active organizations; labelling
+    // them 'discontinued' would tell a student a live org had shut down.
+    const discontinued = Object.entries(EXPECTED_STATUS)
+      .filter(([, status]) => status === 'discontinued')
+      .map(([key]) => key)
+      .sort();
+    expect(discontinued).toEqual(['far-farweb-org-compromised', 'negative-chicago-fm-club']);
+  });
+
+  it('never computes open for a Tier D record, since none of them is a live cash application', () => {
+    for (const record of TIER_D_RECORDS) {
+      const p = normalizeRaw(record, tierDCtx);
+      expect(p.trust.status, record.externalKey).not.toBe('open');
+    }
+  });
+
+  it('reads every status straight from rawFields.status — the override, not inference, is what wins', () => {
+    for (const record of TIER_D_RECORDS) {
+      expect(record.rawFields.status, `${record.externalKey} has no explicit status`).toBe(
+        EXPECTED_STATUS[record.externalKey],
+      );
+    }
   });
 });
 

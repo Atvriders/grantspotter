@@ -6,7 +6,6 @@ import type {
   RawOpportunity,
 } from '@grantspotter/core';
 import { RECURRENCE_PREFIX } from '@grantspotter/core';
-import { sourceKeyOf } from './disputed.js';
 import type { NormalizeContext } from './index.js';
 
 /**
@@ -138,22 +137,6 @@ const KNOWN_PROGRAM_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * (sourceId, externalKey) pairs whose own prose says "contact-only" / "do not poll" but carry no
- * structured field the recordType/deadlineKind checks below can key on. rca-youth-activities'
- * rawText reads "Permanent contact-only entry; do not poll."
- *
- * FIX ROUND 1: a prior version of this function compared `ctx.sourceId` against the STRING
- * 'rca-scholarship-program' to catch that sibling record — which can never match, because
- * manual-tier-d.ts's SOURCE_ID is the constant 'manual-tier-d', and 'rca-scholarship-program' is
- * only that record's externalKey. That record actually resolves via the applicantEntity check
- * below (its rawFields.applicantEntity is 'nominated_by_institution'); this table exists for the
- * one Tier D record applicantEntity does not cover.
- */
-const CONTACT_ONLY_RECORDS: ReadonlySet<string> = new Set([
-  sourceKeyOf('manual-tier-d', 'rca-youth-activities'),
-]);
-
-/**
  * FIX ROUND 1 (Task 15 review, Critical). Before this fix, `far-farweb-org-compromised` — a
  * SAFETY WARNING that a compromised domain (farweb.org, now an Indonesian gambling site) is
  * still linked from live QCWA/ARRL/club pages — computed `status: 'open'`, because
@@ -161,15 +144,29 @@ const CONTACT_ONLY_RECORDS: ReadonlySet<string> = new Set([
  * Plan 3 renders status badges and filters directly on `trust.status`, so that bug would have
  * tagged a domain-takeover warning as an open opportunity.
  *
- * Two changes close this:
- *   1. `rawFields.status` is now read as an explicit per-record override and wins over every
- *      inference below. far-farweb-org-compromised carries `status: 'discontinued'` for exactly
- *      this reason — that field existed since Task 15 shipped but was never read anywhere.
- *   2. The fallthrough at the bottom no longer defaults an UNRECOGNISED recordType to 'open'. A
- *      recordType this function has never heard of now resolves to 'unknown' — the same honest,
- *      already-rendered status this product uses everywhere else for "we don't know" — instead of
- *      the single most misleading label available. Only the genuine default path (no recordType
- *      set at all, the common case for a live-crawled record) still reaches plain 'open'.
+ * FIX ROUND 2 (Task 15/16 review). Round 1 fixed the two records it was told about
+ * (`far-farweb-org-compromised`, `rca-youth-activities`) but left the same class of bug live in
+ * the other 14 Tier D records: every `verified_negative` record computed a blanket
+ * `'discontinued'` regardless of whether the underlying organization was actually defunct (AMSAT,
+ * ARRL CARI, FlexRadio and DARA/Hamvention are all ACTIVE — they are simply not grantmakers, or
+ * their real program lives elsewhere), and four contact-only/pointer records with no cash terms
+ * computed the generic `'open'` default. Round 1's own `CONTACT_ONLY_RECORDS` table was flagged in
+ * that round's report as a workaround, not the real fix.
+ *
+ * The real fix, done this round: `sources/manual-tier-d.ts` now gives EVERY one of its 16 records
+ * an explicit `rawFields.status`, researched per record (see that file's per-record comments for
+ * the reasoning — e.g. `'contact_only'` for the Icom/DXE relationship-giving record because a real
+ * path exists through a person, `'no_application'` for AMSAT/CARI/FlexRadio/DARA because the org is
+ * real but there is nothing to apply to, `'discontinued'` reserved for Chicago FM Club, the one
+ * record that genuinely ended). `CONTACT_ONLY_RECORDS` is deleted: it existed only to reconstruct
+ * `rca-youth-activities`' status by (sourceId, externalKey) lookup, and a record carrying its own
+ * status makes that reconstruction unnecessary.
+ *
+ * The override mechanism below — `rawFields.status` wins, inference runs only when it is absent —
+ * was already correct as of round 1. `rawFields.status` being WRITTEN and never READ is exactly
+ * how the FAR bug hid in the first place; the remaining generic recordType/deadlineKind inference
+ * below is now a fallback for records that genuinely have no researched status (a live-crawled
+ * source usually doesn't), not a substitute for one.
  */
 export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): ProgramStatus {
   const override = raw.rawFields.status;
@@ -194,7 +191,6 @@ export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): Program
 
   if (raw.rawFields.deadlineKind === 'no_application_exists') return 'no_application';
   if (raw.rawFields.applicantEntity === 'nominated_by_institution') return 'contact_only';
-  if (CONTACT_ONLY_RECORDS.has(sourceKeyOf(ctx.sourceId, raw.externalKey))) return 'contact_only';
   if (ctx.sourceId === 'nasa-csli' || ctx.sourceId === 'arrl-club-grant') return 'unknown';
 
   // A recordType WAS set, but nothing above resolved it — fail loud as 'unknown', never silently
