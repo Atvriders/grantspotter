@@ -2,7 +2,10 @@ import cookieParser from 'cookie-parser';
 import express, { type Express } from 'express';
 import { errorHandler, notFoundHandler, requestIdMiddleware } from './api/errors.js';
 import { createHealthRouter } from './api/health.js';
+import { attachUser } from './auth/middleware.js';
 import type { AppConfig } from './config.js';
+import { createSessionRepo } from './db/repositories/sessions.js';
+import { createUserRepo } from './db/repositories/users.js';
 import type { Db } from './db/migrate.js';
 
 export interface AppDeps {
@@ -36,6 +39,13 @@ export function createApp(deps: AppDeps): Express {
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
   app.use(requestIdMiddleware());
+  app.use(
+    attachUser({
+      users: createUserRepo(deps.db),
+      sessions: createSessionRepo(deps.db),
+      sessionSecret: deps.config.sessionSecret,
+    }),
+  );
 
   app.use('/api', createHealthRouter(deps.db));
 
