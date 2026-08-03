@@ -60,8 +60,15 @@ const CONFIGS: SinglePageConfig[] = [
       // paragraphs in between, so they are captured as two fields instead.
       amount: /(generally do not exceed[^.]*\.)/i,
       amountNote: /(In support of[^.]*\$5,000[^.]*\.)/i,
-      restrictions: /(does not fund[^.]*\.)/i,
-      applicant: /(made to organizations[^.]*\.)/i,
+      // The live page states the exclusion as two adjacent, back-to-back <li> sentences (no
+      // filler between them, unlike the amount/amountNote split above), so concatenating them
+      // verbatim is faithful rather than fabricated. The synthetic pathological fixture instead
+      // uses a single "does not fund X or Y" sentence from an older capture; both are kept.
+      restrictions:
+        /(does not fund[^.]*\.|Grant requests for emergency communications[^.]*\.\s*Grant requests for ongoing operations[^.]*\.)/i,
+      // "made to organizations" was the older capture's wording; the live page (2026-08-02) says
+      // "Grants are awarded only to organizations, not individuals." instead.
+      applicant: /(made to organizations[^.]*\.|Grants are awarded only to organizations[^.]*\.)/i,
     },
     requiredFields: ['windows'],
     expectedMinRecords: 1,
@@ -85,6 +92,16 @@ const CONFIGS: SinglePageConfig[] = [
       // Lazy rather than a literal "to": the live page reads "as small as $1,000 to as large as
       // the maximum $25,000", not the terser "$1,000 to $25,000".
       amount: /(\$1,000[^.]*?\$25,000)/i,
+      // UNFIXABLE FROM THE CAPTURED HTML (round 2 sweep, 2026-08-03): the live page (captured
+      // 2026-08-02) contains no occurrence of "affiliat" or "eligib" anywhere in its raw HTML,
+      // in any form — this pattern only ever matches the synthetic pathological fixture, which
+      // states an ARRL-affiliation requirement an OLDER capture of the real page apparently
+      // carried. The page genuinely does not state an affiliation/eligibility requirement in
+      // this snapshot, so `eligibility` stays undefined on the real record rather than being
+      // rewritten to match nothing, or worse, to invent wording the page doesn't have. Omission
+      // here is deliberate: a missing constraint under-restricts (an applicant sees the award
+      // and can self-correct by reading the funder's page); inventing one would over-restrict
+      // and hide the award from someone it may be for, silently.
       eligibility: /(ARRL[-\s]affiliated[^.]*\.)/i,
     },
     requiredFields: ['amount'],
@@ -97,7 +114,8 @@ const CONFIGS: SinglePageConfig[] = [
       'autumn window / Feb-Jun-Oct, the last probably conflating it with the separate Amateur ' +
       'Radio Grants cycle). The record ships `disputed` rather than a guessed date. The ' +
       'application portal is a JS SPA and returns no server-side text, so open/closed status ' +
-      'cannot be determined programmatically.',
+      'cannot be determined programmatically. `eligibility` is also currently unresolvable: the ' +
+      'live 2026-08-02 capture states no ARRL-affiliation requirement anywhere in its HTML.',
   },
   {
     id: 'arrl-etp-grants',
@@ -114,7 +132,10 @@ const CONFIGS: SinglePageConfig[] = [
       window:
         /(Oct(?:ober)?\.?\s*1(?:st)?\s*(?:[-–]|and)\s*(?:Oct(?:ober)?\.?\s*)?31(?:st)?[^.]*\.)/i,
       jotformId: /jotform\.com\/(?:form\/)?(\d{8,})/i,
-      applicant: /(available to teachers[^.]*\.)/i,
+      // The live page never says "available to teachers" as one contiguous phrase (that wording
+      // is only in the synthetic fixture); its actual applicant-eligibility sentence is "Grant
+      // applicants must be a current ARRL member to be eligible to apply."
+      applicant: /(available to teachers[^.]*\.|Grant applicants? must be[^.]*\.)/i,
     },
     requiredFields: ['window'],
     expectedMinRecords: 1,

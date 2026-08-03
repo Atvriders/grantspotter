@@ -80,6 +80,22 @@ describe('arrl-amateur-radio-grants (REAL fixture)', () => {
       "In support of ARRL's Year of the Club, award amounts may be up to $5,000 in 2026.",
     );
   });
+
+  // Round 2 (whole-branch review): restrictions/applicant feed normalize/axes/* directly, so a
+  // stale pattern here doesn't just leave a field blank — it lets the matcher compute a
+  // confidently wrong eligibility constraint. Raw HTML, lines 145-146, 150:
+  //   <li>Grant requests for emergency communications equipment, facilities, or projects will
+  //       not be considered.</li>
+  //   <li>Grant requests for ongoing operations or expenses will not be considered.</li>
+  //   ...
+  //   <li>Grants are awarded only to organizations, not individuals.</li>
+  it('captures both live exclusion sentences and the organizations-only sentence verbatim', () => {
+    expect(raws[0].rawFields.restrictions).toBe(
+      'Grant requests for emergency communications equipment, facilities, or projects will not ' +
+        'be considered. Grant requests for ongoing operations or expenses will not be considered.',
+    );
+    expect(raws[0].rawFields.applicant).toBe('Grants are awarded only to organizations, not individuals.');
+  });
 });
 
 describe('arrl-club-grant', () => {
@@ -133,6 +149,16 @@ describe('arrl-club-grant (REAL fixture)', () => {
     expect(wb4sa?.rawFields.amountRaw).toBe('');
     expect(wb4sa?.externalKey).toBe('past-award:WB4SA, Radio Scouting:FL');
   });
+
+  // Round 2 (whole-branch review, 2026-08-03): the live page's raw HTML contains no occurrence
+  // of "affiliat" or "eligib" in any form (confirmed by grepping the captured fixture directly),
+  // so `eligibility` is genuinely unresolvable from this capture — not a regex miss. Asserting
+  // it stays undefined pins that as a deliberate, verified omission rather than a silent gap: a
+  // future edit that starts matching *something* here should be forced to explain what changed.
+  it('leaves eligibility undefined — the live page states no affiliation requirement anywhere', () => {
+    const main = raws.find((r) => r.externalKey === 'club-grant-program');
+    expect(main?.rawFields.eligibility).toBeUndefined();
+  });
 });
 
 describe('parseClubGrantRecipients', () => {
@@ -171,6 +197,18 @@ describe('arrl-etp-grants (REAL fixture)', () => {
   it('captures the ALL-CAPS "1ST AND ... 31ST" window and the live Jotform id', () => {
     expect(raws[0].rawFields.window).toBe('OCTOBER 1ST AND OCTOBER 31ST of 2025.');
     expect(raws[0].rawFields.jotformId).toBe('252714368960161');
+  });
+
+  // Round 2 (whole-branch review): raw HTML, line 138 (tags stripped by flattenHtml):
+  //   "...a working relationship with local ham radio volunteers who will provide mentoring
+  //   support for the school.<span> Grant applicants must be a <em>current ARRL member</em> to
+  //   be eligible to apply.<br /></span></p>"
+  // The live page never says "available to teachers" as a contiguous phrase — the old pattern
+  // matched nothing here. The actual applicant-eligibility sentence is the ARRL-membership one.
+  it('captures the live "must be a current ARRL member" sentence, not the synthetic wording', () => {
+    expect(raws[0].rawFields.applicant).toBe(
+      'Grant applicants must be a current ARRL member to be eligible to apply.',
+    );
   });
 });
 
