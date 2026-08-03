@@ -1,0 +1,191 @@
+import { createHash } from 'node:crypto';
+import type Database from 'better-sqlite3';
+import type { ChangeEvent, FetchedPayload, Program, RawOpportunity, SourceModule } from '@grantspotter/core';
+import {
+  ProgramUpsertConflictError,
+  insertChangeEvents,
+  insertSnapshot,
+  listProgramsBySource,
+  listSourceHealth,
+  recordPollFailure,
+  recordPollStart,
+  recordPollSuccess,
+} from '../db/repositories/ingestion.js';
+import { detectYieldDrop, diffPrograms, shouldSuppressVanished } from '../diff/index.js';
+import type { Fetcher } from '../fetcher/index.js';
+import type { NormalizeContext } from '../normalize/index.js';
+import { normalizeRaw } from '../normalize/index.js';
+import { buildReviewItems } from '../review/index.js';
+import { SOURCES, getSource } from '../sources/registry.js';
+import { hasFollowUp, isSignalSource, resolveRequests } from '../sources/types.js';
+import { contextForSource } from './context.js';
+
+export interface CrawlDeps {
+  db: Database.Database;
+  fetcher: Fetcher;
+  nowISO: () => string;
+}
+
+export interface SourceRunResult {
+  sourceId: string;
+  parsedCount: number;
+  events: number;
+  reviewItems: number;
+  error?: string;
+}
+
+function signalEventId(sourceId: string, externalKey: string): string {
+  return createHash('sha256').update(`signal|${sourceId}|${externalKey}`).digest('hex').slice(0, 24);
+}
+
+/**
+ * Carry-forward #2 (RESOLUTIONS R9). `upsertProgram`'s `ON CONFLICT(id)` target means a stale or
+ * missed `existingIdFor` surfaces as `ProgramUpsertConflictError` (Task 20) rather than a raw
+ * SQLite message. This is the single place that turns any error caught inside `runSource` into
+ * the text that lands in `sources.last_error` — and it specifically NAMES a source-key conflict
+ * instead of relaying whatever SQLite/fetch/parse message happened to be attached, so an operator
+ * reading source health can tell "reconciliation broke for one record" apart from "the site is
+ * down" or "the parser found nothing". Exported so it can be exercised directly: constructing a
+ * real `ProgramUpsertConflictError` end-to-end through `runSource` is not possible once R9
+ * reconciliation is wired correctly (that is the point of wiring it), so this is unit-tested
+ * against an error instance obtained the same way Task 20's own tests obtain one.
+ */
+export function healthMessageFor(err: unknown): string {
+  if (err instanceof ProgramUpsertConflictError) return `source-key conflict: ${err.message}`;
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Carry-forward #3 (RESOLUTIONS R9). `DEADLINE_INHERITANCE` (normalize/deadline.ts) points
+ * `arrl-scholarship-descriptions` and `qcwa` at the literal id `arrl-foundation-scholarships`,
+ * and nothing enforces at runtime that a published program actually carries that id — if Plan 5's
+ * seed record never gets there (or the `arrl-scholarship-program` source never reconciles onto
+ * it), every "inherited" deadline these two sources emit silently points at nothing. This is a
+ * WARNING, not a failure: the source's own records are still real and still worth reviewing even
+ * when the program they inherit a deadline from is temporarily missing, so it must not set
+ * `result.error` or block review-item creation.
+ */
+function warnIfDeadlineTargetMissing(deps: CrawlDeps, module: SourceModule, ctx: NormalizeContext): void {
+  if (ctx.deadlineInheritsFrom === undefined) return;
+  const target = deps.db.prepare('SELECT 1 FROM programs WHERE id = ?').get(ctx.deadlineInheritsFrom);
+  if (target !== undefined) return;
+  console.warn(
+    `[crawl] "${module.id}" inherits its deadline from program id "${ctx.deadlineInheritsFrom}" ` +
+      '(DEADLINE_INHERITANCE, normalize/deadline.ts), but no published program carries that id ' +
+      'yet. Every "inherited" deadline this source emits tonight points at nothing until the ' +
+      'seeded record for its owning source carries a matching sourceKey — RESOLUTIONS R9.',
+  );
+}
+
+export async function runSource(deps: CrawlDeps, sourceId: string): Promise<SourceRunResult> {
+  const module = getSource(sourceId);
+  const now = deps.nowISO();
+  recordPollStart(deps.db, module, now);
+
+  try {
+    const payloads: FetchedPayload[] = [];
+    for (const request of await resolveRequests(module)) {
+      const payload = await deps.fetcher.fetch(request);
+      payloads.push(payload);
+      insertSnapshot(deps.db, sourceId, payload);
+    }
+
+    if (hasFollowUp(module)) {
+      const sinceISO = listSourceHealth(deps.db).find((h) => h.sourceId === sourceId)?.lastSuccessAt;
+      for (const request of module.followUp(payloads, { sinceISO })) {
+        const payload = await deps.fetcher.fetch(request);
+        payloads.push(payload);
+        insertSnapshot(deps.db, sourceId, payload);
+      }
+    }
+
+    const raws: RawOpportunity[] = module.parse(payloads);
+    const events: ChangeEvent[] = [];
+
+    const yieldAlarm = detectYieldDrop(sourceId, raws.length, module.expectedMinRecords, now);
+    if (yieldAlarm) events.push(yieldAlarm);
+
+    let reviewItemCount = 0;
+
+    if (isSignalSource(module)) {
+      // Signal sources produce ChangeEvents for a human to read and never a candidate Program.
+      // The event id is derived from the item's externalKey, and insertChangeEvents uses
+      // INSERT OR IGNORE, so an item is signalled exactly once, ever.
+      for (const raw of raws) {
+        if (!module.isRelevant(raw)) continue;
+        events.push({
+          id: signalEventId(sourceId, raw.externalKey),
+          sourceId,
+          kind: 'new',
+          fieldPath: 'news',
+          after: { name: raw.name, sourceUrl: raw.sourceUrl, rawFields: raw.rawFields },
+          detectedAt: now,
+        });
+      }
+      insertChangeEvents(deps.db, events);
+    } else {
+      // `deps.db` is what turns on RESOLUTIONS R9's seeded-id reconciliation.
+      const ctx = contextForSource(module, now, deps.db);
+      warnIfDeadlineTargetMissing(deps, module, ctx); // carry-forward #3
+      const next: Program[] = raws.map((raw) => normalizeRaw(raw, ctx));
+      const previous = listProgramsBySource(deps.db, sourceId);
+      const diffed = diffPrograms(previous, next, sourceId, now);
+      // carry-forward #1: a legitimately empty scrape (grants.austinhams.org, Aug-Apr) must not
+      // read as "every previously-published record vanished". shouldSuppressVanished is exported
+      // by diff/ but deliberately not called there — it is a runner-facing gate, and this is the
+      // one place that wires it in.
+      const suppressVanished = shouldSuppressVanished(next.length, module.expectedMinRecords);
+      events.push(...diffed.filter((e) => !(suppressVanished && e.kind === 'vanished')));
+      insertChangeEvents(deps.db, events);
+
+      const byId = new Map<string, Program>();
+      for (const program of [...previous, ...next]) byId.set(program.id, program);
+      // buildReviewItems is async (optional AI pre-scoring, spec §9): no `assist` is passed here,
+      // so it resolves without ever awaiting anything itself, but the call must still be awaited
+      // — a bare call returns a Promise, and reading `.length` off that is a type error, not just
+      // a race.
+      reviewItemCount = (await buildReviewItems(deps.db, events, byId, module.tier, sourceId)).length;
+    }
+
+    recordPollSuccess(deps.db, sourceId, raws.length, now);
+    return { sourceId, parsedCount: raws.length, events: events.length, reviewItems: reviewItemCount };
+  } catch (err) {
+    // carry-forward #2: whatever the failure — a network error, a parser throw, or a source-key
+    // UNIQUE conflict from a stale/missed existingIdFor — this is caught here, turned into a
+    // health failure for THIS source only, and never rethrown. `runCrawl`'s loop below is what
+    // actually keeps crawling the other sources; healthMessageFor is what makes the recorded
+    // message name a source-key conflict specifically rather than relaying an opaque SQLite error.
+    const message = healthMessageFor(err);
+    recordPollFailure(deps.db, sourceId, message, now);
+    return { sourceId, parsedCount: 0, events: 0, reviewItems: 0, error: message };
+  }
+}
+
+/**
+ * Sources run strictly serially. One source failing never aborts the crawl.
+ *
+ * RESOLUTIONS R20 — `sources.enabled = 0` really pauses a source. Plan 3 ships
+ * `PATCH /api/sources/:id` writing that column and an admin toggle on the Sources page; without
+ * this filter the toggle is decorative and the nightly crawl keeps hammering a site the operator
+ * deliberately backed off from. That is a politeness failure, not just a UI bug: this crawl walks
+ * ~25 small-nonprofit sites, and the reason an admin pauses one is almost always that it is
+ * 500ing, rate-limiting, or asked us to stop.
+ *
+ * The filter applies to an explicit `sourceIds` request too. "Run just this one" from the admin
+ * console must not resurrect a source someone paused — Plan 3's manual crawl trigger calls exactly
+ * this function, so the pause has to hold on both paths.
+ *
+ * A source that has never been polled has no `sources` row at all, so it is not in the disabled
+ * set and runs normally. The default is enabled, and Plan 1's column default (`1`) agrees.
+ */
+export async function runCrawl(deps: CrawlDeps, sourceIds?: string[]): Promise<SourceRunResult[]> {
+  const disabled = new Set(
+    (
+      deps.db.prepare('SELECT id FROM sources WHERE enabled = 0').all() as Array<{ id: string }>
+    ).map((r) => r.id),
+  );
+  const ids = (sourceIds ?? SOURCES.map((m) => m.id)).filter((id) => !disabled.has(id));
+  const results: SourceRunResult[] = [];
+  for (const id of ids) results.push(await runSource(deps, id));
+  return results;
+}
