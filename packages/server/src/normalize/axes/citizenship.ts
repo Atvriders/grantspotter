@@ -20,7 +20,7 @@ export function extractCitizenship(raw: RawOpportunity): Constraint[] {
 
   const sentence = /[^.]*citizen[^.]*\./i.exec(text)?.[0]?.trim() ?? text;
   const allowed: Citizenship[] = ['US_CITIZEN'];
-  if (/\b(permanent resident|lawful resident|US resident)\b/i.test(sentence)) allowed.push('US_RESIDENT');
+  if (/\b(?:permanent residents?|lawful residents?|US residents?)\b/i.test(sentence)) allowed.push('US_RESIDENT');
   const within = WITHIN.exec(sentence);
   const withinMonthsOfCitizenship = within
     ? (WORD_MONTHS[within[1].toLowerCase()] ?? Number.parseInt(within[1], 10))

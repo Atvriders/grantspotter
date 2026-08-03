@@ -33,6 +33,30 @@ describe('isPreferenceText and cascadeRank', () => {
     expect(isPreferenceText('Any accredited institution.')).toBe(false);
   });
 
+  // Regression: PREFERENCE previously missed the plural "preferences" (same word-boundary gap
+  // fixed six times elsewhere in this axis set) and the whole rest of the preference vocabulary
+  // real corpus text uses besides "preference"/"preferred"/"prefer(s)"/"encouraged". A false
+  // negative here doesn't drop a constraint like the other instances of this bug — it converts a
+  // stated preference into a hard bar, on whichever axis the sentence happens to describe, since
+  // isPreferenceText is the shared classifier every axis extractor calls through makeConstraint.
+  it('detects the full preference vocabulary, biased toward detection over precision', () => {
+    expect(isPreferenceText('Regional preferences are considered in the review.')).toBe(true);
+    expect(isPreferenceText('This is a preferential consideration for veterans.')).toBe(true);
+    expect(isPreferenceText('Applicants from Louisiana will be given priority.')).toBe(true);
+    expect(isPreferenceText('Local applicants are favored in review.')).toBe(true);
+    expect(isPreferenceText('Local applicants are favoured in review.')).toBe(true);
+    expect(isPreferenceText('Louisiana applicants will be considered first.')).toBe(true);
+    expect(isPreferenceText('Louisiana applicants receive first consideration.')).toBe(true);
+  });
+
+  it('detects the real-corpus Louisiana cascade form end to end', () => {
+    const text =
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant ' +
+      'is identified, the award is open to any eligible applicant.';
+    expect(isPreferenceText(text)).toBe(true);
+    expect(cascadeRank(text)).toBe(1);
+  });
+
   it('ranks an explicit cascade after the primary preference', () => {
     expect(cascadeRank('Preference will be given to applicants residing in Louisiana.')).toBe(0);
     expect(
@@ -45,11 +69,8 @@ describe('isPreferenceText and cascadeRank', () => {
 
 describe('extractLicense', () => {
   it('reads the four license classes', () => {
-    expect(extractLicense(raw({ 'License Requirement': 'Any' }))[0].spec).toMatchObject({
-      axis: 'license',
-      licenseMin: 'NONE',
-    });
     expect(extractLicense(raw({ 'License Requirement': 'Technician or higher' }))[0].spec).toMatchObject({
+      axis: 'license',
       licenseMin: 'TECH',
     });
     expect(extractLicense(raw({ 'License Requirement': 'General or higher' }))[0].spec).toMatchObject({
@@ -63,6 +84,44 @@ describe('extractLicense', () => {
   it('treats Novice as Technician, the modern equivalent floor', () => {
     expect(extractLicense(raw({ 'License Requirement': 'Novice or higher' }))[0].spec).toMatchObject({
       licenseMin: 'TECH',
+    });
+  });
+
+  // Regression: 68 of this corpus's 111 real License Requirement values plainly require *a*
+  // licence but name no specific class ("Any active Amateur Radio license", "Applicant must be a
+  // licensed radio amateur.") — the old code fell through to 'NONE' for every one of them, so the
+  // matcher (needed = LICENSE_RANK.NONE = 0) skipped the check entirely and showed 8 ham-radio-only
+  // awards as eligible to an applicant with no amateur licence. Technician is the correct floor:
+  // it's the modern entry-level US licence and every higher class satisfies "any class".
+  it('reads "any class" text as requiring a licence — TECH is the floor, never NONE (regression)', () => {
+    expect(
+      extractLicense(raw({ 'License Requirement': 'Any active Amateur Radio license class' }))[0].spec,
+    ).toMatchObject({ axis: 'license', licenseMin: 'TECH' });
+    expect(
+      extractLicense(raw({ 'License Requirement': 'Applicant must be a licensed radio amateur.' }))[0].spec,
+    ).toMatchObject({ licenseMin: 'TECH' });
+  });
+
+  // Regression: licenseMinFrom used to test `extra` first and return immediately, so an
+  // alternation naming both classes ("General or Extra", real corpus shape on e.g. the Michael
+  // Tortorella, W2IY, Scholarship Fund) wrongly resolved to EXTRA — the maximum named, not the
+  // floor — excluding every General-class holder from an award they qualified for.
+  it('resolves an alternation to the LOWEST class named, not the first one checked (regression)', () => {
+    expect(extractLicense(raw({ 'License Requirement': 'General or Extra' }))[0].spec).toMatchObject({
+      licenseMin: 'GENERAL',
+    });
+    expect(
+      extractLicense(raw({ 'License Requirement': 'General Class or Extra Class active Amateur Radio License' }))[0]
+        .spec,
+    ).toMatchObject({ licenseMin: 'GENERAL' });
+  });
+
+  // Regression: the one genuinely unlicensed-OK shape in this corpus (The North Fulton Amateur
+  // Radio League Scholarship: "License Requirement: None") must still resolve to NONE, not be
+  // swept into the new "mentions a licence, no class named" TECH fallback above.
+  it('reads an explicit "None" as NONE — genuinely no licence required (regression)', () => {
+    expect(extractLicense(raw({ 'License Requirement': 'None' }))[0].spec).toMatchObject({
+      licenseMin: 'NONE',
     });
   });
 

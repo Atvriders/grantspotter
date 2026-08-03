@@ -51,6 +51,41 @@ describe('extractArrlMembership', () => {
     expect(cs[0].hard).toBe(false);
     expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
   });
+
+  // Regression: the ARRL Rocky Mountain Division Scholarship's real Award Amount field reads
+  // "$500 and 1 year ARRL membership for non-member" — the membership is the AWARD, explicitly
+  // offered TO non-members. The old code scanned Other + eligibility + the whole flattened
+  // rawText concatenated into one string, so this Award Amount wording (reached only via
+  // rawText, since this entry's Other field never mentions ARRL at all) matched the bare
+  // ARRL_MEMBER guard and emitted a hard "must be an ARRL member" constraint — excluding exactly
+  // the people the award exists for.
+  it('does not emit a constraint when membership is the award itself, not a requirement (Rocky Mountain regression)', () => {
+    const cs = extractArrlMembership(
+      raw({
+        'Award Amount': '$500 and 1 year ARRL membership for non-member',
+        Other:
+          "Applicant must be a US citizen; open only to graduating high school seniors and undergraduate students; applicant must submit a letter of recommendation from a sitting officer of an ARRL-affiliated club attesting to the applicant's regular activity on the Amateur Radio spectrum and within the Amateur Radio community",
+      }),
+    );
+    expect(cs).toEqual([]);
+  });
+
+  it('does not emit a constraint for other prize-polarity phrasings of membership as the award', () => {
+    expect(extractArrlMembership(raw({ Other: 'The award includes a one-year ARRL membership.' }))).toEqual([]);
+    expect(
+      extractArrlMembership(raw({ Other: 'The recipient receives a year of ARRL membership.' })),
+    ).toEqual([]);
+  });
+
+  // True positive alongside the prize-polarity regression above: a genuine "must be an ARRL
+  // member" requirement (e.g. the real Edmond A. Metzger Scholarship's Other field) must still
+  // fire as a hard constraint — the polarity fix must not become a blanket suppression.
+  it('still emits a hard constraint for a genuine membership requirement (true positive)', () => {
+    const cs = extractArrlMembership(raw({ Other: 'Must be an ARRL Member' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
+  });
 });
 
 describe('extractRecommendation', () => {
@@ -136,6 +171,24 @@ describe('extractCitizenship', () => {
     expect(cs).toHaveLength(1);
     expect(cs[0].hard).toBe(false);
     expect(cs[0].spec).toMatchObject({ axis: 'citizenship', allowed: ['US_CITIZEN'] });
+  });
+
+  it('reads "permanent residents" plural into allowed (regression: word-boundary plural gap)', () => {
+    const cs = extractCitizenship(raw({ Other: 'Open to US citizens and permanent residents.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toMatchObject({
+      axis: 'citizenship',
+      allowed: expect.arrayContaining(['US_CITIZEN', 'US_RESIDENT']),
+    });
+  });
+
+  it('reads "US residents" plural into allowed (regression: word-boundary plural gap)', () => {
+    const cs = extractCitizenship(raw({ Other: 'This scholarship is open to US citizens and US residents.' }));
+    expect(cs[0].spec).toMatchObject({
+      axis: 'citizenship',
+      allowed: expect.arrayContaining(['US_CITIZEN', 'US_RESIDENT']),
+    });
   });
 });
 
@@ -356,5 +409,24 @@ describe('extractConstraints with all thirteen axes wired', () => {
       }),
     );
     for (const c of cs) expect(c.hard).toBe(false);
+  });
+});
+
+describe('preference.ts propagates through every axis that calls makeConstraint', () => {
+  // preference.ts is shared: every axis extractor (except the hard-coded-soft financial_need
+  // and other) derives hard/soft from the same isPreferenceText call inside makeConstraint. A
+  // regression in that shared classifier re-hardens constraints across the whole corpus at
+  // once, not just on one axis — so this locks in the effect on two independently-owned axes
+  // (citizenship and recommendation), not just on preference.ts's own unit tests.
+  it('softens a preference-worded citizenship constraint', () => {
+    const cs = extractCitizenship(raw({ Other: 'Priority will be given to US citizens.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+  });
+
+  it('softens a preference-worded recommendation constraint', () => {
+    const cs = extractRecommendation(raw({ Other: 'Applicants with two sponsors are favored in review.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
   });
 });

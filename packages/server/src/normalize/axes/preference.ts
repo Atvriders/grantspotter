@@ -1,6 +1,14 @@
 import type { Constraint, ConstraintSpec } from '@grantspotter/core';
 
-const PREFERENCE = /\b(preference|preferred|prefers?|preferably|is given to|encouraged)\b/i;
+/**
+ * Biased toward detecting a preference, not away from it: a false negative here converts a
+ * stated preference into a hard bar on whichever axis the sentence describes (this is the
+ * shared classifier every axis extractor calls), while a false positive merely softens a real
+ * requirement. The asymmetry is deliberate — see the plural-audit report for the corpus-wide
+ * hard/soft delta this produced.
+ */
+const PREFERENCE =
+  /\b(?:preferences?|preferred|preferential(?:ly)?|prefers?|preferably|priority|favou?r(?:ed|s|ing)?|considered first|first consideration|is given to|encouraged)\b/i;
 const CASCADE = /\bif no (?:other )?qualified applicant/i;
 
 /** Nearly every axis appears in both requirement and preference form. Soft never excludes. */
