@@ -1,14 +1,31 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Program } from '@grantspotter/core';
+
+/**
+ * Mocks the real `@anthropic-ai/sdk` module so `realClient` (assist.ts) — the one path no other
+ * test in this file exercises, since every other test injects `deps.client` — actually runs.
+ * `vi.hoisted` is required because `vi.mock`'s factory is hoisted above this file's imports, so
+ * it cannot close over an ordinarily-declared module-scope `const`.
+ */
+const { createMock, anthropicCtor } = vi.hoisted(() => {
+  const createMock = vi.fn();
+  const anthropicCtor = vi.fn().mockImplementation(() => ({ messages: { create: createMock } }));
+  return { createMock, anthropicCtor };
+});
+vi.mock('@anthropic-ai/sdk', () => ({ default: anthropicCtor }));
+
 import {
   AI_ASSIST_MODEL,
   createAiAssist,
   parseAssistResponse,
   parsePreScoreResponse,
 } from './assist.js';
+
+/** A minimal well-formed Anthropic `messages.create` result carrying one text block. */
+const sdkTextResponse = (text: string) => ({ content: [{ type: 'text', text }] });
 
 const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -133,6 +150,135 @@ describe('with a key', () => {
     });
     await expect(assist.parseAssist('<html></html>', hint)).resolves.toEqual([]);
     await expect(assist.preScore(program())).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * `realClient` (assist.ts) is otherwise never exercised: every test above injects `deps.client`.
+ * That combines badly with parseAssist/preScore swallowing every failure to `[]`/`undefined` —
+ * a wrong parameter name, or the `schema as Record<string, unknown>` cast masking a shape
+ * mismatch, would silently and permanently disable the feature in production with a symptom
+ * indistinguishable from "correctly optional, no key set." This block constructs the assist
+ * through `createAiAssist(config)` with a real key and NO `deps.client` override, so `realClient`
+ * — and the real, mocked `@anthropic-ai/sdk` — actually runs.
+ */
+describe('the real Anthropic client (SDK mocked, wiring exercised end to end)', () => {
+  beforeEach(() => {
+    createMock.mockReset();
+    anthropicCtor.mockClear();
+  });
+
+  it('constructs Anthropic with the given key and sends model/max_tokens/thinking/output_config exactly as documented', async () => {
+    createMock.mockResolvedValueOnce(sdkTextResponse('{"records":[]}'));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' }); // no deps.client!
+    await assist.parseAssist('<html>the page</html>', hint);
+
+    expect(anthropicCtor).toHaveBeenCalledTimes(1);
+    expect(anthropicCtor).toHaveBeenCalledWith({ apiKey: 'sk-real-key' });
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const request = createMock.mock.calls[0][0];
+    expect(request.model).toBe(AI_ASSIST_MODEL);
+    expect(request.max_tokens).toBeGreaterThanOrEqual(8_000);
+    expect(request.thinking).toEqual({ type: 'disabled' });
+    // The JSON schema must land in the documented position: output_config.format.
+    expect(request.output_config.format.type).toBe('json_schema');
+    expect(request.output_config.format.schema.properties.records).toBeDefined();
+    expect(request.output_config.format.schema.additionalProperties).toBe(false);
+    expect(request.system).toContain('extract');
+    expect(request.messages).toEqual([
+      { role: 'user', content: expect.stringContaining('the page') },
+    ]);
+  });
+
+  it('sends the pinned model, thinking-disabled and the schema for preScore too, reusing the same wiring', async () => {
+    createMock.mockResolvedValueOnce(sdkTextResponse('{"confidence":0.7,"reason":"ok"}'));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    const score = await assist.preScore(program());
+    expect(score).toBeCloseTo(0.7, 5);
+
+    const request = createMock.mock.calls[0][0];
+    expect(request.model).toBe(AI_ASSIST_MODEL);
+    expect(request.thinking).toEqual({ type: 'disabled' });
+    expect(request.output_config.format.type).toBe('json_schema');
+    expect(request.output_config.format.schema.properties.confidence).toBeDefined();
+  });
+
+  it('a well-formed mocked response parses into the expected structured output through the real client', async () => {
+    createMock.mockResolvedValueOnce(
+      sdkTextResponse(
+        JSON.stringify({
+          records: [
+            {
+              externalKey: 'real-client-1',
+              name: 'Real Client Scholarship',
+              rawFields: { 'Award Amount': '$1,000' },
+              rawText: 'raw',
+            },
+          ],
+        }),
+      ),
+    );
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    const raws = await assist.parseAssist('<html></html>', hint);
+    expect(raws).toEqual([
+      {
+        sourceId: hint.sourceId,
+        externalKey: 'real-client-1',
+        name: 'Real Client Scholarship',
+        rawFields: { 'Award Amount': '$1,000', aiAssisted: 'true' },
+        sourceUrl: hint.sourceUrl,
+        rawText: 'raw',
+      },
+    ]);
+  });
+
+  it('degrades to [] for a malformed/truncated response and WARNS, so the swallow is deliberate and observable, not silent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // Simulates output truncated mid-object by max_tokens: valid text content, invalid JSON.
+    createMock.mockResolvedValueOnce(sdkTextResponse('{"records":[{"externalKey":"trunc'));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    await expect(assist.parseAssist('<html></html>', hint)).resolves.toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('parseAssist');
+    expect(warn.mock.calls[0][0]).toContain(hint.sourceId);
+    warn.mockRestore();
+  });
+
+  it('degrades to undefined for a malformed preScore response and warns identically', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    createMock.mockResolvedValueOnce(sdkTextResponse('not even close to json'));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    await expect(assist.preScore(program())).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('preScore');
+    warn.mockRestore();
+  });
+
+  it('does NOT warn for a clean, deliberate empty envelope — that is not the failure this guards against', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    createMock.mockResolvedValueOnce(sdkTextResponse('{"records":[]}'));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    await expect(assist.parseAssist('<html></html>', hint)).resolves.toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('handles a multi-record salvage payload through the real client without truncating (MAX_TOKENS headroom)', async () => {
+    const records = Array.from({ length: 25 }, (_, i) => ({
+      externalKey: `salvage-${i}`,
+      name: `Salvaged Scholarship ${i}`,
+      rawFields: { 'Award Amount': `$${i * 100}` },
+      rawText: `Record number ${i} of a large page.`,
+    }));
+    createMock.mockResolvedValueOnce(sdkTextResponse(JSON.stringify({ records })));
+    const assist = createAiAssist({ anthropicApiKey: 'sk-real-key' });
+    const raws = await assist.parseAssist('<html>a page with many records</html>', hint);
+    expect(raws).toHaveLength(25);
+    expect(raws[24].externalKey).toBe('salvage-24');
+    // The request that would carry this many records must actually ask for enough budget.
+    const request = createMock.mock.calls[0][0];
+    expect(request.max_tokens).toBeGreaterThanOrEqual(8_000);
   });
 });
 
