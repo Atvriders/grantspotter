@@ -28,3 +28,4 @@ export type { GeoDecision, GeoLocation } from './geo.js';
 export { expandCycles } from './deadline.js';
 export { ageAt, evaluateConstraint, monthsBetween } from './matcher.js';
 export type { AxisResult, AxisStatus } from './matcher.js';
+export { APPLICANT_ENTITY_CONSTRAINT_SUFFIX, matchAll, matchProgram } from './matcher.js';
