@@ -1,0 +1,26 @@
+{
+  "response": {
+    "award": [
+      {
+        "id": "2334891",
+        "title": "Collaborative Research: Ionospheric Sounding Instrumentation for Undergraduate Research",
+        "abstractText": "This project supports the development of low-cost ionosonde receivers operated by undergraduate students, including amateur radio licensees, at four regional universities. Students build HF antennas, characterize propagation, and publish open datasets.",
+        "awardeeName": "University of Example",
+        "startDate": "09/01/2024",
+        "expDate": "08/31/2027",
+        "fundProgramName": "Aeronomy",
+        "agency": "NSF"
+      },
+      {
+        "id": "2210044",
+        "title": "Mechanisms of Protein Folding in Thermophilic Archaea",
+        "abstractText": "This project investigates chaperone-assisted folding pathways in extremophile organisms.",
+        "awardeeName": "Example Medical College",
+        "startDate": "07/01/2022",
+        "expDate": "06/30/2026",
+        "fundProgramName": "Molecular Biophysics",
+        "agency": "NSF"
+      }
+    ]
+  }
+}

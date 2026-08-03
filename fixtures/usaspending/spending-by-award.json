@@ -1,0 +1,24 @@
+{
+  "limit": 25,
+  "page_metadata": { "page": 1, "hasNext": false },
+  "results": [
+    {
+      "Award ID": "2334891",
+      "Recipient Name": "UNIVERSITY OF EXAMPLE",
+      "Description": "IONOSPHERIC SOUNDING INSTRUMENTATION FOR UNDERGRADUATE RESEARCH; HF PROPAGATION; AMATEUR RADIO STUDENT OPERATORS",
+      "Awarding Agency": "National Science Foundation",
+      "Award Amount": 412500,
+      "Start Date": "2024-09-01",
+      "End Date": "2027-08-31"
+    },
+    {
+      "Award ID": "SP070023D0001",
+      "Recipient Name": "EXAMPLE DEFENSE SYSTEMS INC",
+      "Description": "RADIO SETS AND ACCESSORIES, BULK PROCUREMENT",
+      "Awarding Agency": "Department of Defense",
+      "Award Amount": 98000000,
+      "Start Date": "2023-01-01",
+      "End Date": "2028-01-01"
+    }
+  ]
+}
