@@ -41,9 +41,16 @@ export function createApp(deps: AppDeps): Express {
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
+  // requestIdMiddleware() must run first, before express.json() and
+  // cookieParser(). Body-parser and cookie-parser failures skip straight to
+  // errorHandler without reaching any later middleware; if requestId
+  // middleware ran after them, the x-request-id RESPONSE HEADER would never
+  // be set on those paths (errorHandler's randomUUID() fallback covers the
+  // response body regardless, which is what let this slip past body-only
+  // assertions in review). Fix round 1 finding, app.ts:39-41.
+  app.use(requestIdMiddleware());
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
-  app.use(requestIdMiddleware());
   app.use(
     attachUser({
       users: createUserRepo(deps.db),

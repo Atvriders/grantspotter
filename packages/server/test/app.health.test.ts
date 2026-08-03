@@ -93,3 +93,49 @@ describe('AppDeps.mountRoutes', () => {
     expect(res.body.error.code).toBe('not_found');
   });
 });
+
+// Fix round 1 finding: requestIdMiddleware() must run before express.json()
+// so body-parser failures (which skip straight to errorHandler, never
+// reaching route or later middleware) still carry the x-request-id response
+// header. errorHandler's randomUUID() fallback covers the response BODY on
+// these paths regardless of ordering, which is why the earlier tests (that
+// only assert on res.body.requestId) didn't catch this — these assert on the
+// header specifically.
+describe('x-request-id header survives body-parser failures', () => {
+  it('sets the header on a malformed JSON body (bad_request)', async () => {
+    const app = createApp({ db: harness.db, config });
+    const res = await request(app)
+      .post('/api/health')
+      .set('content-type', 'application/json')
+      .send('{ not json');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('bad_request');
+    expect(res.headers['x-request-id']).toBeTruthy();
+    expect(res.headers['x-request-id']).toBe(res.body.requestId);
+  });
+
+  it('sets the header on an oversize body (payload_too_large)', async () => {
+    const app = createApp({ db: harness.db, config });
+    const oversized = JSON.stringify({ data: 'a'.repeat(1024 * 1024 + 100) });
+    const res = await request(app)
+      .post('/api/health')
+      .set('content-type', 'application/json')
+      .send(oversized);
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe('payload_too_large');
+    expect(res.headers['x-request-id']).toBeTruthy();
+    expect(res.headers['x-request-id']).toBe(res.body.requestId);
+  });
+
+  it('echoes a client-supplied x-request-id in the header on a body-parser failure', async () => {
+    const app = createApp({ db: harness.db, config });
+    const res = await request(app)
+      .post('/api/health')
+      .set('content-type', 'application/json')
+      .set('x-request-id', 'client-supplied-id-123')
+      .send('{ not json');
+    expect(res.status).toBe(400);
+    expect(res.headers['x-request-id']).toBe('client-supplied-id-123');
+    expect(res.body.requestId).toBe('client-supplied-id-123');
+  });
+});
