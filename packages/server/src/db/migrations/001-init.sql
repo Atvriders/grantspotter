@@ -111,6 +111,11 @@ CREATE TABLE snapshots (
 );
 CREATE INDEX idx_snapshots_source ON snapshots(source_id, fetched_at);
 
+-- NOTE: source_id here is a bare TEXT NOT NULL with no FK, unlike
+-- snapshots.source_id above, which references sources(id) ON DELETE CASCADE.
+-- So deleting a source cascades its snapshots but orphans its change events.
+-- Flagged for Plan 2 rather than fixed here — may be deliberate (change
+-- events might be meant to outlive the source that produced them).
 CREATE TABLE change_events (
   id          TEXT PRIMARY KEY,
   source_id   TEXT NOT NULL,
@@ -123,10 +128,14 @@ CREATE TABLE change_events (
 );
 CREATE INDEX idx_change_events_detected ON change_events(detected_at);
 CREATE INDEX idx_change_events_program  ON change_events(program_id);
+CREATE INDEX idx_change_events_source   ON change_events(source_id);
 
 -- RESOLUTIONS R2: the column is `candidate_json`, not `candidate` — Plans 2
 -- and 3 both already write and read that name. `created_at` carries a DEFAULT
--- because Plan 2's insertReviewItem does not supply it.
+-- of the current UTC timestamp because Plan 2's insertReviewItem does not
+-- supply it — a caller that omits the column still gets a real, sortable
+-- value instead of an empty string, which would collapse the Inbox's
+-- `ORDER BY created_at` into a tie across every row.
 CREATE TABLE review_items (
   id              TEXT PRIMARY KEY,
   change_event_id TEXT NOT NULL REFERENCES change_events(id) ON DELETE CASCADE,
@@ -136,10 +145,11 @@ CREATE TABLE review_items (
   decided_at      TEXT,
   confidence      REAL NOT NULL DEFAULT 0,
   reject_key      TEXT,
-  created_at      TEXT NOT NULL DEFAULT ''
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
-CREATE INDEX idx_review_items_decision   ON review_items(decision);
-CREATE INDEX idx_review_items_reject_key ON review_items(reject_key);
+CREATE INDEX idx_review_items_decision      ON review_items(decision);
+CREATE INDEX idx_review_items_reject_key    ON review_items(reject_key);
+CREATE INDEX idx_review_items_change_event  ON review_items(change_event_id);
 
 CREATE TABLE users (
   id               TEXT PRIMARY KEY,
@@ -182,6 +192,10 @@ CREATE TABLE watches (
   created_at     TEXT NOT NULL,
   UNIQUE (user_id, program_id)
 );
+-- The UNIQUE(user_id, program_id) index above has program_id as its second
+-- column, so it cannot serve a lookup keyed by program_id alone (e.g. the R26
+-- vanished-program delete path fanning out to every watcher).
+CREATE INDEX idx_watches_program ON watches(program_id);
 
 -- RESOLUTIONS R24: these two tables are Plan 1's, and the column list is
 -- Plan 4's, adopted verbatim (db/repositories/applications.ts writes exactly
@@ -212,7 +226,8 @@ CREATE TABLE applications (
   created_at              TEXT NOT NULL,
   updated_at              TEXT NOT NULL
 );
-CREATE INDEX idx_applications_user ON applications(user_id, updated_at DESC);
+CREATE INDEX idx_applications_user    ON applications(user_id, updated_at DESC);
+CREATE INDEX idx_applications_program ON applications(program_id);
 
 CREATE TABLE template_instances (
   id                    TEXT PRIMARY KEY,

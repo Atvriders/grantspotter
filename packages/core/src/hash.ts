@@ -8,7 +8,7 @@ import type { Constraint, Program } from "./types.js";
  * with phantom changes.
  */
 function normalizeText(value: string): string {
-  return value.replace(/ /g, " ").replace(/\s+/g, " ").trim();
+  return value.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function canonical(value: unknown): string {
@@ -16,7 +16,18 @@ function canonical(value: unknown): string {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
   if (typeof value === "string") return JSON.stringify(normalizeText(value));
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (Array.isArray(value)) {
+    // Order is not content for arrays of strings anywhere in the tree, not
+    // just at the top level: GeoSpec.values, field_of_study's fields and
+    // excludedFields, institution's degreeLevels, citizenship's and
+    // gender's allowed, age_stage's stages, ham_activity's activityKinds.
+    // A parser that legitimately emits one of these in a different order
+    // must not fire a phantom eligibility_changed. Arrays of non-strings
+    // (Constraint[], AwardTier[]) are left as-is here; hashProgram sorts
+    // the ones among those where order is likewise not content.
+    const items = value.every((v) => typeof v === "string") ? [...value].sort() : value;
+    return `[${items.map(canonical).join(",")}]`;
+  }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj)
     .filter((k) => obj[k] !== undefined)

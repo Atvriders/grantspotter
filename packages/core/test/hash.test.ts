@@ -83,4 +83,39 @@ describe('hashProgram', () => {
     const present = makeProgram({ applyContact: '' });
     expect(hashProgram(present)).not.toBe(hashProgram(absent));
   });
+
+  // Nested arrays, not just the top-level ones hashProgram sorts explicitly.
+  // A parser re-scraping the same page legitimately emits GeoSpec.values (and
+  // every other constraint-spec array — fields, excludedFields, degreeLevels,
+  // allowed, stages, activityKinds) in a different order between runs. If
+  // order were content there, a phantom eligibility_changed would fire every
+  // night the order happened to flip.
+  it('is insensitive to nested constraint-spec array ordering (GeoSpec.values)', () => {
+    // Same constraint id on both sides: only the nested array order differs.
+    const forward = makeConstraint(
+      { axis: 'geography', geo: { type: 'state', values: ['TX', 'OK'] } },
+      { id: 'geo1' },
+    );
+    const reversed = makeConstraint(
+      { axis: 'geography', geo: { type: 'state', values: ['OK', 'TX'] } },
+      { id: 'geo1' },
+    );
+    expect(hashProgram(makeProgram({ constraints: [forward] }))).toBe(
+      hashProgram(makeProgram({ constraints: [reversed] })),
+    );
+  });
+
+  it('still changes when nested constraint-spec array CONTENT changes (not just order)', () => {
+    const original = makeConstraint(
+      { axis: 'geography', geo: { type: 'state', values: ['TX', 'OK'] } },
+      { id: 'geo1' },
+    );
+    const differentContent = makeConstraint(
+      { axis: 'geography', geo: { type: 'state', values: ['TX', 'CA'] } },
+      { id: 'geo1' },
+    );
+    expect(hashProgram(makeProgram({ constraints: [original] }))).not.toBe(
+      hashProgram(makeProgram({ constraints: [differentContent] })),
+    );
+  });
 });

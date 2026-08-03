@@ -203,9 +203,54 @@ describe('migrate', () => {
         )
         .run('ri1', 'ce1', '{"id":"ardc-grants"}', 0.8, 'ardc-grants|deadline'),
     ).not.toThrow();
-    expect(
-      db.prepare('SELECT candidate_json, created_at, decision FROM review_items WHERE id = ?').get('ri1'),
-    ).toEqual({ candidate_json: '{"id":"ardc-grants"}', created_at: '', decision: 'pending' });
+    const stored = db
+      .prepare('SELECT candidate_json, created_at, decision FROM review_items WHERE id = ?')
+      .get('ri1') as { candidate_json: string; created_at: string; decision: string };
+    expect(stored.candidate_json).toBe('{"id":"ardc-grants"}');
+    expect(stored.decision).toBe('pending');
+    // created_at is defaulted, not supplied — and the default must be a real,
+    // sortable timestamp, not '', or ORDER BY created_at degenerates into a
+    // tie across the whole table (see the dedicated test below).
+    expect(stored.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  // The Inbox's core loop is `ORDER BY created_at` over review_items. Before
+  // this fix the column defaulted to '' — a non-empty, sortable ISO timestamp
+  // for an omitted column, and correct ordering across sequential inserts, is
+  // exactly what that loop depends on.
+  it('defaults review_items.created_at to a sortable non-empty ISO timestamp', () => {
+    harness = createTestDb();
+    const { db } = harness;
+
+    db.prepare(
+      'INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?,?,?,?,?)',
+    ).run('f1', 'ARRL Foundation', 'https://www.arrl.org/arrl-foundation', 'now', 'now');
+    db.prepare(
+      `INSERT INTO programs (id, funder_id, name, klass, summary, applicant_entities, amount,
+        deadline, apply_via, funding_restrictions, obligations, ai_policy, trust, raw_other_text,
+        tags, content_hash, status, last_verified_at, created_at, updated_at)
+       VALUES ('p1','f1','X','ham_grant','s','[]','{}','{}','page_form','[]','{}','{}','{}','','[]','h','open','now','now','now')`,
+    ).run();
+    db.prepare(
+      'INSERT INTO change_events (id, source_id, kind, detected_at) VALUES (?,?,?,?)',
+    ).run('ce1', 'src', 'deadline_changed', '2026-08-02T00:00:00.000Z');
+
+    const insertReviewItem = db.prepare(
+      'INSERT INTO review_items (id, change_event_id, candidate_json) VALUES (?,?,?)',
+    );
+    insertReviewItem.run('ri-first', 'ce1', '{}');
+    insertReviewItem.run('ri-second', 'ce1', '{}');
+
+    const rows = db
+      .prepare('SELECT id, created_at FROM review_items ORDER BY created_at')
+      .all() as { id: string; created_at: string }[];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.created_at).not.toBe('');
+      expect(row.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+    // Sequential inserts sort in insertion order rather than tying on ''.
+    expect(rows.map((r) => r.id)).toEqual(['ri-first', 'ri-second']);
   });
 
   // RESOLUTIONS R24. Plan 4 ships no migration for these tables; it asserts
