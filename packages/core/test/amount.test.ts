@@ -961,3 +961,159 @@ describe('parseAmount — round 4 probes re-verified after round 5', () => {
     expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual({});
   });
 });
+
+// Fix round 6 (2026-08-06, owner-authorized past the five-round cap): two
+// additive findings, no restructuring.
+//
+//   F1  CRITICAL, introduced by round 5. Widening OUTFLOW_VERBS with
+//       past-tense/participle forms let rule 4 fire on verbs it had never
+//       recognized. Rule 4 sits ABOVE rule 5's clause-level capital fallback
+//       and treated direction as unconditionally decisive, so sentences that
+//       were only ever saved by rule 5 began over-claiming. This is the
+//       self-description pattern granting foundations actually use.
+//   F2  IMPORTANT, pre-existing. INFLOW_OBJECT had `funding` but not `funds`,
+//       so one word changed in round 5's own V2 probe reopened it.
+describe('parseAmount — fix round 6 (capital-pool subjects of outflow verbs)', () => {
+  it('F1: "The fund distributed $N in grants." is a pool reporting its own outflow', () => {
+    expect(parseAmount('The fund distributed $500,000 in grants.')).toEqual({});
+  });
+
+  it('F1: "The endowment paid $N to grantees" — an unrecognized payee noun is not a rescue', () => {
+    expect(parseAmount('The endowment paid $500,000 to grantees this year.')).toEqual({});
+  });
+
+  it('F1: "The fund issued $N in grants this year."', () => {
+    expect(parseAmount('The fund issued $500,000 in grants this year.')).toEqual({});
+  });
+
+  it('F1: a pool outflow in one clause does not contaminate a real award in the next', () => {
+    expect(
+      parseAmount('The fund awarded $500,000 in grants; one scholarship of $1,000 was given.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('F1 shape: every capital-pool subject noun behaves the same with a past-tense outflow verb', () => {
+    expect(parseAmount('The endowment distributed $500,000 in grants.')).toEqual({});
+    expect(parseAmount('The trust disbursed $500,000 last year.')).toEqual({});
+    expect(parseAmount('The corpus provided $250,000 in grants.')).toEqual({});
+    expect(parseAmount('The estate gave $750,000 in grants.')).toEqual({});
+  });
+
+  it('F1 shape: present-tense outflow verbs get the same subject test', () => {
+    expect(parseAmount('The fund distributes $500,000 in grants.')).toEqual({});
+    expect(parseAmount('The fund pays $500,000 in grants.')).toEqual({});
+    expect(parseAmount('The fund awards $500,000 in grants.')).toEqual({});
+  });
+
+  it('F1 control: a trailing payee is checked BEFORE the subject and still wins', () => {
+    // This is the boundary the fix must not cross: a pool paying a named payee
+    // IS naming an award. All of these were green before round 6 and stay green.
+    expect(parseAmount('The trust pays $1,000 to each recipient.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('The fund awards $2,000 to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+    expect(parseAmount('The endowment distributes $2,000 to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+    expect(parseAmount('The estate awarded $1,500 to one applicant.')).toEqual({
+      amountMin: 1500,
+      amountMax: 1500,
+    });
+  });
+
+  it('F1 control: a non-pool subject with an outflow verb is still an award', () => {
+    expect(parseAmount('The club distributed $2,000 to each winner.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+    expect(parseAmount('The committee granted $1,500 to one applicant.')).toEqual({
+      amountMin: 1500,
+      amountMax: 1500,
+    });
+  });
+
+  // --- F2: singular/plural symmetry in the inflow-object set.
+  it('F2: "in membership funds" is capital income, exactly as "in membership dues" is', () => {
+    expect(
+      parseAmount("The Society's student members receive $50,000 in membership funds each year."),
+    ).toEqual({});
+  });
+
+  it('F2 shape: other plain-capital "funds" objects', () => {
+    expect(parseAmount('Members receive $75,000 in general funds.')).toEqual({});
+    expect(parseAmount('Student members receive $40,000 in operating funds.')).toEqual({});
+  });
+
+  it('F2 control: an award noun inside the object phrase blocks the override', () => {
+    // "in scholarship funds" / "in prize funds" / "in scholarship grants" are
+    // money in the FORM of awards. The object-noun guard is what keeps round 5's
+    // shipped positive control green while "membership funds" is caught.
+    expect(parseAmount('Students receive $1,000 in scholarship funds each year.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(parseAmount('Winners receive $5,000 in prize funds.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+    expect(parseAmount('Members receive $10,000 in scholarship grants each year.')).toEqual({
+      amountMin: 10000,
+      amountMax: 10000,
+    });
+  });
+});
+
+// Fix round 6: the three round-5 vectors and the round-4 six, re-run verbatim.
+describe('parseAmount — rounds 4 and 5 vectors re-verified after round 6', () => {
+  it('round 5 V1: fronted adverbial keeps its cumulative marker', () => {
+    expect(
+      parseAmount(
+        'Since 1978, the club has provided over $930,350 in scholarships; this year, one award of $1,000 is made.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('round 5 V2: payee subject with an inflow object', () => {
+    expect(
+      parseAmount("The Society's student members receive $50,000 in membership dues each year."),
+    ).toEqual({});
+    expect(parseAmount("The club's youth members receive $500,000 in annual dues.")).toEqual({});
+    expect(parseAmount("The scholars' committee members receive $10,000 in program funding.")).toEqual({});
+  });
+
+  it('round 5 V3: bare and labeled cumulative totals', () => {
+    expect(parseAmount('$1.2M over 48 years')).toEqual({});
+    expect(parseAmount('Total distributed: $1.2M over 48 years.')).toEqual({});
+  });
+
+  it('round 5 controls: payee with no inflow object, and a genuine multi-year award', () => {
+    expect(parseAmount('Each winner receives $2,500.')).toEqual({ amountMin: 2500, amountMax: 2500 });
+    expect(parseAmount('A $5,000 scholarship paid over four years.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+  });
+
+  it('round 4 six probes', () => {
+    expect(parseAmount('A $50,000 trust is made to one recipient of $1,000 annually.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+    expect(
+      parseAmount('A $50,000 fund goes to one recipient; a separate $1,000 prize is issued each term.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(
+      parseAmount('A $50,000 trust to one recipient near a $1,000 stipend awarded elsewhere.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+    expect(
+      parseAmount('A $75,000 endowment to each winner, separate from the $2,000 prize fund total.'),
+    ).toEqual({});
+    expect(parseAmount("The fund's board of trustees receives $500,000 in gifts each year.")).toEqual({});
+    expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual({});
+  });
+});

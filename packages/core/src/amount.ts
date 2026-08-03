@@ -301,7 +301,7 @@ const INFLOW_VERBS: ReadonlySet<string> = new Set([
  * the corpus. Every word kept here is unambiguously money entering a pool.
  */
 const INFLOW_OBJECT =
-  /^in\s+(?:(?!\$)\S+\s+){0,2}?(?:dues|contributions?|donations?|gifts?|funding|revenues?|income|fees?|pledges?|bequests?|endowments?|assets?|earnings|interest|proceeds|capital|principal)\b/i;
+  /^in\s+(?:(?!\$)(?!(?:awards?|scholarships?|grants?|prizes?|stipends?|fellowships?|bursar(?:y|ies)|honorari(?:um|a))\b)\S+\s+){0,2}?(?:dues|contributions?|donations?|gifts?|funding|funds?|revenues?|income|fees?|pledges?|bequests?|endowments?|assets?|earnings|interest|proceeds|capital|principal)\b/i;
 
 /**
  * A duration span: "$1.2M over 48 years", "over the past twenty years". The
@@ -807,17 +807,34 @@ function classify(clause: Clause, span: MoneySpan): Verdict {
     scanFrom = tokenIndexAfter(clause, run[run.length - 1].end);
   }
 
-  // 4. Predicate: which way is the money moving, and for an inflow, into what.
+  // 4. Predicate: which way is the money moving, and whose money is it.
+  //
+  //    Fix round 6 (2026-08-06): BOTH directions now consult the subject. Round
+  //    5 widened OUTFLOW_VERBS with participles, which let this rule fire on
+  //    verbs it had never recognized — and because rule 4 sits ABOVE rule 5's
+  //    capital-noun fallback and treated direction as unconditionally decisive,
+  //    sentences that were only ever saved by rule 5 began over-claiming ("The
+  //    fund distributed $500,000 in grants." -> {500000,500000}). A pool
+  //    describing its own outflow is reporting an aggregate, not naming an
+  //    award, so a capital-pool subject no longer claims. A trailing
+  //    "to <payee>" is checked before any of this and still wins, which is why
+  //    "The trust pays $1,000 to each recipient." stays an award.
   if (trailingAwardPredicate(clause, scanFrom)) return 'award';
   const verb = governingVerb(clause, span);
   if (verb) {
-    if (OUTFLOW_VERBS.has(verb.lower)) return 'award';
     const subject = subjectHead(clause, verb);
-    if (subject === undefined || !PERSON_NOUNS.has(subject)) return 'capital';
-    // The subject is a payee, but the money's own object can still say the
-    // money is capital income rather than an award: "student members receive
-    // $50,000 in membership dues". Who receives it does not settle what it is.
-    return INFLOW_OBJECT.test(trailingText(clause, scanFrom)) ? 'capital' : 'award';
+    if (OUTFLOW_VERBS.has(verb.lower)) {
+      if (subject === undefined || !CAPITAL_NOUNS.has(subject)) return 'award';
+      // Capital-pool subject: fall through to rule 5, which will find the pool
+      // noun in the clause and omit.
+    } else if (subject !== undefined && PERSON_NOUNS.has(subject)) {
+      // The subject is a payee, but the money's own object can still say the
+      // money is capital income rather than an award: "student members receive
+      // $50,000 in membership dues". Who receives it does not settle what it is.
+      return INFLOW_OBJECT.test(trailingText(clause, scanFrom)) ? 'capital' : 'award';
+    } else {
+      return 'capital';
+    }
   }
 
   // 5. Clause-level capital vocabulary, or an accumulation spanning years —
