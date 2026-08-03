@@ -465,3 +465,271 @@ describe('parseAmount — rounds 1 and 2 probes re-verified after round 3', () =
     });
   });
 });
+
+// Fix round 4 (2026-08-06): rounds 1-3 each closed their finding and reopened
+// the identical hole in an adjacent branch, because a character window plus an
+// n-word filler budget cannot tell WHICH mention an anchor phrase belongs to.
+// The classifier was restructured around noun-phrase attachment resolved on
+// tokens (see the header comment in amount.ts): every mention is classified by
+// its own governing noun phrase, and only when that does not answer the
+// question does a predicate — and then clause context — get consulted.
+//
+// The invariant these tests exist to police: a noun-phrase attachment BINDS.
+// Once "$50,000 trust" resolves as capital, nothing anywhere else in the clause
+// can rescue it. These test the SHAPE, not the string: word-order swaps,
+// multi-word subjects, and cross-mention gaps at 0, 1 and 2 words.
+describe('parseAmount — fix round 4 restructure (noun-phrase attachment)', () => {
+  // --- The four remaining over-claim leaks: the one-word filler was removed
+  // only from the bare-noun branch; the verb-phrase and to-phrase branches
+  // still carried it, so a capital figure could borrow a later mention's
+  // recipient phrase.
+  it('leak 1: a trailing "is made to one recipient" cannot rescue a "$N trust" (was {50000,50000})', () => {
+    expect(
+      parseAmount('A $50,000 trust is made to one recipient of $1,000 annually.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('leak 2: a trailing "goes to one recipient" cannot rescue a "$N fund" (was {1000,50000})', () => {
+    expect(
+      parseAmount(
+        'A $50,000 fund goes to one recipient; a separate $1,000 prize is issued each term.',
+      ),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('leak 3: a trailing "to one recipient" cannot rescue a "$N trust" (was {1000,50000})', () => {
+    expect(
+      parseAmount('A $50,000 trust to one recipient near a $1,000 stipend awarded elsewhere.'),
+    ).toEqual({ amountMin: 1000, amountMax: 1000 });
+  });
+
+  it('leak 4: a trailing "to each winner" cannot rescue a "$N endowment", and a "prize fund total" is not an award either (was {2000,75000})', () => {
+    // Both figures are capital: $75,000 is the endowment, $2,000 is a pool
+    // total. Omission is the correct answer — over-claiming is worse.
+    expect(
+      parseAmount('A $75,000 endowment to each winner, separate from the $2,000 prize fund total.'),
+    ).toEqual({});
+  });
+
+  // --- The two `receivesRescue` over-claims: a single-token lookback is not a
+  // subject. Both of these have a HUMAN subject; neither subject is a payee.
+  it('receives probe 1: multi-word subject "the fund\'s board of trustees" is not a payee (was {500000,500000})', () => {
+    expect(parseAmount("The fund's board of trustees receives $500,000 in gifts each year.")).toEqual(
+      {},
+    );
+  });
+
+  it('receives probe 2: multi-word subject "the committee of trustees" is not a payee (was {500000,500000})', () => {
+    expect(parseAmount('The committee of trustees receives $500,000 in annual contributions.')).toEqual(
+      {},
+    );
+  });
+
+  // --- Shape: word-order swaps. The attachment rule is order-independent, so
+  // the same two figures classify the same way whichever comes first.
+  it('shape — word order: award figure first, capital figure second', () => {
+    expect(parseAmount('A $1,000 award is funded by a $50,000 endowment.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('shape — word order: a "<person> of $N" left attachment ahead of a capital noun', () => {
+    expect(parseAmount('One recipient of $1,000 is chosen from a $50,000 trust.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('shape — word order: both figures coordinated in one clause', () => {
+    expect(parseAmount('The $50,000 endowment and the $1,000 award are separate.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  // --- Shape: cross-mention gaps at 0, 1 and 2 words. Rounds 1-3 each passed
+  // their literal probe and failed one word away; the gap must not matter.
+  it('shape — 0-word gap: "$N trust award of $M" excludes the trust figure', () => {
+    expect(parseAmount('A $50,000 trust award of $2,000 is made annually.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('shape — 1-word gap: "$N trust annual award of $M" excludes the trust figure', () => {
+    expect(parseAmount('A $50,000 trust annual award of $2,000 is made.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('shape — 2-word gap: "$N trust makes an annual award of $M" excludes the trust figure', () => {
+    expect(parseAmount('A $50,000 trust makes an annual award of $2,000.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('shape — 4-noun compound: "$N endowment prize fund award of $M" excludes the endowment figure', () => {
+    expect(parseAmount('A $50,000 endowment prize fund award of $2,000 is made.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('shape — separated mentions: a bare "$M award" later in the clause does not pull the trust figure in', () => {
+    expect(parseAmount('A $50,000 trust supports the $2,000 award.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  it('shape — across a clause boundary: "$N trust; the $M award is annual"', () => {
+    expect(parseAmount('A $50,000 trust; the $2,000 award is annual.')).toEqual({
+      amountMin: 2000,
+      amountMax: 2000,
+    });
+  });
+
+  // --- Shape: multi-word subjects of an inflow verb. The head noun of the
+  // subject decides, and administrators are not payees.
+  it('shape — subject head: "the board of directors of the trust" is an administrator, not a payee', () => {
+    expect(parseAmount('The board of directors of the trust receives $250,000 annually.')).toEqual({});
+  });
+
+  it('shape — subject head: "the scholarship committee" is an administrator despite the award word in it', () => {
+    expect(parseAmount('The scholarship committee receives $10,000 in donations.')).toEqual({});
+  });
+
+  it('shape — subject head: "the endowment\'s trustees" is an administrator', () => {
+    expect(parseAmount("The endowment's trustees receive $500,000 in gifts.")).toEqual({});
+  });
+
+  it('shape — subject head: "the treasurer of the club" is an administrator', () => {
+    expect(parseAmount('The treasurer of the club receives $25,000 in dues.')).toEqual({});
+  });
+
+  it('shape — subject head: a bare recipient noun IS a payee', () => {
+    expect(parseAmount('Each winner receives $2,500.')).toEqual({
+      amountMin: 2500,
+      amountMax: 2500,
+    });
+  });
+
+  it('shape — subject head: a postmodifying "of" phrase does not move the head off a payee', () => {
+    expect(parseAmount('The winner of the essay contest receives $1,000.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  // --- Shape: the genuinely ambiguous nouns defer to the predicate, and omit
+  // when the predicate does not settle it.
+  it('shape — ambiguous "gift" with an outflow predicate to a payee is an award', () => {
+    expect(parseAmount('A $1,000 gift goes to each winner.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('shape — ambiguous "gift" with no outflow predicate and capital context is omitted', () => {
+    expect(parseAmount('A $100,000 gift from the estate of W1ABC supports the program.')).toEqual({});
+  });
+
+  it('shape — a compound containing a capital noun is capital whatever its head is', () => {
+    expect(parseAmount('The $2,000 prize fund is divided among winners.')).toEqual({});
+  });
+
+  // --- Shape: tier assembly still runs underneath a poisoned capital figure.
+  it('shape — the ARDC tier block still assembles when it sits under a $1,000,000 endowment', () => {
+    expect(
+      parseAmount(
+        'A $1,000,000 endowment funds 20 awards of $25,000, 4 of $15,000, 17 of $10,000, 4 of $5,000.',
+      ),
+    ).toEqual({
+      amountMin: 5000,
+      amountMax: 25000,
+      tiers: [
+        { count: 20, amount: 25000 },
+        { count: 4, amount: 15000 },
+        { count: 17, amount: 10000 },
+        { count: 4, amount: 5000 },
+      ],
+    });
+  });
+
+  // --- Shape: cumulative markers still beat everything else in their clause.
+  it('shape — a cumulative clause is excluded even when the award clause is clean', () => {
+    expect(parseAmount('Awards of $1,000 each; $2,000,000 has been raised to date.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('shape — "the fund has awarded $N since 19xx" is a lifetime total, not an award', () => {
+    expect(parseAmount('$3,000 each; the fund has awarded $930,350 since 1978.')).toEqual({
+      amountMin: 3000,
+      amountMax: 3000,
+    });
+  });
+});
+
+// Fix round 4: the explicitly required re-verification set. These are the
+// load-bearing probes from every prior round, re-run verbatim against the
+// restructured classifier.
+describe('parseAmount — rounds 1-3 probes re-verified after round 4', () => {
+  it('cross-sentence capital pool: "seeded with a $1,000,000 fund"', () => {
+    expect(
+      parseAmount(
+        'The scholarship was seeded with a $1,000,000 fund. One award of $2,000 is made annually.',
+      ),
+    ).toEqual({ amountMin: 2000, amountMax: 2000 });
+  });
+
+  it('same-sentence capital pool: "A $100,000 endowment award of $2,500"', () => {
+    expect(parseAmount('A $100,000 endowment award of $2,500 is made annually.')).toEqual({
+      amountMin: 2500,
+      amountMax: 2500,
+    });
+  });
+
+  it('inflow to a capital pool: "The endowment receives $500,000 in gifts each year."', () => {
+    expect(parseAmount('The endowment receives $500,000 in gifts each year.')).toEqual({});
+  });
+
+  it('inflow to a person: "The Principal Investigator receives $5,000."', () => {
+    expect(parseAmount('The Principal Investigator receives $5,000.')).toEqual({
+      amountMin: 5000,
+      amountMax: 5000,
+    });
+  });
+
+  it('ambiguous noun settled by an outflow predicate: "A $1,000 gift is made to one recipient annually."', () => {
+    expect(parseAmount('A $1,000 gift is made to one recipient annually.')).toEqual({
+      amountMin: 1000,
+      amountMax: 1000,
+    });
+  });
+
+  it('magnitude suffixes: $1.5K / $2M / $2 million', () => {
+    expect(parseAmount('$1.5K')).toEqual({ amountMin: 1500, amountMax: 1500 });
+    expect(parseAmount('$2M')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+    expect(parseAmount('$2 million')).toEqual({ amountMin: 2_000_000, amountMax: 2_000_000 });
+  });
+
+  it("ARDC's tier string still yields 4 tiers and 45 awards", () => {
+    const parsed = parseAmount('20 awards of $25,000, 4 of $15,000, 17 of $10,000, 4 of $5,000');
+    expect(parsed).toEqual({
+      amountMin: 5000,
+      amountMax: 25000,
+      tiers: [
+        { count: 20, amount: 25000 },
+        { count: 4, amount: 15000 },
+        { count: 17, amount: 10000 },
+        { count: 4, amount: 5000 },
+      ],
+    });
+    expect(parsed.tiers?.reduce((n, t) => n + t.count, 0)).toBe(45);
+  });
+});
