@@ -8,10 +8,10 @@ export function extractInstitution(raw: RawOpportunity): Constraint[] {
   // "trade" is deliberately excluded here — it drives tradeSchoolOK below, not a CERT degree
   // level; a trade school accepted alongside two/four-year/graduate programs isn't itself a
   // certificate-level requirement.
-  if (/\b(certificate|certification|vocational)\b/i.test(text)) levels.add('CERT');
-  if (/\b(two[- ]year|associate|community college)\b/i.test(text)) levels.add('ASSOC');
-  if (/\b(four[- ]year|bachelor|undergraduate|baccalaureate)\b/i.test(text)) levels.add('BACH');
-  if (/\b(graduate|master|doctoral|phd|post[- ]graduate)\b/i.test(text)) levels.add('GRAD');
+  if (/\b(?:certificates?|certifications?|vocational)\b/i.test(text)) levels.add('CERT');
+  if (/\b(?:two[- ]year|associates?|community colleges?)\b/i.test(text)) levels.add('ASSOC');
+  if (/\b(?:four[- ]year|bachelors?|undergraduates?|baccalaureates?)\b/i.test(text)) levels.add('BACH');
+  if (/\b(?:graduates?|masters?|doctoral|phds?|post[- ]graduates?)\b/i.test(text)) levels.add('GRAD');
   return [
     makeConstraint(
       'institution',
@@ -19,7 +19,7 @@ export function extractInstitution(raw: RawOpportunity): Constraint[] {
       {
         axis: 'institution',
         degreeLevels: [...levels],
-        tradeSchoolOK: /\b(trade|vocational|technical school)\b/i.test(text),
+        tradeSchoolOK: /\b(?:trade|vocational|technical schools?)\b/i.test(text),
         partTimeOK: /\bpart[- ]time\b/i.test(text),
         accreditationRequired: /\baccredit/i.test(text),
       },

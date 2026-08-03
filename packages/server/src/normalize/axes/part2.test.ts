@@ -80,6 +80,20 @@ describe('extractRecommendation', () => {
       extractRecommendation(raw({ Other: 'A letter of recommendation from a teacher is required.' }))[0].spec,
     ).toMatchObject({ recommenderType: 'teacher' });
   });
+
+  it('reads "Must have two sponsors" (regression: word-boundary plural gap)', () => {
+    const c = extractRecommendation(raw({ Other: 'Must have two sponsors.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(true);
+    expect(c[0].spec).toMatchObject({ axis: 'recommendation', recommenderType: 'any', count: 1 });
+  });
+
+  it('reads a preference-form plural: "preference is given to applicants who have two sponsors" and keeps it soft', () => {
+    const c = extractRecommendation(raw({ Other: 'Preference is given to applicants who have two sponsors.' }));
+    expect(c).toHaveLength(1);
+    expect(c[0].hard).toBe(false);
+    expect(c[0].spec).toMatchObject({ axis: 'recommendation', recommenderType: 'any' });
+  });
 });
 
 describe('extractCitizenship', () => {

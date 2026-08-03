@@ -274,6 +274,20 @@ describe('extractInstitution', () => {
     expect(spec.partTimeOK).toBe(false);
     expect(spec.accreditationRequired).toBe(false);
   });
+
+  it('reads the un-apostrophized plural "Bachelors degree" (regression: word-boundary plural gap)', () => {
+    const spec = extractInstitution(raw({ Institution: 'Bachelors degree required.' }))[0].spec as {
+      degreeLevels: string[];
+    };
+    expect(spec.degreeLevels).toEqual(['BACH']);
+  });
+
+  it('reads the un-apostrophized plural "Certificates programs" (regression: word-boundary plural gap)', () => {
+    const spec = extractInstitution(raw({ Institution: 'Certificates programs accepted.' }))[0].spec as {
+      degreeLevels: string[];
+    };
+    expect(spec.degreeLevels).toEqual(['CERT']);
+  });
 });
 
 describe('extractGpa', () => {
