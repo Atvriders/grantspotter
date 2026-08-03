@@ -4,24 +4,52 @@ import { type SinglePageConfig, makeSinglePageSource } from './util/singlePage.j
 const YLRL_HEADING =
   /^((?:Ethel Smith|Mary Lou Brown|Marte Wessel)[^\n]*Scholarship)$/gim;
 
+/** Shared with the `ylrl` config's `fieldPatterns.eligibility` below — same restriction, one pattern. */
+const YLRL_ELIGIBILITY_SENTENCE = /(licensed[^.]*(?:women|female|YL)[^.]*\.)/i;
+
 /** One YLRL page carries three distinct named scholarships; each becomes its own record. */
 export function parseYlrlScholarships(flatText: string, sourceUrl: string): RawOpportunity[] {
   const out: RawOpportunity[] = [];
   const lines = flatText.split('\n');
+  const headingLines: number[] = [];
   lines.forEach((line, i) => {
     YLRL_HEADING.lastIndex = 0;
-    if (!YLRL_HEADING.test(line.trim())) return;
-    const body = lines.slice(i + 1, i + 4).join('\n');
+    if (YLRL_HEADING.test(line.trim())) headingLines.push(i);
+  });
+  if (headingLines.length === 0) return out;
+
+  // Everything above the FIRST named heading is document-level prose — this is where YLRL's
+  // women-only restriction lives — and applies to every named scholarship below it, not just
+  // whichever one happens to sit nearest it (which, before this fix, was none of them). Narrow
+  // it to the restriction sentence itself (same pattern as the page-level `ylrl` config below)
+  // rather than the whole preamble block, which would otherwise also drag in the page's own H1.
+  const preambleBlock = lines.slice(0, headingLines[0]).join('\n').trim();
+  const preamble = YLRL_ELIGIBILITY_SENTENCE.exec(preambleBlock)?.[1] ?? preambleBlock;
+
+  headingLines.forEach((start, idx) => {
+    // Bound the body at the NEXT heading (or end of document for the last record) instead of a
+    // fixed-length window, so one scholarship's summary/amount never bleeds into its neighbor's.
+    const end = idx + 1 < headingLines.length ? headingLines[idx + 1] : lines.length;
+    const heading = lines[start].trim();
+    const body = lines.slice(start + 1, end).join('\n').trim();
     const amount = /\$[\d,]+/.exec(body)?.[0];
+    const summary = body.replace(/\s+/g, ' ').trim();
+
     const rawFields: Record<string, string> = { scope: 'named_scholarship' };
     if (amount) rawFields.amount = amount;
+    // Explicit per-record summary so the shared `eligibility` text below (needed for the gender
+    // constraint axis) never displaces this record's own amount/body in normalize's summary
+    // field-priority chain.
+    if (summary) rawFields.summary = summary;
+    if (preamble) rawFields.eligibility = preamble;
+
     out.push({
       sourceId: 'ylrl',
-      externalKey: line.trim(),
-      name: line.trim(),
+      externalKey: heading,
+      name: heading,
       rawFields,
       sourceUrl,
-      rawText: [line.trim(), body].join('\n').trim(),
+      rawText: [preamble, heading, body].filter(Boolean).join('\n').trim(),
     });
   });
   return out;
@@ -61,7 +89,7 @@ const CONFIGS: SinglePageConfig[] = [
     url: 'https://ylrl.net/Scholarships/',
     name: 'YLRL Scholarships',
     externalKey: 'ylrl-scholarships',
-    fieldPatterns: { eligibility: /(licensed[^.]*(?:women|female|YL)[^.]*\.)/i },
+    fieldPatterns: { eligibility: YLRL_ELIGIBILITY_SENTENCE },
     requiredFields: ['eligibility'],
     expectedMinRecords: 3,
     extraParse: (flat, _html, sourceUrl) => parseYlrlScholarships(flat, sourceUrl),

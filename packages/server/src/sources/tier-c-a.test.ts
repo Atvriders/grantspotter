@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
+import { extractGender } from '../normalize/axes/index.js';
 import { TIER_C_A_SOURCES, austinArc, qcwa, sara, ylrl } from './tier-c-a.js';
 
 describe('qcwa', () => {
@@ -40,6 +41,69 @@ describe('ylrl', () => {
 
   it('has expectedMinRecords 3, one per named scholarship', () => {
     expect(ylrl.expectedMinRecords).toBe(3);
+  });
+
+  // Regression coverage for the fixed-slice-window bug: a 3-line lookahead ran PAST the next
+  // <h2>, so each named scholarship's summary/amount silently absorbed its neighbor's heading
+  // and award figure. Assert each of the three records' OWN amount and summary, with no trace
+  // of a sibling's name or figure — presence checks alone (as the old suite had) cannot catch
+  // this, because the bled-in figure was coincidentally often correct too.
+  describe('no cross-record bleed (regression)', () => {
+    const named = raws.filter((r) => r.rawFields.scope === 'named_scholarship');
+
+    it('emits exactly the three named records, each with its own exact amount', () => {
+      expect(named).toHaveLength(3);
+      const byName = Object.fromEntries(named.map((r) => [r.name, r]));
+      expect(byName['Ethel Smith K4LMB Memorial Scholarship'].rawFields.amount).toBe('$2,500');
+      expect(byName['Mary Lou Brown NM7N Scholarship'].rawFields.amount).toBe('$2,500');
+      expect(byName['Marte Wessel K0EPE Scholarship'].rawFields.amount).toBe('$1,500');
+    });
+
+    it('gives Ethel Smith her own summary with no Mary Lou Brown bleed', () => {
+      const ethel = named.find((r) => r.name.includes('Ethel Smith'));
+      expect(ethel?.rawFields.summary).toBe('Award: $2,500.');
+      expect(ethel?.rawText).not.toMatch(/Mary Lou Brown/);
+    });
+
+    it('gives Mary Lou Brown her own summary with no Marte Wessel bleed', () => {
+      const mlb = named.find((r) => r.name.includes('Mary Lou Brown'));
+      expect(mlb?.rawFields.summary).toBe('Award: $2,500.');
+      expect(mlb?.rawText).not.toMatch(/Marte Wessel/);
+    });
+
+    it("keeps Marte Wessel's part-time-working-full-time detail intact", () => {
+      const wessel = named.find((r) => r.name.includes('Wessel'));
+      expect(wessel?.rawFields.summary).toBe(
+        'Award: $1,500. For part-time students working full-time.',
+      );
+    });
+  });
+
+  // Regression coverage for the reach bug: the document-level women-only restriction sits ABOVE
+  // the first <h2>, so the fixed-window parser's per-record rawFields never carried it — only
+  // the separate whole-page record did. `raws.some(...)` across ALL records (as the old suite
+  // had) passed because of that unrelated page record, while all three real scholarships quietly
+  // published as unrestricted. Assert the restriction on EACH named record individually, and
+  // that it survives all the way through the shared gender-axis extractor as a HARD constraint —
+  // the actual mechanism that would otherwise let these three publish as open to everyone.
+  describe('female-only restriction reaches every named record (regression)', () => {
+    const named = raws.filter((r) => r.rawFields.scope === 'named_scholarship');
+
+    it('puts the eligibility sentence on all three named records, not just the page record', () => {
+      expect(named).toHaveLength(3);
+      for (const r of named) {
+        expect(r.rawFields.eligibility).toBe('licensed women amateur radio operators worldwide.');
+      }
+    });
+
+    it('drives a hard female-only gender constraint for all three via extractGender', () => {
+      for (const r of named) {
+        const constraints = extractGender(r);
+        expect(constraints).toHaveLength(1);
+        expect(constraints[0].hard).toBe(true);
+        expect(constraints[0].spec).toEqual({ axis: 'gender', allowed: ['female'] });
+      }
+    });
   });
 });
 

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { parseAmount } from '@grantspotter/core';
 import { fixturePayload, loadFixture } from '../../test/fixtures.js';
+import { type NormalizeContext, normalizeRaw } from '../normalize/index.js';
+import { programIdFor } from './util/ids.js';
 import { findDr2xPdfLinks, windowFromPdfLink, yaesuDr2x } from './yaesu-dr2x.js';
 
 const BASE = 'https://systemfusion.yaesu.com/';
@@ -71,6 +74,47 @@ describe('yaesuDr2x', () => {
     expect(raws[0].rawFields.pricing).toContain('$1,450');
     expect(raws[0].rawFields.pricing).toContain('$1,860');
     expect(raws[0].rawFields.sustainment).toMatch(/twelve months/i);
+  });
+
+  // Regression coverage: feeding the raw pricing prose straight into the shared parseAmount
+  // heuristic collapsed a $1,450-$1,860 discounted-purchase RANGE into a single amountMin: 1860
+  // — publishing the accessory-inclusive ceiling as if it were the floor, overstating the true
+  // cost of the cheapest option by $410. `.toContain('$1,450')` on the raw prose (as the old
+  // suite had) cannot catch this: the substring was always present even when the parsed range
+  // was wrong. Assert the EXACT min/max that the normalize layer will actually publish.
+  describe('correct min/max, not a collapsed range (regression)', () => {
+    it('emits an unambiguous amount field with both option prices', () => {
+      expect(raws[0].rawFields.amount).toBe('$1,450 to $1,860.');
+    });
+
+    it('parses to amountMin 1450 / amountMax 1860, not a collapsed 1860/1860', () => {
+      expect(parseAmount(raws[0].rawFields.amount!)).toEqual({
+        amountMin: 1450,
+        amountMax: 1860,
+      });
+    });
+
+    it('never lets amountMin exceed the $1,450 floor', () => {
+      const { amountMin } = parseAmount(raws[0].rawFields.amount!);
+      expect(amountMin).toBe(1450);
+    });
+
+    it('lands correctly through the full normalize pipeline, alongside the sustainment obligation', () => {
+      const ctx: NormalizeContext = {
+        sourceId: 'yaesu-dr2x',
+        funderId: 'yaesu-usa',
+        klass: 'equipment_in_kind',
+        tier: 'C',
+        nowISO: '2026-08-02T00:00:00.000Z',
+        verificationMethod: 'live_fetch',
+        mintId: programIdFor,
+      };
+      const program = normalizeRaw(raws[0], ctx);
+      expect(program.amount.instrument).toBe('discounted_purchase');
+      expect(program.amount.amountMin).toBe(1450);
+      expect(program.amount.amountMax).toBe(1860);
+      expect(program.obligations.sustainmentObligation).toMatch(/12 months/i);
+    });
   });
 
   it('never downloads the PDF — every request is html', async () => {

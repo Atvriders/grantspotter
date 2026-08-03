@@ -88,8 +88,31 @@ export const yaesuDr2x: SourceModule = {
         formUrl: link.href,
         formTitle: link.text,
       };
-      const pricing = /([^.]*\$1,[0-9]{3}[^.]*\.)/.exec(flat)?.[1]?.trim();
-      if (pricing) rawFields.pricing = pricing;
+      // `[^.\n]*` on the LEADING side only: it must not cross a newline INTO the sentence (that
+      // was the bug — the prefix used to run backwards past the block boundary into the <h1> and
+      // then, because the trailing `\$1,[0-9]{3}` anchor is free to land on either dollar figure,
+      // it was non-deterministic which one anchored the match). The trailing side stays newline-
+      // permissive on purpose, same as `sustainment` below, because a pricing sentence can itself
+      // wrap across a soft line break the way "must remain\non the air" does.
+      const pricing = /([^.\n]*\$1,[0-9]{3}[^.]*\.)/.exec(flat)?.[1]?.trim();
+      if (pricing) {
+        rawFields.pricing = pricing;
+        // This is a DISCOUNTED PURCHASE with two option prices ($1,450 alone, $1,860 with the
+        // LAN-01A), not a single award figure — feeding the raw prose straight to the shared
+        // `parseAmount` heuristic is what collapsed the range to a single `amountMin: 1860`
+        // (the accessory-inclusive ceiling standing in for the floor). Extract every dollar
+        // figure actually present in the pricing sentence and hand the shared parser an
+        // unambiguous bare range expression ("$1,450 to $1,860.") instead of prose it has to
+        // guess about.
+        const figures = [...new Set(pricing.match(/\$\d{1,3}(?:,\d{3})*/g) ?? [])]
+          .map((text) => ({ text, value: Number(text.replace(/[$,]/g, '')) }))
+          .sort((a, b) => a.value - b.value);
+        if (figures.length > 0) {
+          const min = figures[0];
+          const max = figures[figures.length - 1];
+          rawFields.amount = min.text === max.text ? `${min.text}.` : `${min.text} to ${max.text}.`;
+        }
+      }
       const sustainment = /([^.]*(?:twelve months|12 months)[^.]*\.)/i.exec(flat)?.[1]?.trim();
       if (sustainment) rawFields.sustainment = sustainment;
 
