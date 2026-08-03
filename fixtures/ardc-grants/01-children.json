@@ -1,0 +1,5 @@
+[
+  {"id": 5511, "slug": "2026-grants", "link": "https://www.ardc.net/apply/grants/2026-grants/", "parent": 4821, "title": {"rendered": "2026 Grants"}, "date": "2026-01-08T09:00:00", "modified": "2026-07-30T14:21:00", "excerpt": {"rendered": "<p>Grants awarded in 2026.</p>"}},
+  {"id": 5290, "slug": "2025-grants", "link": "https://www.ardc.net/apply/grants/2025-grants/", "parent": 4821, "title": {"rendered": "2025 Grants"}, "date": "2025-01-06T09:00:00", "modified": "2026-01-04T11:00:00", "excerpt": {"rendered": "<p>Grants awarded in 2025.</p>"}},
+  {"id": 6402, "slug": "grant-hamsci-psws-expansion", "link": "https://www.ardc.net/apply/grants/grant-hamsci-psws-expansion/", "parent": 4821, "title": {"rendered": "HamSCI Personal Space Weather Station Expansion"}, "date": "2026-04-02T09:00:00", "modified": "2026-04-02T09:00:00", "excerpt": {"rendered": "<p>$77,000 to expand the PSWS network.</p>"}}
+]
