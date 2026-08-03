@@ -7,13 +7,13 @@
   "license": "MIT",
   "workspaces": ["packages/*"],
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "npm run build -w @grantspotter/core && npm run build -w @grantspotter/server",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck -w @grantspotter/web",
+    "build": "npm run build -w @grantspotter/core && npm run build -w @grantspotter/server && npm run build -w @grantspotter/web",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @grantspotter/server",
-    "dev:web": "echo \"web workspace arrives in Task 18\""
+    "dev:web": "npm run dev -w @grantspotter/web"
   },
   "devDependencies": {
     "@types/node": "20.19.43",
