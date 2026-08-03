@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import type { FetchRequest, FetchedPayload, Program } from '@grantspotter/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
+import { createCycleRepo } from '../db/repositories/cycles.js';
 import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
 import {
@@ -13,7 +14,7 @@ import {
   upsertProgram,
 } from '../db/repositories/ingestion.js';
 import { approveReviewItem } from '../review/index.js';
-import { SOURCES } from '../sources/registry.js';
+import { funderFor, SOURCES } from '../sources/registry.js';
 import { healthMessageFor, runCrawl, runSource } from './runner.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
@@ -23,13 +24,26 @@ beforeEach(() => {
   db = new Database(':memory:');
   migrate(db); // Plan 1 owns every CONTRACT §6 table
   ensureIngestionSchema(db);
-  // programs.funder_id references funders(id); seed every funder the registry names.
-  // funders.created_at / updated_at are NOT NULL with no DEFAULT in 001-init.sql.
-  const insertFunder = db.prepare(
-    'INSERT OR IGNORE INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-  );
-  for (const m of SOURCES) insertFunder.run(m.funderId, m.funderId, 'https://example.test/', NOW, NOW);
+  // Deliberately NO funders pre-seeding here (SEAM FIX, whole-branch review). runSource itself
+  // now upserts the real funder for whatever source it runs — that IS the fix, and hand-seeding
+  // every registry funder here would silently mask a regression in it. A few tests below need a
+  // program to already exist BEFORE they ever call runSource; those seed only the one funder they
+  // need, at the point they need it — see `seedFunder` below.
 });
+
+/**
+ * Seeds exactly one real funder row, for a test that upserts a program directly (bypassing
+ * runSource) to simulate "this record was already published by an earlier, successful
+ * crawl+approve cycle" — which is the only way such a row could exist in production, and is
+ * exactly how it would have acquired its funder row: through the same seam this file's "fresh
+ * install" describe block below proves.
+ */
+function seedFunder(funderId: string): void {
+  const f = funderFor(funderId);
+  db.prepare(
+    'INSERT OR IGNORE INTO funders (id, name, homepage, ein, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(f.id, f.name, f.homepage, f.ein ?? null, f.note ?? null, NOW, NOW);
+}
 
 /** Serves committed fixtures instead of the network. */
 function fixtureFetcher(map: Record<string, FetchedPayload>) {
@@ -274,6 +288,7 @@ describe('runSource on a legitimately empty source', () => {
     async () => {
       // A prior crawl (last spring) published Austin ARC's scholarship. It is August now:
       // grants.austinhams.org legitimately shows "No opportunities available" until April 30.
+      seedFunder('austin-arc'); // that prior crawl+approve is what created this funder row too
       const prior = makeProgram({
         id: 'austin-arc--austin-arc-scholarships--deadbeef',
         funderId: 'austin-arc',
@@ -483,6 +498,7 @@ describe('RESOLUTIONS R9 — DEADLINE_INHERITANCE reconciliation (carry-forward 
 
   it('does not warn once the canonical target program is published under a matching source key', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    seedFunder('arrl-foundation');
     const target = makeProgram({
       id: 'arrl-foundation-scholarships',
       funderId: 'arrl-foundation',
@@ -505,6 +521,7 @@ describe('carry-forward #2 — catching the source-key UNIQUE violation (RESOLUT
     // external_key) pair. This is precisely what "a stale or missed existingIdFor" produces —
     // the programs upsert targets ON CONFLICT(id) only, so the second write hits the
     // partial-unique-index on (source_id, external_key) and SQLite refuses it.
+    seedFunder('qcwa');
     const key = { sourceId: 'qcwa', externalKey: 'qcwa-memorial-scholarship' };
     const original = makeProgram({ id: 'qcwa--original--aaaaaaaa', funderId: 'qcwa' });
     upsertProgram(db, original, key);
@@ -557,4 +574,175 @@ describe('carry-forward #2 — catching the source-key UNIQUE violation (RESOLUT
       );
     },
   );
+});
+
+describe('SEAM FIX — a fresh install seeds its own funders, nobody has to', () => {
+  // No `funders` INSERT anywhere in this describe block, and none in this file's beforeEach
+  // either (see the note there). This is deliberately "the way it broke": before the fix,
+  // `db/repositories/programs.ts`'s upsert (called from `approveReviewItem`) died with
+  // `SqliteError: FOREIGN KEY constraint failed` the moment anyone approved a fresh install's
+  // first review item, because programs.funder_id REFERENCES funders(id) and nothing ever wrote
+  // that table. manual-tier-d is used because it needs no fetcher at all, so this test proves the
+  // funder seam specifically rather than depending on HTML fixtures.
+
+  it('crawls, then approves, on a genuinely empty migrated database', async () => {
+    expect((db.prepare('SELECT COUNT(*) AS n FROM funders').get() as { n: number }).n).toBe(0);
+
+    const { fetcher } = fixtureFetcher({});
+    const result = await runSource(deps(fetcher), 'manual-tier-d');
+    expect(result.error).toBeUndefined();
+
+    const pending = listReviewItems(db, 'pending');
+    expect(pending.length).toBeGreaterThan(0);
+
+    const published = approveReviewItem(db, pending[0].id, 'user-1', NOW);
+    expect(published.id).toBe(pending[0].candidate.id);
+    expect(listProgramsBySource(db, 'manual-tier-d')).toHaveLength(1);
+  });
+
+  it('seeds the real funder identity from the registry, not a placeholder', async () => {
+    const { fetcher } = fixtureFetcher({});
+    await runSource(deps(fetcher), 'manual-tier-d');
+    const row = db.prepare('SELECT id, name, homepage FROM funders WHERE id = ?').get('various') as
+      | { id: string; name: string; homepage: string }
+      | undefined;
+    expect(row).toEqual({
+      id: 'various',
+      name: funderFor('various').name,
+      homepage: funderFor('various').homepage,
+    });
+    expect(row?.homepage).not.toBe('https://example.test/');
+  });
+
+  it('lets every review item from a whole no-argument nightly crawl be approved with no crash', async () => {
+    // Every module actually gets fetched here (each returns 404 from fixtureFetcher's default),
+    // so this exercises funderFor() against every one of the 16 distinct funderIds in the
+    // registry, not just one.
+    const { fetcher } = fixtureFetcher({});
+    await runCrawl(deps(fetcher));
+    const pending = listReviewItems(db, 'pending');
+    expect(pending.length).toBeGreaterThan(0);
+    for (const item of pending) {
+      expect(() => approveReviewItem(db, item.id, 'user-1', NOW)).not.toThrow();
+    }
+  });
+});
+
+describe('registry funder coverage (SEAM FIX)', () => {
+  it('resolves a real, non-placeholder funder for every registered module', () => {
+    for (const m of SOURCES) {
+      const funder = funderFor(m.funderId);
+      expect(funder.id).toBe(m.funderId);
+      expect(funder.name).not.toBe('');
+      expect(funder.homepage).toMatch(/^https:\/\//);
+      expect(funder.homepage).not.toBe('https://example.test/');
+    }
+  });
+
+  it('throws a named, actionable error for an unregistered funderId', () => {
+    expect(() => funderFor('not-a-real-funder-id')).toThrow(/not-a-real-funder-id/);
+  });
+});
+
+describe('cycles end-to-end: real ARDC/ARRL fixtures through crawl -> approve -> cycles (SEAM FIX)', () => {
+  // `expandCycles`/`createCycleRepo` had zero production callers before this fix. These are the
+  // three real RECUR directives in `normalize/deadline.ts`'s RECURRENCE_BY_SOURCE, exercised here
+  // through the ACTUAL crawl pipeline against committed real (non-pathological) fixtures — no
+  // hand-built Program, no hand-written RECUR note — so this proves the whole seam: parse ->
+  // normalize -> review -> approve -> cycles.
+  const map = {
+    'slug=grants': fixturePayload(
+      'ardc-grants',
+      '00-discovery.json',
+      'https://www.ardc.net/wp-json/wp/v2/pages?slug=grants',
+    ),
+    'parent=4821': fixturePayload(
+      'ardc-grants',
+      '01-children.json',
+      'https://www.ardc.net/wp-json/wp/v2/pages?parent=4821',
+    ),
+    '/amateur-radio-grants': fixturePayload(
+      'arrl-amateur-radio-grants',
+      '00-www-arrl-org-amateur-radio-grants.html',
+      'http://www.arrl.org/amateur-radio-grants',
+    ),
+    '/scholarship-program': fixturePayload(
+      'arrl-scholarship-program',
+      '00-www-arrl-org-scholarship-program.html',
+      'http://www.arrl.org/scholarship-program',
+    ),
+  };
+
+  async function crawlThreeSources(): Promise<ReturnType<typeof fixtureFetcher>> {
+    const served = fixtureFetcher(map);
+    for (const sourceId of ['ardc-grants', 'arrl-amateur-radio-grants', 'arrl-scholarship-program']) {
+      await runSource(deps(served.fetcher), sourceId);
+    }
+    return served;
+  }
+
+  it('lands real dated rows for all three RECUR programs, matching each funder\'s directive', async () => {
+    expect((db.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n).toBe(0);
+
+    await crawlThreeSources();
+    for (const item of listReviewItems(db, 'pending')) approveReviewItem(db, item.id, 'user-1', NOW);
+
+    const cycles = createCycleRepo(db);
+    const ardcGrants = listProgramsBySource(db, 'ardc-grants');
+    const [arrlGrant] = listProgramsBySource(db, 'arrl-amateur-radio-grants');
+    const [arrlScholarship] = listProgramsBySource(db, 'arrl-scholarship-program');
+    expect(ardcGrants.length).toBeGreaterThan(0);
+    expect(arrlGrant).toBeDefined();
+    expect(arrlScholarship).toBeDefined();
+
+    // ARDC — "RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01" — four
+    // fixed dates a year, close time defaults to 23:59 local. NOW is 2026-08-02, horizon is 18
+    // months, so this window catches the tail of 2026 and all of 2027.
+    const ardcCycles = cycles.listForProgram(ardcGrants[0].id);
+    expect(ardcCycles.map((c) => c.closesAt)).toEqual([
+      '2026-09-02T06:59:00.000Z', // Sep 1, 2026 23:59 PDT (UTC-7)
+      '2027-02-02T07:59:00.000Z', // Feb 1, 2027 23:59 PST (UTC-8)
+      '2027-04-02T06:59:00.000Z', // Apr 1, 2027 23:59 PDT
+      '2027-07-02T06:59:00.000Z', // Jul 1, 2027 23:59 PDT
+      '2027-09-02T06:59:00.000Z', // Sep 1, 2027 23:59 PDT
+    ]);
+    expect(ardcCycles.every((c) => c.isEstimated && c.programId === ardcGrants[0].id)).toBe(true);
+
+    // ARRL Amateur Radio Grants — "RECUR n_fixed_windows tz=America/New_York
+    // windows=02-01..02-28,06-01..06-30,10-01..10-31" — three windows a year, close 23:59 local.
+    const grantCycles = cycles.listForProgram(arrlGrant.id);
+    expect(grantCycles.map((c) => c.closesAt)).toEqual([
+      '2026-11-01T03:59:00.000Z', // Oct 31, 2026 23:59 EDT (UTC-4)
+      '2027-03-01T04:59:00.000Z', // Feb 28, 2027 23:59 EST (UTC-5)
+      '2027-07-01T03:59:00.000Z', // Jun 30, 2027 23:59 EDT
+      '2027-11-01T03:59:00.000Z', // Oct 31, 2027 23:59 EDT
+    ]);
+
+    // ARRL Foundation Scholarships — "RECUR annual_window tz=America/New_York
+    // window=10-30..12-30 close=12:00" — one annual window a year, explicit close time.
+    const scholarshipCycles = cycles.listForProgram(arrlScholarship.id);
+    expect(scholarshipCycles.map((c) => c.closesAt)).toEqual([
+      '2026-12-30T17:00:00.000Z', // Dec 30, 2026 12:00 EST (UTC-5)
+      '2027-12-30T17:00:00.000Z', // Dec 30, 2027 12:00 EST
+    ]);
+  });
+
+  it('approving the same review items twice does not duplicate cycle rows', async () => {
+    await crawlThreeSources();
+    const pending = listReviewItems(db, 'pending');
+    expect(pending.length).toBeGreaterThan(0);
+    for (const item of pending) approveReviewItem(db, item.id, 'user-1', NOW);
+
+    const before = (db.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n;
+    expect(before).toBeGreaterThan(0);
+
+    // Literally "approve twice": re-approving the SAME review item ids is legal (approve does not
+    // check current decision) and is exactly what proves projectCycles's
+    // removeEstimatedForProgram-then-upsertMany replaces rather than accumulates a second
+    // projection on top of the first.
+    for (const item of pending) approveReviewItem(db, item.id, 'user-1', NOW);
+
+    const after = (db.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n;
+    expect(after).toBe(before);
+  });
 });

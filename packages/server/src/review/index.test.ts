@@ -1,14 +1,16 @@
 import Database from 'better-sqlite3';
-import type { ChangeEvent, Program } from '@grantspotter/core';
-import { hashProgram } from '@grantspotter/core';
+import type { ChangeEvent, DeadlineSpec, Program } from '@grantspotter/core';
+import { expandCycles, hashProgram } from '@grantspotter/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
+import { createCycleRepo } from '../db/repositories/cycles.js';
 import { isRejected, listProgramsBySource, listReviewItems } from '../db/repositories/ingestion.js';
 import {
   approveReviewItem,
   buildReviewItems,
   confidenceFor,
+  cycleHorizonEndISO,
   editReviewItem,
   listInbox,
   provenanceFor,
@@ -299,5 +301,139 @@ describe('listInbox', () => {
     approveReviewItem(db, item.id, 'user-1', NOW);
     expect(listInbox(db, 'pending')).toHaveLength(0);
     expect(listInbox(db, 'approved')).toHaveLength(1);
+  });
+});
+
+describe('cycle projection on publish (SEAM FIX)', () => {
+  // `expandCycles` (core) and `createCycleRepo` had zero production callers before this fix —
+  // only tests called them directly, so `cycles` stayed empty forever and Plan 3's "next
+  // deadline" would render blank for every published program.
+  const selfDeadline: DeadlineSpec = {
+    kind: 'n_fixed_dates',
+    source: { kind: 'self' },
+    note: 'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | four fixed dates a year.',
+  };
+
+  function insertEvent(id: string, programId: string, kind: ChangeEvent['kind'] = 'new'): void {
+    db.prepare(
+      'INSERT INTO change_events (id, source_id, program_id, kind, detected_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(id, 'qcwa', programId, kind, NOW);
+  }
+
+  /** Builds a fresh pending review item for `p` and approves it, returning the published Program. */
+  async function approveNew(p: Program, eventId: string): Promise<Program> {
+    insertEvent(eventId, p.id);
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: eventId, sourceId: 'qcwa', programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    return approveReviewItem(db, item.id, 'user-1', NOW);
+  }
+
+  it('projects real cycle rows for a program with its own RECUR note on approve', async () => {
+    const p = program({ id: 'qcwa--cycle-own--00000001', deadline: selfDeadline, tags: [] });
+    await approveNew(p, 'evt-cycle-1');
+
+    const rows = createCycleRepo(db).listForProgram(p.id);
+    const expected = expandCycles(p, [p], NOW, cycleHorizonEndISO(NOW));
+    expect(rows).toEqual(expected);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((c) => c.isEstimated)).toBe(true);
+    expect(rows.every((c) => c.programId === p.id)).toBe(true);
+  });
+
+  it('does not duplicate cycles when the identical program is published a second time', async () => {
+    const p = program({ id: 'qcwa--cycle-nodupe--00000002', deadline: selfDeadline, tags: [] });
+    await approveNew(p, 'evt-cycle-2a');
+    const first = createCycleRepo(db).listForProgram(p.id);
+    expect(first.length).toBeGreaterThan(0);
+
+    // Simulate the record surviving a second night's crawl unchanged and being approved again.
+    insertEvent('evt-cycle-2b', p.id, 'deadline_changed');
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: 'evt-cycle-2b', sourceId: 'qcwa', programId: p.id, kind: 'deadline_changed', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    approveReviewItem(db, item.id, 'user-1', NOW);
+
+    const second = createCycleRepo(db).listForProgram(p.id);
+    expect(second).toEqual(first);
+  });
+
+  it('replaces stale projected cycles when the RECUR note itself changes, rather than accumulating them', async () => {
+    const p = program({ id: 'qcwa--cycle-moved--00000003', deadline: selfDeadline, tags: [] });
+    insertEvent('evt-cycle-3', p.id);
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: 'evt-cycle-3', sourceId: 'qcwa', programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    approveReviewItem(db, item.id, 'user-1', NOW);
+    const before = createCycleRepo(db).listForProgram(p.id);
+    expect(before.length).toBeGreaterThan(0);
+
+    const movedDeadline: DeadlineSpec = {
+      kind: 'annual_window',
+      source: { kind: 'self' },
+      note: 'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | moved to one annual window.',
+    };
+    const moved = { ...p, deadline: movedDeadline };
+    editReviewItem(db, item.id, 'user-1', NOW, moved);
+
+    const after = createCycleRepo(db).listForProgram(p.id);
+    const expectedAfter = expandCycles(moved, [moved], NOW, cycleHorizonEndISO(NOW));
+    expect(after).toEqual(expectedAfter);
+    expect(after.length).toBeGreaterThan(0);
+    // None of the stale n_fixed_dates cycles survive the note change.
+    expect(after.some((a) => before.some((b) => b.id === a.id))).toBe(false);
+  });
+
+  it('resolves an inherited deadline through the currently-published corpus, attributed to the inheriting program', async () => {
+    db.prepare(
+      'INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('arrl-foundation', 'ARRL Foundation', 'https://www.arrl.org/arrl-foundation', NOW, NOW);
+
+    const owner = program({
+      id: 'arrl-foundation-scholarships',
+      funderId: 'arrl-foundation',
+      name: 'ARRL Foundation Scholarship Program',
+      deadline: {
+        kind: 'annual_window',
+        source: { kind: 'self' },
+        note: 'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | owner window.',
+      },
+      tags: [],
+    });
+    await approveNew(owner, 'evt-owner');
+
+    const inheritor = program({
+      id: 'qcwa--cycle-inherits--00000004',
+      deadline: { kind: 'inherited', source: { kind: 'inherited', fromProgramId: owner.id }, note: '' },
+      tags: [],
+    });
+    await approveNew(inheritor, 'evt-inheritor');
+
+    const rows = createCycleRepo(db).listForProgram(inheritor.id);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((c) => c.programId === inheritor.id)).toBe(true);
+    expect(rows[0].label).toContain('via ARRL Foundation Scholarship Program');
+  });
+
+  it('does not fabricate cycles for an inherited deadline whose owner is not published yet', async () => {
+    const inheritor = program({
+      id: 'qcwa--cycle-orphan--00000005',
+      deadline: { kind: 'inherited', source: { kind: 'inherited', fromProgramId: 'not-published-yet' }, note: '' },
+      tags: [],
+    });
+    await approveNew(inheritor, 'evt-orphan');
+    expect(createCycleRepo(db).listForProgram(inheritor.id)).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { ChangeEvent, FetchedPayload, Program, RawOpportunity, SourceModule } from '@grantspotter/core';
 import type { AiAssist } from '../ai/assist.js';
+import { createFunderRepo } from '../db/repositories/funders.js';
 import {
   ProgramUpsertConflictError,
   insertChangeEvents,
@@ -17,7 +18,7 @@ import type { Fetcher } from '../fetcher/index.js';
 import type { NormalizeContext } from '../normalize/index.js';
 import { normalizeRaw } from '../normalize/index.js';
 import { buildReviewItems } from '../review/index.js';
-import { SOURCES, getSource } from '../sources/registry.js';
+import { SOURCES, funderFor, getSource } from '../sources/registry.js';
 import { hasFollowUp, isSignalSource, resolveRequests } from '../sources/types.js';
 import { contextForSource } from './context.js';
 
@@ -92,6 +93,14 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
   recordPollStart(deps.db, module, now);
 
   try {
+    // SEAM FIX (whole-branch review). `programs.funder_id` is a NOT NULL foreign key onto
+    // `funders(id)` and nothing else ever wrote that table, so a fresh install's first
+    // `approveReviewItem` died on a raw FOREIGN KEY constraint failure. `funderFor` (the
+    // registry) knows the real organization behind every module's funderId; upserting it here,
+    // before anything else touches this source tonight, guarantees the funder row exists before
+    // any review item this run produces can ever reach approval.
+    createFunderRepo(deps.db).upsert(funderFor(module.funderId));
+
     const payloads: FetchedPayload[] = [];
     for (const request of await resolveRequests(module)) {
       const payload = await deps.fetcher.fetch(request);
