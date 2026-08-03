@@ -76,3 +76,45 @@ describe('source registry invariants', () => {
     }
   });
 });
+
+/**
+ * Every source module on disk must be reachable from SOURCES.
+ *
+ * This exists because nine parser tasks ran concurrently and all had to edit this one
+ * shared file. They converged correctly, but nothing proved it: the other tests in this
+ * file only validate the modules that ARE registered, so a module that exists and is
+ * simply never wired in would be silently never crawled — a gate that checks nothing.
+ */
+describe('registry completeness', () => {
+  it('registers every source module that exists on disk', async () => {
+    const dir = new URL('.', import.meta.url);
+    const dirPath = fileURLToPath(dir);
+    const files = (await readdir(dirPath))
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => !f.endsWith('.test.ts'))
+      .filter((f) => f !== 'registry.ts' && f !== 'types.ts');
+
+    const registered = new Set(listSourceIds());
+    const missing: string[] = [];
+
+    for (const file of files) {
+      const mod: Record<string, unknown> = await import(`./${file.replace(/\.ts$/, '.js')}`);
+      const exported = Object.values(mod).flatMap((v) =>
+        Array.isArray(v) ? v : [v],
+      ) as Array<{ id?: unknown; parse?: unknown }>;
+      for (const candidate of exported) {
+        if (
+          candidate &&
+          typeof candidate === 'object' &&
+          typeof candidate.id === 'string' &&
+          typeof candidate.parse === 'function' &&
+          !registered.has(candidate.id)
+        ) {
+          missing.push(`${file} exports SourceModule "${candidate.id}" which is not in SOURCES`);
+        }
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+});
