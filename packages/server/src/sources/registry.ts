@@ -2,7 +2,9 @@ import type { SourceModule } from '@grantspotter/core';
 import { ardcAwardTables } from './ardc-award-tables.js';
 import { ardcGrants } from './ardc-grants.js';
 import { arrlNewsRss } from './arrl-news-rss.js';
+import { arrlScholarshipDescriptions } from './arrl-scholarship-descriptions.js';
 import { nsfFundingRss } from './nsf-funding-rss.js';
+import { TIER_C_B_SOURCES } from './tier-c-b.js';
 import { yaesuDr2x } from './yaesu-dr2x.js';
 
 /**
@@ -17,7 +19,15 @@ import { yaesuDr2x } from './yaesu-dr2x.js';
  * DO NOT add farweb.org, candid.org, fconline.foundationcenter.org, grantwatch.com,
  * grantstation.com or instrumentl.com. They are refused inside the fetcher.
  */
-const MODULES: SourceModule[] = [ardcGrants, ardcAwardTables, arrlNewsRss, nsfFundingRss, yaesuDr2x];
+const MODULES: SourceModule[] = [
+  ardcGrants,
+  ardcAwardTables,
+  arrlNewsRss,
+  arrlScholarshipDescriptions,
+  nsfFundingRss,
+  ...TIER_C_B_SOURCES,
+  yaesuDr2x,
+];
 
 export const SOURCES: readonly SourceModule[] = MODULES;
 
