@@ -15,6 +15,82 @@ const PREFERENCE_SCAN = new RegExp(PREFERENCE.source, 'gi');
 const CASCADE = /\bif no (?:other )?qualified applicant/i;
 
 /**
+ * MODAL VERBS — "should" is not "must".
+ *
+ * RFC 2119 spells the convention the English language already had, and it is exactly how the
+ * volunteers who write these pages use the words: MUST / SHALL / REQUIRED state a requirement,
+ * SHOULD / MAY / RECOMMENDED / OPTIONAL state a recommendation. The preference vocabulary above
+ * knows the NOUN family ("preference", "preferably", "encouraged") and knew none of the modals, so
+ * a funder who wrote its recommendation the ordinary English way had it published as a bar:
+ *
+ *   MARCO  "1) Applicants SHOULD be able to describe how they have engaged in volunteer and/or
+ *           public service activities making use of Amateur Radio."
+ *   York   "Applicants SHOULD describe how they have engaged iin volunteer and/or public service
+ *           activities making use of amateur radio."
+ *
+ * `spec.activityKinds` is an allow-list the matcher enforces, so both awards were `ineligible` on
+ * `ham_activity` for EVERY licensed individual profile — a hard bar built out of the word
+ * "should". A third, ECARS, states its age band the same way and is widened in the same breath:
+ * "Applicant should generally be between the ages of 17 and 25 …, BUT OLDER APPLICANTS RETRAINING
+ * IN A CHANGING JOB MARKET WILL BE CONSIDERED."
+ *
+ * WHAT IS DELIBERATELY NOT HERE.
+ *  - `recommend\w*`. The stem looks like the obvious member of this family and is the single most
+ *    dangerous string in this corpus: eight hard constraints across six programs carry "letter(s)
+ *    of recommendation" or "counselor or teacher recommendations", where it is a NOUN naming a
+ *    document the funder REQUIRES ("Three letters of recommendation must be provided"). A stem
+ *    match would soften all of them. There is no occurrence of "is/are recommended" anywhere in
+ *    the corpus, so the participle buys nothing and the stem costs eight requirements.
+ *  - negated or restricted `may`. "may not", "may never", "may only" are a prohibition or a
+ *    narrowing, not a permission — "Applicants may not be related to a director" is a bar. Only
+ *    bare permissive `may` is a recommendation marker.
+ *  - `should not`, by contrast, IS still soft: RFC 2119's SHOULD NOT is a recommendation against,
+ *    not a prohibition, and softening it errs toward the recoverable direction anyway.
+ */
+const RECOMMENDATION_MODAL_SCAN = /\b(?:should|might|ought\s+to)\b|\bmay\b(?!\s+(?:not|never|no|only)\b)/gi;
+
+/**
+ * The requirement half of the same convention, used ONLY to stop a recommendation reaching back
+ * over a requirement (see `preferenceScope`). It never makes anything soft, so a false positive
+ * here costs nothing but a slightly narrower preference scope.
+ */
+const REQUIREMENT_MODAL = /\b(?:must|shall|required)\b/i;
+
+/**
+ * WHOSE OBLIGATION IS BEING RELAXED. A modal only means "this is a recommendation to the
+ * applicant" when the applicant is what it is talking about.
+ *
+ * Unlike the preference NOUNS above — "preference", "priority", "favoured" are selection
+ * vocabulary and are about applicants by construction — "should" and "may" are general-purpose
+ * English that these pages also use for administration and procedure. The corpus contains exactly
+ * one such sentence and it is a licence floor:
+ *
+ *   QCWA  "APPLICATIONS should be requested by interested licensed radio amateurs on or after
+ *          October 31 of each year from the ARRL Foundation Committee."
+ *
+ * The subject is the APPLICATION, not the applicant; "licensed radio amateurs" is an oblique
+ * phrase describing who does the requesting, not something the "should" makes optional. Softening
+ * that sentence deletes QCWA's licence floor entirely and hands the award to an unlicensed
+ * applicant — `licenseFloorContract.test.ts` RULE A and RULE B both catch it, which is the
+ * invariant doing its job.
+ *
+ * This gate can only ever soften LESS than it would without it, and it can never harden anything
+ * that is soft today, so it cannot introduce a false exclude relative to the behaviour it
+ * replaces. That is what makes it the safe side of the ambiguity to sit on, notwithstanding the
+ * general "when in doubt, soft" rule — the doubt here is resolved by the funder's own subject.
+ *
+ * The pronouns are in the list on purpose. A page that addresses the reader ("You should be able
+ * to describe…") or carries the subject across a sentence ("Applicants must submit an essay. They
+ * should describe…") is naming the applicant just as plainly as the nouns are, and leaving them
+ * out is the false-exclude direction — which is the one the applicant gets no signal about.
+ *
+ * `hamActivity.ts` already reaches for the same anchor in `APPLICANT_REQUIREMENT`
+ * (`\bapplicants?\s+(?:should|need|needs)\b`); this is that judgement, shared.
+ */
+const APPLICANT_SUBJECT =
+  /\b(?:applicants?|candidates?|students?|recipients?|awardees?|nominees?|entrants?|winners?|scholars?|you|he|she|they)\b/i;
+
+/**
  * "…if no qualified applicant is identified…", "…if no suitable applicant found…", "…if there is
  * no applicant from the preferred areas…". A span that opens with one of these does not state a
  * requirement: it states what happens when the preferred pool is empty, which is the funder
@@ -121,24 +197,59 @@ function segmentsOf(text: string): string[] {
   return splitClauses(text).flatMap((clause) => clause.split(';'));
 }
 
+/**
+ * The leftmost offset in `segment` at which a preference's scope opens, or -1 for none.
+ *
+ * Two vocabularies, one answer. A preference NOUN opens a scope wherever it appears; a
+ * RECOMMENDATION MODAL opens one only where the applicant is what it is talking about (see
+ * `APPLICANT_SUBJECT`), so the scan walks the modals and takes the first that qualifies rather
+ * than the first that matches.
+ */
+function markerIndexOf(segment: string): number {
+  PREFERENCE_SCAN.lastIndex = 0;
+  const noun = PREFERENCE_SCAN.exec(segment);
+  RECOMMENDATION_MODAL_SCAN.lastIndex = 0;
+  let modalIndex = -1;
+  for (
+    let m = RECOMMENDATION_MODAL_SCAN.exec(segment);
+    m !== null;
+    m = RECOMMENDATION_MODAL_SCAN.exec(segment)
+  ) {
+    if (APPLICANT_SUBJECT.test(segment.slice(0, m.index))) {
+      modalIndex = m.index;
+      break;
+    }
+  }
+  if (noun === null) return modalIndex;
+  if (modalIndex < 0) return noun.index;
+  return Math.min(noun.index, modalIndex);
+}
+
 export function preferenceScope(text: string): PreferenceScope {
   const governed: string[] = [];
   const ungoverned: string[] = [];
   for (const segment of segmentsOf(text)) {
-    PREFERENCE_SCAN.lastIndex = 0;
-    const marker = PREFERENCE_SCAN.exec(segment);
-    if (marker === null) {
+    const markerIndex = markerIndexOf(segment);
+    if (markerIndex < 0) {
       ungoverned.push(segment);
       continue;
     }
-    const before = segment.slice(0, marker.index);
-    if (before.trim() !== '' && !HINGE_BEFORE.test(before)) {
+    const before = segment.slice(0, markerIndex);
+    // A RECOMMENDATION NEVER REACHES BACK OVER A REQUIREMENT. "Applicants must hold a valid
+    // licence and should be active in public service" is one sentence stating two different
+    // things, and the mixed form is common here — the North Texas Bob Nelson entry says
+    // "Applicant must have graduated high school located within the North Texas Section, and may
+    // attend college or university in this section." A hinge ("and", ",") already hands the
+    // preference forward in both of those; this is the same rule where the funder wrote no hinge
+    // ("Applicants must submit a form that may be downloaded online"), and it only ever narrows
+    // what a preference governs, so it cannot erase one.
+    if (before.trim() !== '' && !HINGE_BEFORE.test(before) && !REQUIREMENT_MODAL.test(before)) {
       // Predicate position: the preference is what this segment says, start to finish.
       governed.push(segment);
       continue;
     }
     ungoverned.push(before);
-    governed.push(segment.slice(marker.index));
+    governed.push(segment.slice(markerIndex));
   }
   return { governed, ungoverned };
 }
@@ -211,7 +322,11 @@ export function requirementText(text: string): string {
  * amateur radio.
  *
  * The rule now: preference language softens what it governs (see `preferenceScope`). If anything
- * outside that scope states a requirement of its own, the text is not preference prose.
+ * outside that scope states a requirement of its own, the text is not preference prose. That
+ * language is the preference NOUNS and the RECOMMENDATION MODALS together — "should" and
+ * permissive "may" are how MARCO, York and ECARS state theirs, and reading a recommendation as a
+ * requirement is the same defect pointing the other way: MARCO and York were `ineligible` on
+ * `ham_activity` for every licensed individual profile because of the word "should".
  *
  * TWO THINGS DELIBERATELY STAY SOFT, because the funder has said so:
  *  - an explicit cascade ("…if no qualified applicant is identified, the scholarship may be
@@ -231,8 +346,13 @@ export function isPreferenceText(text: string): boolean {
   // one ("if no suitable applicant identified, applicants from all regions will be considered")
   // had that sentence published as a bar.
   if (CASCADE.test(text) || statesFallback(text)) return true;
-  if (!PREFERENCE.test(text)) return false;
-  return !preferenceScope(text).ungoverned.some(statesRequirement);
+  // "Is there any preference language here at all?" asked of the SCOPE rather than of a bare
+  // `PREFERENCE.test(text)`, so the two vocabularies cannot answer differently: a text whose only
+  // marker is a recommendation modal ("Applicants should be able to describe…") has a governed
+  // span and no preference noun, and the old gate returned false before the scope was ever built.
+  const scope = preferenceScope(text);
+  if (scope.governed.length === 0) return false;
+  return !scope.ungoverned.some(statesRequirement);
 }
 
 /**
