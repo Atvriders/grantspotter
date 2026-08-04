@@ -1159,3 +1159,265 @@ describe('funder layer — the two workflows that no capture can back', () => {
     }
   });
 });
+
+/**
+ * ------------------------------------------------------------------------------------------
+ * FUNDER LAYER (Tasks 7 and 8) — ARDC, ARRL Amateur Radio Grants, ARRL Club Grant, ARRL
+ * Foundation Scholarships.
+ *
+ * A component states STRUCTURE. An overlay states THIS FUNDER'S ACTUAL REQUIREMENTS — which
+ * makes it the one place in the corpus where a fabricated fact would read as researched. The
+ * three published-and-removed failures this product is built against were all of exactly this
+ * shape: a Yaesu "repeater must remain on the air for 12 months" obligation appearing ZERO
+ * times in that funder's real page, 148 records asserting "no cost share required" when no
+ * funder had said so, and 345 awards linking a recipient's Facebook page as where to apply.
+ *
+ * So every requirement an overlay states must be QUOTABLE FROM A CAPTURED PAGE, and the
+ * overlay must carry that page in `sources`. The quotes themselves are pinned against the
+ * committed capture bytes in `funderCaptures.test.ts`; the assertions here pin that the
+ * overlay says the thing at all, and — just as important — that it does NOT say the things
+ * the captures never said.
+ * ------------------------------------------------------------------------------------------
+ */
+describe('funder layer — invariants', () => {
+  const overlays = all.filter((t) => t.layer === 'funder');
+
+  it('cites at least one live https source for every overlay', () => {
+    expect(overlays.length).toBeGreaterThan(0);
+    for (const t of overlays) {
+      expect(t.sources.length, `${t.id} has no sources`).toBeGreaterThan(0);
+      for (const s of t.sources) {
+        expect(s.url, `${t.id} source "${s.label}"`).toMatch(/^https?:\/\//);
+        expect(s.label.length).toBeGreaterThan(3);
+      }
+    }
+  });
+
+  it('never links to the compromised farweb.org domain', () => {
+    for (const t of all) {
+      expect(t.body, `${t.id}`).not.toMatch(/farweb\.org/i);
+      for (const s of t.sources) expect(s.url).not.toMatch(/farweb\.org/i);
+    }
+  });
+
+  it('binds each overlay to a program id unless it is an always-available playbook', () => {
+    for (const t of overlays) {
+      if (t.alwaysAvailable) expect(t.programIds).toEqual([]);
+      else expect(t.programIds.length, `${t.id}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('lists the components each overlay expects', () => {
+    const componentIds = new Set(components.map((c) => c.id));
+    for (const t of overlays) {
+      for (const req of t.requires) expect(componentIds.has(req), `${t.id} requires ${req}`).toBe(true);
+    }
+  });
+});
+
+describe('funder layer — ARDC and ARRL Amateur Radio Grants', () => {
+  const byId = (id: string) => all.find((t) => t.id === id);
+
+  it('surfaces ARDC open-source obligation and the 20 percent indirect cap', () => {
+    const ardc = byId('funder-ardc');
+    expect(ardc).toBeDefined();
+    expect(ardc?.body).toMatch(/open[- ]source/i);
+    expect(ardc?.body).toMatch(/open[- ]access/i);
+    expect(ardc?.body).toMatch(/CERN-OHL/);
+    expect(ardc?.body).toMatch(/20%/);
+    expect(ardc?.slots).toContain('project.openLicense');
+    expect(ardc?.slots).toContain('project.indirectPct');
+  });
+
+  it('surfaces the ARDC brevity mandate and the four fixed cycles', () => {
+    const ardc = byId('funder-ardc');
+    expect(ardc?.body).toMatch(/brief|brevity/i);
+    expect(ardc?.body).toMatch(/February 1.*April 1.*July 1.*September 1/s);
+    expect(ardc?.body).toMatch(/fiscal sponsor/i);
+    expect(ardc?.programIds).toEqual(['ardc-grants']);
+  });
+
+  /**
+   * The brief for this task described the over-20% case as "either the institution accepts the
+   * capped rate in writing, or the project is restructured". ARDC's instructions page says
+   * neither: it asks the applicant to COST-SHARE the excess. An overlay that invents the remedy
+   * sends a university to a negotiation its funder never asked for, so the published remedy is
+   * pinned here by its own words.
+   */
+  it('states ARDCs published remedy for an institutional rate above the cap, not an invented one', () => {
+    const ardc = byId('funder-ardc');
+    expect(ardc?.body).toMatch(/cost-share any indirect amount over 20%/);
+    expect(ardc?.body).not.toMatch(/in writing/i);
+  });
+
+  it('surfaces the three ARRL exclusions, the co-funding preference and the amount ceiling', () => {
+    const arrl = byId('funder-arrl-amateur-radio-grants');
+    expect(arrl?.body).toMatch(/emergency communication|emcomm/i);
+    expect(arrl?.body).toMatch(/ongoing operating expenses/i);
+    expect(arrl?.body).toMatch(/organizations only|never to individuals/i);
+    expect(arrl?.body).toMatch(/\$3,000/);
+    expect(arrl?.body).toMatch(/\$5,000/);
+    expect(arrl?.body).toMatch(/Year of the Club/);
+    expect(arrl?.body).toMatch(/February 1.{0,4}28|Jun(e)? 1.{0,4}30|October 1.{0,4}31/);
+    expect(arrl?.programIds).toEqual(['arrl-amateur-radio-grants']);
+  });
+
+  /**
+   * The page restricts the PROGRAM's location ("Only programs and initiatives conducted within
+   * the United States are eligible") and, separately, the RECIPIENT's type ("Grants are awarded
+   * only to organizations, not individuals"). Collapsing those into "US organizations only" —
+   * as the brief did — invents a nationality test for the applicant that the page never states,
+   * and would hide the program from an applicant it may be for.
+   */
+  it('keeps the US restriction on the programme, not on the applicants nationality', () => {
+    const arrl = byId('funder-arrl-amateur-radio-grants');
+    expect(arrl?.body).toMatch(/programs and initiatives conducted within the United States/);
+    expect(arrl?.body).not.toMatch(/US organizations only/i);
+  });
+});
+
+describe('funder layer — ARRL Club Grant and ARRL Foundation Scholarship', () => {
+  const byId = (id: string) => all.find((t) => t.id === id);
+
+  it('states the Club Grant cycle as disputed rather than printing a date', () => {
+    const cg = byId('funder-arrl-club-grant');
+    expect(cg).toBeDefined();
+    expect(cg?.body).toMatch(/disputed/i);
+    expect(cg?.body).toMatch(/three different/i);
+    expect(cg?.body).toMatch(/news RSS|news feed/i);
+    // It must not present a single confident deadline sentence.
+    expect(cg?.body).not.toMatch(/The deadline is [A-Z][a-z]+ \d/);
+  });
+
+  it('gives the Club Grant range and the 2024 outcome numbers', () => {
+    const cg = byId('funder-arrl-club-grant');
+    expect(cg?.body).toMatch(/\$1,000/);
+    expect(cg?.body).toMatch(/\$25,000/);
+    expect(cg?.body).toMatch(/\$500,502/);
+    expect(cg?.body).toMatch(/37 of 110/);
+    expect(cg?.body).toMatch(/ARRL-affiliated/i);
+    expect(cg?.programIds).toEqual(['arrl-club-grant']);
+  });
+
+  /**
+   * `sources/arrl-pages.ts` records that the live 2026-08-02 capture of the Club Grant page
+   * "contains no occurrence of 'affiliat' or 'eligib' anywhere in its raw HTML, in any form",
+   * and therefore ships the record with `eligibility` undefined rather than inventing wording.
+   * An overlay that then tells the applicant "applicants must be an ARRL-affiliated club"
+   * re-asserts, in the applicant's own hands, the exact requirement the ingestion layer refused
+   * to assert — and over-restricts, hiding a grant from a club it may be for.
+   */
+  it('reports the Club Grant affiliation question as unresolved instead of asserting it', () => {
+    const cg = byId('funder-arrl-club-grant');
+    expect(cg?.body).not.toMatch(/must be an ARRL-affiliated club/i);
+    expect(cg?.body).not.toMatch(/in good standing/i);
+    expect(cg?.body).toMatch(/no occurrence of "affiliat"/);
+  });
+
+  it('tells scholarship applicants what the catalog is and when the cycle ran', () => {
+    const sch = byId('funder-arrl-foundation-scholarships');
+    expect(sch?.body).toMatch(/one application|single application/i);
+    expect(sch?.body).toMatch(/111/);
+    expect(sch?.body).toMatch(/October 30/);
+    expect(sch?.body).toMatch(/December 30/);
+    expect(sch?.appliesTo).toEqual(['ham_scholarship']);
+    expect(sch?.requires).toContain('scholarship-personal-essay');
+  });
+
+  /**
+   * Three claims the brief for this task asked for, and the captures do not carry:
+   *
+   *  - a close time of "12:00 PM Eastern" — present ONLY in the synthetic `pathological.html`
+   *    fixture written to exercise the parser, never in a capture of a live ARRL page;
+   *  - "the close date moved from January 31" — the string "January 31" appears in no capture
+   *    in the repository, so the overlay states no previous date and no movement;
+   *  - "135 awards totalling more than $715,000 in 2024" — no captured page carries either
+   *    figure.
+   *
+   * A time-of-day on a deadline is the highest-consequence detail in this whole overlay: an
+   * applicant who believes they have until midnight when the form shuts at noon loses the year.
+   * It is exactly the kind of specific that reads as researched. So it is not stated, and this
+   * test keeps it out.
+   */
+  it('states no scholarship deadline detail that no captured page carries', () => {
+    const sch = byId('funder-arrl-foundation-scholarships');
+    // Case-sensitive on purpose for the abbreviation: `/EST\b/i` also matches the tail of
+    // "request", "largest" and "best", which would fail this on prose that says nothing at all
+    // about a time zone.
+    expect(sch?.body).not.toMatch(/12:00|[Nn]oon|Eastern|\bEST\b/);
+    expect(sch?.body).not.toMatch(/January 31/);
+    expect(sch?.body).not.toMatch(/\$715|135 awards/);
+    // And the gap is declared to the reader rather than left as silence.
+    expect(sch?.body).toMatch(/publishes no closing TIME/);
+  });
+
+  it('reports the two ARRL pages that disagree about the size of the catalog', () => {
+    const sch = byId('funder-arrl-foundation-scholarships');
+    // "more than 170" (scholarship-program) vs "more than 150" (scholarship-descriptions), both
+    // captured on the same day. Picking one and printing it would be a coin toss presented as
+    // a fact; both are ARRL's own words and both are shown.
+    expect(sch?.body).toMatch(/more than 170/);
+    expect(sch?.body).toMatch(/more than 150/);
+    expect(sch?.body).toMatch(/2026 Scholarship Cycle is now closed/);
+  });
+});
+
+describe('funder layer — an overlay may not weld an invented figure to a live slot', () => {
+  const OVERLAY_IDS = [
+    'funder-ardc',
+    'funder-arrl-amateur-radio-grants',
+    'funder-arrl-club-grant',
+    'funder-arrl-foundation-scholarships',
+  ];
+
+  /**
+   * Task 4's finding, carried into the funder layer where it is worse. A line that welds live
+   * slots to invented specifics renders as a complete, TRUE-LOOKING sentence in which the club's
+   * real details are real and the number beside them is fabricated — and it carries no
+   * `[TODO: …]`, so Task 14's export gate counts zero open todos and releases it.
+   *
+   * A digits-only detector does not catch the real cases: Task 4's actual line was "Three of our
+   * members … will teach a four-session class", which spells every quantity as a word.
+   *
+   * The rule: a line is either fully self-contained (no live slot) or fully slotted (no invented
+   * specific). A funder figure — the 20% cap, the $3,000 ceiling — belongs in the surrounding
+   * prose beside its quotation, never inside a model sentence the applicant will paste.
+   */
+  const COUNT_WORD =
+    /\b(?:a handful of|a couple of|couple|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|dozens?|several)\b/i;
+
+  it('keeps every slotted line free of figures and spelled quantities', () => {
+    const offenders: string[] = [];
+    for (const id of OVERLAY_IDS) {
+      const t = all.find((x) => x.id === id);
+      expect(t, id).toBeDefined();
+      for (const raw of (t?.body ?? '').split('\n')) {
+        if (!raw.includes('{{')) continue;
+        const prose = raw
+          .replace(/^\s*(?:[-*>]\s+|\d+\.\s+)+/, '')
+          .replace(/^\s*-\s*\[[ x]\]\s*/, '')
+          .replace(/^\*\*[^*]*\*\*/, '')
+          .replace(/\{\{[^}]*\}\}/g, '');
+        if (/\d/.test(prose)) offenders.push(`${id} — figure beside a live slot: ${raw.trim()}`);
+        const spelled = COUNT_WORD.exec(prose);
+        if (spelled) offenders.push(`${id} — "${spelled[0]}" beside a live slot: ${raw.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Slot misattribution: the right slot carrying the wrong fact. Task 6 found
+   * `{{project.requestAmount}}` printed as the AWARDED amount, `{{project.endDate}}` used as a
+   * SUBMISSION date, and `{{recommender.role}}` under the APPLICANT's signature. Each renders
+   * perfectly and states something false, and no marker is left behind to notice.
+   */
+  it('never prints a requested amount as an awarded one, or an end date as a deadline', () => {
+    for (const id of OVERLAY_IDS) {
+      const body = all.find((x) => x.id === id)?.body ?? '';
+      expect(body, id).not.toMatch(/award(?:ed)?[^.\n]{0,40}\{\{project\.requestAmount\}\}/i);
+      expect(body, id).not.toMatch(/\{\{project\.requestAmount\}\}[^.\n]{0,20}\bawarded\b/i);
+      expect(body, id).not.toMatch(/(?:deadline|due|submit[^.\n]{0,20})\{\{project\.endDate\}\}/i);
+    }
+  });
+});
