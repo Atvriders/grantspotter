@@ -52,13 +52,17 @@ async function bootAndStop(dataDir: string, port: number): Promise<string> {
       ...process.env,
       PORT: String(port),
       DATA_DIR: dataDir,
-      // No default exists for either of these and none may be added: the server refuses to start
-      // without them. This used to be an example.com contact URL; `loadConfig` refuses the RFC
-      // 2606 documentation domains now, so it is loopback — which is where this process is anyway
-      // and is equally not a stranger's host. The secret names itself as a test value on purpose;
-      // see the reasoning in deploy/compose.test.ts.
+      // SESSION_SECRET has no default and none may be added: the server refuses to start without
+      // it. It names itself as a test value on purpose; see the reasoning in deploy/compose.test.ts.
+      //
+      // CONTACT_URL is deliberately absent, and the history is the reason it is worth a line. It
+      // was an example.com URL until the loader started refusing RFC 2606 names, then loopback
+      // ("where this process is anyway"), which the loader refuses too now — a crawler that
+      // identifies itself by an address pointing at the reader's own machine is worse than one
+      // that says nothing. Both edits were chasing a value this test never cared about, so it
+      // takes the shipped default: the project's issue tracker, which is what a real deployment
+      // sends.
       SESSION_SECRET: 'first-run-test-session-secret-not-a-real-secret',
-      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
       // A crawl would reach the network, and would also be the thing that duplicates the corpus
       // if the import were wired in after the scheduler.
       CRAWL_ENABLED: 'false',

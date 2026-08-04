@@ -10,17 +10,32 @@ import {
   PLACEHOLDER_RUN_LENGTH,
   PLACEHOLDER_SESSION_SECRET,
   reservedContactName,
+  resolveContactUrl,
 } from '../src/config.js';
 
 /**
- * NOT example.org. `loadConfig` refuses the RFC 2606 documentation domains for CONTACT_URL now,
- * because that value ends up in a live crawler's User-Agent and a reserved name reaches nobody —
- * and this fixture was one of the places the old rule's own example was quietly proving itself
- * acceptable. Loopback is the honest stand-in for a test: it is where this process actually is.
+ * NOT example.org, and — since 2026-08-04 — NOT loopback either.
+ *
+ * This fixture has now been wrong twice, in opposite directions, which is worth recording because
+ * both times it was the RULE that was wrong and the fixture merely honest about it.
+ *
+ *   1. It was `https://example.org/grantspotter`, back when the loader accepted RFC 2606 names.
+ *      That value was also the error message's own worked example, so the message was handing out
+ *      a placeholder at the moment an operator was most likely to paste one.
+ *   2. It became `http://127.0.0.1:3030/grantspotter`, with the comment "loopback is the honest
+ *      stand-in for a test: it is where this process actually is". True of the process and false
+ *      of the value's only reader: this string goes into a User-Agent read by a sysadmin at a
+ *      polled nonprofit, and `127.0.0.1` points at THEIR machine. The loader refuses it now, for
+ *      exactly the reason it refuses `example.org`, so the fixture had to move again.
+ *
+ * What it is now: an invented club domain. The loader does no DNS and cannot tell a live club site
+ * from an unregistered one — it rules out the addresses that are GUARANTEED to reach nobody, and
+ * says so — so the honest fixture is a plausible public address that is nobody's, not a reserved
+ * name pretending to be one.
  */
 const VALID = {
   SESSION_SECRET: 'a'.repeat(32),
-  CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
+  CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
 };
 
 describe('loadConfig', () => {
@@ -216,11 +231,17 @@ describe('loadConfig', () => {
 
     it('accepts an address that is somebody’s', () => {
       // Vacuity guard: this must rule out the reserved names, not http(s) URLs in general.
+      //
+      // `http://192.0.2.10:3030/about` used to be in this list, admitted on the reasoning that
+      // RFC 5737 is a documentation ADDRESS rather than a reserved NAME. It is refused now, and
+      // the distinction is what was wrong: the reader of this value is a stranger at a polled
+      // site, and they can reach 192.0.2.10 exactly as well as they can reach example.org, which
+      // is not at all. It moved to the block below with the loopback and LAN addresses.
       for (const url of [
         'https://w9xyz-radio-club.org/grantspotter',
-        'http://192.0.2.10:3030/about', // RFC 5737 documentation ADDRESS, not a reserved NAME
         'https://exampleclub.org/contact', // "example" as a prefix is not example.org
         'https://notexample.com/contact',
+        'https://gs.w9xyz.org.uk/who-runs-this', // a multi-label public suffix is not a TLD match
       ]) {
         expect(loadConfig({ ...VALID, CONTACT_URL: url }).contactUrl, url).toBe(url);
       }
@@ -316,6 +337,268 @@ describe('loadConfig', () => {
     });
   });
 
+  /**
+   * VALIDATED AS ONE ADDRESS, SENT AS ANOTHER.
+   *
+   * `optional()` trims the ends; `new URL()` deletes TAB, CR and LF from ANYWHERE in its input.
+   * Between those two facts, a CONTACT_URL with an interior tab was checked as one string and put
+   * on the wire as a different one, and a value with a newline booted cleanly and then injected a
+   * line break into an HTTP header on every outbound request. Both measured against the built
+   * `packages/server/dist/config.js` before the fix:
+   *
+   *   "https://w9xyz-radio-club.org/a<TAB>b"      validated as …/ab, sent as …/a<TAB>b
+   *   "https://w9xyz-radio-club.org/x<CR><LF>…"   accepted, then `new Headers()` threw
+   *                                               "is an invalid header value" on every fetch
+   *
+   * The rule is a character-set rule and it runs BEFORE `new URL`, which is the only ordering that
+   * can work: after the parse, the evidence is gone.
+   */
+  describe('CONTACT_URL characters that would not survive the trip', () => {
+    const smuggled: Record<string, string> = {
+      'an interior tab': 'https://w9xyz-radio-club.org/a\tb',
+      'a carriage return': 'https://w9xyz-radio-club.org/a\rb',
+      'a newline, which is header injection': 'https://w9xyz-radio-club.org/about\nX-Injected: yes',
+      'a CRLF pair': 'https://w9xyz-radio-club.org/about\r\nX-Injected: yes',
+      'a tab inside the HOST, which rewrites the host': 'https://w9xyz-radio\t-club.org/x',
+      'a NUL': 'https://w9xyz-radio-club.org/a\u0000b',
+      'a DEL': 'https://w9xyz-radio-club.org/a\u007fb',
+      'a non-ASCII host the parser would punycode': 'https://münster-arc.de/kontakt',
+    };
+
+    it('refuses every one of them', () => {
+      for (const [why, value] of Object.entries(smuggled)) {
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: value }), why).toThrow(ConfigError);
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: value }), why).toThrow(
+          /only printable ASCII/,
+        );
+      }
+    });
+
+    it('proves the point it is refusing them for: the parser really does delete these', () => {
+      // Not a restatement of the rule — the reason for it. If this ever stops being true the rule
+      // above is unnecessary, and a test that only asserted "refused" would never say so.
+      expect(new URL('https://w9xyz-radio-club.org/a\tb').href).toBe(
+        'https://w9xyz-radio-club.org/ab',
+      );
+      expect(new URL('https://w9xyz-radio\t-club.org/x').hostname).toBe('w9xyz-radio-club.org');
+      expect(() => new Headers({ 'user-agent': 'x\r\ny' })).toThrow();
+    });
+
+    it('tells the operator the encoded form of what they typed, when there is one', () => {
+      let message = '';
+      try {
+        loadConfig({ ...VALID, CONTACT_URL: 'https://münster-arc.de/kontakt' });
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain('punycode');
+      expect(message).toContain('https://xn--mnster-arc-9db.de/kontakt');
+    });
+
+    it('refuses a space, which survives the parse but not a reader', () => {
+      expect(() =>
+        loadConfig({ ...VALID, CONTACT_URL: 'https://w9xyz-radio-club.org/who runs this' }),
+      ).toThrow(/must not contain a space/);
+      // …while a value whose only problem is that it is not a URL still says exactly that.
+      expect(() => loadConfig({ ...VALID, CONTACT_URL: 'not a url' })).toThrow(
+        /must be an http\(s\) URL/,
+      );
+    });
+
+    /**
+     * THE PROPERTY, over the config path rather than over `buildUserAgent` in isolation.
+     *
+     * The existing "never more than one header line" test builds four configs by hand. That is
+     * the shape of test that misses a class: every value below was one `loadConfig` accepted, and
+     * two of them produced a User-Agent that no HTTP client would send. The property is now:
+     * whatever the environment says, EITHER the loader refuses it OR the User-Agent contains the
+     * exact string it was given and is a legal single-line header value.
+     */
+    it('every value that boots produces a header the wire will carry, unaltered', () => {
+      const candidates = [
+        ...Object.values(smuggled),
+        'https://w9xyz-radio-club.org/who runs this',
+        'https://w9xyz-radio-club.org/grantspotter',
+        'https://w9xyz-radio-club.org/a%20b',
+        'https://w9xyz-radio-club.org/~w9xyz/contact?ref=logs#top',
+        'http://w9xyz-radio-club.org:8080/contact',
+        DEFAULT_CONTACT_URL,
+        'not a url',
+        'ftp://w9xyz-radio-club.org/',
+        'http://127.0.0.1:3030/grantspotter',
+        'https://example.org/x',
+      ];
+      let accepted = 0;
+      for (const value of candidates) {
+        let config;
+        try {
+          config = loadConfig({ ...VALID, CONTACT_URL: value });
+        } catch (err) {
+          expect(err, value).toBeInstanceOf(ConfigError);
+          continue;
+        }
+        accepted += 1;
+        const ua = buildUserAgent(config);
+        expect(config.contactUrl, value).toBe(value); // stored verbatim, nothing normalised away
+        expect(ua, value).toContain(`(+${value};`); // the exact string, on the wire
+        expect(ua, value).toMatch(/^[\x20-\x7e]+$/); // one line, printable ASCII
+        expect(() => new Headers({ 'user-agent': ua }), value).not.toThrow();
+      }
+      expect(accepted).toBeGreaterThan(4); // vacuity: the loop must not be refusing everything
+    });
+  });
+
+  /**
+   * THE RULE AND ITS STATED REASON, MADE TO AGREE (2026-08-04).
+   *
+   * `loadConfig` refused `example.org` because a reserved name "resolves for nobody", and in the
+   * same breath accepted `http://127.0.0.1:3030/grantspotter`, `https://192.168.1.5/`,
+   * `http://[::1]/`, `http://0.0.0.0/`, `https://intranet/` and `https://a/`. Every one of those
+   * is MORE useless to the reader than example.org: the reader is a sysadmin at a polled
+   * nonprofit, and those addresses name their own machine, their own LAN, or nothing.
+   *
+   * The rule now enforces what it always claimed to: an address that cannot reach the operator
+   * from the public internet is refused, whether it is reserved-by-name or unreachable-by-range.
+   * It does NOT claim the accepted ones resolve — no DNS happens here, and the message says so.
+   */
+  describe('CONTACT_URL that cannot be reached from the public internet', () => {
+    it('refuses loopback, LAN, link-local, dotless and documentation addresses', () => {
+      const unreachable: Record<string, string> = {
+        'IPv4 loopback, the value this suite itself used to use': 'http://127.0.0.1:3030/grantspotter',
+        'another loopback address in 127/8': 'http://127.1.2.3/about',
+        'the name for loopback': 'http://localhost:3030/',
+        'IPv6 loopback': 'http://[::1]/',
+        'IPv6 loopback, IPv4-mapped': 'http://[::ffff:127.0.0.1]/',
+        'RFC 1918, the shape a home server has': 'https://192.168.1.5/',
+        'RFC 1918, 10/8': 'https://10.0.0.7:8080/',
+        'RFC 1918, 172.16/12': 'https://172.20.3.4/contact',
+        'the unspecified address': 'http://0.0.0.0/',
+        'link-local': 'https://169.254.10.2/',
+        'carrier-grade NAT': 'https://100.100.20.3/',
+        'IPv6 link-local': 'https://[fe80::1]/',
+        'IPv6 unique-local': 'https://[fd00::5]/',
+        'a single-label intranet name': 'https://intranet/',
+        'a single-label name of one letter': 'https://a/',
+        'an mDNS name': 'https://gs.local/contact',
+        'ICANN’s private-use TLD': 'https://grantspotter.internal/contact',
+        'RFC 8375 home networking': 'https://gs.home.arpa/',
+        'RFC 5737 TEST-NET-1': 'http://192.0.2.10:3030/about',
+        'RFC 5737 TEST-NET-2': 'http://198.51.100.4/about',
+        'RFC 5737 TEST-NET-3': 'http://203.0.113.9/about',
+        'RFC 3849 documentation IPv6': 'http://[2001:db8::1]/about',
+      };
+      for (const [why, url] of Object.entries(unreachable)) {
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), why).toThrow(ConfigError);
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), why).toThrow(
+          /cannot be reached from the public internet/,
+        );
+      }
+    });
+
+    it('says what it costs and where to go instead, because it is refusing a real deployment', () => {
+      // The operator this rejects is the one running GrantSpotter on a home server whose only web
+      // page is on the LAN. That is a legitimate deployment and the message has to leave them
+      // somewhere to go, or the next thing they type is a plausible-looking lie.
+      let message = '';
+      try {
+        loadConfig({ ...VALID, CONTACT_URL: 'https://192.168.1.5/about' });
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toMatch(/unset CONTACT_URL/);
+      expect(message).toMatch(/reaches a human/);
+      // And it names what it found rather than saying "invalid".
+      expect(message).toContain('192.168.1.5');
+    });
+
+    it('does not over-reach into names that merely look local', () => {
+      // Vacuity guard, and a real risk: a substring rule would refuse a club whose domain happens
+      // to contain one of these words, and every over-refusal pushes an operator toward a value
+      // that parses and reaches nobody.
+      for (const url of [
+        'https://localhost-hosting.org/contact', // a real registrable domain
+        'https://local.w9xyz-radio-club.org/contact', // `local` as a LABEL, not the TLD
+        'https://internal.w9xyz-radio-club.org/contact',
+        'https://home.arpa.w9xyz-radio-club.org/contact',
+        'https://10-10-international.org/contact', // 10-10 International Net, a real club
+        'https://w9xyz-radio-club.org/10.0.0.1', // a private address in the PATH is not the host
+      ]) {
+        expect(loadConfig({ ...VALID, CONTACT_URL: url }).contactUrl, url).toBe(url);
+      }
+    });
+  });
+
+  /**
+   * ONE PREDICATE, CALLED BY EVERY PATH.
+   *
+   * `scripts/verify-sources.ts` and `scripts/capture-fixture.ts` — both documented in the README,
+   * both polling the same live nonprofit sites the nightly crawl polls — read
+   * `process.env.CONTACT_URL` themselves and never called `loadConfig`. Measured before the fix:
+   * `CONTACT_URL='not a url' npm run verify-sources -- qcwa` fetched qcwa.org, got a live 200, and
+   * sent `GrantSpotter/0.1.0 (+not a url; …)`.
+   *
+   * `resolveContactUrl` is the shared entry point those scripts use now, so these tests are what
+   * says the two paths cannot disagree. The structural half — nothing NEW skips it — is
+   * `test/contactUrlEntryPointContract.test.ts`.
+   */
+  describe('resolveContactUrl: the one way a contact URL enters this process', () => {
+    it('agrees with loadConfig on every value, good and bad', () => {
+      const values = [
+        undefined,
+        '',
+        '   ',
+        'https://w9xyz-radio-club.org/grantspotter',
+        DEFAULT_CONTACT_URL,
+        '  https://w9xyz-radio-club.org/padded  ',
+        'not a url',
+        'ftp://w9xyz-radio-club.org/',
+        'https://example.org/x',
+        'https://x.invalid/me',
+        FORMER_PLACEHOLDER_CONTACT_URL,
+        'http://127.0.0.1:3030/grantspotter',
+        'https://w9xyz-radio-club.org/a\tb',
+      ];
+      let refused = 0;
+      let accepted = 0;
+      for (const value of values) {
+        const env = value === undefined ? {} : { CONTACT_URL: value };
+        let resolved: string | Error;
+        try {
+          resolved = resolveContactUrl(env);
+          accepted += 1;
+        } catch (err) {
+          resolved = err as Error;
+          refused += 1;
+        }
+        let loaded: string | Error;
+        try {
+          loaded = loadConfig({ ...env, SESSION_SECRET: VALID.SESSION_SECRET }).contactUrl;
+        } catch (err) {
+          loaded = err as Error;
+        }
+        if (resolved instanceof Error) {
+          expect(loaded, String(value)).toBeInstanceOf(ConfigError);
+          expect((loaded as Error).message, String(value)).toBe(resolved.message);
+        } else {
+          expect(loaded, String(value)).toBe(resolved);
+        }
+      }
+      expect(refused).toBeGreaterThan(5); // vacuity guards on both arms of the loop
+      expect(accepted).toBeGreaterThan(4);
+    });
+
+    it('defaults to the project tracker when the environment says nothing', () => {
+      expect(resolveContactUrl({})).toBe(DEFAULT_CONTACT_URL);
+      expect(resolveContactUrl({ CONTACT_URL: '  ' })).toBe(DEFAULT_CONTACT_URL);
+    });
+
+    it('refuses before anything can be fetched — the failure is a ConfigError, not a network error', () => {
+      // What the scripts rely on: this throws where they call it, above the line that builds a
+      // fetcher, so the refusal costs a polled site nothing.
+      expect(() => resolveContactUrl({ CONTACT_URL: 'not a url' })).toThrow(ConfigError);
+    });
+  });
+
   it('applies the CONTRACT §7 defaults', () => {
     const config = loadConfig(VALID);
     expect(config.port).toBe(3030);
@@ -366,7 +649,7 @@ describe('buildUserAgent', () => {
   // RESOLUTIONS R10: one definition, one output string. Plan 2 imports this
   // function instead of declaring its own.
   const EXPECTED =
-    'GrantSpotter/0.1.0 (+http://127.0.0.1:3030/grantspotter; nightly grant-deadline change detector; contact the operator at that page)';
+    'GrantSpotter/0.1.0 (+https://w9xyz-radio-club.org/grantspotter; nightly grant-deadline change detector; contact the operator at that page)';
 
   it('names the app and carries the contact URL', () => {
     // Plan 2's fetcher sends this on every request. Politeness §7.1.3.
@@ -375,8 +658,29 @@ describe('buildUserAgent', () => {
 
   it('accepts a bare contact URL and produces the identical string', () => {
     // Plan 2's fetcher tests call the string form; both forms must agree.
-    expect(buildUserAgent('http://127.0.0.1:3030/grantspotter')).toBe(EXPECTED);
+    expect(buildUserAgent('https://w9xyz-radio-club.org/grantspotter')).toBe(EXPECTED);
     expect(buildUserAgent(loadConfig(VALID))).toBe(buildUserAgent(VALID.CONTACT_URL));
+  });
+
+  /**
+   * THE OTHER HALF OF "ONE PREDICATE". `buildUserAgent` is the only thing in this repository that
+   * mints a wire User-Agent (RESOLUTIONS R10), and it is exported, and `scripts/` used to hand it
+   * a bare `process.env.CONTACT_URL`. So it validates too: whatever route a value takes to get
+   * here, it faces the same rules `loadConfig` applies.
+   */
+  it('refuses to mint a User-Agent from a value loadConfig would refuse', () => {
+    for (const bad of [
+      'not a url',
+      'ftp://w9xyz-radio-club.org/',
+      'https://example.org/grantspotter',
+      'https://x.invalid/me',
+      FORMER_PLACEHOLDER_CONTACT_URL,
+      'http://127.0.0.1:3030/grantspotter',
+      'https://w9xyz-radio-club.org/about\r\nX-Injected: yes',
+    ]) {
+      expect(() => buildUserAgent(bad), bad).toThrow(ConfigError);
+      expect(() => loadConfig({ ...VALID, CONTACT_URL: bad }), bad).toThrow(ConfigError);
+    }
   });
 
   /**

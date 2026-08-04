@@ -380,7 +380,7 @@ hand from the Actions tab, and subsequent pushes behave normally.
 | `HOST_PORT` | no | `3030` | compose host port only; the only interpolated value left |
 | `PORT` | no | `3030` | in-container listen port |
 | `SESSION_SECRET` | **yes** | **no default** | at least **32 characters**; the server refuses to start without it, and refuses the shipped `CHANGE_ME` placeholder by value |
-| `CONTACT_URL` | no | `https://github.com/Atvriders/grantspotter/issues` | an `http(s)` URL; goes in the crawler User-Agent. The default reaches this project's maintainers, **not you** — see below for when to override it. A `CHANGE_ME` value or a reserved documentation domain is still refused by value |
+| `CONTACT_URL` | no | `https://github.com/Atvriders/grantspotter/issues` | an `http(s)` URL; goes in the crawler User-Agent. The default reaches this project's maintainers, **not you** — see below for when to override it. Refused by value: a `CHANGE_ME` placeholder, a reserved documentation name or address, an address nobody outside your network can reach, and anything that is not printable ASCII |
 | `DATA_DIR` | no | `/data` | SQLite, snapshots, fixture cache |
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
@@ -412,19 +412,36 @@ One variable fails loudly on startup, and one carries a caveat rather than a req
   *your* instance in particular to stop polling them will reach maintainers who do not run it and
   cannot stop it. There is one remedy that works no matter who is running what, and it is
   `robots.txt`: every instance honours it, matched on the `GrantSpotter` token, so
-  `User-agent: GrantSpotter` + `Disallow: /` stops all of them — with the caveat that an instance
-  reads a given site's `robots.txt` once per server process, so a container that has been up for
-  months acts on a new file at its next restart. That is the first thing
+  `User-agent: GrantSpotter` + `Disallow: /` stops all of them, and it takes effect on the next
+  nightly crawl — each run re-reads every site's `robots.txt` before it fetches anything, and a
+  cached copy expires after six hours regardless, so no instance acts on rules more than a day
+  old. (Until 2026-08-04 that was not true: the file was read once per server process and cached
+  for its life, so a long-running container never noticed a new one. If you are running an
+  instance older than that, restart it.) That is the first thing
   [the issue template](.github/ISSUE_TEMPLATE/crawler-contact.md) tells an arriving site owner,
   before it asks them for anything.
 
   **Override it if a complaint should reach you rather than us** — you are running a modified fork,
   a large or long-running deployment, or an instance polling on behalf of an institution. Point it
-  at an `http(s)` page you control and can be reached through. The reserved documentation domains
-  are rejected (`example.com`, `example.net`, `example.org`, and the `.invalid`, `.test` and
-  `.example` TLDs): they exist precisely so that they reach nobody, and a crawler identifying
-  itself with one is anonymous while looking identified. A value still containing `CHANGE_ME` is
-  rejected too — nobody has to edit this any more, but a half-finished edit is not an address.
+  at an `http(s)` page you control **and that can be reached from outside your own network**, and
+  note the second half: the only reader of this value is a stranger at a site you are polling, so
+  the loader refuses everything that is guaranteed not to reach you from where they are standing.
+
+  - The reserved documentation names (`example.com`, `example.net`, `example.org`, and the
+    `.invalid`, `.test` and `.example` TLDs) and the reserved documentation addresses (RFC 5737's
+    `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, and `2001:db8::/32`). They exist precisely
+    so that they reach nobody; a crawler identifying itself with one is anonymous while looking
+    identified.
+  - Loopback and private space — `127.0.0.1`, `localhost`, `::1`, `10.x`, `172.16–31.x`,
+    `192.168.x`, link-local, carrier NAT — and single-label names like `intranet`, and `.local` /
+    `.internal` / `.home.arpa`. To the sysadmin reading your User-Agent at 2am these point at their
+    own machine or their own LAN, which is less useful than no address at all, and they publish how
+    your network is numbered to ~25 third parties. **If your only web page is on your LAN, leave
+    this variable unset**: the default reaches a human, and a LAN address does not.
+  - A value still containing `CHANGE_ME` — nobody has to edit this any more, but a half-finished
+    edit is not an address — and anything that is not printable ASCII, because this string is
+    copied verbatim into an HTTP header and a URL parser silently deletes tabs and line breaks from
+    anywhere inside it (percent-encode, and use the punycode form of an international domain).
 
   This variable used to be required with no default, on the reasoning that *an anonymous crawler is
   one nobody can ask to stop*. That was right about anonymity and wrong about the remedy: it made

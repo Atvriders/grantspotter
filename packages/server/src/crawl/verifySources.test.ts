@@ -74,6 +74,8 @@ describe('verifyExitCode', () => {
 describe('verifySources', () => {
   it('reports a row per source and never throws when a fetch fails', async () => {
     const fetcher = {
+      // Required by `Fetcher`; no cache here to forget. See crawl/runner.ts.
+      forgetRobots(): void {},
       async fetch(req: FetchRequest): Promise<FetchedPayload> {
         if (req.url.includes('austinhams')) throw new Error('ECONNRESET');
         return { url: req.url, status: 200, contentType: 'text/html', body: '<p>x</p>', fetchedAt: '2026-08-02T00:00:00.000Z' };
@@ -87,10 +89,17 @@ describe('verifySources', () => {
 });
 
 describe('the script is never a CI gate', () => {
-  it('always exits 0 in the CLI wrapper', async () => {
+  it('always exits 0 on anything the network did', async () => {
     const src = await readFile(path.join(REPO_ROOT, 'scripts/verify-sources.ts'), 'utf8');
     expect(src).toMatch(/process\.exitCode\s*=\s*verifyExitCode\(\)/);
     expect(src).not.toMatch(/process\.exit\(1\)|exitCode\s*=\s*1/);
+    // Both assertions above are unchanged. What the title used to say — "always exits 0" — is
+    // narrowed rather than weakened: since 2026-08-04 a CONTACT_URL the loader refuses exits 2,
+    // and that case never reaches the network. This asserts the exception is exactly that one
+    // case, so it cannot grow into "verify-sources fails on a flaky site" by accident.
+    expect(src).toMatch(/err instanceof ConfigError/);
+    expect(src).toMatch(/process\.exitCode\s*=\s*2/);
+    expect([...src.matchAll(/process\.exitCode\s*=\s*\d/g)]).toHaveLength(1);
   });
 
   it('is not referenced by any GitHub Actions workflow', async () => {

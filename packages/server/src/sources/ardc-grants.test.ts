@@ -508,6 +508,8 @@ describe('the three facts ARDC publishes, quoted from the capture', () => {
 describe('what reaches the human queue', () => {
   const NOW = '2026-08-02T00:00:00.000Z';
   const fetcher = {
+    // Fixtures, no cache: nothing to forget. Required by `Fetcher` — see crawl/runner.ts.
+    forgetRobots(): void {},
     async fetch(req: FetchRequest): Promise<FetchedPayload> {
       if (req.url === APPLY_URL) return { ...apply(), url: req.url };
       if (req.url === INSTRUCTIONS_URL) return { ...instructions(), url: req.url };

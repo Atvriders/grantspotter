@@ -101,6 +101,15 @@ export function parseRobots(
  * robots.txt, and treating that as disallow-all would silently drop the source forever.
  * 429 and 5xx mean the server is unhappy: back off and treat it as disallow-all until the
  * next nightly poll re-reads it.
+ *
+ * THAT LAST CLAUSE WAS FALSE UNTIL 2026-08-04, and it is worth saying why it is true now rather
+ * than just correcting it. The caller cached this result in a `Map` keyed by origin with no
+ * expiry and no eviction, so "until the next nightly poll re-reads it" described an intention
+ * nothing implemented: a 503 at 03:17 disallowed the whole origin for the life of the process, and
+ * so did a `Disallow: /` that a site later removed. The re-read now exists — `runCrawl` calls
+ * `Fetcher.forgetRobots()` at the start of every run, and `ROBOTS_CACHE_TTL_MS` bounds every other
+ * path — so this function's back-off really is for one run, and the remedy this project tells site
+ * owners to use really does take effect the next night.
  */
 export function robotsFromResponse(
   status: number,

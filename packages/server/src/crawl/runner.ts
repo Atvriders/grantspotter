@@ -369,6 +369,13 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
  * set and runs normally. The default is enabled, and Plan 1's column default (`1`) agrees.
  */
 export async function runCrawl(deps: CrawlDeps, sourceIds?: string[]): Promise<SourceRunResult[]> {
+  // EVERY RUN RE-READS robots.txt. The fetcher caches it per origin so that one run does not fetch
+  // the same file 30 times; without this line that cache had no end, and a container running since
+  // February would still be acting on February's rules. `robots.txt` is the remedy this project's
+  // README and issue template give a site owner as the way to stop EVERY deployment of this
+  // software — "a new file takes effect tonight" has to be true of the code, not just of the
+  // documentation. Cheap: one conditional GET per origin per night, on ~25 origins.
+  deps.fetcher.forgetRobots();
   const disabled = new Set(
     (
       deps.db.prepare('SELECT id FROM sources WHERE enabled = 0').all() as Array<{ id: string }>

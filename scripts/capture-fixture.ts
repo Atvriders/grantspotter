@@ -12,7 +12,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FetchRequest, FetchedPayload } from '@grantspotter/core';
-import { buildUserAgent, DEFAULT_CONTACT_URL } from '../packages/server/src/config.js';
+import { ConfigError, buildUserAgent, resolveContactUrl } from '../packages/server/src/config.js';
 import { createFetcher } from '../packages/server/src/fetcher/index.js';
 import { getSource } from '../packages/server/src/sources/registry.js';
 import { hasFollowUp, resolveRequests } from '../packages/server/src/sources/types.js';
@@ -39,10 +39,11 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  // The server's default, not a second rule: unset means "identify through the project's issue
-  // tracker", and this script hits the same live sites the crawler does. Set CONTACT_URL if the
-  // site you are about to fetch should be able to reach YOU about it.
-  const contactUrl = process.env.CONTACT_URL?.trim() || DEFAULT_CONTACT_URL;
+  // The server's rule, not a second one — see the note in `scripts/verify-sources.ts`. This was
+  // `process.env.CONTACT_URL?.trim() || DEFAULT_CONTACT_URL`, which put values the server refuses
+  // onto the wire of a real site. Unset means "identify through the project's issue tracker"; set
+  // CONTACT_URL if the site you are about to fetch should be able to reach YOU about it.
+  const contactUrl = resolveContactUrl();
 
   const source = getSource(sourceId);
   const fetcher = createFetcher({ userAgent: buildUserAgent(contactUrl), contactUrl });
@@ -78,6 +79,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+  // Same reasoning as verify-sources: a refused CONTACT_URL is an operator error caught before any
+  // request, and the message is the whole of what a reader needs.
+  if (err instanceof ConfigError) {
+    console.error(`\n${err.message}\n`);
+    process.exitCode = 2;
+    return;
+  }
   console.error(err);
   process.exitCode = 1;
 });

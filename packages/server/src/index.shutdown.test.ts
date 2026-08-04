@@ -60,7 +60,6 @@ async function bootServer(port: number): Promise<ChildProcessWithoutNullStreams>
         PORT: String(port),
         DATA_DIR: dataDir,
         SESSION_SECRET: 'shutdown-test-session-secret-not-a-real-secret',
-        CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
         // No scheduler: this test is about stopping, and a crawl would reach the network.
         CRAWL_ENABLED: 'false',
       },

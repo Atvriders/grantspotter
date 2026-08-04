@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FetchRequest, FetchedPayload } from '@grantspotter/core';
+import { ConfigError, buildUserAgent } from '../config.js';
 import { assertNotBlocked, normalizeHost } from './blocklist.js';
 import { HostQueue } from './hostQueue.js';
 import {
@@ -15,6 +16,24 @@ export const AGENT_TOKEN = 'GrantSpotter';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MIN_INTERVAL_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
+
+/**
+ * How long a robots.txt may be believed. Six hours: comfortably shorter than the nightly crawl
+ * interval, so even a path that never calls `forgetRobots` re-reads at least daily.
+ *
+ * IT USED TO BE FOREVER, and the comment in `robots.ts` claimed otherwise ("until the next nightly
+ * poll re-reads it"). There was no re-read: `robotsCache` was a `Map` keyed by origin that nothing
+ * ever removed from, so a container up for months never noticed a `Disallow: /` added weeks ago.
+ * That is not an ordinary stale comment — `robots.txt` is the remedy the README and the crawler
+ * issue template give a site owner as THE way to stop every deployment of this software, so the
+ * gap was between what we tell an annoyed stranger to do and what the code does with it.
+ *
+ * Two mechanisms, because they cover different paths: `runCrawl` calls `forgetRobots()` at the
+ * start of every run, which makes "a new robots.txt takes effect on the next nightly crawl" exact
+ * rather than approximate; this TTL bounds every other path (the admin "Verify now" action, a
+ * manual re-poll) without depending on anyone remembering to call anything.
+ */
+export const ROBOTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export interface FetchOptions {
   userAgent: string;
@@ -35,10 +54,21 @@ export interface FetchOptions {
    * these and is therefore not overridable: no UA spoofing, ever.
    */
   headersByHost?: Record<string, Record<string, string>>;
+  /** Defaults to ROBOTS_CACHE_TTL_MS. Tests set it to exercise expiry against an injected clock. */
+  robotsTtlMs?: number;
 }
 
 export interface Fetcher {
   fetch(req: FetchRequest): Promise<FetchedPayload>;
+  /**
+   * Drop every cached robots.txt, so the next fetch to each origin re-reads it.
+   *
+   * Required, not optional, and that is deliberate: every implementation of this interface —
+   * including the fixture fetchers in the test suite — has to answer the question "what happens
+   * when a site publishes new rules?", and an optional method is answered by forgetting to
+   * implement it. `runCrawl` calls this at the start of every run.
+   */
+  forgetRobots(): void;
 }
 
 export class HttpStatusError extends Error {
@@ -102,6 +132,26 @@ function parseRetryAfter(value: string | null): number | undefined {
 }
 
 export function createFetcher(opts: FetchOptions): Fetcher {
+  /*
+   * THE WIRE BOUNDARY. Every User-Agent this codebase sends leaves through this function, so this
+   * is where "the value on the wire was validated" stops being a convention and becomes a fact.
+   *
+   * `buildUserAgent` runs `assertUsableContactUrl`, so an unusable contactUrl throws here — before
+   * a transport exists, let alone a request. The equality then closes the other half: a
+   * hand-assembled User-Agent that never went through the single UA factory (RESOLUTIONS R10) is
+   * refused even if it looks right. Both halves are what the two scripts in `scripts/` needed and
+   * did not have; neither can be skipped by a future entry point, because a fetcher is the only
+   * thing here that can make a request.
+   */
+  const expectedUserAgent = buildUserAgent(opts.contactUrl);
+  if (opts.userAgent !== expectedUserAgent) {
+    throw new ConfigError(
+      'createFetcher was given a User-Agent that buildUserAgent did not produce from the ' +
+        'contactUrl beside it. There is exactly one User-Agent in this software (config.ts, ' +
+        `RESOLUTIONS R10); pass \`buildUserAgent(contactUrl)\`. Expected "${expectedUserAgent}", ` +
+        `got "${opts.userAgent}".`,
+    );
+  }
   const transport = opts.transport ?? ((url, init) => globalThis.fetch(url, init));
   const now = opts.now ?? (() => Date.now());
   const sleep =
@@ -119,7 +169,8 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     now,
     sleep,
   });
-  const robotsCache = new Map<string, Promise<RobotsRules>>();
+  const robotsTtlMs = opts.robotsTtlMs ?? ROBOTS_CACHE_TTL_MS;
+  const robotsCache = new Map<string, { readAtMs: number; rules: Promise<RobotsRules> }>();
 
   function headers(
     url: string,
@@ -151,7 +202,9 @@ export function createFetcher(opts: FetchOptions): Fetcher {
 
   async function robotsFor(origin: string): Promise<RobotsRules> {
     const cached = robotsCache.get(origin);
-    if (cached) return cached;
+    // Cached for the run, never for the life of the process. `now()` is injected, so this is the
+    // same clock the host queue and the payload timestamps use.
+    if (cached && now() - cached.readAtMs < robotsTtlMs) return cached.rules;
     const promise = (async () => {
       const url = `${origin}/robots.txt`;
       assertNotBlocked(url);
@@ -166,7 +219,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
         return robotsFromResponse(404, '', AGENT_TOKEN, new Date(now()).toISOString());
       }
     })();
-    robotsCache.set(origin, promise);
+    robotsCache.set(origin, { readAtMs: now(), rules: promise });
     return promise;
   }
 
@@ -256,6 +309,9 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     async fetch(req: FetchRequest): Promise<FetchedPayload> {
       assertNotBlocked(req.url);
       return fetchOne(req.url, req, 0);
+    },
+    forgetRobots(): void {
+      robotsCache.clear();
     },
   };
 }

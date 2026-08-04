@@ -18,7 +18,6 @@ const NOW = '2026-08-02T12:00:00.000Z';
 
 const config = loadConfig({
   SESSION_SECRET: 'x'.repeat(32),
-  CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
   NODE_ENV: 'test',
 });
 

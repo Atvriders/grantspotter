@@ -481,6 +481,21 @@ or a reserved documentation domain is still refused). The row above is left as w
 these five plans were implemented against it; the live documentation is README → Environment,
 which also records what the default does not buy.
 
+**Amended again 2026-08-04, same day, after two verifiers went at the change above.** The guard was
+being skipped: `scripts/verify-sources.ts` and `scripts/capture-fixture.ts` read
+`process.env.CONTACT_URL` directly and never called `loadConfig`, so every value it refuses went
+onto the wire of a live nonprofit site from those two commands. There is now one predicate,
+`assertUsableContactUrl` in `server/src/config.ts`, reached from `loadConfig`, from
+`resolveContactUrl` (which both scripts use), from `buildUserAgent`, and from `createFetcher`,
+which refuses a User-Agent that `buildUserAgent` did not produce from the contact URL beside it.
+`packages/server/test/contactUrlEntryPointContract.test.ts` fails if a new entry point skips it.
+Two rules were added to the predicate in the same pass: a contact URL must be printable ASCII
+(`new URL()` deletes tabs and line breaks from anywhere in its input, so the value validated and
+the value sent were not the same string), and it must not be an address that cannot be reached from
+the public internet (loopback, RFC 1918, link-local, carrier NAT, single-label names, `.local` /
+`.internal` / `.home.arpa`, and the RFC 5737 / RFC 3849 documentation ranges) — which is what the
+reserved-name rule always claimed to be enforcing.
+
 ## 8. npm scripts (root)
 
 ```

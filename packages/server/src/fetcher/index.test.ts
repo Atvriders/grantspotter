@@ -2,12 +2,21 @@ import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { buildUserAgent } from '../config.js';
+import { ConfigError, buildUserAgent } from '../config.js';
 import { BlockedHostError } from './blocklist.js';
 import { RobotsDisallowedError } from './robots.js';
-import { backoffMs, createFetcher } from './index.js';
+import { ROBOTS_CACHE_TTL_MS, backoffMs, createFetcher } from './index.js';
 
-const CONTACT = 'https://grantspotter.example.test/about';
+/**
+ * NOT `https://grantspotter.example.test/about`, which is what this was until 2026-08-04.
+ *
+ * `.test` is an RFC 6761 reserved TLD, and `loadConfig` has refused it for CONTACT_URL since the
+ * day that rule was written — so this file was building its User-Agent out of a value the server
+ * would not start on. That was harmless while `buildUserAgent` validated nothing and exactly the
+ * inconsistency the 2026-08-04 remediation is about: one rule, applied on one path. It validates
+ * now, so the fixture has to be a value a real deployment could hold.
+ */
+const CONTACT = 'https://w9xyz-radio-club.org/grantspotter';
 
 function res(body: string, init: { status?: number; headers?: Record<string, string> } = {}) {
   return new Response(body, {
@@ -48,6 +57,45 @@ describe('the User-Agent has exactly one definition', () => {
   it('is not re-exported by the fetcher — RESOLUTIONS R10', async () => {
     const mod = (await import('./index.js')) as Record<string, unknown>;
     expect(mod.buildUserAgent).toBeUndefined();
+  });
+
+  /**
+   * THE WIRE BOUNDARY (2026-08-04). R10 said there is one definition of the User-Agent; it did not
+   * say every caller uses it, and two scripts did not — they read `process.env.CONTACT_URL` and
+   * sent whatever was there, including values `loadConfig` refuses. A fetcher is the only thing in
+   * this codebase that can make a request, so it is the one place where that can be made
+   * impossible rather than merely discouraged.
+   */
+  it('refuses to exist with a User-Agent buildUserAgent did not produce', () => {
+    const { transport } = router({});
+    // A hand-assembled string, which is how a second User-Agent gets onto the wire.
+    expect(() =>
+      createFetcher({ ...baseOpts, transport, userAgent: 'GrantSpotter/0.1.0' }),
+    ).toThrow(/exactly one User-Agent/);
+    // The right string for a DIFFERENT contact URL is still the wrong string here.
+    expect(() =>
+      createFetcher({
+        ...baseOpts,
+        transport,
+        userAgent: buildUserAgent('https://elsewhere-radio-club.org/x'),
+      }),
+    ).toThrow(/exactly one User-Agent/);
+  });
+
+  it('refuses a contact URL the server would refuse, before any transport is touched', () => {
+    const { transport, calls } = router({});
+    for (const bad of [
+      'not a url',
+      'https://example.org/grantspotter',
+      'http://127.0.0.1:3030/grantspotter',
+      'https://w9xyz-radio-club.org/a\r\nX-Injected: yes',
+    ]) {
+      expect(() =>
+        createFetcher({ ...baseOpts, transport, contactUrl: bad, userAgent: `GrantSpotter (+${bad})` }),
+        bad,
+      ).toThrow(ConfigError);
+    }
+    expect(calls).toEqual([]); // nothing reached the network to find out
   });
 });
 
@@ -126,6 +174,61 @@ describe('createFetcher politeness', () => {
     await f.fetch({ url: 'http://www.arrl.org/a', method: 'GET', accept: 'html' });
     await f.fetch({ url: 'http://www.arrl.org/b', method: 'GET', accept: 'html' });
     expect(calls.filter((u) => u.endsWith('/robots.txt'))).toHaveLength(1);
+  });
+
+  /**
+   * ONCE PER HOST, NOT ONCE PER PROCESS — the distinction the test above does not draw and the
+   * code did not either.
+   *
+   * `robots.txt` is the remedy the README and the crawler issue template hand a site owner as the
+   * way to stop EVERY deployment of this software. The cache that made the test above pass had no
+   * expiry and nothing ever removed an entry, so a container running since February was still
+   * acting on February's file: the documented remedy did not work on a long-lived instance, which
+   * is the only kind that would be worth complaining about.
+   */
+  it('re-reads robots.txt when the cached copy expires', async () => {
+    let t = 0;
+    let served = 'User-agent: *\n';
+    const transport = vi.fn(async (url: string) =>
+      url.endsWith('/robots.txt') ? res(served) : res('<p>x</p>'),
+    );
+    const f = createFetcher({ ...baseOpts, transport, now: () => t, robotsTtlMs: 1_000 });
+    const req = { url: 'http://www.arrl.org/a', method: 'GET', accept: 'html' } as const;
+    await f.fetch(req);
+
+    t = 999; // still inside the TTL: the cached copy stands
+    await f.fetch(req);
+    expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(1);
+
+    t = 1_000; // expired
+    served = 'User-agent: GrantSpotter\nDisallow: /\n'; // the site owner acted while we were up
+    await expect(f.fetch(req)).rejects.toBeInstanceOf(RobotsDisallowedError);
+    expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(2);
+  });
+
+  it('forgets every cached robots.txt on demand, which is what runCrawl calls', async () => {
+    let served = 'User-agent: *\n';
+    const transport = vi.fn(async (url: string) =>
+      url.endsWith('/robots.txt') ? res(served) : res('<p>x</p>'),
+    );
+    const f = createFetcher({ ...baseOpts, transport });
+    const req = { url: 'http://www.arrl.org/a', method: 'GET', accept: 'html' } as const;
+    await f.fetch(req);
+    await f.fetch(req);
+    expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(1);
+
+    served = 'User-agent: GrantSpotter\nDisallow: /\n';
+    f.forgetRobots();
+    // No clock moved. The next run re-reads because it was told to, not because time passed.
+    await expect(f.fetch(req)).rejects.toBeInstanceOf(RobotsDisallowedError);
+    expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(2);
+  });
+
+  it('holds the default TTL below the nightly crawl interval', () => {
+    // The number itself, because the reasoning is the number: a path that never calls
+    // forgetRobots must still re-read at least daily, and CRAWL_CRON is nightly.
+    expect(ROBOTS_CACHE_TTL_MS).toBeLessThan(24 * 60 * 60 * 1000);
+    expect(ROBOTS_CACHE_TTL_MS).toBeGreaterThan(60 * 60 * 1000);
   });
 
   it('refuses a path robots.txt disallows', async () => {

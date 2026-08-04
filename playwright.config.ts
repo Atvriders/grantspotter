@@ -35,7 +35,12 @@ export default defineConfig({
       // e2e/seed.ts just wrote. There is no DB-path env var; DATA_DIR is it.
       DATA_DIR,
       SESSION_SECRET: 'e2e-session-secret-not-a-real-secret',
-      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
+      // Deliberately blank, which `loadConfig` reads as "unset": the e2e server boots on the
+      // SHIPPED default contact URL, which is what a `docker compose up` does. It used to be
+      // `http://127.0.0.1:3030/grantspotter`, and the loader refuses that now — a loopback address
+      // in a crawler's User-Agent points at the machine of whoever is reading it. Blank rather
+      // than absent so a CONTACT_URL in the developer's own shell cannot change what is tested.
+      CONTACT_URL: '',
       // No nightly scheduler in the e2e process: the manual crawl button and
       // the injected change_events row are the only things that move data.
       CRAWL_ENABLED: 'false',

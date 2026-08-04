@@ -13,7 +13,9 @@ import {
   listSourceHealth,
   upsertProgram,
 } from '../db/repositories/ingestion.js';
+import { buildUserAgent } from '../config.js';
 import { NSF_FEED_URLS } from '../federal/nsf.js';
+import { createFetcher } from '../fetcher/index.js';
 import { approveReviewItem, confidenceFor } from '../review/index.js';
 import { funderFor, SOURCES } from '../sources/registry.js';
 import { healthMessageFor, runCrawl, runSource } from './runner.js';
@@ -93,9 +95,18 @@ function fixtureFetcher(map: Record<string, FetchedPayload>) {
   };
 }
 
+/**
+ * `forgetRobots` is stamped on here rather than written into every fixture literal below.
+ *
+ * `Fetcher` requires it since 2026-08-04 — `runCrawl` drops the robots cache at the start of every
+ * run, which is what makes "add a Disallow and it takes effect tonight" true. A fixture fetcher has
+ * no cache to drop, so the no-op is honest, and a no-op here would prove nothing anyway: the test
+ * that shows the re-read really happens uses the REAL fetcher over a stub transport, two runs in
+ * one process, and counts the robots.txt requests ("re-reads robots.txt on every crawl run").
+ */
 const deps = (fetcher: { fetch(req: FetchRequest): Promise<FetchedPayload> }) => ({
   db,
-  fetcher,
+  fetcher: { forgetRobots: () => {}, ...fetcher },
   nowISO: () => NOW,
 });
 
@@ -935,7 +946,13 @@ describe('SEAM FIX round 2 — real crawl+approve converges regardless of Inbox 
     });
 
     const served = fixtureFetcher(map);
-    const localDeps = { db: freshDb, fetcher: served.fetcher, nowISO: () => NOW };
+    // Same no-op as `deps` above, for the one helper that builds its own CrawlDeps against a
+    // second database rather than the file-level `db`.
+    const localDeps = {
+      db: freshDb,
+      fetcher: { forgetRobots: () => {}, ...served.fetcher },
+      nowISO: () => NOW,
+    };
     await runSource(localDeps, 'arrl-scholarship-program');
     await runSource(localDeps, 'arrl-scholarship-descriptions');
 
@@ -1323,5 +1340,86 @@ describe('nsf-funding-rss: noise suppressed, breakage still detectable', () => {
     expect(pending[0].candidate.name).toBe('Geospace Facilities');
     // Tier B alone would be a flat 0.5; the score is what puts this above it.
     expect(pending[0].confidence).toBeGreaterThan(confidenceFor('B', 'new', undefined));
+  });
+});
+
+/**
+ * THE DOCUMENTED REMEDY, EXERCISED THROUGH THE REAL FETCHER (2026-08-04).
+ *
+ * The README and `.github/ISSUE_TEMPLATE/crawler-contact.md` both tell a site owner that
+ * `User-agent: GrantSpotter` + `Disallow: /` stops every deployment of this software. Until this
+ * commit that was true of a fresh process and false of a running one: `createFetcher` cached each
+ * origin's robots.txt in a `Map` with no expiry and no eviction, so an instance up since February
+ * was still crawling on February's rules, and `robots.ts` carried a comment claiming a re-read
+ * ("until the next nightly poll re-reads it") that nothing implemented.
+ *
+ * Every other robots test in this repository uses a fixture fetcher, which has no cache and
+ * therefore cannot see this. So this block uses the REAL fetcher over a stub transport and drives
+ * it through `runCrawl` twice in one process — the shape of the thing that was broken: not two
+ * fetches, two RUNS.
+ */
+describe('a robots.txt added between two crawl runs, in one process', () => {
+  const AUSTIN_PAGE = 'https://austinhams.org/scholarships/';
+  const AUSTIN_ROBOTS = 'https://austinhams.org/robots.txt';
+
+  function stubTransport(robots: () => string) {
+    const calls: string[] = [];
+    const transport = async (url: string): Promise<Response> => {
+      calls.push(url);
+      if (url === AUSTIN_ROBOTS) {
+        return new Response(robots(), { status: 200, headers: { 'content-type': 'text/plain' } });
+      }
+      return new Response('<html><body><p>nothing today</p></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    };
+    return { calls, transport };
+  }
+
+  it('re-reads it, and the second run obeys the new file', async () => {
+    let robots = 'User-agent: *\n';
+    const { calls, transport } = stubTransport(() => robots);
+    const fetcher = createFetcher({
+      userAgent: buildUserAgent('https://w9xyz-radio-club.org/grantspotter'),
+      contactUrl: 'https://w9xyz-radio-club.org/grantspotter',
+      transport,
+      sleep: async () => {},
+      now: () => 0, // the clock never moves: any re-read is forgetRobots, not the TTL
+      defaultMinIntervalMs: 0,
+    });
+    const crawlDeps = { db, fetcher, nowISO: () => NOW };
+
+    const first = await runCrawl(crawlDeps, ['austin-arc']);
+    expect(first[0].error).toBeUndefined();
+    expect(calls).toEqual([AUSTIN_ROBOTS, AUSTIN_PAGE]);
+
+    // The site owner reads the issue template and adds the two lines it gives them.
+    robots = 'User-agent: GrantSpotter\nDisallow: /\n';
+
+    const second = await runCrawl(crawlDeps, ['austin-arc']);
+    // Read again — this is the assertion that was false before the fix.
+    expect(calls.filter((u) => u === AUSTIN_ROBOTS)).toHaveLength(2);
+    // …and acted on: the page is not fetched a second time, and the source records why.
+    expect(calls.filter((u) => u === AUSTIN_PAGE)).toHaveLength(1);
+    expect(second[0].error).toMatch(/robots\.txt disallows/);
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'austin-arc')?.lastError).toMatch(
+      /robots\.txt disallows/,
+    );
+  });
+
+  it('still reads it only once WITHIN a run, so the re-read costs one request a night', async () => {
+    // The politeness property the cache exists for, which the fix must not have traded away.
+    const { calls, transport } = stubTransport(() => 'User-agent: *\n');
+    const fetcher = createFetcher({
+      userAgent: buildUserAgent('https://w9xyz-radio-club.org/grantspotter'),
+      contactUrl: 'https://w9xyz-radio-club.org/grantspotter',
+      transport,
+      sleep: async () => {},
+      now: () => 0,
+      defaultMinIntervalMs: 0,
+    });
+    await runCrawl({ db, fetcher, nowISO: () => NOW }, ['austin-arc', 'austin-arc']);
+    expect(calls.filter((u) => u === AUSTIN_ROBOTS)).toHaveLength(1);
   });
 });

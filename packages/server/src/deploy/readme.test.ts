@@ -186,7 +186,16 @@ describe('README honesty surfaces', () => {
       template.indexOf('Useful if you have it'),
     );
     // And it admits the limits of both remedies rather than promising a fix it cannot deliver.
-    expect(template).toMatch(/once per server process/);
+    //
+    // This used to assert `/once per server process/`, which was the honest description of a
+    // cache that never expired: the template told a site owner their new robots.txt would be
+    // ignored until the container restarted. The code was fixed on 2026-08-04 (`runCrawl` drops
+    // the robots cache at the start of every run, and entries expire after six hours), so the
+    // sentence to hold is the new one — a bound the reader can check against their own logs,
+    // still stated as a delay rather than as an instant fix.
+    expect(template).toMatch(/nightly crawl/);
+    expect(template).toMatch(/within a day/);
+    expect(template).not.toMatch(/will not notice your new file until it restarts/);
     expect(template).toMatch(/cannot switch it off|cannot stop it/i);
   });
 
@@ -244,7 +253,12 @@ describe('README honesty surfaces', () => {
    * asked for one file to edit — so the instruction is now a pointer to nothing, and a README that
    * still printed it would strand a reader on step one. The replacement design has a sharp edge
    * that has to be documented rather than discovered: the compose file ships working-looking
-   * literals, and the server refuses two of them by value.
+   * literals, and the server refuses the SESSION_SECRET among them by value.
+   *
+   * ("refuses two of them" until 2026-08-04, and that had stopped being true one commit earlier:
+   * CONTACT_URL gained a working default and the compose file now ships a real address for it, so
+   * exactly one shipped value is refused. `compose.test.ts` holds the sharper version of the same
+   * claim — exactly one edit is needed, checked by making it and requiring a config back.)
    */
   it('does not send the reader to a file this repository no longer ships', () => {
     expect(readme).not.toContain('.env.example');

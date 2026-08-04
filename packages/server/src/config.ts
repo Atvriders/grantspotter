@@ -1,3 +1,5 @@
+import { unreachableContactHost } from './net/hosts.js';
+
 export type NodeEnv = 'development' | 'test' | 'production';
 
 export interface AppConfig {
@@ -23,7 +25,12 @@ export const MIN_SESSION_SECRET_LENGTH = 32;
 export const SERVER_VERSION = '0.1.0';
 
 /**
- * The literal values `docker-compose.yml` ships for the two variables that have no default.
+ * The literal value `docker-compose.yml` ships for SESSION_SECRET — the one variable an operator
+ * still has to edit, and the only one with no default.
+ *
+ * (It read "the two variables that have no default" until 2026-08-04, and both halves of that had
+ * stopped being true in the commit above this one: CONTACT_URL gained a working default, so there
+ * is one such variable, not two, and the constant below is only ever about the secret.)
  *
  * Until 2026-08-04 the compose file wrote `${SESSION_SECRET:?…}`, and that `:?` was doing real
  * work: `docker compose up` refused to run at all until the operator supplied a value. Moving the
@@ -92,9 +99,10 @@ export const FORMER_PLACEHOLDER_CONTACT_URL =
  * that instance and cannot stop it. The remedy that works regardless of who is running what is
  * `robots.txt`: every instance honours it, matched on the `GrantSpotter` token
  * (`fetcher/index.ts` AGENT_TOKEN), so `User-agent: GrantSpotter` + `Disallow: /` stops all of
- * them — allowing for the fetcher's per-process robots cache, which has no TTL, so a container
- * that has been up for months acts on a new file at its next restart. That is what the issue
- * template tells an arriving site owner first, caveat included.
+ * them, taking effect on the next nightly crawl — `runCrawl` drops the fetcher's robots cache at
+ * the start of every run, and the cache expires on its own after ROBOTS_CACHE_TTL_MS in any case,
+ * so no deployment holds a stale copy for longer than a day. That is what the issue template
+ * tells an arriving site owner first.
  *
  * So: overridable, and it should be overridden by anyone running a modified fork, a large or
  * long-running deployment, or an instance polling on behalf of an institution. The README says
@@ -124,7 +132,16 @@ export const DEFAULT_CONTACT_URL = 'https://github.com/Atvriders/grantspotter/is
 export const RESERVED_CONTACT_HOSTS = ['example.com', 'example.net', 'example.org'] as const;
 export const RESERVED_CONTACT_TLDS = ['invalid', 'test', 'example'] as const;
 
-/** The reserved name a hostname falls under, or null. Exported: the live scripts check it too. */
+/**
+ * The reserved name a hostname falls under, or null.
+ *
+ * Exported so `config.test.ts` can pin the RFC list itself rather than only its effect through
+ * `loadConfig`. It said "the live scripts check it too" until 2026-08-04, and that was false when
+ * it was written: nothing outside this file and its test has ever called it. The scripts did not
+ * check this, or anything else — they built a User-Agent straight from `process.env.CONTACT_URL`.
+ * They now go through `resolveContactUrl` below, which is the only caller that ever mattered: one
+ * predicate, called by every path, rather than a comment asking each path to remember.
+ */
 export function reservedContactName(hostname: string): string | null {
   // A trailing dot is a legal absolute name and `example.org.` is the same host as `example.org`.
   const host = hostname.toLowerCase().replace(/\.$/, '');
@@ -192,6 +209,167 @@ function parseNodeEnv(env: Env): NodeEnv {
   return 'development';
 }
 
+/**
+ * Characters that must never reach the header: C0 controls, DEL, and anything above ASCII.
+ *
+ * THIS IS A CORRECTNESS RULE, NOT TIDINESS. `new URL()` deletes TAB, CR and LF from ANYWHERE in
+ * its input — not just the ends, which `optional` already trims — so before this rule existed the
+ * string this loader validated and the string the fetcher put in the header were two different
+ * strings. Measured against the built artefact on 2026-08-04:
+ *
+ *   CONTACT_URL="https://w9xyz-radio-club.org/a<TAB>b"
+ *     validated as https://w9xyz-radio-club.org/ab   (the tab is gone before any check runs)
+ *     sent as      https://w9xyz-radio-club.org/a<TAB>b
+ *
+ *   CONTACT_URL="https://w9xyz-radio-club.org/about<CR><LF>X-Injected: yes"
+ *     validated as one address, and `new Headers()` then threw `invalid header value` on every
+ *     outbound request — a config that booted clean and broke the crawler on its first fetch.
+ *
+ * Refusing the whole non-printable range and everything above 0x7e makes one sentence provable
+ * rather than hopeful: **no character is silently deleted before the scheme and host are read, so
+ * the address this loader checked is the address the header names.** A URL has a percent-encoding
+ * for every character this excludes, and an internationalised host has a punycode form, so nothing
+ * addressable is lost — the error below says so and prints the encoded form when it can.
+ *
+ * The space is handled separately, below, because it is not deleted: `not a url` has to keep
+ * reporting "must be an http(s) URL", which is what is actually wrong with it.
+ */
+const CONTACT_URL_UNSENDABLE = /[^\x20-\x7e]/;
+
+/**
+ * THE ONE PREDICATE. Every path that can put a User-Agent on the wire calls this, or calls
+ * something that does.
+ *
+ * WHY IT IS A SEPARATE FUNCTION AND NOT SIX LINES INSIDE `loadConfig`. Because for two commits it
+ * WAS six lines inside `loadConfig`, and `scripts/verify-sources.ts` and `scripts/capture-fixture.ts`
+ * — both documented in the README, both hitting the same live nonprofit sites the nightly crawl
+ * hits — read `process.env.CONTACT_URL` themselves and never called the loader. Measured before
+ * the fix: `CONTACT_URL='not a url' npm run verify-sources -- qcwa` fetched qcwa.org and got a
+ * live 200, sending `GrantSpotter/0.1.0 (+not a url; …)`. Every value this function refuses went
+ * out on the wire that way: `example.org`, a `.invalid` host, a `CHANGE_ME` string, `ftp://…`.
+ *
+ * A guard that lives in one entry point and is skipped by two others is not a guard. So the rules
+ * live here; `loadConfig`, `resolveContactUrl` and `buildUserAgent` all call it, `createFetcher`
+ * refuses a User-Agent this function did not produce, and
+ * `test/contactUrlEntryPointContract.test.ts` fails if a new file starts reading CONTACT_URL or
+ * building a User-Agent without going through one of them.
+ *
+ * Returns the value, so it can be used inline.
+ */
+export function assertUsableContactUrl(value: string): string {
+  if (value.trim() === '') {
+    throw new ConfigError('CONTACT_URL is required: the crawler User-Agent must name a contact URL.');
+  }
+  // Above every shape rule, on purpose: the retired placeholder parses as https, so it would
+  // otherwise reach `new URL` and pass — and a later edit that broke its shape would report "must
+  // be an http(s) URL" about a value whose real problem is that it is nobody's address. The
+  // ordering is the same one SESSION_SECRET's placeholder check needs, and for the same reason:
+  // the message that fires must be the one that says "you did not finish editing this".
+  if (isPlaceholder(value)) {
+    // No worked example here on purpose. The version of this message that ended "for example
+    // https://www.example.org/grantspotter" was handing out a value that this very loader
+    // accepted, at the moment the operator is most likely to paste whatever they are shown.
+    throw new ConfigError(
+      'CONTACT_URL still contains CHANGE_ME, so it is a placeholder rather than an address. This ' +
+        'variable has a working default — unset it entirely and the crawler identifies itself ' +
+        "through this project's issue tracker. Set it only to point complaints at yourself " +
+        'instead, and then it must be an http(s) page you control and can be reached through: it ' +
+        'goes in the crawler User-Agent, and it is how one of the ~25 small nonprofits this polls ' +
+        'finds out who is polling them.',
+    );
+  }
+  if (CONTACT_URL_UNSENDABLE.test(value)) {
+    // Best-effort: if it parses at all, show the operator the ASCII form of what they typed,
+    // because that form is usually exactly what they meant and this loader accepts it.
+    let encoded = '';
+    try {
+      encoded = ` The encoded form of what you set is "${new URL(value).href}".`;
+    } catch {
+      encoded = '';
+    }
+    throw new ConfigError(
+      'CONTACT_URL may contain only printable ASCII, and this value contains a control character ' +
+        'or a character above ASCII. It is copied verbatim into an HTTP header, and a URL parser ' +
+        'silently deletes tabs, carriage returns and newlines from anywhere in it — so a value ' +
+        'like this is checked as one address and sent as another, and a line break in it makes ' +
+        'every outbound request fail on an invalid header. Percent-encode anything unusual, and ' +
+        `use the punycode form of an international host.${encoded}`,
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ConfigError(`CONTACT_URL must be an http(s) URL; got "${value}".`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ConfigError(`CONTACT_URL must be an http(s) URL; got "${value}".`);
+  }
+  if (value.includes(' ')) {
+    // A space survives `new URL` (it is percent-encoded in `href`, not dropped), so unlike the
+    // control characters above it does not change what was checked — but the header would then
+    // print an address no reader can copy, and `href` and the printed value would disagree.
+    throw new ConfigError(
+      `CONTACT_URL must not contain a space; percent-encode it as %20. Got "${value}".`,
+    );
+  }
+  const reserved = reservedContactName(parsed.hostname);
+  if (reserved !== null) {
+    throw new ConfigError(
+      `CONTACT_URL is under ${reserved}, which is reserved for documentation (RFC 2606) and ` +
+        'resolves for nobody. This value is pasted into the crawler User-Agent and is the route ' +
+        'by which a site being polled finds out who is polling it, so a reserved name makes this ' +
+        'crawler anonymous while looking identified. Use an http(s) page you control and can be ' +
+        'reached through, or unset CONTACT_URL and take the default.',
+    );
+  }
+  /*
+   * THE RULE THIS CHECK MAKES CONSISTENT WITH ITS OWN STATED REASON (added 2026-08-04).
+   *
+   * The reserved-name rule above refuses `example.org` on the ground that it reaches nobody. The
+   * loader nevertheless accepted `http://127.0.0.1:3030/grantspotter`, `http://localhost:3030/`,
+   * `https://192.168.1.5/`, `http://[::1]/`, `http://0.0.0.0/`, `https://intranet/` and
+   * `https://a/` — every one of which is MORE useless to the reader than `example.org` is, because
+   * the reader is a sysadmin at a polled nonprofit and those addresses point at their own machine,
+   * their own LAN, or nothing. The rule and its rationale disagreed, so one of them had to go.
+   *
+   * Refusing them is the half that keeps the rationale, and it buys something the documentation
+   * rule does not: a private address in an outbound User-Agent tells ~25 third parties how the
+   * operator's network is numbered, which this project's own seed validator already refuses to let
+   * into a public repository (`seed/validate.ts`, `private-host-detail`). Both now ask
+   * `net/hosts.ts` — one list, two anchorings.
+   *
+   * WHAT IT COSTS, SAID PLAINLY: an operator whose only web page is on their LAN can no longer
+   * name it here. That operator is better served by the default, which reaches a human, than by an
+   * address that reaches the complainant's own router — and the message says exactly that.
+   */
+  const unreachable = unreachableContactHost(parsed.hostname);
+  if (unreachable !== null) {
+    throw new ConfigError(
+      `CONTACT_URL points at ${unreachable}, so it cannot be reached from the public internet. ` +
+        'This value goes into the crawler User-Agent, where its only reader is somebody at one of ' +
+        'the sites being polled: to them a loopback or private address points at their own ' +
+        'machine or their own network, which is less use than no address at all, and it tells ' +
+        'them how yours is numbered. Use an http(s) page reachable from outside your network, or ' +
+        'unset CONTACT_URL and take the default, which reaches a human.',
+    );
+  }
+  return value;
+}
+
+/**
+ * The contact URL for this process: the operator's, or the project's issue tracker.
+ *
+ * The one place CONTACT_URL is read from an environment. `loadConfig` uses it, and so do the two
+ * live scripts in `scripts/`, which is the whole point — see `assertUsableContactUrl`.
+ */
+export function resolveContactUrl(env: Env = process.env): string {
+  // Unset is a supported choice, not an omission: the default identifies the crawler through this
+  // project's issue tracker. Every rule still runs on the resulting value, because the operator
+  // who DOES set this is the one who can get it wrong.
+  return assertUsableContactUrl(optional(env, 'CONTACT_URL') ?? DEFAULT_CONTACT_URL);
+}
+
 export function loadConfig(env: Env = process.env): AppConfig {
   const sessionSecret = optional(env, 'SESSION_SECRET');
   if (sessionSecret === undefined) {
@@ -230,46 +408,9 @@ export function loadConfig(env: Env = process.env): AppConfig {
     );
   }
 
-  // Unset is now a supported choice, not an omission: the default identifies the crawler through
-  // this project's issue tracker. Every rule below still runs on the resulting value, because the
-  // operator who DOES set this is the one who can get it wrong.
-  const contactUrl = optional(env, 'CONTACT_URL') ?? DEFAULT_CONTACT_URL;
-  // Before the URL rules, for the same reason as above: the retired placeholder parses as https,
-  // so it would otherwise reach `new URL` and pass, but a later edit that broke its shape would
-  // report "must be an http(s) URL" about a value whose real problem is that it is nobody's
-  // address.
-  if (isPlaceholder(contactUrl)) {
-    // No worked example here on purpose. The version of this message that ended "for example
-    // https://www.example.org/grantspotter" was handing out a value that this very loader
-    // accepted, at the moment the operator is most likely to paste whatever they are shown.
-    throw new ConfigError(
-      'CONTACT_URL still contains CHANGE_ME, so it is a placeholder rather than an address. This ' +
-        'variable has a working default — unset it entirely and the crawler identifies itself ' +
-        "through this project's issue tracker. Set it only to point complaints at yourself " +
-        'instead, and then it must be an http(s) page you control and can be reached through: it ' +
-        'goes in the crawler User-Agent, and it is how one of the ~25 small nonprofits this polls ' +
-        'finds out who is polling them.',
-    );
-  }
-  let parsedContact: URL;
-  try {
-    parsedContact = new URL(contactUrl);
-  } catch {
-    throw new ConfigError(`CONTACT_URL must be an http(s) URL; got "${contactUrl}".`);
-  }
-  if (parsedContact.protocol !== 'http:' && parsedContact.protocol !== 'https:') {
-    throw new ConfigError(`CONTACT_URL must be an http(s) URL; got "${contactUrl}".`);
-  }
-  const reserved = reservedContactName(parsedContact.hostname);
-  if (reserved !== null) {
-    throw new ConfigError(
-      `CONTACT_URL is under ${reserved}, which is reserved for documentation (RFC 2606) and ` +
-        'resolves for nobody. This value is pasted into the crawler User-Agent and is the route ' +
-        'by which a site being polled finds out who is polling it, so a reserved name makes this ' +
-        'crawler anonymous while looking identified. Use an http(s) page you control and can be ' +
-        'reached through, or unset CONTACT_URL and take the default.',
-    );
-  }
+  // Every CONTACT_URL rule lives in `assertUsableContactUrl`, which this shares with the two
+  // scripts in `scripts/`. Nothing about the value is decided here any more.
+  const contactUrl = resolveContactUrl(env);
 
   const config: AppConfig = {
     nodeEnv: parseNodeEnv(env),
@@ -321,10 +462,11 @@ function isGithubIssueTracker(url: string): boolean {
  * instruction that cannot be followed, which is worse than the bare convention it replaced.
  */
 export function buildUserAgent(source: AppConfig | string): string {
-  const url = typeof source === 'string' ? source : source.contactUrl;
-  if (!url.trim()) {
-    throw new Error('CONTACT_URL is required: the crawler User-Agent must name a contact URL.');
-  }
+  // Re-validated on the string form as well as the config form, and cheap enough to do on every
+  // call: this is the function that MINTS the wire value, so it is the last place that can refuse
+  // one. `buildUserAgent('')` still throws "CONTACT_URL is required", which is the first branch of
+  // the predicate — the message and the test that pins it are unchanged.
+  const url = assertUsableContactUrl(typeof source === 'string' ? source : source.contactUrl);
   const howToReachUs = isGithubIssueTracker(url)
     ? 'open an issue there to contact the maintainers'
     : 'contact the operator at that page';

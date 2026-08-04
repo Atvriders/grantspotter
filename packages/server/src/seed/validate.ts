@@ -45,6 +45,7 @@ import {
   programSchema,
 } from '@grantspotter/core';
 import { BLOCKED_HOSTS, assertNotBlocked } from '../fetcher/blocklist.js';
+import { PRIVATE_IPV4_PROSE_PATTERNS } from '../net/hosts.js';
 import { DO_NOT_PUBLISH_TAG, isDoNotPublish } from '../normalize/index.js';
 
 /**
@@ -233,11 +234,18 @@ const CLOSED_PHRASES: readonly RegExp[] = [
   /\bis\s+(?:now\s+)?discontinued\b/i,
 ];
 
-/** Host detail that must never reach a public repository (feedback: no real LAN IPs or paths). */
+/**
+ * Host detail that must never reach a public repository (feedback: no real LAN IPs or paths).
+ *
+ * The three IP ranges are no longer written here. `config.ts` needs the same ranges to refuse a
+ * CONTACT_URL pointing into somebody's LAN, and two hand-maintained copies of "what is a private
+ * address" is the shape of defect this repository keeps finding; `net/hosts.ts` holds the one list
+ * and exports it word-bounded for prose (here) and anchored for a hostname (there).
+ * `net/hosts.test.ts` pins these patterns against the literals this array used to contain, so the
+ * merge is provably verdict-preserving for the seed corpus.
+ */
 const PRIVATE_HOST_PATTERNS: readonly RegExp[] = [
-  /\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
-  /\b192\.168\.\d{1,3}\.\d{1,3}\b/,
-  /\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b/,
+  ...PRIVATE_IPV4_PROSE_PATTERNS,
   /\/home\/[a-z0-9_.-]+\//i,
   /\/Users\/[A-Za-z0-9_.-]+\//,
   /\bC:\\Users\\/i,

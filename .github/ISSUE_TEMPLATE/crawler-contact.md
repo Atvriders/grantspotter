@@ -20,11 +20,16 @@ User-agent: GrantSpotter
 Disallow: /
 ```
 
-One caveat we would rather tell you than have you discover: an instance reads a site's
-`robots.txt` once per server process and caches it, so a container that has been running for
-months will not notice your new file until it restarts. Blocking or 403ing the User-Agent token
-`GrantSpotter` at your edge takes effect immediately and depends on nobody — this crawler never
-spoofs a browser User-Agent, so blocking it by name works and keeps working.
+How long that takes, so you can tell whether it worked: an instance re-reads your `robots.txt` at
+the start of every nightly crawl, and any copy it is holding expires after six hours, so the
+polling should stop within a day. It is not instant, and until 2026-08-04 it was not guaranteed at
+all — an instance read a site's `robots.txt` once per server process and cached it for the life of
+the process, so a container that had been running for months never noticed a new file. If the
+polling continues past a day, that instance is running an old build and we would like to know.
+
+Blocking or 403ing the User-Agent token `GrantSpotter` at your edge takes effect immediately and
+depends on nobody — this crawler never spoofs a browser User-Agent, so blocking it by name works
+and keeps working.
 
 **What we can and cannot do.** GrantSpotter is self-hosted software: anyone can run their own
 instance, and we do not operate, control or even know about most of them. If the polling came from

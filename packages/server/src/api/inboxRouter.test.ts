@@ -659,6 +659,9 @@ describe('a real crawl into an empty migrated database', () => {
   const CRAWL_NOW = '2026-08-02T00:00:00.000Z';
 
   const fixtureFetcher = (files: Record<string, [string, string]>) => ({
+    // No cache to drop: this fake never reads a robots.txt. `Fetcher` requires the method because
+    // every real fetcher must be able to forget one — see crawl/runner.ts.
+    forgetRobots(): void {},
     async fetch(req: FetchRequest): Promise<FetchedPayload> {
       for (const [part, [sourceId, file]] of Object.entries(files)) {
         if (req.url.includes(part)) return { ...fixturePayload(sourceId, file, req.url), url: req.url };
