@@ -209,6 +209,27 @@ function splitCandidateList(segment: string): string[] {
     .filter((s) => s.length > 1 && isRealCandidate(s));
 }
 
+/**
+ * The connectors a county list may be joined by, as a single alternation used by
+ * COUNTY_LIST_BEFORE's backward chase: a bare comma ("Travis, Bastrop"), a bare and/or ("Hays and
+ * Williamson"), or — the form the real Austin ARC page uses and the one that used to break the
+ * whole list — an Oxford comma, i.e. a comma AND a connective word (", and Williamson").
+ *
+ * ROUND 3 ROOT CAUSE. This alternation used to be `(?:,\s*|\s+(?:or|and)\s+)`: comma, or
+ * and/or-with-spaces, never the two together. On "Travis, Bastrop, Blanco, Burnet, Caldwell,
+ * Hays, and Williamson counties." the comma branch consumes ", " and then demands a Title-Case
+ * name where the lowercase "and" sits, while the and/or branch demands whitespace where the comma
+ * sits. Both fail at that one connector, which fails the entire backward chase from "Travis", and
+ * the global scan then restarts and matches the shortest thing that does work — "Williamson
+ * counties" — so an award open to seven Central Texas counties published exactly one of them and
+ * was hidden from applicants in the other six.
+ *
+ * Note this was never a `splitCandidateList` problem (that function has always split on `,`, `or`
+ * AND `and`, and drops the empty segment an Oxford comma produces): the list never reached it,
+ * because the pattern that finds the list never matched.
+ */
+const LIST_CONNECTOR = String.raw`(?:,\s*(?:(?:or|and)\s+)?|\s+(?:or|and)\s+)`;
+
 // A run of one or two Title-Case words: "Peoria", "San Diego". Deliberately does NOT allow an
 // "of" infix ("Gwinnett" only, never "Resident of Gwinnett") — that infix is common enough in
 // ordinary prose that allowing it reopens the whole-preceding-sentence bug this rewrite exists to
@@ -234,7 +255,7 @@ const NAME = String.raw`[A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*)?`;
 // part of the county name ("of Pasco", "by Orange"), the same class of prefix-contamination bug
 // this rewrite exists to fix. `[Cc]ount` below covers the keyword's real case variation instead.
 const COUNTY_LIST_BEFORE = new RegExp(
-  `((?:${NAME}\\s*(?:,\\s*|\\s+(?:or|and)\\s+))*${NAME})\\s+[Cc]ount(?:y|ies)\\b(?!\\s*:)`,
+  `((?:${NAME}\\s*${LIST_CONNECTOR})*${NAME})\\s+[Cc]ount(?:y|ies)\\b(?!\\s*:)`,
   'g',
 );
 

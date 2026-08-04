@@ -117,7 +117,18 @@ const APPLY_VIA_BY_SOURCE: Readonly<Record<string, ApplyVia>> = Object.freeze({
   'arrl-etp-grants': 'jotform_year_keyed',
   'ieee-mtts': 'jotform_year_keyed',
   'austin-arc': 'self_hosted_portal',
-  'ncdxf-grants': 'email_pdf_packet',
+  // ROUND 4. Was 'email_pdf_packet', pinned on the Budget Worksheet alone. NCDXF's intake is
+  // genuinely TWO channels, both on https://www.ncdxf.org/pages/grant_app.php (fetched live
+  // 2026-08-03; the committed fixture is the guidelines page that links to it):
+  //   Part 1  a Budget Worksheet SPREADSHEET, saved and emailed to dxbudget@ncdxf.org — not a
+  //           PDF, and not sufficient on its own;
+  //   Part 2  <form action="ncdxf_grant.php" method="post"> with a "SUBMIT APPLICATION" button —
+  //           an ordinary HTML form on the funder's own site.
+  // ApplyVia can name only one, and Plan 3 renders it as the apply button, so it names the half
+  // an applicant can complete unaided in a browser. The emailed half is not lost: the funder's
+  // own "completing (1) a Budget Worksheet and (2) an Application Form, and submitting both"
+  // sentence is kept by the parser in `applyNote` and published below as `applyContact`.
+  'ncdxf-grants': 'page_form',
   sara: 'email_pdf_packet',
   'manual-tier-d': 'contact_person',
   'ardc-award-tables': 'none',

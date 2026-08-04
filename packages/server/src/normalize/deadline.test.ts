@@ -1,6 +1,6 @@
 import type { RawOpportunity } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
-import { inferStatus } from './deadline.js';
+import { inferDeadline, inferInstrument, inferStatus } from './deadline.js';
 import type { NormalizeContext } from './index.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
@@ -201,5 +201,169 @@ describe('inferStatus — the true positive must still fire', () => {
       ctx({ sourceId: 'arrl-club-grant' }),
     );
     expect(status).toBe('closed');
+  });
+});
+
+/**
+ * ROUND 4 — three source-metadata constants contradicted by the pages themselves, all three found
+ * only once real captured fixtures replaced self-authored synthetic ones.
+ */
+
+describe('inferInstrument — SARA hands out cash, not kit', () => {
+  // fixtures/sara/00-www-radio-astronomy-org-grants.html, the whole programme in one paragraph:
+  //   "The Society of Amateur Radio Astronomers provides funds in support of student projects.
+  //    The funds will be divided up into several small grants of no more than $200 each or more,
+  //    with the approval of the grant committee, to ensure that the money reaches the largest
+  //    number of students."
+  // Radio JOVE / SuperSID / INSPIRE appear on the page only as example projects an applicant
+  // might build with the money — never as the thing SARA hands over. `in_kind_equipment` came
+  // from earlier research into those kits and was never true of this page: it tells a club or a
+  // teacher to plan around hardware arriving instead of a cheque.
+  const saraRaw = raw({
+    sourceId: 'sara',
+    externalKey: 'sara-student-teacher-grants',
+    name: 'SARA Student and Teacher Project Grants',
+    rawFields: {
+      amount:
+        'no more than $200 each or more, with the approval of the grant committee, to ensure ' +
+        'that the money reaches the largest number of students.',
+      applyNote: 'grants at radio-astronomy.org',
+    },
+    sourceUrl: 'https://www.radio-astronomy.org/grants',
+    rawText: 'The Society of Amateur Radio Astronomers provides funds in support of student projects.',
+  });
+
+  it('is a cash instrument', () => {
+    const instrument = inferInstrument(saraRaw, ctx({ sourceId: 'sara', funderId: 'sara', tier: 'C' }));
+    expect(instrument).toBe('cash_range');
+    expect(instrument).not.toBe('in_kind_equipment');
+  });
+
+  it('the page states a ceiling with committee discretion above it, so not a flat cash_fixed', () => {
+    // "no more than $200 each OR MORE, with the approval of the grant committee" — the amount
+    // varies per grant; cash_fixed would publish one flat award the funder never promised.
+    const instrument = inferInstrument(saraRaw, ctx({ sourceId: 'sara' }));
+    expect(instrument).not.toBe('cash_fixed');
+  });
+
+  it('leaves the other pinned instruments alone', () => {
+    expect(inferInstrument(raw({ rawFields: {} }), ctx({ sourceId: 'yaesu-dr2x' }))).toBe(
+      'discounted_purchase',
+    );
+    expect(inferInstrument(raw({ rawFields: {} }), ctx({ sourceId: 'arrl-etp-grants' }))).toBe(
+      'in_kind_equipment',
+    );
+    expect(inferInstrument(raw({ rawFields: {} }), ctx({ sourceId: 'ncdxf-scholarships' }))).toBe(
+      'tuition_coverage',
+    );
+    expect(inferInstrument(raw({ rawFields: {} }), ctx({ sourceId: 'ariss' }))).toBe(
+      'in_kind_service',
+    );
+  });
+});
+
+describe('inferDeadline — YLRL publishes no dates at all', () => {
+  // fixtures/ylrl/00-ylrl-net-scholarships.html contains no month, no day and no window: the
+  // page says what the scholarships are and points at ylrl.net/apply/, nothing more (asserted
+  // against the captured page in sources/tier-c-a.test.ts). `annual_window` asserted a shape
+  // nobody has stated, and `expandCycles` would have had a kind with no directive to project.
+  const ylrlRaw = raw({
+    sourceId: 'ylrl',
+    externalKey: 'ylrl-ethel-smith-k4lmb',
+    name: 'Ethel Smith K4LMB Memorial Scholarship',
+    rawFields: { amount: '$1,000' },
+    sourceUrl: 'https://ylrl.net/scholarships/',
+    rawText: 'The Ethel Smith K4LMB Memorial Scholarship is awarded to a licensed YL.',
+  });
+  const ylrlCtx = ctx({ sourceId: 'ylrl', funderId: 'ylrl', tier: 'C' });
+
+  it('emits unpublished rather than an invented annual window', () => {
+    const spec = inferDeadline(ylrlRaw, ylrlCtx);
+    expect(spec.kind).toBe('unpublished');
+    expect(spec.kind).not.toBe('annual_window');
+  });
+
+  it('says so in the note instead of describing a window', () => {
+    expect(inferDeadline(ylrlRaw, ylrlCtx).note).toMatch(/never published a deadline/i);
+    expect(inferDeadline(ylrlRaw, ylrlCtx).note).not.toMatch(/RECUR/);
+  });
+
+  it('never computes open for it: no dates means no assertable live cycle', () => {
+    const status = inferStatus(ylrlRaw, ylrlCtx);
+    expect(status).toBe('unknown');
+    expect(status).not.toBe('open');
+  });
+});
+
+describe('inferStatus — inactivity wording about a RETIRED PREDECESSOR is not about this program', () => {
+  // Verbatim RawOpportunity as produced by the tier C-B parser against the real captured page
+  // fixtures/ncdxf-scholarships/00-www-ncdxf-org-pages-scholarships-html.html. The live W6EEN
+  // scholarship (full tuition at DX University / Contest University for hams 25 and under) is
+  // described in the body; the ONLY inactivity wording anywhere on the page is the heading of a
+  // recipients table for a DIFFERENT, superseded programme. Reading it as this programme's own
+  // status marked a live scholarship dormant — a false exclude, the direction that hides an award
+  // permanently with no signal to anyone.
+  const ncdxf = raw({
+    sourceId: 'ncdxf-scholarships',
+    externalKey: 'ncdxf-w6een-scholarship',
+    name: 'NCDXF W6EEN Memorial Scholarship',
+    rawFields: {
+      summary:
+        'NCDXF will provide full tuition scholarships for hams 25 years of age and younger at ' +
+        'all DX University and Contest University sessions held in North America for the next year.',
+      retiredPredecessor: 'Previous ARRL Foundation Scholarship Program (No Longer Active)',
+    },
+    sourceUrl: 'https://www.ncdxf.org/pages/scholarships.html',
+    rawText:
+      'W6EEN Memorial NCDXF Scholarship Fund\n' +
+      'Beginning April 22, 2013, NCDXF has decided to use these funds in a new way. Starting ' +
+      'April 22, 2013, NCDXF will provide full tuition scholarships for hams 25 years of age and ' +
+      'younger at all DX University and Contest University sessions held in North America for ' +
+      'the next year. There is no restriction as to class of license.\n' +
+      'If you are a licensed amateur radio operator 25 years of age or younger, you can apply ' +
+      'for a free tuition scholarship by contacting the appropriate University directly:\n' +
+      'Previous ARRL Foundation Scholarship Program (No Longer Active)\n' +
+      'Year\nRecipient\n2012\nAlexander Scullin, KI6LXD\n1998\nElizabeth Pelczar, KA1SLD',
+  });
+
+  it('does not mark the live scholarship dormant off the predecessor table heading', () => {
+    const status = inferStatus(ncdxf, ctx({ sourceId: 'ncdxf-scholarships', funderId: 'ncdxf', tier: 'C' }));
+    expect(status).not.toBe('dormant');
+  });
+
+  it('computes unknown, because NCDXF publishes no dates for it either', () => {
+    expect(inferStatus(ncdxf, ctx({ sourceId: 'ncdxf-scholarships' }))).toBe('unknown');
+  });
+
+  it('the Winscott case still computes dormant — the check is scoped, not weakened', () => {
+    // Same fix, opposite direction: this sentence IS about the programme being extracted.
+    const status = inferStatus(
+      raw({
+        rawFields: { Other: 'This scholarship is not currently active.' },
+        rawText: 'Other: This scholarship is not currently active.',
+      }),
+      ctx(),
+    );
+    expect(status).toBe('dormant');
+  });
+
+  it.each([
+    ['Previous ARRL Foundation Scholarship Program (No Longer Active)', 'a predecessor heading'],
+    ['Our previous scholarship program is no longer offered.', 'a predecessor sentence'],
+    ['Past grant program (discontinued)', 'a past grant table heading'],
+  ])('ignores %j (%s)', (line) => {
+    const status = inferStatus(
+      raw({ rawText: `This award is open to licensed amateurs.\n${line}\nApply at example.test.` }),
+      ctx(),
+    );
+    expect(status).not.toBe('dormant');
+  });
+
+  it.each([
+    'This scholarship is not currently active.',
+    'This program is no longer offered.',
+    'The scholarship is discontinued.',
+  ])('still fires on %j when the sentence is about this programme', (sentence) => {
+    expect(inferStatus(raw({ rawText: sentence }), ctx())).toBe('dormant');
   });
 });

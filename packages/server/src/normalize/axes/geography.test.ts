@@ -260,3 +260,62 @@ describe('round 2 — "<Section> Section of the <Division> Division" resolves to
     });
   });
 });
+
+/**
+ * Round 3: the first defect this axis has been shown by a REAL captured page rather than by a
+ * fixture someone wrote. fixtures/austin-arc/00-austinhams-org-scholarships.html publishes the
+ * Austin ARC scholarship's eligible area as an Oxford-comma list —
+ *   "Travis, Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson counties."
+ * — and the axis published exactly ONE of the seven (Williamson), hiding the award from
+ * applicants in the other six. The synthetic fixture had used " or " with no comma, so the
+ * parser agreed with its author and disagreed with the web.
+ *
+ * ROOT CAUSE (not the split, and not a missing delimiter): `splitCandidateList` already splits on
+ * `,`, `or` and `and`, but it never saw the list, because `COUNTY_LIST_BEFORE` never matched it.
+ * That pattern walks BACKWARD from the "counties" keyword through connectors, and its connector
+ * alternation was `(?:,\s*|\s+(?:or|and)\s+)` — a bare comma, or a bare "and"/"or" surrounded by
+ * spaces, but never the two combined. On ", and Williamson" the comma branch consumes ", " and
+ * then requires a Title-Case name where "and" sits; the "and" branch requires whitespace where
+ * the comma sits. Both fail, the whole backward chase from "Travis" fails with it, and the global
+ * scan restarts and matches the shortest thing that does work: "Williamson counties".
+ */
+describe('round 3 — the real Austin ARC page: an Oxford-comma county list', () => {
+  const AUSTIN = 'Travis, Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson counties.';
+  const SEVEN = ['Bastrop', 'Blanco', 'Burnet', 'Caldwell', 'Hays', 'Travis', 'Williamson'];
+
+  it('publishes all seven Central Texas counties, not just the last one', () => {
+    expect(sortValues(geoOf(AUSTIN))).toEqual({ type: 'county', values: SEVEN });
+  });
+
+  it('reads them through the real field the source writes (rawFields.counties)', () => {
+    // austinArc.parse() puts this text under `counties`, not `Region` — the exact string is
+    // asserted verbatim in sources/tier-c-a.test.ts against the captured page.
+    const cs = extractGeography(raw({ counties: AUSTIN }));
+    const geo = (cs[0].spec as { axis: 'geography'; geo: GeoSpec }).geo;
+    expect(sortValues(geo)).toEqual({ type: 'county', values: SEVEN });
+  });
+
+  it('accepts the Oxford "or" form of the same list', () => {
+    expect(sortValues(geoOf('Travis, Hays, or Williamson counties'))).toEqual({
+      type: 'county',
+      values: ['Hays', 'Travis', 'Williamson'],
+    });
+  });
+
+  it('still accepts the non-Oxford form the synthetic fixture used', () => {
+    expect(sortValues(geoOf('Travis, Williamson and Hays county'))).toEqual({
+      type: 'county',
+      values: ['Hays', 'Travis', 'Williamson'],
+    });
+  });
+
+  it('an Oxford comma does not let the list chase backward into prose', () => {
+    // The connector fix must not reopen the prefix-contamination bug: "residents of" is prose,
+    // and "Preference"/"residents" are stopwords, so nothing but the two real names survives.
+    expect(
+      sortValues(
+        geoOf('Preference will be given to residents of Pasco, and Hernando Counties, Florida.'),
+      ),
+    ).toEqual({ type: 'county', values: ['Hernando', 'Pasco'] });
+  });
+});

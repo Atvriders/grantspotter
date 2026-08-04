@@ -60,7 +60,14 @@ const KIND_BY_SOURCE: Readonly<Record<string, DeadlineKind>> = Object.freeze({
   'ncdxf-scholarships': 'unpublished',
   sara: 'rolling',
   'austin-arc': 'annual_window',
-  ylrl: 'annual_window',
+  // ROUND 4. Was 'annual_window' — a shape nobody has stated. The captured page
+  // (fixtures/ylrl/) publishes no month, no day and no window anywhere: it describes the
+  // scholarships and points at ylrl.net/apply/, which is why the parser refuses to write a
+  // `window` field for it at all (sources/tier-c-a.test.ts asserts that against the real page).
+  // 'unpublished' is the one honest value for a deadline nobody has stated: it is also the only
+  // one that keeps `expandCycles` from being handed a projectable kind with no dates to project,
+  // and `inferStatus` below refuses to call an explicitly-unpublished programme 'open'.
+  ylrl: 'unpublished',
   'ieee-mtts': 'annual_window',
   'ieee-student-branch-rebate': 'annual_window',
   'nasa-csli': 'unpublished',
@@ -198,13 +205,48 @@ const INACTIVITY_PATTERN =
   /\bnot currently\s+active\b|\bno longer (?:offered|active|available)\b|\bdiscontinued\b|\bsuspended\b|\bon hiatus\b/i;
 
 /**
- * True when the funder's own text says this programme is not accepting applications right now.
+ * FIX ROUND 4 (scope, not strength). A segment that says a programme ended, about a DIFFERENT,
+ * superseded programme the page also mentions — a retrospective qualifier ("previous", "prior",
+ * "past", "predecessor", "earlier") applied to a named programme, in the same segment as the
+ * inactivity wording.
+ *
+ * The case that proved it: the live NCDXF scholarships page
+ * (fixtures/ncdxf-scholarships/00-www-ncdxf-org-pages-scholarships-html.html) describes a LIVE
+ * award — full tuition at DX University and Contest University for hams 25 and under — and then
+ * prints a recipients table under the heading "Previous ARRL Foundation Scholarship Program (No
+ * Longer Active)". Reading that heading as the extracted programme's own status marked a live
+ * scholarship 'dormant': a false exclude, the direction that hides an award permanently with no
+ * signal to anyone. (The tier C-B parser labels that very span `rawFields.retiredPredecessor`
+ * for the same reason; this check is deliberately not coupled to that field name, so it also
+ * holds for any other page that prints a superseded programme's obituary next to a live one.)
+ *
+ * Note what this does NOT match: "Formerly the Smith Award, this scholarship is no longer
+ * offered" (`\bformer\b` does not match "formerly", and the qualifier must attach to a named
+ * programme), so a funder's own farewell to the programme being extracted still counts.
+ */
+const RETIRED_PREDECESSOR =
+  /\b(?:previous|prior|past|predecessor|earlier|former)\b[^.\n]{0,80}?\b(?:program|programme|scholarship|fund|award|grant)s?\b/i;
+
+/**
+ * True when the funder's own text says THIS programme is not accepting applications right now.
+ *
  * Checked against `rawText` — the full flattened body every source's `rawFields` is itself split
  * from (see `sources/util/text.ts`'s `splitByLabels`) — so this fires regardless of which label,
- * if any, the sentence happens to land under on a given source's page.
+ * if any, the sentence happens to land under on a given source's page. That breadth is the whole
+ * point (the Winscott scholarship states its inactivity under `Other:`), but until round 4 it was
+ * unbounded: the check read the ENTIRE flattened page as if every word of it described the record
+ * being extracted.
+ *
+ * Bounded, not weakened: the body is split into segments (lines, and sentences within a line) and
+ * each segment is judged on its own. A segment whose inactivity wording belongs to a retired
+ * predecessor programme is skipped; any other segment stating inactivity still yields 'dormant'
+ * exactly as before.
  */
 function statesInactivity(raw: RawOpportunity): boolean {
-  return INACTIVITY_PATTERN.test(raw.rawText);
+  const segments = raw.rawText.split(/\n|(?<=[.;!?])\s+/);
+  return segments.some(
+    (segment) => INACTIVITY_PATTERN.test(segment) && !RETIRED_PREDECESSOR.test(segment),
+  );
 }
 
 export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): ProgramStatus {
@@ -230,13 +272,28 @@ export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): Program
 
   if (raw.rawFields.deadlineKind === 'no_application_exists') return 'no_application';
   if (raw.rawFields.applicantEntity === 'nominated_by_institution') return 'contact_only';
-  if (ctx.sourceId === 'nasa-csli' || ctx.sourceId === 'arrl-club-grant') return 'unknown';
 
   // FIX ROUND 3. The funder's own words say this programme is not currently active (e.g. the
   // Winscott scholarship) — never let that compute 'open', regardless of recordType. 'dormant'
   // is the honest read: the programme exists and is not permanently ended (Winscott names a
-  // specific future trigger), it simply has no live cycle right now.
+  // specific future trigger), it simply has no live cycle right now. Round 4 bounded WHICH words
+  // count (see statesInactivity): a superseded programme's obituary printed on the same page is
+  // not this programme's status.
   if (statesInactivity(raw)) return 'dormant';
+
+  // FIX ROUND 4. A source whose KIND_BY_SOURCE entry is an EXPLICIT 'unpublished' has been
+  // researched and found to publish no dates at all (ylrl, ncdxf-scholarships, arrl-club-grant,
+  // nasa-csli — the last two used to be named here one by one, which is the same table read a
+  // second time by hand). Nothing about such a record can support asserting a live cycle, so
+  // 'open' is a claim this file cannot back; 'unknown' is what we actually know. This reads the
+  // TABLE, deliberately not the resolved kind: `KIND_BY_SOURCE[...] ?? 'unpublished'` is also the
+  // fallback for every source nobody has modelled a deadline for yet (nsf-funding-rss's 45 live
+  // NSF solicitations among them), and "we have not modelled it" is not the same finding as "the
+  // funder does not publish one". A per-record `rawFields.deadlineKind` overrides the table
+  // entirely, so it must not be second-guessed here either.
+  if (KIND_BY_SOURCE[ctx.sourceId] === 'unpublished' && raw.rawFields.deadlineKind === undefined) {
+    return 'unknown';
+  }
 
   // FIX ROUND 3. 'manual'/'guided_workflow' reach here only when none of the more specific
   // signals above resolved them (no deadlineKind of no_application_exists, no
@@ -255,11 +312,28 @@ export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): Program
   return 'open';
 }
 
+/**
+ * sourceId -> the instrument the FUNDER'S OWN PAGE describes, for the sources whose award is not
+ * derivable from an amount string. Getting one wrong is not cosmetic: this codebase separates
+ * `discounted_purchase` and the in-kind values from cash precisely so a club does not budget
+ * around money that does not exist — or, in SARA's case below, wait for hardware that is never
+ * coming while the actual cheque goes unclaimed.
+ */
 const INSTRUMENT_BY_SOURCE: Readonly<Record<string, Instrument>> = Object.freeze({
   'yaesu-dr2x': 'discounted_purchase',
   ariss: 'in_kind_service',
   'nasa-csli': 'in_kind_service',
-  sara: 'in_kind_equipment',
+  // ROUND 4. Was 'in_kind_equipment', pinned on earlier research into radio-astronomy kits
+  // (Radio JOVE, SuperSID). The captured page (fixtures/sara/) says otherwise, and the page
+  // governs: "The Society of Amateur Radio Astronomers provides funds in support of student
+  // projects. The funds will be divided up into several small grants of no more than $200 each
+  // or more, with the approval of the grant committee, to ensure that the money reaches the
+  // largest number of students." Radio JOVE / SuperSID / INSPIRE appear there only as example
+  // projects an applicant might BUILD with the money, never as what SARA hands over.
+  // cash_range, not cash_fixed: the page states a ceiling with explicit committee discretion
+  // above it ("no more than $200 each OR MORE, with the approval of the grant committee"), so
+  // the per-grant amount varies and a flat figure would be an award the funder never promised.
+  sara: 'cash_range',
   'arrl-etp-grants': 'in_kind_equipment',
   'ieee-student-branch-rebate': 'per_member_rebate',
   'ncdxf-scholarships': 'tuition_coverage',

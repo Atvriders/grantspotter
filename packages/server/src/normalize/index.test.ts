@@ -863,3 +863,55 @@ describe('do_not_publish: which record types are suppressed', () => {
     }
   });
 });
+
+/**
+ * ROUND 4. `applyVia` and `applyUrl` are what Plan 3 renders as the apply button, so a wrong
+ * channel wastes a professional's time at exactly the moment they have decided to apply.
+ * NCDXF's intake was pinned to `email_pdf_packet` on the strength of the Budget Worksheet alone;
+ * the live https://www.ncdxf.org/pages/grant_app.php (fetched 2026-08-03) has BOTH halves:
+ *   Part 1  "You can download the Budget Worksheet Here ==>" ... "Create a new email message
+ *           addressed to: dxbudget@ncdxf.org" — a spreadsheet, not a PDF, and only half the
+ *           application.
+ *   Part 2  <form action="ncdxf_grant.php" method="post"> ... "PLEASE FILL OUT THIS FORM
+ *           COMPLETELY AND THEN CLICK THE 'SUBMIT APPLICATION' BUTTON" — an ordinary HTML form on
+ *           the funder's own site.
+ * `page_form` is the half an applicant can complete unaided in a browser, so that is the channel
+ * the button points at; the emailed worksheet is not lost, because the parser keeps the funder's
+ * own two-part sentence in `applyNote`, which normalizeRaw publishes as `applyContact`.
+ */
+describe('the NCDXF grant intake is a web form, not only an emailed packet', () => {
+  const ncdxfCtx = {
+    sourceId: 'ncdxf-grants',
+    funderId: 'ncdxf',
+    klass: 'ham_grant' as const,
+    deadlineInheritsFrom: undefined,
+  };
+
+  it('publishes page_form, the channel an applicant can complete unaided', () => {
+    const p = normalizeRaw(raw({ sourceId: 'ncdxf-grants', rawFields: {} }), ctx(ncdxfCtx));
+    expect(p.applyVia).toBe('page_form');
+    expect(p.applyVia).not.toBe('email_pdf_packet');
+  });
+
+  it('does not lose the emailed Budget Worksheet half of the application', () => {
+    const applyNote =
+      'Applications must be made by completing (1) a Budget Worksheet and (2) an Application ' +
+      'Form, and submitting both to NCDXF.';
+    const p = normalizeRaw(
+      raw({ sourceId: 'ncdxf-grants', rawFields: { applyNote } }),
+      ctx(ncdxfCtx),
+    );
+    expect(p.applyContact).toBe(applyNote);
+  });
+
+  it('leaves the other pinned apply channels alone', () => {
+    const via = (sourceId: string) =>
+      normalizeRaw(raw({ sourceId, rawFields: {} }), ctx({ sourceId, deadlineInheritsFrom: undefined }))
+        .applyVia;
+    expect(via('sara')).toBe('email_pdf_packet');
+    expect(via('austin-arc')).toBe('self_hosted_portal');
+    expect(via('ardc-grants')).toBe('external_spa_portal');
+    expect(via('arrl-etp-grants')).toBe('jotform_year_keyed');
+    expect(via('manual-tier-d')).toBe('contact_person');
+  });
+});
