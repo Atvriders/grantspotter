@@ -32,6 +32,13 @@ export function createProfileRouter(deps: RouterDeps): Router {
     res.json({
       student: profiles.student,
       organization: profiles.organization,
+      // A user may hold BOTH profiles and there is exactly one report, so the
+      // report has to say whose it is. Without this the UI can only guess, and
+      // the only way to guess is to rebuild PROFILE_KIND_PRIORITY in the
+      // browser — a second definition of "which profile does the meter speak
+      // for?", which is precisely what the comment above refuses. `null` means
+      // no profile was evaluated, not "student by default".
+      completenessFor: active?.kind ?? null,
       completeness:
         active === null
           ? emptyCompleteness(corpus.length)
@@ -84,6 +91,9 @@ export function createProfileRouter(deps: RouterDeps): Router {
 
     res.json({
       profile,
+      // The report is for the profile just saved, whatever the default order
+      // would have picked.
+      completenessFor: kind,
       completeness: computeCompleteness(profile, loadCorpus(deps.db), deps.now()),
     });
   });
@@ -103,6 +113,10 @@ export function createMeRouter(deps: RouterDeps): Router {
       user,
       hasStudentProfile: profiles.student !== null,
       hasOrgProfile: profiles.organization !== null,
+      // See the note on GET /api/profiles: one report, up to two profiles, so
+      // the report names the profile it speaks for rather than leaving the
+      // browser to re-derive the preference order.
+      completenessFor: active?.kind ?? null,
       completeness:
         active === null
           ? emptyCompleteness(corpus.length)

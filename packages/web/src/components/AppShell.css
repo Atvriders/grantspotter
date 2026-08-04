@@ -1,0 +1,113 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-areas: "rail topbar" "rail main";
+  min-height: 100vh;
+}
+
+.shell-rail {
+  grid-area: rail;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: var(--s-4) var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.shell-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 var(--s-2);
+}
+
+.shell-brand strong {
+  font-size: var(--fs-400);
+  letter-spacing: -0.02em;
+}
+
+.shell-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shell-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-1);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-weight: 540;
+  /* The 3px keel is the shell's signature: a rule that lights up, not a pill. */
+  border-left: 3px solid transparent;
+}
+
+.shell-nav a:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.shell-nav a[aria-current="page"] {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--accent);
+}
+
+.shell-topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: 0 var(--s-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-topbar-spacer {
+  flex: 1;
+}
+
+.shell-main {
+  grid-area: main;
+  padding: var(--s-5);
+  max-width: var(--content-max);
+  width: 100%;
+}
+
+.badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-data);
+  font-size: var(--fs-100);
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-areas: "topbar" "rail" "main";
+  }
+
+  .shell-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .shell-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

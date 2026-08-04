@@ -360,4 +360,56 @@ describe('profiles API, beyond the brief', () => {
     expect(me.body.hasOrgProfile).toBe(true);
     expect(me.body.completeness.score).toBe(60);
   });
+
+  /**
+   * One report, up to two profiles. Until `completenessFor` existed the
+   * response could not say which profile the 60 belonged to, so the only way
+   * for a client to label the meter was to rebuild `PROFILE_KIND_PRIORITY` in
+   * the browser — a second definition of the preference order, and the reason
+   * `loadActiveProfile` is re-read above rather than picked out of `profiles`.
+   */
+  describe('completenessFor names the profile the meter speaks for', () => {
+    it('is null when the user holds no profile at all', async () => {
+      const app = buildApp(db);
+      expect((await request(app).get('/api/me')).body.completenessFor).toBeNull();
+      expect((await request(app).get('/api/profiles')).body.completenessFor).toBeNull();
+    });
+
+    it('names the only profile a single-profile user holds', async () => {
+      const app = buildApp(db);
+      await request(app)
+        .put('/api/profiles/organization')
+        .send({ kind: 'organization', entity: 'club_501c3' });
+
+      expect((await request(app).get('/api/me')).body.completenessFor).toBe('organization');
+      expect((await request(app).get('/api/profiles')).body.completenessFor).toBe('organization');
+    });
+
+    it('names student, and only student, when the user holds both', async () => {
+      const app = buildApp(db);
+      await request(app)
+        .put('/api/profiles/organization')
+        .send({ kind: 'organization', entity: 'club_501c3' });
+      await request(app).put('/api/profiles/student').send({ kind: 'student' });
+
+      const me = await request(app).get('/api/me');
+      expect(me.body.completenessFor).toBe('student');
+      // The organisation profile exists and was NOT evaluated. Both facts are
+      // in the response, so a client can say so instead of implying the score
+      // covers it.
+      expect(me.body.hasOrgProfile).toBe(true);
+    });
+
+    it('names the profile just saved on a PUT, not the one the default order would pick', async () => {
+      const app = buildApp(db);
+      await request(app).put('/api/profiles/student').send({ kind: 'student' });
+      const put = await request(app)
+        .put('/api/profiles/organization')
+        .send({ kind: 'organization', entity: 'club_501c3' });
+
+      expect(put.body.completenessFor).toBe('organization');
+      // …while the unscoped meter still speaks for the student profile.
+      expect((await request(app).get('/api/me')).body.completenessFor).toBe('student');
+    });
+  });
 });

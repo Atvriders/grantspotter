@@ -146,3 +146,28 @@ export async function postLogout(): Promise<void> {
 export async function getMe(): Promise<{ user: PublicUser }> {
   return apiFetch<{ user: PublicUser }>('/api/auth/me');
 }
+
+// ---- Plan 3 conveniences ----
+//
+// These are wrappers, not a second client. Every envelope-parsing rule lives in
+// apiFetch above: it throws
+//   new ApiError(body.error.code, body.error.message, response.status,
+//                body.requestId ?? '', body.error.details)
+// for a well-formed error body and ApiError('internal', …) for anything else,
+// which is exactly what RESOLUTIONS R6 requires. Re-deriving that here — reading
+// `body?.error` as if it were a string — would assign the whole
+// { code, message } object to ApiError.code.
+
+/** GET `path`, optionally abortable. Resolves the parsed body. */
+export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return apiFetch<T>(path, signal === undefined ? {} : { signal });
+}
+
+/** POST / PUT / PATCH / DELETE `path` with an optional JSON body. */
+export async function apiSend<T>(
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  return apiFetch<T>(path, body === undefined ? { method } : { method, body });
+}
