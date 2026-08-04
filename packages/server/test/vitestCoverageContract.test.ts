@@ -126,6 +126,16 @@ const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
       'half skips with a reason until the SPA fallback is mounted. `npm run test:e2e` runs it, ' +
       'never `npm test`.',
   ],
+  [
+    'e2e/shippedSeed.spec.ts',
+    'Playwright, not vitest, for the same reason as the three above: @playwright/test fixtures ' +
+      'against a real built server. It is the odd one out in one respect worth recording — it boots ' +
+      'the SHIPPED seed corpus rather than the fixtures the other suites use, because the two are ' +
+      'different products (143 publishable and 0 suppressed with canonical ids, against 150 and 553 ' +
+      'with content-hashed ones) and the canonical ids are what make the first-run import idempotent ' +
+      'instead of inserting every programme again on each boot. That property cannot be tested ' +
+      'against a hash-id fixture at all. `npm run test:e2e` runs it, never `npm test`.',
+  ],
 ]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */

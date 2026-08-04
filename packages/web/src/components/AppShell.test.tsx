@@ -151,8 +151,12 @@ describe('AppShell', () => {
    * pattern-matched so that adding a third is a decision somebody makes on purpose:
    *
    *  - `components/AppShell.tsx` — the shell itself, for every signed-in screen.
-   *  - `routes/Login.tsx` — `App.tsx` returns it INSTEAD of the shell when there is no session
-   *    (`if (!user) return <Login … />`), so its `<main id="main">` is that page's only one.
+   *  - `routes/Login.tsx` — the signed-out page, whose `<main id="main">` is that page's only one.
+   *    `App.tsx` no longer names it directly: it returns `<SignedOut …>` from `routes/FirstRun.tsx`,
+   *    which shows the first-run setup form on a deployment with no accounts yet and this sign-in
+   *    screen on every other. Either way exactly one of them renders instead of the shell, which is
+   *    the property this allowlist is about — but the old wording quoted
+   *    `if (!user) return <Login … />` as if it were still in the file, and it is not.
    *
    * `App.test.tsx` carries the rendered companion: it counts `main` elements in the REAL composed
    * tree, signed out and signed in, on every CONTRACT §2 route. So this allowlist cannot quietly

@@ -90,10 +90,29 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/52/);
   });
 
-  it('marks the projected calendar dates as projected', () => {
-    expect(readme).toMatch(/243/);
-    expect(readme).toMatch(/4 of (the )?243/);
+  /**
+   * This test used to REQUIRE the README to say "243" and "4 of the 243", and that is how a false
+   * statistic survived on the project's front page with a green suite pointing at it.
+   *
+   * The number was wrong three separate ways for the corpus a reader installs: it named "two
+   * federal NOFOs" among the funder-published windows and no federal record in this corpus
+   * declares one; the ratio was measured against the test fixtures rather than the shipped seed;
+   * and the total is not a constant at all, because a cycle count is a function of the corpus AND
+   * the wall clock — a window that closes stops resolving, so the same corpus yielded 252/2 on
+   * 2026-08-04 and 248/0 by 2027-02-01.
+   *
+   * So the assertion is now on the claim that is durably true and is the one that actually protects
+   * a user: the README must say these dates are PROJECTED and must not quote a corpus count it
+   * cannot keep true. A doc gate should pin the honesty, never the arithmetic.
+   */
+  it('marks the projected calendar dates as projected, without quoting a count that rots', () => {
     expect(readme).toMatch(/projected|recurrence/i);
+    expect(readme).toMatch(/three seed records/i);
+    expect(
+      /\b(4|four) of (the )?24\d\b/i.test(readme),
+      'The README is quoting a fixed "N of M cycles" statistic again. It cannot stay true: the ' +
+        'count depends on the corpus and on the day it is read.',
+    ).toBe(false);
   });
 
   it('explains why there is no headless browser', () => {
@@ -145,16 +164,28 @@ describe('README honesty surfaces', () => {
   });
 
   /**
-   * There is no sign-up form and no first-run screen: `createBootstrapState` prints a one-time
-   * token to the log and `POST /api/auth/bootstrap` is the only thing that spends it. An operator
-   * who is told to "read the log for the token" and nothing else has a browser showing a sign-in
-   * box with no account to sign in as, which is step 1 of the product's own flow, unreachable.
+   * There is no sign-up form for the public — but there IS a first-run screen now, and this comment
+   * used to say there wasn't.
+   *
+   * When it was written that was accurate and was the point: `createBootstrapState` printed a
+   * one-time token to the log, `POST /api/auth/bootstrap` was the only thing that could spend it,
+   * and an operator told to "read the log for the token" and nothing else was left looking at a
+   * sign-in box with no account to sign in as — step 1 of the product's own flow, unreachable from
+   * a browser. That gap is now closed by `routes/FirstRun.tsx`, so the README describes the screen
+   * and keeps the curl as the alternative rather than the only way in.
+   *
+   * The assertion below is unchanged and still meaningful: no public signup is a real property of
+   * this product, and the README must keep saying so, because "there is a setup screen" could
+   * otherwise be misread as "anyone can make themselves an account".
    */
   it('says how to spend the bootstrap token, not just where to find it', () => {
     expect(readme).toContain('/api/auth/bootstrap');
     // `\s+` and not a space: the sentence wraps mid-phrase in the source, and a regex that
     // assumes one line would fail on a reflow that changed nothing a reader can see.
     expect(readme).toMatch(/no\s+sign-?up\s+form/i);
+    // The screen exists; a README that still called it API-only would be the product's front page
+    // contradicting the product.
+    expect(readme).toMatch(/first-run screen/i);
   });
 
   it('gives the deploy path including the workflow_dispatch gotcha', () => {

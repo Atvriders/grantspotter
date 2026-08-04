@@ -232,7 +232,7 @@ uses it to parse messy pages and pre-score review-queue items. It is never requi
 | Export | Format |
 |---|---|
 | Filtered opportunity list | CSV, XLSX (with a Provenance sheet) |
-| Deadlines | a subscribable **ICS feed** at a per-user token URL, plus a one-off `.ics` |
+| Deadlines | a subscribable **ICS feed** at a per-user token URL — two URLs, one for every deadline and one for your watchlist — plus a one-off `.ics` |
 | Application draft | DOCX and Markdown |
 | Application packet | ZIP: draft, budget worksheet, requirements checklist, source links |
 | Opportunity brief / eligibility report | print stylesheet → your browser's Save as PDF |
@@ -244,15 +244,26 @@ eligibility report; an export row on **Browse** for the filtered view you are lo
 Markdown and ZIP on an open draft under **Applications**; **Print brief** on any opportunity; and
 backup/restore under **Admin**. The three draft exports are gated by the fact checklist above.
 
-**About the calendar.** The corpus yields **243** dated cycles over 18 months, and only
-**4 of the 243** are dates a funder has actually published (ARISS 2026-07-01..09-30, Yaesu
-2026-08-31 and two federal NOFOs). The other 239 are this pipeline's **projection** from a
-recurrence rule. Every
+**About the calendar.** Almost every dated event in this corpus is this pipeline's **projection**
+from a recurrence rule, not a date a funder published. Exactly three seed records declare a window
+their funder actually printed — ARISS, Yaesu, and an ARRL window that has since closed — and how
+many of those still resolve into a future cycle depends on the day you ask, which is why no count
+is quoted here. (An earlier version of this paragraph quoted one, and it was wrong three ways: it
+named "two federal NOFOs" that do not exist, its total drifted with the clock, and its ratio was
+measured against a corpus that is not the one you install.) Every
 projected event is marked four ways in the file — an "(estimated)" title prefix, a tentative status,
 a custom property and a note in the description — so nothing in your calendar reads as a promise the
 funder made. The feed is the useful one: a one-off `.ics` is a snapshot that rots the moment a
 funder moves a date, whereas a token URL your phone re-reads every twelve hours is what actually
 stops you missing a deadline. Only a hash of the token is stored, and you can revoke it.
+
+**Two feed URLs, and each one always means the same thing.** The plain token URL carries every
+publishable deadline, however long your watchlist gets; the same URL with `?watched=1` carries only
+the programmes you have starred, and an empty watchlist there means an empty calendar rather than a
+silent fallback to everything. That separation is deliberate and was a bug first: the feed used to
+infer its scope from whether your watchlist happened to be empty, so starring a single opportunity
+silently cut a live subscription from every deadline down to one — remotely, days later, in a
+calendar app, with nothing on screen to explain it.
 
 **PDF is your browser's own Print / Save as PDF** against a designed `@media print` stylesheet.
 There is deliberately **no headless Chromium in the image**: it would add roughly **400 MB**, needs
@@ -290,9 +301,13 @@ docker compose pull
 docker compose up -d
 ```
 
-Then read the container log for the one-time admin bootstrap token and spend it. **There is no
-sign-up form and no first-run screen** — the browser only ever shows a sign-in box, so the first
-account has to be created over the API:
+Then read the container log for the one-time admin bootstrap token. There is still no sign-up form
+for the public, but there **is** a first-run screen: open the app and, because no accounts exist yet,
+it offers **Set up GrantSpotter** instead of a sign-in box, asking for that token, an email address
+and a password of at least 12 characters. On success you are signed in as an administrator. There
+is no password reset for the first administrator, so store it somewhere you can find it again.
+
+If you would rather do it over the API:
 
 ```bash
 docker compose logs grantspotter | grep -A4 'first-run setup'
@@ -356,6 +371,14 @@ Every source parser is tested against committed real payloads under `fixtures/`.
 with zero network access, and refreshing a fixture is a deliberate, reviewable act rather than
 silent drift. `verify-sources` is the only thing that touches the live network, and it never gates a
 build.
+
+The Playwright suite boots two corpora, deliberately. Most specs run against the committed
+fixtures — 703 records, 553 of them suppressed — which is the only corpus that can exercise the
+suppression boundary, since the shipped seed contains nothing suppressed to leak.
+`e2e/shippedSeed.spec.ts` additionally boots a second server on an empty `DATA_DIR`, so a browser
+also opens what a fresh install actually gets: the shipped seed, its canonical ids such as
+`/o/ardc-grants`, and a restart that imports nothing a second time. The two disagree on programme
+ids by design, and only the second can test that the first-run import is idempotent.
 
 Captured fixtures are redacted: contact emails and phone numbers found in real pages were replaced
 before they were committed. There are no real LAN addresses, hostnames or host paths anywhere in
