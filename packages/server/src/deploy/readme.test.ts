@@ -198,6 +198,30 @@ describe('README honesty surfaces', () => {
   });
 
   /**
+   * THE PACING PROMISES, PINNED TO THE README THAT MAKES THEM.
+   *
+   * The README advertises a minimum interval per host and says `Crawl-delay` is honoured. Four
+   * separate defects were measured against that, all one mistake: the per-host gate was entered
+   * once per LOGICAL fetch rather than once per HTTP request, so retries and redirect hops bypassed
+   * it entirely. What a reader needs is not "we are polite" but the three sentences that can be
+   * checked against their own access log, so those are what this holds.
+   */
+  it('states the pacing rules a polled site can check against its own logs', () => {
+    // The interval, as a number rather than as an adjective.
+    expect(readme).toMatch(/1000 ms between requests to one host/i);
+    // The unit the gate applies to, which is the whole of the defect.
+    expect(readme).toMatch(/once per \*\*HTTP request\*\*|once per HTTP request/i);
+    expect(readme).toMatch(/every retry, every redirect hop/i);
+    // Composition, in the direction that cannot be argued into polling more.
+    expect(readme).toMatch(/compose by MAX|never replace each other/i);
+    // The ceiling, and that it is not the product of two limits.
+    expect(readme).toMatch(/at most nine requests/i);
+    expect(readme).toMatch(/not 5 x 4 = 24|rather than two that multiply/i);
+    // And where the numbers came from, so the claim is reproducible rather than asserted.
+    expect(readme).toMatch(/npm run measure-pacing/);
+  });
+
+  /**
    * The README sends a site owner to an issue template, so the template has to exist and has to
    * lead with the thing that works without us. A dangling link is bad; a link to a page that
    * opens by asking an annoyed stranger for information before telling them how to make the
@@ -276,6 +300,20 @@ describe('README honesty surfaces', () => {
     expect(template).toMatch(/four attempts/i);
     // And the closure: nothing else generates a request.
     expect(template).toMatch(/Nothing else\./);
+
+    /*
+     * FINDING H, SECOND ROUND (2026-08-04). Naming the two extras was not a bound. "Up to five
+     * hops … plus up to four attempts" reads additively and the code multiplied: the retry loop
+     * sat inside the per-hop loop, so one `/robots.txt` could cost (5 + 1) x (3 + 1) = 24 requests.
+     * Measured against a loopback server that both 301s and 429s: 19 requests in 6052 ms. A site
+     * owner who counted requests against the sentence above would have concluded the block failed,
+     * which is the same failure this test was written for, one level up.
+     *
+     * So the template must now state the CEILING and state that the two budgets do not multiply —
+     * and the fetcher must enforce it (`maxRequestsPerFetch`, and the tests beside it).
+     */
+    expect(template).toMatch(/nine/i);
+    expect(template).toMatch(/cannot multiply|do not multiply|not 5 x 4/i);
   });
 
   it('names the verified negatives so a reader does not re-research them', () => {

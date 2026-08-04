@@ -134,8 +134,26 @@ re-verifies quarterly.
 
 ## Polite crawling
 
-- Per-host serialisation. Never parallel within a host.
-- `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org. The agent token is
+- Per-host serialisation, **at least 1000 ms between requests to one host**, and the gate is
+  entered once per **HTTP request** — first attempt, every retry, every redirect hop, and the
+  `/robots.txt` read itself. That distinction is the whole of it: until 2026-08-04 the whole retry
+  loop sat *inside* one gate slot, so a site answering `429 Retry-After: 0` was measured getting
+  gaps of 2, 5 and 3 ms.
+- **A `Retry-After` and the host interval compose by MAX; they never replace each other.** Ask for
+  30 s and you get 30 s. Ask for 0 s and you still get the host interval. Publish a `Crawl-delay`
+  and the longest of the three wins — nothing here adds two waits together, and nothing here lets a
+  server talk us *below* our own floor.
+- **One page fetch, or one `/robots.txt` read, costs at most nine requests to your server** —
+  redirect hops and retries spend one shared budget rather than two that multiply, so a chain that
+  redirects five times *and* fails at every hop costs nine requests and not 5 x 4 = 24. When the
+  budget runs out we stop and skip the source for that run.
+- These are measurements, not intentions. `npm run measure-pacing` drives the real fetcher against
+  throwaway loopback HTTP servers — happy path, `429` with `Retry-After` 0/1/30, `503` with no
+  header, a five-hop redirect chain, a chain that also 429s, and a host publishing `Crawl-delay: 5`
+  — and prints the millisecond gap between every request the server actually received, against the
+  floor that applies to each one.
+- `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org, **from the first request it
+  governs** — the page fetched immediately after reading the file, not the one after that. The agent token is
   `GrantSpotter`, so any site can stop any deployment of this with `User-agent: GrantSpotter` and
   `Disallow: /`. The token is matched case-insensitively and a version or suffix after it is
   accepted, so `grantspotter`, `GrantSpotter/0.1.0` — the form that appears in a log — and

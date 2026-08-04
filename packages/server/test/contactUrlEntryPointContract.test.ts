@@ -75,13 +75,24 @@ const SCANNED_TREES = ['packages/server/src', 'scripts', 'e2e'];
 const SCANNED_ROOT_FILES = ['playwright.config.ts'];
 
 /**
- * The files allowed to decide what identifies this crawler. Three, and each one is a process
- * entry point: the server, and the two commands in `scripts/` that poll live sites by hand.
+ * The files allowed to decide what identifies this crawler. Four, and each one is a process
+ * entry point: the server, the two commands in `scripts/` that poll live sites by hand, and the
+ * pacing harness.
+ *
+ * `scripts/measure-pacing.ts` is the odd one and is listed deliberately rather than exempted. It
+ * builds a real fetcher, so it decides what identifies the crawler and belongs here; but unlike the
+ * other three it supplies the environment instead of reading it —
+ * `resolveContactUrl({ CONTACT_URL: '…' })`, a fixed value, still through the one predicate. That
+ * is right because it polls NOBODY: every request it makes goes to a throwaway HTTP server it
+ * started on 127.0.0.1 a moment earlier. Making it demand a real operator address would break the
+ * reason it exists — the README and the crawler-contact template send a polled site's owner here to
+ * reproduce the pacing figures those documents quote, and that reader has no deployment.
  */
 const ENTRY_POINTS = [
   'packages/server/src/index.ts',
   'scripts/verify-sources.ts',
   'scripts/capture-fixture.ts',
+  'scripts/measure-pacing.ts',
 ];
 
 /** Where the rules live. Naturally exempt: it is the predicate, not a caller of it. */
@@ -108,9 +119,20 @@ const THE_WIRE_BOUNDARY = 'packages/server/src/fetcher/index.ts';
  * harness just started. Routing our own test server's health check through the crawler's politeness
  * machinery would test the machinery, not the server.
  *
+ * `scripts/measure-pacing.ts` imports `node:http` to LISTEN, not to poll. It is the harness that
+ * measures the per-host interval this project advertises, and measuring the gap between requests
+ * requires a server that records when each one arrived. Its outbound side is a real fetcher — it is
+ * in ENTRY_POINTS above for exactly that — so the only thing exempted here is binding a socket on
+ * loopback, which no politeness rule has anything to say about. The pattern that catches it is
+ * `from 'node:http'`, which cannot tell a listener from a client; the list is what tells them apart.
+ *
  * Anything else that wants to talk to the network is polling somebody, and goes through a fetcher.
  */
-const DIRECT_NETWORK = ['packages/server/src/ai/assist.ts', 'e2e/shippedSeed.ts'];
+const DIRECT_NETWORK = [
+  'packages/server/src/ai/assist.ts',
+  'e2e/shippedSeed.ts',
+  'scripts/measure-pacing.ts',
+];
 
 /**
  * Any mention of the variable that is not WRITING it.

@@ -20,6 +20,7 @@
     "dev:web": "npm run dev -w @grantspotter/web",
     "capture-fixture": "tsx scripts/capture-fixture.ts",
     "verify-sources": "tsx scripts/verify-sources.ts",
+    "measure-pacing": "tsx scripts/measure-pacing.ts",
     "seed:arrl": "tsx scripts/generate-arrl-seed.ts",
     "profile-corpus": "tsx scripts/profile-corpus.ts"
   },

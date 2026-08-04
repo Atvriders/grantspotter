@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { FetchRequest, FetchedPayload } from '@grantspotter/core';
 import { ConfigError, buildUserAgent } from '../config.js';
+import { canonicalOrigin } from '../net/hosts.js';
 import { assertNotBlocked, normalizeHost } from './blocklist.js';
 import { HostQueue } from './hostQueue.js';
 import {
@@ -48,19 +49,55 @@ export const ROBOTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
  *
  * NOT CACHING IT AT ALL IS WORSE, WHICH IS WHY THIS IS A NUMBER AND NOT A DELETION. `robotsFor` is
  * consulted once per PAGE, so an uncached failure means every page queued against that origin
- * re-reads `/robots.txt` — each read now costing up to four attempts (see `fetchWithRetries`) — at a
- * host that has just proved it is in trouble. The cache is what makes one failure cost one read.
+ * re-reads `/robots.txt` — each read now costing up to `maxRequestsPerFetch` requests — at a host
+ * that has just proved it is in trouble. The cache is what makes one failure cost one read.
  *
  * Fifteen minutes is chosen against the two bounds that actually exist rather than picked. Below:
  * the entry must outlive the run that created it, and one failing origin costs at most
- * maxRetries+1 attempts, each bounded by DEFAULT_TIMEOUT_MS with backoffs capped at MAX_BACKOFF_MS
- * — a little over two minutes at the default settings — against a nightly run of ~25 sources.
+ * `maxRequestsPerFetch(ROBOTS_MAX_REDIRECTS, maxRetries)` = 9 requests, each bounded by
+ * DEFAULT_TIMEOUT_MS and separated by at least the host interval — a few minutes at the default
+ * settings — against a nightly run of ~25 sources.
  * Above: it must be short enough that a human who fixes the problem and re-triggers does not meet
  * their own stale refusal, and short enough that a blip cannot span two crawls. Anything in tens of
  * minutes satisfies both; this is the middle of that range, and `runCrawl`'s `forgetRobots()` makes
  * the exact figure irrelevant to the nightly path in any case.
  */
 export const ROBOTS_UNREAD_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * The most HTTP requests one logical fetch may cost the host it is aimed at — ONE PURSE shared by
+ * redirect hops and retries, rather than two independent limits that multiply.
+ *
+ * WHAT THIS REPLACES. `maxRedirects` bounded hops and `maxRetries` bounded attempts, and the
+ * retry loop sat INSIDE the per-hop loop, so the real bound was their product: a `/robots.txt`
+ * that both 429s and 301s cost (5 hops + 1) x (3 retries + 1) = 24 requests. Measured at HEAD
+ * against a loopback server serving exactly that: 19 requests in 6051 ms with 12 of the 18 gaps
+ * under the 1000 ms floor. The crawler-contact issue template, meanwhile, promised "up to five
+ * hops, spaced at least a second apart, plus up to four attempts" — the ADDITIVE bound, which
+ * nothing enforced. Two ways to fix a false promise: correct the promise, or make it true. This is
+ * the second, because the number in the template is the number a site owner uses to decide whether
+ * what they are seeing in their logs is us misbehaving.
+ *
+ * `hops + retries + 1`: enough to follow a full-length redirect chain (each hop costs one) and
+ * still hold the whole retry budget in reserve for whichever hop actually fails, which is the case
+ * the two limits were sized for individually. What it refuses is spending the retry budget again at
+ * every hop. When the purse runs out mid-chain the chain simply stops, and an unresolved chain is
+ * already handled the polite way — `robotsFromResponse` reads a 3xx as "we never read the rules"
+ * and backs off for the run.
+ *
+ * NOT A PER-ORIGIN-PER-RUN BUDGET, which was the other candidate, and the reason is arithmetic
+ * rather than taste. Measured over the shipped source registry (27 sources, 17 hosts), one crawl
+ * run legitimately makes 30 requests to `api.grants.gov` (5 searches + up to 25 detail fetches,
+ * `MAX_DETAIL_FETCHES`), 12 to `www.ardc.net` and 9 to `www.arrl.org`. A single flat per-origin cap
+ * would therefore have to sit at 40-plus to avoid truncating a legitimate federal crawl — far above
+ * anything a volunteer-run club site could ever see, so it would bound nothing that anyone is
+ * worried about while being able to silently cut a crawl short. The per-fetch purse is the tighter
+ * bound where it matters: a site that publishes `Disallow: /` is fetched once per run and its whole
+ * nightly footprint is this number.
+ */
+export function maxRequestsPerFetch(maxHops: number, maxRetries: number): number {
+  return maxHops + maxRetries + 1;
+}
 
 export interface FetchOptions {
   userAgent: string;
@@ -253,31 +290,21 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    *
    * The rules that come back apply to the origin we ASKED, wherever the chain ends: RFC 9309
    * §2.3.1.2, which requires following at least five redirects, explicitly across authorities.
-   * A chain that does not resolve within ROBOTS_MAX_REDIRECTS hops, or that we decline to follow,
-   * is handed to `robotsFromResponse` as a 3xx, which backs off for this run — see the
-   * enumeration there for why that is not the same choice the RFC makes.
+   * A chain that does not resolve within ROBOTS_MAX_REDIRECTS hops, that exhausts the request
+   * purse, or that we decline to follow, is handed to `robotsFromResponse` as a 3xx, which backs
+   * off for this run — see the enumeration there for why that is not the same choice the RFC makes.
    *
-   * TWO THINGS THIS FUNCTION HAD TO STOP DOING BY ITSELF, both self-inflicted by the commit that
-   * added redirect following:
-   *
-   *   IT WENT ROUND THE HOST QUEUE. It called the transport directly, so the redirect chain above
-   *   could issue up to ROBOTS_MAX_REDIRECTS + 1 requests to one host back to back, against a
-   *   shipped floor of one per second that the README advertises to the sites being polled.
-   *   Measured with the real fetcher against a loopback HTTP server serving a five-hop chain, the
-   *   gaps one host saw were 18, 2, 2, 2 and 5 ms; after this change, 1013, 1004, 1002, 1003 and
-   *   1004. The commit that made this crawler more obedient made it burstier. Every hop
-   *   goes through `queue.run` now, on the host of THAT hop, so a chain that crosses authorities is
-   *   still spaced per host and the page fetch that follows is spaced from the last hop.
-   *
-   *   IT GOT ONE ATTEMPT WHERE A PAGE GETS FOUR. It called the raw transport rather than
-   *   `fetchWithRetries`, so the file that governs a whole origin was the least-retried request the
-   *   crawler makes — and a single dropped connection then opened the origin, because the `catch`
-   *   below manufactured a 404. Both halves are fixed together because either alone leaves the hole:
-   *   retries without the verdict change still open the origin on the fourth failure, and the
-   *   verdict change without retries refuses an origin over one lost packet.
+   * THIS FUNCTION IS NOT SPECIAL, and that is the point of the shape it now has: it walks hops and
+   * spends a purse exactly like `fetchOne` does, through the same `gatedRequest`, so `/robots.txt`
+   * gets the same retry budget, the same per-host gate on every single attempt, and the same
+   * additive cap on how many requests one read can cost. Two earlier rounds of this bug were both
+   * "robots.txt does its own thing": first it called the raw transport (one attempt where a page
+   * got four, and a dropped connection manufactured a 404 that opened the whole origin), then it
+   * wrapped a whole retry loop in one queue slot (bursts of 2-5 ms against a 1000 ms floor).
    */
   async function readRobots(origin: string): Promise<RobotsRules> {
     const stamp = (): string => new Date(now()).toISOString();
+    const budget = { remaining: maxRequestsPerFetch(ROBOTS_MAX_REDIRECTS, maxRetries) };
     let url = `${origin}/robots.txt`;
     assertNotBlocked(url);
     for (let hop = 0; ; hop += 1) {
@@ -285,9 +312,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       let body = '';
       try {
         const request: FetchRequest = { url, method: 'GET', accept: 'html' };
-        // `new URL(url).host` and not the origin we were asked about: a chain may cross
-        // authorities, and the host that has to be spaced is the one about to be asked.
-        response = await queue.run(new URL(url).host, () => fetchWithRetries(url, request));
+        response = await gatedRequest(url, request, budget);
         if (response.status === 200) body = await response.text();
       } catch (err) {
         if (err instanceof HttpStatusError) {
@@ -311,7 +336,10 @@ export function createFetcher(opts: FetchOptions): Fetcher {
         return robotsFromResponse(response.status, body, AGENT_TOKEN, stamp());
       }
       const location = response.headers.get('location');
-      if (location === null || hop >= ROBOTS_MAX_REDIRECTS) {
+      // Empty counts as absent. `new URL('', url)` resolves to `url` itself, so following an empty
+      // `Location` would re-request the same address until the hop budget ran out — five wasted
+      // requests to a server that is already answering strangely, ending in the same back-off.
+      if (!location || hop >= ROBOTS_MAX_REDIRECTS || budget.remaining <= 0) {
         return robotsFromResponse(response.status, '', AGENT_TOKEN, stamp());
       }
       let next: string;
@@ -368,49 +396,123 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     });
   }
 
-  async function fetchWithRetries(url: string, req: FetchRequest): Promise<Response> {
-    let lastError: unknown;
-    for (let i = 0; i <= maxRetries; i += 1) {
-      try {
-        const response = await attempt(url, req);
-        if (response.status === 429 || response.status >= 500) {
-          if (i === maxRetries) throw new HttpStatusError(url, response.status);
-          await sleep(backoffMs(i, rand, parseRetryAfter(response.headers.get('retry-after'))));
-          continue;
+  /** What one gated attempt did, reported back OUT of the queue slot rather than thrown from it. */
+  type Attempted =
+    | { kind: 'ok'; response: Response }
+    | { kind: 'status'; status: number }
+    | { kind: 'error'; error: unknown };
+
+  /**
+   * ONE HTTP REQUEST PER GATE ENTRY. This is the whole fix, and everything else in this file is
+   * arranged so that this stays true.
+   *
+   * The retry loop is OUTSIDE `queue.run` and each attempt is INSIDE it. It used to be the other
+   * way round — `queue.run(host, () => fetchWithRetries(url, req))` — which meant the gate was
+   * entered once per LOGICAL fetch, and every retry after the first went straight to the wire from
+   * inside a slot the lane was already holding. Measured at HEAD against a loopback server
+   * answering `429` with `Retry-After: 0`, one host saw gaps of 4, 3 and 3 ms against the 1000 ms
+   * floor this project's README advertises; a host publishing `Crawl-delay: 5` saw 971, 1008 and
+   * 2618 ms on a 503, never 5000.
+   *
+   * THE PENALTY IS RECORDED ON THE LANE, NOT SLEPT THROUGH HERE, and it is recorded from inside the
+   * slot — see `HostQueue.defer`. `Retry-After` composes with the host floor by MAX: 0 s still costs
+   * the floor, 30 s costs 30 s. That composition lives in one place, `HostQueue.releaseAt`, because
+   * it is the same question the gate already answers for every other request.
+   *
+   * The penalty is recorded even on the attempt we have no budget to follow: a 429 is the server
+   * asking us to stop asking, and the next request to that host is exactly what it was asking
+   * about, even if that request belongs to a different page.
+   *
+   * `budget` is the shared purse (see `maxRequestsPerFetch`). Every attempt costs one, whichever
+   * hop of whichever chain it belongs to.
+   */
+  async function gatedRequest(
+    url: string,
+    req: FetchRequest,
+    budget: { remaining: number },
+  ): Promise<Response> {
+    // The pacing lane is keyed by CANONICAL HOSTNAME, port and trailing root dots removed, so
+    // `example.org`, `example.org.` and `example.org:8443` are one budget and not three. The two
+    // host-derived values in this file were the last places that still compared raw
+    // `URL.host` — four copies of the trailing-dot bug have been found in this repository, one of
+    // them in a blocklist check, so there is exactly one spelling of it now (`net/hosts.ts`).
+    // Dropping the port deliberately errs towards polling less: two ports are two servers to HTTP
+    // and one machine to the person whose bandwidth it is.
+    const host = normalizeHost(url);
+    let last: Attempted | undefined;
+    for (let i = 0; i <= maxRetries && budget.remaining > 0; i += 1) {
+      budget.remaining -= 1;
+      const outcome = await queue.run(host, async (): Promise<Attempted> => {
+        try {
+          const response = await attempt(url, req);
+          if (response.status === 429 || response.status >= 500) {
+            const askedFor = parseRetryAfter(response.headers.get('retry-after'));
+            queue.defer(host, backoffMs(i, rand, askedFor));
+            return { kind: 'status', status: response.status };
+          }
+          return { kind: 'ok', response };
+        } catch (error) {
+          queue.defer(host, backoffMs(i, rand));
+          return { kind: 'error', error };
         }
-        return response;
-      } catch (err) {
-        if (err instanceof HttpStatusError) throw err;
-        lastError = err;
-        if (i === maxRetries) break;
-        await sleep(backoffMs(i, rand));
-      }
+      });
+      if (outcome.kind === 'ok') return outcome.response;
+      last = outcome;
     }
-    throw lastError instanceof Error ? lastError : new Error(`fetch failed for ${url}`);
+    if (last?.kind === 'status') throw new HttpStatusError(url, last.status);
+    const error = last?.kind === 'error' ? last.error : undefined;
+    throw error instanceof Error ? error : new Error(`fetch failed for ${url}`);
   }
 
-  async function fetchOne(url: string, req: FetchRequest, hop: number): Promise<FetchedPayload> {
-    assertNotBlocked(url);
-    const parsed = new URL(url);
-    const rules = await robotsFor(parsed.origin);
-    if (!isPathAllowed(rules, `${parsed.pathname}${parsed.search}`)) {
-      throw new RobotsDisallowedError(url);
-    }
-    if (rules.crawlDelaySec !== undefined) {
-      queue.setMinInterval(parsed.host, Math.round(rules.crawlDelaySec * 1000));
-    }
-
-    const response = await queue.run(parsed.host, () => fetchWithRetries(url, req));
-
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (location && hop < maxRedirects) {
-        const next = new URL(location, url).toString();
-        // Re-assert on every hop. This is what stops farweb.org -> batualam.org and any
-        // future takeover chain from reaching a parser.
-        assertNotBlocked(next);
-        return fetchOne(next, req, hop + 1);
+  /**
+   * Fetch one page, following redirects, spending one purse across every hop and every retry.
+   *
+   * WHY robots.txt IS READ OUTSIDE THE GATE AND CANNOT DEADLOCK. `robotsFor` may have to fetch
+   * `/robots.txt`, and that read enters the SAME host's lane through `gatedRequest`. It is awaited
+   * here, at the top of a hop, while this function holds no slot at all — `gatedRequest` acquires
+   * and releases a slot per attempt and never spans an `await robotsFor`. So the lane is always
+   * free for the robots read to take, and the ordering is: resolve the rules, then queue the
+   * request they govern. Awaiting `robotsFor` from inside a slot would be a self-deadlock (the read
+   * waits for a lane this call is holding), and the shared in-flight promise in `robotsFor` would
+   * make it a deadlock for every other page on that origin too. Any future edit that moves a
+   * `robotsFor` call inside a `queue.run` callback reintroduces it.
+   *
+   * This was recursion (`fetchOne(next, req, hop + 1)`) and is now a loop, because the purse and
+   * the hop count have to be one piece of state that every hop shares rather than an argument each
+   * level is free to reset.
+   */
+  async function fetchOne(startUrl: string, req: FetchRequest): Promise<FetchedPayload> {
+    const budget = { remaining: maxRequestsPerFetch(maxRedirects, maxRetries) };
+    let url = startUrl;
+    let response: Response;
+    for (let hop = 0; ; hop += 1) {
+      assertNotBlocked(url);
+      const parsed = new URL(url);
+      const rules = await robotsFor(canonicalOrigin(parsed));
+      if (!isPathAllowed(rules, `${parsed.pathname}${parsed.search}`)) {
+        throw new RobotsDisallowedError(url);
       }
+      if (rules.crawlDelaySec !== undefined) {
+        // Set BEFORE the request it governs, and honoured because `HostQueue` reads the interval
+        // when it releases rather than stamping a deadline when the previous request ended. Those
+        // two facts together are what make a `Crawl-delay` apply to the first page after the
+        // robots.txt that asked for it instead of the second.
+        queue.setMinInterval(normalizeHost(url), Math.round(rules.crawlDelaySec * 1000));
+      }
+
+      response = await gatedRequest(url, req, budget);
+
+      if (response.status < 300 || response.status >= 400) break;
+      const location = response.headers.get('location');
+      // Out of hops or out of purse: the 3xx itself becomes the payload, exactly as it did when
+      // only `maxRedirects` could stop the chain. `!location` and not `=== null` because an empty
+      // `Location` resolves back to this same URL — see the matching note in `readRobots`.
+      if (!location || hop >= maxRedirects || budget.remaining <= 0) break;
+      const next = new URL(location, url).toString();
+      // Re-assert on every hop. This is what stops farweb.org -> batualam.org and any
+      // future takeover chain from reaching a parser.
+      assertNotBlocked(next);
+      url = next;
     }
 
     const fetchedAt = new Date(now()).toISOString();
@@ -442,7 +544,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     // (blocklist, robots, retries) is what ultimately fails.
     async fetch(req: FetchRequest): Promise<FetchedPayload> {
       assertNotBlocked(req.url);
-      return fetchOne(req.url, req, 0);
+      return fetchOne(req.url, req);
     },
     forgetRobots(): void {
       robotsCache.clear();

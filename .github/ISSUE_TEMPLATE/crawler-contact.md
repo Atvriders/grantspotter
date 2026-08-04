@@ -52,11 +52,23 @@ things that are all normal:
    one, and here is exactly where the extras come from, so that seeing three does not look like
    the block failing:
    - **A redirect is followed.** If `/robots.txt` 301s — apex to `www`, `http` to `https` — each hop
-     is a request, up to five of them, and they are spaced at least a second apart. Serving the file
-     directly on every host and scheme you answer on removes this entirely.
+     is a request, up to five of them. Serving the file directly on every host and scheme you answer
+     on removes this entirely.
    - **A failed read is retried,** up to four attempts, if the connection drops or you answer 429 or
      5xx. That is the same budget any other request gets, and it is deliberate: a file that governs
      a whole origin should not be the least-retried thing we ask for.
+   - **Nine requests is the hard ceiling, and it is a ceiling on the two of them together.** Hops
+     and retries spend one shared budget, so they cannot multiply: a `/robots.txt` that redirects
+     five times *and* answers 429 at every hop costs **nine** requests, not 5 x 4 = 24, and when the
+     budget runs out we stop and skip your site for the night. Every one of the nine is at least a
+     second after the one before it, and longer if you send `Retry-After` or publish a
+     `Crawl-delay` — whichever of the three is longest wins, and they are never added together.
+     **Until 2026-08-04 the two budgets multiplied and this paragraph did not say so.** Measured
+     against a test server that redirected five times and 429'd at every hop: 19 requests in 6052
+     ms, 12 of the 18 gaps under 5 ms. The same scenario now costs 9 requests over 8024 ms with
+     every gap over a second. Those are real numbers off real sockets, and you can reproduce them —
+     `npm run measure-pacing` in this repository prints the millisecond gap between every request a
+     throwaway HTTP server receives.
    - Nothing else. There is no second file, no probing, and no request at all to a path you have
      disallowed.
 2. **We could not read your `robots.txt`.** If it 404s or 403s we read that as "this site publishes

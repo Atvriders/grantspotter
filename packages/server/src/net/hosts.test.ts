@@ -3,6 +3,7 @@ import {
   PRIVATE_IPV4_PROSE_PATTERNS,
   PRIVATE_IPV4_RANGES,
   canonicalHostname,
+  canonicalOrigin,
   unreachableContactHost,
 } from './hosts.js';
 
@@ -125,6 +126,38 @@ describe('unreachableContactHost', () => {
     for (const host of ['example..org', '.w9xyz-radio-club.org', 'a..b..c']) {
       expect(unreachableContactHost(host), host).toMatch(/empty DNS label/);
     }
+  });
+});
+
+/**
+ * The robots.txt cache key, and the fifth place this repository nearly re-derived "what a host is".
+ *
+ * `new URL(u).origin` was used directly, so `https://example.org/` and `https://example.org./` were
+ * two cache entries — two reads of one file, and two independent request budgets for one site.
+ */
+describe('canonicalOrigin', () => {
+  const origin = (url: string): string => canonicalOrigin(new URL(url));
+
+  it('folds case and every trailing root dot, exactly as canonicalHostname does', () => {
+    expect(origin('https://W9XYZ-Club.ORG./grants')).toBe('https://w9xyz-club.org');
+    expect(origin('https://w9xyz-club.org../grants?x=1')).toBe('https://w9xyz-club.org');
+    expect(origin('https://w9xyz-club.org/grants')).toBe('https://w9xyz-club.org');
+  });
+
+  it('keeps scheme and host distinct, because robots.txt rules are per origin', () => {
+    // RFC 9309 §2.3, and the crawler issue template tells site owners this in as many words.
+    expect(origin('http://w9xyz-club.org/x')).not.toBe(origin('https://w9xyz-club.org/x'));
+    expect(origin('https://www.w9xyz-club.org/x')).not.toBe(origin('https://w9xyz-club.org/x'));
+  });
+
+  it('keeps an explicit non-default port, which publishes its own robots.txt', () => {
+    expect(origin('https://w9xyz-club.org.:8443/x')).toBe('https://w9xyz-club.org:8443');
+    // …and drops the default one, so the two spellings of the same authority agree.
+    expect(origin('https://w9xyz-club.org:443/x')).toBe('https://w9xyz-club.org');
+  });
+
+  it('leaves an IPv6 literal bracketed and intact', () => {
+    expect(origin('http://[::FFFF:7F00:1]:8080/x')).toBe('http://[::ffff:7f00:1]:8080');
   });
 });
 

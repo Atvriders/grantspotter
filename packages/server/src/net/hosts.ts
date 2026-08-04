@@ -15,6 +15,11 @@
  * patterns this file exports are byte-identical to the ones `seed/validate.ts` used before the
  * two were merged, so the merge changed no seed verdict.
  *
+ * `canonicalHostname` and `canonicalOrigin` at the bottom serve a wider set of callers than the
+ * address lists do — the blocklist, the pacing queue and the robots.txt cache all ask "is this the
+ * same host as that one?", and every place that answered it privately got the same trailing-dot
+ * answer wrong.
+ *
  * WHY THE TWO LISTS ARE NOT ONE LIST. `PRIVATE_IPV4_RANGES` is shared. `UNROUTABLE_IPV4_RANGES`
  * is not, and deliberately: `0.0.0.0`, `169.254.x.x` and the carrier-NAT range are meaningful as
  * a whole hostname and meaningless in prose, where they would only add false positives to a
@@ -103,6 +108,27 @@ const PRIVATE_USE_SUFFIXES: readonly string[] = ['localhost', 'local', 'internal
 export function canonicalHostname(hostname: string): string {
   const host = hostname.toLowerCase();
   return host.startsWith('[') ? host : host.replace(/\.+$/, '');
+}
+
+/**
+ * A URL reduced to the origin the robots.txt cache is keyed by: scheme, canonical host, and the
+ * port only when the URL carried an explicit non-default one.
+ *
+ * `new URL(u).origin` is ALMOST this and was what the fetcher used, but it preserves the hostname
+ * verbatim — so `https://example.org/` and `https://example.org./` were two cache entries, two
+ * reads of the same file, and two chances to disagree about what that file said. That is the same
+ * trailing-dot bug already found and fixed in three other places in this repository, one of them a
+ * blocklist check, which is why this composes `canonicalHostname` rather than spelling the rule out
+ * a fifth time.
+ *
+ * The PORT stays, unlike in {@link canonicalHostname}'s other consumers: RFC 9309 §2.3 puts
+ * `/robots.txt` at the authority's root, so a service on :8443 publishes its own file and must not
+ * inherit :443's. (The per-host pacing lane makes the opposite trade deliberately — see
+ * `fetcher/index.ts`.)
+ */
+export function canonicalOrigin(url: URL): string {
+  const port = url.port === '' ? '' : `:${url.port}`;
+  return `${url.protocol}//${canonicalHostname(url.hostname)}${port}`;
 }
 
 /**

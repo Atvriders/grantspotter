@@ -10,6 +10,7 @@ import {
   ROBOTS_UNREAD_CACHE_TTL_MS,
   backoffMs,
   createFetcher,
+  maxRequestsPerFetch,
 } from './index.js';
 
 /**
@@ -50,6 +51,37 @@ const baseOpts = {
   now: () => 0,
   defaultMinIntervalMs: 0,
 };
+
+/**
+ * A clock where sleeping is the only thing that moves time, so a "gap" in these tests is exactly
+ * the gap the shipped code would produce with real timers and nothing else.
+ *
+ * The equivalent figures against real sockets and real timers come from `scripts/measure-pacing.ts`
+ * and are quoted in the doc comments below; this is the deterministic guard for them.
+ */
+function pacingClock() {
+  let t = 0;
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+  };
+}
+
+/** Records the instant of every transport call, which is what "gap" means for these tests. */
+function timeline(now: () => number, handler: (url: string) => Response) {
+  const at: number[] = [];
+  const transport = vi.fn(async (url: string) => {
+    at.push(now());
+    return handler(url);
+  });
+  return {
+    transport,
+    at,
+    gaps: (): number[] => at.slice(1).map((when, i) => when - (at[i] as number)),
+  };
+}
 
 describe('the User-Agent has exactly one definition', () => {
   it('comes from config.ts and embeds the contact URL', () => {
@@ -239,7 +271,7 @@ describe('createFetcher politeness', () => {
   /**
    * A REDIRECTED robots.txt IS RULES, NOT PERMISSION.
    *
-   * `rawGet` sends `redirect: 'manual'` so the blocklist can be re-asserted on every hop. That is
+   * Every request sends `redirect: 'manual'` so the blocklist can be re-asserted on every hop. That is
    * right for pages, and it was silently wrong here until 2026-08-04: nothing followed the
    * redirect, the 3xx reached `robotsFromResponse`, which had no 3xx branch, and the site was
    * crawled as though it published no rules. Apex-to-`www` and http-to-https redirects on
@@ -502,6 +534,203 @@ describe('createFetcher politeness', () => {
       accept: 'html',
     });
     expect(payload.status).toBe(200);
+  });
+});
+
+/**
+ * THE GATE IS ENTERED ONCE PER HTTP REQUEST, NOT ONCE PER LOGICAL FETCH.
+ *
+ * One mistake, four measured symptoms. `fetchWithRetries` ran INSIDE a single `queue.run(...)`
+ * slot, so the per-host gate governed only the FIRST attempt of the first hop; every retry and
+ * every redirect hop after it went straight to the wire from inside a slot the lane was already
+ * holding. Against the real fetcher and loopback HTTP servers (`scripts/measure-pacing.ts`), at the
+ * commit before this one:
+ *
+ *   429, `Retry-After: 0`      gaps of 2, 5, 3 ms against a 1000 ms floor
+ *   503, no header             gaps of 975, 1848, 3385 ms — the first under the floor
+ *   `Crawl-delay: 5` + 503     gaps of 1004 and 783 ms, never 5000
+ *   `Crawl-delay: 5`, page 1   1002 ms after `/robots.txt`, not 5000
+ *   robots.txt 429ing AND 301ing   19 requests in 6052 ms, 12 of the 18 gaps under the floor
+ *
+ * After: 0 gaps under the floor in every one of those scenarios, and the last costs 9 requests.
+ * These tests pin the same properties against an injected clock so they are checked on every run.
+ */
+describe('every request that reaches the network passes the host gate exactly once', () => {
+  const PAGE = { url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' } as const;
+  const FLOOR = 1_000;
+
+  /** Every scenario below shares this shape: a fetcher on a virtual clock with the shipped floor. */
+  function paced(handler: (url: string) => Response, extra: Record<string, unknown> = {}) {
+    const clock = pacingClock();
+    const line = timeline(clock.now, handler);
+    const fetcher = createFetcher({
+      ...baseOpts,
+      transport: line.transport,
+      defaultMinIntervalMs: FLOOR,
+      now: clock.now,
+      sleep: clock.sleep,
+      ...extra,
+    });
+    return { ...line, fetcher };
+  }
+
+  it('spaces every RETRY of a 429 that says Retry-After: 0', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt')
+        ? res('User-agent: *\n')
+        : res('slow down', { status: 429, headers: { 'retry-after': '0' } }),
+    );
+    await expect(t.fetcher.fetch(PAGE)).rejects.toThrow(/429/);
+    expect(t.at).toHaveLength(5); // robots.txt, then four attempts
+    const gaps = t.gaps();
+    // "You may retry immediately" is the SERVER's constraint. Ours still applies.
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('waits the whole Retry-After when the server asks for more than the floor', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt')
+        ? res('User-agent: *\n')
+        : res('slow down', { status: 429, headers: { 'retry-after': '30' } }),
+    );
+    await expect(t.fetcher.fetch(PAGE)).rejects.toThrow(/429/);
+    // 30000 and not 31000: Retry-After and the floor compose by MAX, so a server that asks for
+    // thirty seconds gets thirty seconds.
+    expect(t.gaps()).toEqual([FLOOR, 30_000, 30_000, 30_000]);
+  });
+
+  it('spaces every retry of a 503 that sends no header at all', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt') ? res('User-agent: *\n') : res('busy', { status: 503 }),
+    );
+    await expect(t.fetcher.fetch(PAGE)).rejects.toThrow(/503/);
+    const gaps = t.gaps();
+    // Jittered backoff is 750, 1500, 3000 ms at rand()=0.5, so the floor is what carries the first.
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('honours Crawl-delay on the retry path, which is where it was ignored entirely', async () => {
+    const t = paced(
+      (url) =>
+        url.endsWith('/robots.txt')
+          ? res('User-agent: *\nCrawl-delay: 5\n')
+          : res('busy', { status: 503 }),
+      { maxRetries: 2 },
+    );
+    await expect(t.fetcher.fetch(PAGE)).rejects.toThrow(/503/);
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= 5_000), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('honours Crawl-delay from the FIRST page it governs, not the second', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt') ? res('User-agent: *\nCrawl-delay: 5\n') : res('<p>ok</p>'),
+    );
+    expect((await t.fetcher.fetch(PAGE)).status).toBe(200);
+    // The request that READ the file cannot be governed by it; the very next one must be.
+    expect(t.gaps()).toEqual([5_000]);
+  });
+
+  /**
+   * THE MULTIPLICATIVE WORST CASE, WHICH THE DOCS DESCRIBED ADDITIVELY.
+   *
+   * `.github/ISSUE_TEMPLATE/crawler-contact.md` promised a site owner "up to five hops … plus up to
+   * four attempts". The retry loop sat inside the per-hop loop, so the truth was the PRODUCT:
+   * (5 + 1) x (3 + 1) = 24 requests for one `/robots.txt`. The purse makes the promise true.
+   */
+  it('caps a robots.txt that both 429s and 301s at the additive bound', async () => {
+    const seen = new Map<string, number>();
+    const t = paced((url) => {
+      if (!url.includes('robots')) return res('<p>ok</p>');
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      if (n <= 2) return res('slow down', { status: 429, headers: { 'retry-after': '0' } });
+      const hop = Number(/robots(\d*)\.txt/.exec(url)?.[1] || '0');
+      return hop < ROBOTS_MAX_REDIRECTS
+        ? res('', { status: 301, headers: { location: `/robots${hop + 1}.txt` } })
+        : res('User-agent: *\n');
+    });
+    // The purse ran out before the chain resolved, so we never read the rules — and a read we could
+    // not complete is not permission. The page is never requested.
+    await expect(t.fetcher.fetch(PAGE)).rejects.toBeInstanceOf(RobotsDisallowedError);
+    expect(t.at).toHaveLength(maxRequestsPerFetch(ROBOTS_MAX_REDIRECTS, 3));
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('caps a PAGE that both 429s and 301s at the same additive bound', async () => {
+    const seen = new Map<string, number>();
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      if (n <= 2) return res('slow down', { status: 429, headers: { 'retry-after': '0' } });
+      const hop = Number(/\/p(\d+)$/.exec(url)?.[1] ?? '0');
+      return res('', { status: 301, headers: { location: `/p${hop + 1}` } });
+    });
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p0',
+      method: 'GET',
+      accept: 'html',
+    });
+    // Out of purse mid-chain: the 3xx itself becomes the payload, exactly as running out of hops
+    // has always done.
+    expect(payload.status).toBe(301);
+    const pageRequests = t.at.length - 1; // minus the one robots.txt read
+    expect(pageRequests).toBe(maxRequestsPerFetch(5, 3));
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('bounds one fetch additively rather than by the product of two limits', () => {
+    expect(maxRequestsPerFetch(5, 3)).toBe(9);
+    // The number the docs used to imply, and the number the code actually produced.
+    expect(maxRequestsPerFetch(5, 3)).toBeLessThan((5 + 1) * (3 + 1));
+  });
+
+  /**
+   * FINDING 5: THE LAST TWO HOST-DERIVED VALUES THAT SKIPPED `canonicalHostname`.
+   *
+   * `queue.run(parsed.host, …)` and `robotsFor(parsed.origin)` compared raw values, so
+   * `example.org` and `example.org.` were two lanes, two robots reads and two independent request
+   * budgets — the same trailing-dot bug already fixed three times elsewhere in this repository, one
+   * of them in the blocklist check that stops `farweb.org`.
+   */
+  it('treats a trailing root dot as the same host: one robots read, one lane', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt') ? res('User-agent: *\n') : res('<p>ok</p>'),
+    );
+    await t.fetcher.fetch({ url: 'https://w9xyz-club.org./a', method: 'GET', accept: 'html' });
+    await t.fetcher.fetch({ url: 'https://w9xyz-club.org/b', method: 'GET', accept: 'html' });
+
+    const robots = t.transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'));
+    expect(robots).toHaveLength(1);
+    // …and it was read from the canonical origin, so it is the same cache entry either way.
+    expect(robots[0]?.[0]).toBe('https://w9xyz-club.org/robots.txt');
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  /**
+   * NO DEADLOCK, AND THE REASON IS AN ORDERING RATHER THAN A LOCK.
+   *
+   * `robotsFor` may have to fetch `/robots.txt`, which enters the SAME host's lane. `fetchOne`
+   * awaits it while holding no slot, so the lane is always free for that read to take. If a future
+   * edit moves a `robotsFor` call inside a `queue.run` callback, this test hangs and then fails on
+   * timeout rather than passing quietly.
+   */
+  it('never awaits robots.txt from inside a slot, so pages racing one origin cannot deadlock', async () => {
+    const t = paced((url) =>
+      url.endsWith('/robots.txt') ? res('User-agent: *\n') : res('<p>ok</p>'),
+    );
+    const [a, b] = await Promise.all([
+      t.fetcher.fetch({ url: 'https://w9xyz-club.org/a', method: 'GET', accept: 'html' }),
+      // Queued while the first page's robots.txt read is still in flight.
+      t.fetcher.fetch({ url: 'https://w9xyz-club.org/b', method: 'GET', accept: 'html' }),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(t.at).toHaveLength(3); // one shared read, then the two pages
+    expect(t.gaps()).toEqual([FLOOR, FLOOR]);
   });
 });
 
