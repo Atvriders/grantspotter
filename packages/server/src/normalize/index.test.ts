@@ -1,3 +1,6 @@
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
 import { expandCycles, hashProgram, parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
@@ -5,7 +8,14 @@ import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
 import { programIdFor } from '../sources/util/ids.js';
 import { DEADLINE_INHERITANCE } from './deadline.js';
 import { DISPUTED_OVERRIDES, sourceKeyOf } from './disputed.js';
-import { type NormalizeContext, normalizeRaw } from './index.js';
+import {
+  DO_NOT_PUBLISH_TAG,
+  PUBLISHABLE_RECORD_TYPES,
+  SUPPRESSED_RECORD_TYPES,
+  isDoNotPublish,
+  type NormalizeContext,
+  normalizeRaw,
+} from './index.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
 
@@ -337,6 +347,10 @@ describe('status and instrument', () => {
     );
     expect(p.trust.status).toBe('closed');
     expect(p.tags).toContain('past_award');
+    // `status: 'closed'` alone was never enough: nothing downstream read trust.status either
+    // (matcher.ts still does not), so a past award was a fully publishable Program until the tag
+    // below started being both written and enforced. See the do_not_publish describe block below.
+    expect(p.tags).toContain('do_not_publish');
   });
 
   it('marks a verified-negative record discontinued', () => {
@@ -744,5 +758,108 @@ describe('the resulting Program is complete', () => {
     const long = 'x'.repeat(5000);
     const p = normalizeRaw(raw({ rawText: long }), ctx());
     expect(p.summary.length).toBeLessThanOrEqual(400);
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — `do_not_publish` used to be written for `crosscheck` only, and read by
+ * nothing anywhere in the repo. These tests cover the WRITER half (this file); the READER half —
+ * proving the tag is actually enforced, and that it stays enforced — lives in `review/index.test.ts`.
+ */
+describe('do_not_publish: which record types are suppressed', () => {
+  const typed = (recordType: string): Program =>
+    normalizeRaw(
+      raw({ sourceId: 'arrl-club-grant', rawFields: { recordType } }),
+      ctx({ sourceId: 'arrl-club-grant', funderId: 'arrl-foundation', klass: 'ham_grant', deadlineInheritsFrom: undefined }),
+    );
+
+  it('stamps the tag on every suppressed record type', () => {
+    expect([...SUPPRESSED_RECORD_TYPES].sort()).toEqual(['crosscheck', 'past_award']);
+    for (const recordType of SUPPRESSED_RECORD_TYPES) {
+      const p = typed(recordType);
+      expect(p.tags, `${recordType} must carry its own type tag`).toContain(recordType);
+      expect(p.tags, `${recordType} must be suppressed`).toContain(DO_NOT_PUBLISH_TAG);
+      expect(isDoNotPublish(p)).toBe(true);
+    }
+  });
+
+  it('leaves every publishable record type publishable', () => {
+    // `verified_negative` and `safety_warning` are the load-bearing cases: "we checked, this does
+    // not exist" and "this funder's domain was taken over, do not apply" are answers a searcher
+    // most needs to see. Suppressing them would hide the warning.
+    for (const recordType of PUBLISHABLE_RECORD_TYPES) {
+      const p = typed(recordType);
+      expect(p.tags, `${recordType} must not be suppressed`).not.toContain(DO_NOT_PUBLISH_TAG);
+      expect(isDoNotPublish(p)).toBe(false);
+    }
+  });
+
+  it('leaves a record with no recordType at all publishable', () => {
+    // The ONE real ARRL Club Grant Program record on the same page as the 37 past recipients.
+    expect(isDoNotPublish(normalizeRaw(raw(), ctx()))).toBe(false);
+  });
+
+  it('the two classes are disjoint', () => {
+    for (const t of SUPPRESSED_RECORD_TYPES) expect(PUBLISHABLE_RECORD_TYPES.has(t)).toBe(false);
+  });
+
+  /**
+   * INVARIANT, in the shape of `sources/registry.test.ts` ("every module on disk must be
+   * registered") and the ARRL prefix-collision table. Every `recordType` literal that any source
+   * module on disk actually emits must be classified as either suppressed or publishable. A fifth
+   * past-award-style source arriving with a new record type — `historical_award`, say — fails HERE,
+   * at the classification, instead of silently defaulting into "publishable" and putting funded
+   * history back into the review queue, which is exactly how the original defect behaved.
+   */
+  it('INVARIANT: every recordType any source emits is explicitly classified', async () => {
+    const sourcesDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../sources');
+    const files = (await readdir(sourcesDir, { recursive: true, withFileTypes: true }))
+      // Node 20.11.0 leaves Dirent.parentPath undefined for recursive readdir; `.path` is the
+      // older alias. Same accommodation as sources/registry.test.ts.
+      .filter((e) => e.isFile() && e.name.endsWith('.ts') && !e.name.endsWith('.test.ts'))
+      .map((e) => path.join(e.parentPath ?? e.path ?? sourcesDir, e.name));
+    expect(files.length).toBeGreaterThan(10);
+
+    const found = new Map<string, string[]>();
+    for (const file of files) {
+      for (const m of (await readFile(file, 'utf8')).matchAll(/recordType:\s*'([a-z_]+)'/g)) {
+        found.set(m[1], [...(found.get(m[1]) ?? []), path.basename(file)]);
+      }
+    }
+
+    // Guards against a silently-vacuous pass: if the scan or the regex ever stops finding
+    // anything, this fails rather than reporting "all zero record types are classified".
+    expect([...found.keys()].sort()).toEqual([
+      'crosscheck',
+      'guided_workflow',
+      'manual',
+      'past_award',
+      'safety_warning',
+      'verified_negative',
+    ]);
+
+    const unclassified = [...found.entries()]
+      .filter(([t]) => !SUPPRESSED_RECORD_TYPES.has(t) && !PUBLISHABLE_RECORD_TYPES.has(t))
+      .map(([t, where]) => `${t} (emitted by ${[...new Set(where)].join(', ')})`);
+    expect(unclassified, 'classify this in normalize/index.ts before shipping it').toEqual([]);
+  });
+
+  it('all four past_award sources normalize to a suppressed, closed record', () => {
+    // arrl-club-grant, ardc-award-tables, nsf-awards and usaspending all stamp recordType
+    // past_award. Each comes through a different funder/klass/tier, so each is checked.
+    const cases: Array<[string, string, Program['klass']]> = [
+      ['arrl-club-grant', 'arrl-foundation', 'ham_grant'],
+      ['ardc-award-tables', 'ardc', 'ham_grant'],
+      ['nsf-awards', 'nsf', 'adjacent_stem'],
+      ['usaspending', 'federal', 'adjacent_stem'],
+    ];
+    for (const [sourceId, funderId, klass] of cases) {
+      const p = normalizeRaw(
+        raw({ sourceId, rawFields: { recordType: 'past_award', amountRaw: '$18,000' } }),
+        ctx({ sourceId, funderId, klass, deadlineInheritsFrom: undefined }),
+      );
+      expect(isDoNotPublish(p), `${sourceId} must be suppressed`).toBe(true);
+      expect(p.trust.status, `${sourceId} must be closed`).toBe('closed');
+    }
   });
 });

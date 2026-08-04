@@ -841,3 +841,160 @@ describe('SEAM FIX round 2 — real crawl+approve converges regardless of Inbox 
     expect(totalDependentsFirst).toBe(totalOwnerFirst);
   });
 });
+
+/**
+ * REMEDIATION 2026-08-03 — `do_not_publish`, end to end through the REAL crawl pipeline.
+ *
+ * Before this fix the tag was written by `normalize/` and read by nothing, so `arrl-pages.ts`'s
+ * claim that a cross-check source "refuses to publish" and the identical promises in
+ * `ardc-award-tables.ts`, `nsf-awards.ts` and `usaspending.ts` were all false of the running code.
+ * Measured on the committed fixtures before the fix: club-grant queued 38 review items,
+ * ardc-award-tables 24, nsf-awards 1, usaspending 1 — every one of them approvable, every one of
+ * them a `Program` that would render as a live funding opportunity.
+ *
+ * These run `runSource` itself — real fixtures, real parse, real normalize, real diff, real queue —
+ * and assert the exact contents of the queue, not merely that it shrank.
+ */
+describe('do_not_publish end-to-end: past awards are stored but never queued', () => {
+  const clubGrantMap = {
+    '/club-grant-program': fixturePayload(
+      'arrl-club-grant',
+      '00-www-arrl-org-club-grant-program.html',
+      'http://www.arrl.org/club-grant-program',
+    ),
+  };
+
+  /**
+   * The candidate Programs the crawl STORED, read back out of `change_events.after_json` — the
+   * evidence that suppression costs nothing. `parse_yield_dropped` alarms also land in
+   * `change_events` and carry `after: { parsedCount }` rather than a Program, so they are filtered
+   * out by shape rather than assumed absent.
+   */
+  const storedCandidates = (tag: string): Program[] =>
+    listChangeEvents(db, 500)
+      .map((e) => e.after as Program | undefined)
+      .filter((p): p is Program => Array.isArray(p?.tags) && p.tags.includes(tag));
+
+  it('queues the ONE real ARRL Club Grant Program and none of the 37 past recipients', async () => {
+    const { fetcher } = fixtureFetcher(clubGrantMap);
+    const result = await runSource(deps(fetcher), 'arrl-club-grant');
+    expect(result.error).toBeUndefined();
+
+    // The parser still finds all 38 — suppression is not a parse failure, and `parsedCount` is
+    // what feeds source health and detectYieldDrop, so it must keep reporting the true yield.
+    expect(result.parsedCount).toBe(38);
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'arrl-club-grant')?.lastRecordCount).toBe(38);
+
+    const pending = listReviewItems(db, 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].candidate.name).toBe('ARRL Club Grant Program');
+    expect(pending[0].candidate.tags).not.toContain('do_not_publish');
+    expect(result.reviewItems).toBe(1);
+
+    // Named, not just counted: no row in the queue is one of the recipient records.
+    expect(pending.filter((i) => i.candidate.name.includes('Club Grant recipient'))).toEqual([]);
+  });
+
+  it('keeps all 37 past recipients stored and retrievable as evidence', async () => {
+    const { fetcher } = fixtureFetcher(clubGrantMap);
+    await runSource(deps(fetcher), 'arrl-club-grant');
+
+    const stored = storedCandidates('past_award');
+    expect(stored).toHaveLength(37);
+
+    // Retrievable in full, not as a bare id: a past recipient list tells an applicant a great deal
+    // about who this funder actually funds, which is the whole reason these are stored at all.
+    const named = stored.find((p) => p.name.startsWith('Oklahoma State University Amateur Radio Club'));
+    expect(named).toBeDefined();
+    expect(named?.trust.status).toBe('closed');
+    expect(named?.tags).toContain('do_not_publish');
+    expect(named?.trust.sourceUrl).toContain('club-grant-program');
+  });
+
+  it('the true positive still fires: approving the real club grant publishes it', async () => {
+    const { fetcher } = fixtureFetcher(clubGrantMap);
+    await runSource(deps(fetcher), 'arrl-club-grant');
+    const [item] = listReviewItems(db, 'pending');
+
+    const published = approveReviewItem(db, item.id, 'user-1', NOW);
+    expect(published.name).toBe('ARRL Club Grant Program');
+
+    const corpus = listProgramsBySource(db, 'arrl-club-grant');
+    expect(corpus).toHaveLength(1);
+    expect(corpus[0].name).toBe('ARRL Club Grant Program');
+    // The published corpus contains no suppressed record, by the only path that can write to it.
+    expect(corpus.filter((p) => p.tags.includes('do_not_publish'))).toEqual([]);
+  });
+
+  it('does the same for ardc-award-tables, nsf-awards and usaspending — four sources, one gate', async () => {
+    // The other three `recordType: 'past_award'` sources. The fix deliberately lives in the shared
+    // pipeline rather than in any one source module, so all four are covered by the same gate.
+    const cases: Array<{ sourceId: string; map: Record<string, FetchedPayload>; parsed: number }> = [
+      {
+        sourceId: 'ardc-award-tables',
+        // The same 3-row fixture is served for each of the eight year pages the module requests
+        // (2019 through 2026), and `year` is part of the external key, so 3 x 8 = 24 distinct rows.
+        map: {
+          '-grants/': fixturePayload(
+            'ardc-award-tables',
+            'pathological.html',
+            'https://www.ardc.net/apply/grants/2026-grants/',
+          ),
+        },
+        parsed: 24,
+      },
+      {
+        sourceId: 'nsf-awards',
+        map: {
+          'api.nsf.gov': fixturePayload(
+            'nsf-awards',
+            'awards-response.json',
+            'https://api.nsf.gov/services/v1/awards.json',
+          ),
+        },
+        parsed: 1,
+      },
+      {
+        sourceId: 'usaspending',
+        map: {
+          'usaspending.gov': fixturePayload(
+            'usaspending',
+            'spending-by-award.json',
+            'https://api.usaspending.gov/api/v2/search/spending_by_award/',
+          ),
+        },
+        parsed: 1,
+      },
+    ];
+
+    for (const { sourceId, map, parsed } of cases) {
+      db.exec('DELETE FROM review_items; DELETE FROM change_events; DELETE FROM programs; DELETE FROM sources; DELETE FROM snapshots;');
+      const { fetcher } = fixtureFetcher(map);
+      const result = await runSource(deps(fetcher), sourceId);
+      expect(result.error, sourceId).toBeUndefined();
+      expect(result.parsedCount, `${sourceId} must still parse everything`).toBe(parsed);
+      expect(listReviewItems(db, 'pending'), `${sourceId} must queue nothing`).toEqual([]);
+
+      expect(
+        storedCandidates('past_award'),
+        `${sourceId} must keep its award history stored`,
+      ).toHaveLength(parsed);
+    }
+  });
+
+  it('does the same for the crosscheck-only ARRL summary table', async () => {
+    // The record type that already carried the tag before this fix — and was queued anyway, which
+    // is the single clearest proof the tag had no reader: it was tagged AND it was in the queue.
+    const { fetcher } = fixtureFetcher({
+      '/summary-of-scholarship-requirements': fixturePayload(
+        'arrl-summary-of-scholarship-requirements',
+        '00-www-arrl-org-summary-of-scholarship-requirements.html',
+        'http://www.arrl.org/summary-of-scholarship-requirements',
+      ),
+    });
+    const result = await runSource(deps(fetcher), 'arrl-summary-of-scholarship-requirements');
+    expect(result.parsedCount).toBe(1);
+    expect(listReviewItems(db, 'pending')).toEqual([]);
+    expect(storedCandidates('crosscheck')).toHaveLength(1);
+  });
+});

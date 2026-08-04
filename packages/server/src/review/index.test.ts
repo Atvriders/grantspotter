@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import type { ChangeEvent, DeadlineSpec, Program } from '@grantspotter/core';
 import { expandCycles, hashProgram } from '@grantspotter/core';
@@ -5,8 +7,16 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
 import { createCycleRepo } from '../db/repositories/cycles.js';
-import { isRejected, listProgramsBySource, listReviewItems } from '../db/repositories/ingestion.js';
 import {
+  insertReviewItem,
+  isRejected,
+  listProgramsBySource,
+  listReviewItems,
+  upsertProgram,
+} from '../db/repositories/ingestion.js';
+import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
+import {
+  SuppressedProgramError,
   approveReviewItem,
   buildReviewItems,
   confidenceFor,
@@ -537,5 +547,139 @@ describe('cycle backfill converges regardless of approval order (SEAM FIX round 
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((c) => c.programId === dependent(1).id)).toBe(true);
     expect(rows[0].label).toContain('via ARRL Foundation Scholarship Program');
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the reader half of `do_not_publish`.
+ *
+ * The tag was written by `normalize/`'s `buildTags` and read by NOTHING: `grep -rn do_not_publish`
+ * over the whole repo returned two hits, the write and its own unit test. `diffPrograms`,
+ * `buildReviewItems` and the approve path all ignored it, so a real crawl of the committed ARRL
+ * club-grant fixture queued 38 review items — the one real grant program plus 37 clubs that had
+ * already RECEIVED money — and approving them would have listed 37 historical awards as live
+ * funding opportunities.
+ *
+ * These tests are the readers. The three marked INVARIANT are the ones that must fail loudly if
+ * enforcement is ever removed again; each was proven by deliberately deleting the gate it covers
+ * and confirming the red run (see remediation-do-not-publish-report.md).
+ */
+describe('do_not_publish is enforced, not merely written', () => {
+  const suppressed = (over: Partial<Program> = {}): Program =>
+    program({ tags: [...program().tags, 'past_award', DO_NOT_PUBLISH_TAG], ...over });
+
+  const candidatesFor = (p: Program) => new Map([[p.id, p]]);
+
+  /** A review-item row created by a crawl that ran BEFORE the gate existed. */
+  function legacyPendingItem(candidate: Program, changeEventId = 'evt-1'): string {
+    insertReviewItem(db, {
+      id: 'ri-persisted-before-the-fix',
+      changeEventId,
+      candidate,
+      decision: 'pending',
+      confidence: 0.7,
+      rejectKey: rejectKeyFor('qcwa', candidate),
+    });
+    return 'ri-persisted-before-the-fix';
+  }
+
+  it('INVARIANT: buildReviewItems never queues a do_not_publish candidate', async () => {
+    const past = suppressed();
+    const items = await buildReviewItems(db, [event()], candidatesFor(past), 'C', 'qcwa');
+    expect(items).toEqual([]);
+    expect(listReviewItems(db, 'pending')).toEqual([]);
+  });
+
+  it('queues the byte-identical candidate once the tag is removed — the TAG is the cause', async () => {
+    // Same program, same event, same everything except the tag. Without this, a green suppression
+    // test could be passing for an unrelated reason (a bad event kind, a missing candidate).
+    const items = await buildReviewItems(db, [event()], candidatesFor(program()), 'C', 'qcwa');
+    expect(items).toHaveLength(1);
+    expect(items[0].candidate.name).toBe('QCWA Memorial Scholarship');
+  });
+
+  it('INVARIANT: approveReviewItem refuses to publish a suppressed candidate', async () => {
+    const id = legacyPendingItem(suppressed());
+    expect(() => approveReviewItem(db, id, 'user-1', NOW)).toThrow(SuppressedProgramError);
+    expect(() => approveReviewItem(db, id, 'user-1', NOW)).toThrow(/do_not_publish/);
+    // Nothing published, and the item is not silently marked approved either.
+    expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
+    expect(listReviewItems(db, 'pending')).toHaveLength(1);
+    expect(provenanceFor(db, id)).toEqual([]);
+  });
+
+  it('INVARIANT: editReviewItem refuses to publish an edit that is still suppressed', async () => {
+    const id = legacyPendingItem(suppressed());
+    const renamedButStillHistory = suppressed({ name: 'Some Club (2024 recipient), tidied up' });
+    expect(() => editReviewItem(db, id, 'user-1', NOW, renamedButStillHistory)).toThrow(
+      SuppressedProgramError,
+    );
+    expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
+  });
+
+  it('lets a reviewer who strips the tag publish deliberately — a guardrail, not a lock', async () => {
+    const id = legacyPendingItem(suppressed());
+    const corrected = program({ name: 'Actually a real, open programme' });
+    expect(corrected.tags).not.toContain(DO_NOT_PUBLISH_TAG);
+    const published = editReviewItem(db, id, 'user-1', NOW, corrected);
+    expect(published.name).toBe('Actually a real, open programme');
+    expect(listProgramsBySource(db, 'qcwa')).toHaveLength(1);
+  });
+
+  it('still allows a vanished suppressed record to be reviewed and removed', async () => {
+    // The one deliberate hole (SUPPRESSION_EXEMPT_KINDS). A `vanished` event proposes a REMOVAL,
+    // not a publication, and it is the only reviewable route by which a record published before
+    // this fix can be taken back out of the corpus. Approving it takes the deleteProgram branch,
+    // never the upsert branch, so the backstop above is not in the way.
+    const past = suppressed();
+    // Exactly how such a row could exist in production: an approve that happened before the gate.
+    upsertProgram(db, past, sourceKeyFor(past));
+    expect(listProgramsBySource(db, 'qcwa')).toHaveLength(1);
+
+    const items = await buildReviewItems(
+      db,
+      [event({ id: 'evt-v', kind: 'vanished', before: past, after: undefined })],
+      candidatesFor(past),
+      'C',
+      'qcwa',
+    );
+    expect(items).toHaveLength(1);
+    approveReviewItem(db, items[0].id, 'user-1', NOW);
+    expect(listProgramsBySource(db, 'qcwa')).toEqual([]);
+  });
+
+  /**
+   * INVARIANT, in the shape of `sources/registry.test.ts`'s "every module on disk must be
+   * registered". The two behavioural gates above only cover the publish paths that exist TODAY. If
+   * someone adds a third way to write into `programs` from this module and does not guard it, the
+   * behavioural tests stay green and the tag silently stops being enforced for that path — which is
+   * precisely how the original defect survived. So: every `upsertProgram(` call site in
+   * `review/index.ts` must have an `isDoNotPublish` guard in front of it, and the count must match
+   * the paths asserted above.
+   */
+  it('INVARIANT: every publish call site in review/index.ts is guarded by isDoNotPublish', async () => {
+    const src = await readFile(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+
+    // The reader itself must still be imported. Deleting the import is the laziest way to
+    // "remove" enforcement, and it must not be a silent one.
+    expect(src).toMatch(/import\s*\{[^}]*isDoNotPublish[^}]*\}\s*from\s*'\.\.\/normalize\/index\.js'/);
+
+    const sites = [...src.matchAll(/\bupsertProgram\(/g)];
+    // approveReviewItem and editReviewItem — the two paths the behavioural INVARIANT tests above
+    // cover, one assertion each. Add a third publish path and this fails until it is covered too.
+    expect(sites, 'a new publish path appeared — guard it and add a suppression test').toHaveLength(2);
+
+    for (const site of sites) {
+      const preceding = src.slice(Math.max(0, (site.index ?? 0) - 600), site.index ?? 0);
+      expect(
+        preceding,
+        `the upsertProgram( call at offset ${site.index} has no isDoNotPublish guard in front of it`,
+      ).toContain('isDoNotPublish(');
+    }
+
+    // And the queue gate, which is not an upsert at all.
+    expect(src, 'buildReviewItems lost its do_not_publish gate').toMatch(
+      /isDoNotPublish\(candidate\)/,
+    );
   });
 });

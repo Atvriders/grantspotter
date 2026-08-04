@@ -26,6 +26,7 @@ import {
 } from '../db/repositories/ingestion.js';
 import type { ProgramSourceKey } from '../db/repositories/programs.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
+import { DO_NOT_PUBLISH_TAG, isDoNotPublish } from '../normalize/index.js';
 
 /**
  * RESOLUTIONS R1/R9. CONTRACT §3 gives neither Program nor ReviewItem a field for the source
@@ -72,6 +73,60 @@ export function confidenceFor(
 
 const NO_CANDIDATE_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['parse_yield_dropped']);
 
+/**
+ * REMEDIATION (2026-08-03): `do_not_publish` is enforced HERE, and this is why.
+ *
+ * The tag was written by `normalize/`'s `buildTags` and read by nothing at all — not
+ * `diffPrograms`, not `buildReviewItems`, not the approve path. Four sources
+ * (`arrl-club-grant`, `ardc-award-tables`, `nsf-awards`, `usaspending`) each carried a comment
+ * promising that past awards "can never render as a live deadline"; none of that was true of the
+ * running code. A real crawl of the committed club-grant fixture put 38 rows in the review queue:
+ * the one real ARRL Club Grant Program and 37 clubs that had already RECEIVED money, each a
+ * publishable `Program` with the same `klass` and `applicantEntities` as the real grant.
+ *
+ * WHY THE REVIEW QUEUE, AND NOT THE CRAWL. The crawl is where these records get STORED, and
+ * storing them is correct and wanted: a funder's list of past recipients is the best available
+ * evidence of who that funder actually funds. `runSource` calls `insertChangeEvents` (which
+ * carries the whole normalized `Program` in `after_json`) before it ever calls
+ * `buildReviewItems`, so suppressing here keeps every suppressed record fully stored and
+ * retrievable through `listChangeEvents` while keeping it out of the human queue.
+ *
+ * WHY NOT ONLY THE APPROVE PATH. The harm the reviewer suffers is the QUEUE, not the publish: 37
+ * historical awards sitting in an Inbox as apparent opportunities, each of which has to be clicked
+ * into before it can be recognised as history. Gating only at approve would leave all 37 there.
+ *
+ * WHY BOTH, THEN. `buildReviewItems` is the only constructor of the queue, so it is the primary
+ * gate. `approveReviewItem`/`editReviewItem` are documented as "the ONLY path that writes into the
+ * published corpus", so they are the backstop — they catch review-item rows that were persisted by
+ * a crawl that ran BEFORE this fix (which `buildReviewItems` will never see again), and they mean
+ * that deleting either gate alone still leaves suppression enforced. A safety tag with exactly one
+ * reader is one deletion away from being unread again, which is the defect class being closed here.
+ *
+ * `SUPPRESSION_EXEMPT_KINDS` is the one deliberate hole. A `vanished` event is a proposal to
+ * REMOVE a program, not to publish one, so it is not an "apparent opportunity" and must not be
+ * swallowed: it is the only reviewable path by which a record published before this fix can be
+ * taken back out of the corpus. `approveReviewItem` handles `vanished` in its own branch, which
+ * calls `deleteProgram` and never `upsertProgram`, so the backstop below sits strictly on the
+ * publishing branch.
+ */
+const SUPPRESSION_EXEMPT_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['vanished']);
+
+/** Thrown when something tries to publish a program tagged `do_not_publish`. */
+export class SuppressedProgramError extends Error {
+  readonly programId: string;
+  constructor(program: Program, action: string) {
+    super(
+      `Refusing to ${action} program "${program.name}" (${program.id}): it is tagged ` +
+        `"${DO_NOT_PUBLISH_TAG}", which means it is stored evidence (a past award, or a ` +
+        `cross-check-only record) and not a funding opportunity. Publishing it would list ` +
+        `history as live funding. If this record really is an opportunity, fix the source's ` +
+        `recordType rather than stripping the tag.`,
+    );
+    this.name = 'SuppressedProgramError';
+    this.programId = program.id;
+  }
+}
+
 function reviewItemId(event: ChangeEvent): string {
   return `ri-${createHash('sha256').update(`${event.id}|${event.fieldPath ?? ''}`).digest('hex').slice(0, 20)}`;
 }
@@ -96,6 +151,9 @@ export async function buildReviewItems(
     if (!event.programId) continue;
     const candidate = candidatesById.get(event.programId);
     if (!candidate) continue;
+    // The primary do_not_publish gate — see SUPPRESSION_EXEMPT_KINDS above. The record stays
+    // stored: `runSource` already wrote it (and this whole candidate Program) into change_events.
+    if (isDoNotPublish(candidate) && !SUPPRESSION_EXEMPT_KINDS.has(event.kind)) continue;
 
     const rejectKey = rejectKeyFor(sourceId, candidate);
     if (isRejected(db, rejectKey)) continue;
@@ -250,6 +308,10 @@ export function approveReviewItem(
   if (kind === 'vanished') {
     deleteProgram(db, item.candidate.id); // cycles cascade via cycles.program_id ON DELETE CASCADE
   } else {
+    // do_not_publish backstop on the publishing branch only: removing a suppressed record is
+    // always allowed, adding one never is. Reached only by a review-item row persisted before
+    // buildReviewItems started gating, since nothing creates such a row any more.
+    if (isDoNotPublish(item.candidate)) throw new SuppressedProgramError(item.candidate, 'approve');
     upsertProgram(db, item.candidate, sourceKeyFor(item.candidate));
     projectCycles(db, item.candidate, nowISO);
   }
@@ -293,6 +355,11 @@ export function editReviewItem(
   edited: Program,
 ): Program {
   const item = require(db, itemId);
+  // Same backstop as approve. The check is on `edited`, not on `item.candidate`: a reviewer who
+  // has genuinely established that a record is an opportunity can strip the tag in the edit and
+  // publish it, which keeps this a guardrail against silent publication rather than a lock a human
+  // cannot reason their way past.
+  if (isDoNotPublish(edited)) throw new SuppressedProgramError(edited, 'publish an edit of');
   upsertProgram(db, edited, sourceKeyFor(edited));
   projectCycles(db, edited, nowISO);
   setReviewDecision(db, itemId, 'edited', userId, nowISO, edited);

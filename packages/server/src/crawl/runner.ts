@@ -184,6 +184,14 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
       // deps.assist is optional (spec §9): undefined or disabled leaves confidence exactly as
       // confidenceFor computed it, and buildReviewItems must still be awaited regardless — a bare
       // call returns a Promise, and reading `.length` off that is a type error, not just a race.
+      //
+      // `reviewItemCount` is deliberately NOT `next.length`, and for four sources it is much
+      // smaller: `buildReviewItems` drops every candidate tagged `do_not_publish` (past awards and
+      // cross-check-only records — see its `SUPPRESSION_EXEMPT_KINDS` doc comment). Those records
+      // are already fully stored by the `insertChangeEvents` call above, which carries the whole
+      // normalized Program in `after_json`, so suppression costs no evidence. `parsedCount` and
+      // `recordPollSuccess` below still report the true parse yield, so a parser that quietly
+      // stops working is still caught by `detectYieldDrop` rather than being masked by suppression.
       reviewItemCount = (
         await buildReviewItems(deps.db, events, byId, module.tier, sourceId, deps.assist)
       ).length;

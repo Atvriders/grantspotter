@@ -182,6 +182,67 @@ function buildRawOtherText(raw: RawOpportunity): string {
   return raw.rawText.trim();
 }
 
+/**
+ * The suppression tag. A program carrying it is EVIDENCE, not an opportunity: store it, keep it
+ * retrievable, never queue it for review and never publish it.
+ *
+ * WHY THIS IS DEFINED HERE, NEXT TO ITS ENFORCEMENT PREDICATE. Until 2026-08-03 this string was
+ * written by `buildTags` and read by absolutely nothing — `diffPrograms`, `buildReviewItems` and
+ * the approve path all ignored it — so `arrl-pages.ts`'s claim that "normalize/ refuses to publish
+ * it" was simply false of the running code, and `ardc-award-tables.ts` / `nsf-awards.ts` /
+ * `usaspending.ts` each carried the same false assurance in their own `notes`. The tag has to be
+ * defined together with `isDoNotPublish`, the predicate every enforcement point calls, so that a
+ * writer with no reader cannot silently reappear: deleting the reader now breaks an import.
+ *
+ * `review/index.ts` is the reader. See `SuppressedProgramError` there for where suppression is
+ * actually enforced and why it lives at those two seams rather than in the crawl.
+ */
+export const DO_NOT_PUBLISH_TAG = 'do_not_publish';
+
+/**
+ * Record types that are historical or diagnostic and must never surface as fundable.
+ *
+ * - `past_award` — money that has ALREADY been handed out. Four sources emit it: the ARRL
+ *   club-grant page (~37 past recipients alongside the one real grant program),
+ *   `ardc-award-tables`, `nsf-awards` and `usaspending`. Every one of these normalizes into a
+ *   `Program` with the same `klass` and `applicantEntities` as a real opportunity; only
+ *   `trust.status: 'closed'` distinguishes them, and `matcher.ts` does not read `trust.status`.
+ *   They currently miss the individual-facing candidates only because the club-grant source's
+ *   `applicantEntities` happen to be org-only — coincidence, not design. A funder's grant history
+ *   is genuinely valuable evidence about who that funder funds, so these are stored, never
+ *   published.
+ * - `crosscheck` — `arrl-summary-of-scholarship-requirements` exists purely to corroborate other
+ *   sources. Its own `notes` call it "STALE… 79 entries against the catalog's 111, abbreviated
+ *   non-joinable keys, and it still lists dropped scholarships". Publishing a dropped scholarship
+ *   as live is precisely the harm this whole pipeline exists to prevent.
+ */
+export const SUPPRESSED_RECORD_TYPES: ReadonlySet<string> = new Set(['past_award', 'crosscheck']);
+
+/**
+ * Record types that ARE meant to reach the review queue, listed explicitly so that the classes are
+ * exhaustive and a NEW record type cannot quietly default into either one. `normalize/index.test.ts`
+ * scans `sources/` on disk for every `recordType:` literal and fails if any is in neither set.
+ *
+ * `verified_negative` and `safety_warning` are deliberately publishable: "we checked, this program
+ * does not exist" and "farweb.org was taken over and now serves a gambling site, do not apply" are
+ * exactly the answers a searcher most needs to see. Suppressing those would hide the warning.
+ */
+export const PUBLISHABLE_RECORD_TYPES: ReadonlySet<string> = new Set([
+  'manual',
+  'guided_workflow',
+  'verified_negative',
+  'safety_warning',
+]);
+
+/**
+ * The ONLY reader of {@link DO_NOT_PUBLISH_TAG}. Every enforcement point calls this rather than
+ * matching the string itself, so `grep isDoNotPublish` enumerates the complete set of places
+ * suppression is honoured — which is the property whose absence was the original defect.
+ */
+export function isDoNotPublish(program: Pick<Program, 'tags'>): boolean {
+  return program.tags.includes(DO_NOT_PUBLISH_TAG);
+}
+
 function buildTags(raw: RawOpportunity, ctx: NormalizeContext): string[] {
   // `source:` and `key:` together ARE the ingest identity (RESOLUTIONS R1/R9). CONTRACT §3's
   // Program has no field for them, and review/index.ts reads them back out of here on approval
@@ -194,7 +255,9 @@ function buildTags(raw: RawOpportunity, ctx: NormalizeContext): string[] {
   ]);
   const recordType = raw.rawFields.recordType;
   if (recordType) tags.add(recordType);
-  if (recordType === 'crosscheck') tags.add('do_not_publish');
+  // Was `recordType === 'crosscheck'` only, which left `past_award` — the ~37 already-funded ARRL
+  // clubs plus every ARDC/NSF/USAspending award row — indistinguishable from a live opportunity.
+  if (recordType !== undefined && SUPPRESSED_RECORD_TYPES.has(recordType)) tags.add(DO_NOT_PUBLISH_TAG);
   if (raw.rawFields.year) tags.add(`year:${raw.rawFields.year}`);
   return [...tags];
 }
