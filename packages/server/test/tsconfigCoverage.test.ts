@@ -110,6 +110,35 @@ async function typecheckedConfigs(): Promise<string[]> {
         await visit(workspaceDir, new Set([...seen, workspaceDir]));
         continue;
       }
+      // `npm run build -w <workspace>` is a PREREQUISITE of the typecheck, not a part of it, and
+      // it is here because of a defect this test is the right place to remember.
+      //
+      // `packages/web/tsconfig.json` has no `paths` entry, so it resolves `@grantspotter/core`
+      // through node_modules to `packages/core/dist/index.d.ts` — a build artefact. On a fresh
+      // clone that file does not exist, so `npm run typecheck`, the command the README tells a
+      // contributor to run, failed with 43 `TS2307 Cannot find module` errors and the cascade
+      // behind them. Nobody here noticed for the life of the project because every local checkout
+      // had a `dist/` left over from an earlier build. CI has no such history: the very first
+      // push went red on this, at the `Typecheck` step, before `Build` had run.
+      //
+      // The obvious-looking alternative — pointing web's `paths` at `packages/core/src` — is
+      // WRONG and was measured to be: it drags core's source through web's compiler options,
+      // which set `noUncheckedIndexedAccess`, and core is not written under that flag. It turned
+      // 43 errors into 85, in core's files rather than web's.
+      //
+      // This step therefore emits and checks nothing, and contributes no config to the list below.
+      // That costs no coverage, and this file still proves it: the package being built is
+      // `packages/core/src`, which the ROOT config already includes, so the assertion at the
+      // bottom still has to account for every one of its source files.
+      if (tokens[0] === 'npm' && tokens[1] === 'run' && tokens[2] === 'build') {
+        const at = tokens.indexOf('-w');
+        if (at === -1 || tokens[at + 1] === undefined) {
+          throw new Error(`\`${leg}\` builds without naming a workspace; teach this test to resolve it`);
+        }
+        // Resolving it proves the workspace exists rather than taking the name on trust.
+        await workspaceDirFor(tokens[at + 1] ?? '');
+        continue;
+      }
       throw new Error(
         `\`${leg}\` is a typecheck step this test cannot read. Teach it before trusting this ` +
           'invariant again — an unread step can hide a whole package.',

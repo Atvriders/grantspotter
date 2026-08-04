@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck -w @grantspotter/web",
+    "typecheck": "npm run build -w @grantspotter/core && tsc --noEmit -p tsconfig.json && npm run typecheck -w @grantspotter/web",
     "build": "npm run build -w @grantspotter/core && npm run build -w @grantspotter/server && npm run build -w @grantspotter/web",
     "test": "vitest run",
     "test:watch": "vitest",
