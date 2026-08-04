@@ -276,6 +276,34 @@ export const funderSchema = z.object({
   note: z.string().optional(),
 });
 
+/**
+ * An absolute http(s) URL, and nothing else. The store-side half of the same allowlist
+ * `web/src/lib/safety.ts` applies before it renders an anchor.
+ *
+ * `applyUrl` was a bare `z.string()`, and `POST /api/inbox/:id/decision` validates an
+ * admin-edited candidate with nothing but `programSchema` — so `javascript:…` was a storable
+ * value, and the detail page renders `applyUrl` as an `<a href>`. All 703 stored apply URLs are
+ * absolute http/https today (591 https, 112 http, 0 unparseable), which is exactly why this is
+ * worth closing before a record proves it rather than after.
+ *
+ * NOT `z.string().url()`: zod's `.url()` accepts `javascript:alert(1)` — it checks that the URL
+ * constructor succeeds, which is the same hole the browser-side copy had. The scheme is checked
+ * by name. `//host/path` is rejected too: `new URL()` throws on it, and a browser resolves it to
+ * the host — which is how a protocol-relative farweb.org link reached the page as a live anchor.
+ *
+ * A REGEX RATHER THAN `new URL()` because `core` is compiled with `lib: ["ES2022"]` and
+ * `types: []` (spec §14 purity — no `node:`, no DOM, no host environment assumed at all), so
+ * `URL` is not in scope here. The pattern is deliberately narrower than the constructor: scheme,
+ * `//`, a non-empty authority with no whitespace, and an optional path/query/fragment. Verified
+ * against every URL the corpus stores — 703 of 703 `applyUrl` values match, and every string
+ * `web/src/lib/safety.ts` refuses is refused here too.
+ */
+const HTTP_URL = /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i;
+
+export const httpUrlSchema = z
+  .string()
+  .refine((value) => HTTP_URL.test(value), { message: 'must be an absolute http or https URL' });
+
 export const programSchema = z.object({
   id: z.string(),
   funderId: z.string(),
@@ -286,7 +314,7 @@ export const programSchema = z.object({
   amount: amountSpecSchema,
   deadline: deadlineSpecSchema,
   applyVia: applyViaSchema,
-  applyUrl: z.string().optional(),
+  applyUrl: httpUrlSchema.optional(),
   applyContact: z.string().optional(),
   constraints: z.array(constraintSchema),
   fundingRestrictions: z.array(z.string()),

@@ -454,21 +454,190 @@ describe('Opportunity detail — the three obligation states', () => {
   it('never renders an unstated obligation as "not required"', async () => {
     renderDetail();
     const obligations = await screen.findByRole('region', { name: /obligations/i });
-    // Both tri-state flags are absent in this record, as they are in 148 of 150.
-    expect(within(obligations).getAllByText(/^Not stated\./)).toHaveLength(2);
+    // Both tri-state flags are absent in this record, as they are in 148 of 150; sustainment and
+    // reporting are absent too, and after I3 they say so rather than vanishing.
+    expect(within(obligations).getAllByText(/^Not stated\./)).toHaveLength(4);
     expect(screen.queryByText(/not required/i)).not.toBeInTheDocument();
   });
 
   it('says what an unstated obligation actually means, and that it is not a no', async () => {
     renderDetail();
     const obligations = await screen.findByRole('region', { name: /obligations/i });
-    expect(within(obligations).getByText(/no page this pipeline has fetched/i)).toBeInTheDocument();
+    expect(within(obligations).getAllByText(/no page this pipeline has fetched/i).length).toBeGreaterThan(0);
   });
 
   it('applies the same three states to the co-funding preference', async () => {
     stubFetch(detailWithObligations({ ...OBLIGATIONS_UNSTATED, coFunderPreference: true }));
     renderDetail();
     expect(await screen.findByText(/prefers not to be the sole funder/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * CLOSE-OUT REVIEW I4 — SIX ROWS, OR THE TWO THAT SPEAK MAKE THE FOUR THAT DO NOT LOOK SETTLED.
+ *
+ * `licenseObligation`, `indirectCostCapPct`, `sustainmentObligation` and `reportingObligation`
+ * were each wrapped in `{value !== undefined && …}`, so an unstated value emitted no row at all —
+ * inside the same `<dl>` as "Cost share: Not stated". A reader who sees one field say "Not stated"
+ * and no Reporting row at all reads the absent row as "no reporting obligation": absence of
+ * evidence rendered as evidence of absence, which is the exact inversion the CONTRACT §3
+ * amendment was written to stop, and the file's own rule at `orNotStated` ("Never an empty cell")
+ * already said so.
+ *
+ * Measured over the 150 publishable records: `sustainmentObligation` is unstated on 150,
+ * `licenseObligation` on 149, `indirectCostCapPct` on 149 and `reportingObligation` on 149 — 597
+ * rows that rendered as silence, on every one of the 150 records.
+ */
+describe('Opportunity detail — all six obligations, always', () => {
+  const NOTHING_STATED: Obligations = {};
+
+  it('renders six labelled rows even when the funder stated none of them', async () => {
+    stubFetch(detailWithObligations(NOTHING_STATED));
+    renderDetail();
+    const obligations = await screen.findByRole('region', { name: /obligations/i });
+    expect(within(obligations).getAllByRole('term').map((t) => t.textContent)).toEqual([
+      'Licensing',
+      'Indirect cost cap',
+      'Cost share',
+      'Co-funding',
+      'Sustainment',
+      'Reporting',
+    ]);
+    expect(within(obligations).getAllByRole('definition')).toHaveLength(6);
+    expect(within(obligations).getAllByText(/^Not stated\./)).toHaveLength(6);
+  });
+
+  it('never leaves an obligation cell empty', async () => {
+    stubFetch(detailWithObligations(NOTHING_STATED));
+    renderDetail();
+    const obligations = await screen.findByRole('region', { name: /obligations/i });
+    for (const dd of within(obligations).getAllByRole('definition')) {
+      expect((dd.textContent ?? '').trim()).not.toBe('');
+    }
+  });
+
+  it('reads an unstated prose obligation as a question, never as an absence of one', async () => {
+    stubFetch(detailWithObligations(NOTHING_STATED));
+    renderDetail();
+    const obligations = await screen.findByRole('region', { name: /obligations/i });
+    const reporting = within(obligations)
+      .getAllByRole('definition')
+      .at(5);
+    expect(reporting).toHaveTextContent(/^Not stated\./);
+    // It may WARN against assuming there is none. It may never assert it.
+    expect(reporting).not.toHaveTextContent(/no reporting obligation/i);
+    expect(reporting).not.toHaveTextContent(/not required/i);
+    expect(reporting).toHaveTextContent(/ask/i);
+  });
+
+  it('still prints a stated obligation verbatim, in its own row', async () => {
+    stubFetch(
+      detailWithObligations({
+        licenseObligation: 'All output must be open-source / open-access.',
+        indirectCostCapPct: 20,
+        sustainmentObligation: 'The repeater must stay on the air for three years.',
+        reportingObligation: 'One written report within 12 months.',
+      }),
+    );
+    renderDetail();
+    const obligations = await screen.findByRole('region', { name: /obligations/i });
+    expect(within(obligations).getByText(/open-source \/ open-access/)).toBeInTheDocument();
+    expect(within(obligations).getByText(/20%/)).toBeInTheDocument();
+    expect(within(obligations).getByText(/stay on the air for three years/)).toBeInTheDocument();
+    expect(within(obligations).getByText(/One written report within 12 months\./)).toBeInTheDocument();
+    // Only the two tri-state flags are unstated in this record.
+    expect(within(obligations).getAllByText(/^Not stated\./)).toHaveLength(2);
+  });
+
+  /** An empty string is not a statement either. It used to render as a blank cell. */
+  it('treats an empty prose obligation as unstated rather than as a blank cell', async () => {
+    stubFetch(detailWithObligations({ reportingObligation: '   ' }));
+    renderDetail();
+    const obligations = await screen.findByRole('region', { name: /obligations/i });
+    expect(within(obligations).getAllByText(/^Not stated\./)).toHaveLength(6);
+  });
+});
+
+/**
+ * CLOSE-OUT REVIEW I6, ON THE PAGE. `matchProgram` no longer upgrades an unresolvable axis to
+ * `eligible`, so `{kind: 'unknown', missingProfileFields: []}` is now reachable — an organisation
+ * against a county- or call-district-scoped geography, where the org editor has no matching input.
+ * The panel used to end with "answering one of these", pointing at an empty list.
+ */
+describe('Opportunity detail — an unknown with nothing to fill in', () => {
+  const UNANSWERABLE = {
+    ...CLUB_GRANT_DETAIL,
+    verdict: { kind: 'unknown', missingProfileFields: [] as string[] },
+  };
+
+  it('says there is nothing to answer, rather than pointing at an empty list', async () => {
+    stubFetch(UNANSWERABLE);
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    expect(within(panel).queryByRole('listitem')).not.toBeInTheDocument();
+    expect(panel).toHaveTextContent(/nothing you can enter here would settle this one/i);
+    expect(panel).not.toHaveTextContent(/answering one of these/i);
+  });
+
+  it('still refuses to read as a no', async () => {
+    stubFetch(UNANSWERABLE);
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    expect(panel).toHaveTextContent(/is not a “no”|is not a "no"|not a .no./i);
+  });
+});
+
+/**
+ * CLOSE-OUT REVIEW I5 — THE LATENT `javascript:` HREF.
+ *
+ * `blockedHostFor` returned `null` whenever `new URL()` threw and never checked the scheme, and
+ * `programSchema.applyUrl` was a bare `z.string()`. All 703 stored apply URLs are http/https
+ * today (591 https, 112 http, 0 unparseable), so this was latent — and an admin editing a
+ * candidate through `POST /api/inbox/:id/decision` was all it took to stop being latent.
+ */
+describe('Opportunity detail — a non-http(s) apply URL is refused, not linked', () => {
+  const withApplyUrl = (applyUrl: string): typeof CLUB_GRANT_DETAIL => ({
+    ...CLUB_GRANT_DETAIL,
+    program: { ...CLUB_GRANT_DETAIL.program, applyUrl },
+  });
+
+  it('renders no anchor at all for a javascript: URL', async () => {
+    stubFetch(withApplyUrl('javascript:alert(document.cookie)'));
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(screen.queryByRole('link', { name: /apply at the funder/i })).not.toBeInTheDocument();
+    for (const link of screen.queryAllByRole('link')) {
+      expect(link.getAttribute('href') ?? '').not.toMatch(/^javascript:/i);
+    }
+    expect(document.querySelectorAll('a[href^="javascript:"]')).toHaveLength(0);
+  });
+
+  it('says the address was refused and why, instead of dropping it silently', async () => {
+    stubFetch(withApplyUrl('javascript:alert(1)'));
+    renderDetail();
+    const alerts = await screen.findAllByRole('alert');
+    const refusal = alerts.find((a) => /javascript:/i.test(a.textContent ?? ''));
+    expect(refusal).toBeDefined();
+    expect(refusal).toHaveTextContent(/http/i);
+  });
+
+  /** `new URL('//farweb.org/apply')` throws, so this reached the page as a live anchor before. */
+  it('refuses a protocol-relative URL rather than letting the browser resolve it', async () => {
+    stubFetch(withApplyUrl('//www.farweb.org/scholarships'));
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    for (const link of screen.queryAllByRole('link')) {
+      expect(link.getAttribute('href') ?? '').not.toMatch(/farweb\.org/i);
+    }
+  });
+
+  it('still links an ordinary https apply URL', async () => {
+    stubFetch(withApplyUrl('https://www.arrl.org/club-grant-program'));
+    renderDetail();
+    expect(await screen.findByRole('link', { name: /apply at the funder/i })).toHaveAttribute(
+      'href',
+      'https://www.arrl.org/club-grant-program',
+    );
   });
 });
 
@@ -497,6 +666,59 @@ describe('Opportunity detail — cycles', () => {
     stubFetch(CYCLES_DETAIL);
     renderDetail();
     expect((await screen.findAllByText(/America\/New_York/)).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * CLOSE-OUT REVIEW I3 — THE PAGE MAY NOT CLAIM A PROVENANCE CORE REFUSES TO CLAIM.
+   *
+   * `observedCycles` (`core/src/deadline.ts:598`) hard-codes `timezone: 'UTC'`, and its own
+   * doc-comment says in terms that this is "that frame, not a claim about where the funder is".
+   * The four funder-published cycles in the corpus are exactly the rows that carry it, so the old
+   * sentence — "the zone the funder published them in" — stated the opposite of what core knows on
+   * the four rows the whole published/projected distinction exists for. Measured over the 150
+   * publishable records: 250 cycles resolve, 4 carry `UTC` (all four funder-published) and 246
+   * carry a zone recorded with the recurrence.
+   *
+   * A recorded zone is also not a funder's claim — it is what this pipeline wrote down — so
+   * neither arm may say "the funder published".
+   */
+  it('never says the funder published the zone, on either arm', async () => {
+    stubFetch(CYCLES_DETAIL);
+    renderDetail();
+    await screen.findByText('2027-02-28');
+    expect(screen.queryByText(/the zone the funder published/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/published them in/i)).not.toBeInTheDocument();
+  });
+
+  it('calls a recorded zone recorded, and says whose reading it is', async () => {
+    stubFetch(CYCLES_DETAIL);
+    renderDetail();
+    const zones = await screen.findAllByText(/dates shown in America\/New_York/i);
+    expect(zones.length).toBeGreaterThan(0);
+    expect(zones[0]).toHaveTextContent(/recorded for this cycle/i);
+    expect(zones[0]).not.toHaveTextContent(/no zone is recorded/i);
+  });
+
+  it('says UTC is a rendering frame, not a zone anyone recorded, on the corpus’s four', async () => {
+    stubFetch({
+      ...CYCLES_DETAIL,
+      cycles: [
+        {
+          id: 'cycle-observed-utc',
+          programId: 'arrl-club-grant',
+          closesAt: '2026-09-30T23:59:59.999Z',
+          // Exactly what `observedCycles` emits for a funder-published window.
+          timezone: 'UTC',
+          label: '30 September 2026 deadline',
+          isEstimated: false,
+        },
+      ] satisfies Cycle[],
+    });
+    renderDetail();
+    const zone = await screen.findByText(/dates shown in UTC/i);
+    expect(zone).toHaveTextContent(/no zone is recorded for this cycle/i);
+    expect(zone).toHaveTextContent(/not a claim about the funder/i);
+    expect(zone).not.toHaveTextContent(/the funder published/i);
   });
 });
 

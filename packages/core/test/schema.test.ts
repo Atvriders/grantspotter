@@ -25,6 +25,48 @@ describe('zod mirrors of CONTRACT §3', () => {
     expect(() => programSchema.parse(bad)).toThrow();
   });
 
+  /**
+   * CLOSE-OUT REVIEW I5, THE STORE-SIDE HALF.
+   *
+   * `applyUrl` was a bare `z.string()`, and `POST /api/inbox/:id/decision` validates an
+   * admin-edited candidate with nothing but `programSchema`. So `javascript:…` was a storable
+   * value, and the detail page renders `applyUrl` as an `<a href>`. All 703 stored apply URLs are
+   * absolute http/https today (591 https, 112 http, 0 unparseable), which is precisely why this
+   * is worth closing now rather than after a record proves it.
+   *
+   * The rule is the same allowlist the renderer applies: an absolute http(s) URL, or the key
+   * absent. It is NOT `z.string().url()` — zod's `.url()` accepts `javascript:alert(1)`.
+   */
+  it('accepts an absolute http(s) apply URL, and lets the key be absent', () => {
+    for (const applyUrl of [
+      'https://www.arrl.org/club-grant-program',
+      'http://www.arrl.org/club-grant-program',
+      'https://example.test:8443/apply?x=1#top',
+    ]) {
+      expect(programSchema.parse({ ...makeProgram(), applyUrl }).applyUrl).toBe(applyUrl);
+    }
+    const { applyUrl: _dropped, ...withoutUrl } = makeProgram();
+    expect(programSchema.parse(withoutUrl).applyUrl).toBeUndefined();
+  });
+
+  it('refuses to store an apply URL no page can safely render as a link', () => {
+    for (const applyUrl of [
+      'javascript:alert(document.cookie)',
+      'JavaScript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'vbscript:msgbox(1)',
+      'file:///etc/passwd',
+      // Protocol-relative: `new URL()` throws on it, and the browser resolves it to the hijacked
+      // farweb.org. This is the shape the web-side blocklist passed through as "not blocked".
+      '//www.farweb.org/scholarships',
+      '/apply',
+      'not a url',
+      '',
+    ]) {
+      expect(() => programSchema.parse({ ...makeProgram(), applyUrl }), applyUrl).toThrow();
+    }
+  });
+
   it('rejects a Constraint whose spec axis is not in the union', () => {
     expect(() => constraintSpecSchema.parse({ axis: 'vibes', note: 'nope' })).toThrow();
   });

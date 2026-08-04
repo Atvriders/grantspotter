@@ -12,7 +12,7 @@ import { IneligibilityDrawer } from '../components/IneligibilityDrawer.js';
 import { ProvenanceTable, type FieldProvenance } from '../components/ProvenanceTable.js';
 import { SourceLink } from '../components/SourceLink.js';
 import { VerifyButton } from '../components/VerifyButton.js';
-import { blockedHostFor } from '../lib/safety.js';
+import { linkRefusal, type LinkRefusal } from '../lib/safety.js';
 import { profileFieldHelp, profileFieldHref, profileFieldLabel } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
 import '../components/detail.css';
@@ -74,6 +74,121 @@ function orNotStated(value: string): string {
 }
 
 /**
+ * The tri-state for an obligation whose value is PROSE or a NUMBER rather than a flag.
+ *
+ * Read through core's `obligationState` — the same reader the two boolean obligations use —
+ * rather than a bare `value !== undefined` test at each call site, because the bare test is what
+ * `licenseObligation`, `indirectCostCapPct`, `sustainmentObligation` and `reportingObligation`
+ * each had: `{program.obligations.X !== undefined && (…)}`, which emits NO ROW when the funder
+ * said nothing. Four silent rows in the same `<dl>` as two that say "Not stated" is worse than
+ * either alone — the reader takes the missing Reporting row for "no reporting obligation", which
+ * is absence of evidence rendered as evidence of absence, the exact inversion the CONTRACT §3
+ * amendment was made to prevent, and against this file's own rule at `orNotStated`.
+ *
+ * A blank string is not a statement either: `''` used to satisfy `!== undefined` and render an
+ * empty cell.
+ */
+function statedState(value: string | number | undefined): ObligationState {
+  const stated =
+    typeof value === 'number' ? Number.isFinite(value) : value !== undefined && value.trim() !== '';
+  return obligationState(stated ? true : undefined);
+}
+
+/**
+ * What a prose or numeric obligation reads as, given its state and the funder's own words.
+ *
+ * The `switch` is over the same exhaustiveness-checked union as `costShareCopy`, so this cannot
+ * quietly regrow an arm that renders nothing. `'no'` is unreachable for these four — a prose field
+ * carries a sentence or carries nothing; there is no way to record "the funder said there is
+ * none" — and is therefore routed to the unstated copy, which is the safe reading of a state that
+ * should never arrive. If a negative claim ever becomes recordable it needs its own words, and
+ * this is where the compiler will send whoever adds it.
+ */
+function statedCopy(state: ObligationState, value: string, unstated: string): string {
+  switch (state) {
+    case 'yes':
+      return value;
+    case 'no':
+    case 'unstated':
+      return unstated;
+  }
+}
+
+const LICENSE_UNSTATED =
+  'Not stated. No page this pipeline has fetched says whether holding or keeping a licence is a ' +
+  'condition of this award, so ask the funder rather than reading this as "no licence needed".';
+
+const INDIRECT_UNSTATED =
+  'Not stated. No page this pipeline has fetched gives an indirect-cost cap. That is not a cap ' +
+  'of zero and not an absence of one — it is a number to ask the funder for before you budget.';
+
+const SUSTAINMENT_UNSTATED =
+  'Not stated. No page this pipeline has fetched says whether you must keep the funded work ' +
+  'running after the money is spent.';
+
+const REPORTING_UNSTATED =
+  'Not stated. No page this pipeline has fetched says what reporting this award carries. Ask ' +
+  'before you assume there is none — reporting is what makes a small grant expensive.';
+
+/**
+ * What can honestly be said about the zone a cycle's dates are rendered in.
+ *
+ * The old sentence read "Dates shown in {zone}, the zone the funder published them in." Core
+ * refuses that claim in terms: `observedCycles` hard-codes `timezone: 'UTC'` and its own
+ * doc-comment says *"`timezone: 'UTC'` is that frame, not a claim about where the funder is"*. So
+ * on the four funder-published cycles in this corpus — the exact rows the whole
+ * published/projected distinction exists for — the page stated the opposite of what the data
+ * layer knows. A zone that IS recorded is not a funder's claim either: it is what this pipeline
+ * wrote down with the recurrence rule.
+ *
+ * Two arms, and neither says "the funder". `'UTC'` is read as UNRECORDED because a rendered
+ * `'UTC'` and a defaulted `'UTC'` are indistinguishable here, and the safe reading of an
+ * ambiguity is the one that claims less. Measured over the 150 publishable records: 250 cycles
+ * resolve, 4 carry `UTC` (all four funder-published), 246 carry a recorded zone.
+ *
+ * `AgendaList`'s `zoneLabel` and `ProgramTable`'s `UTC` mark already held this line; this page
+ * was the only deadline surface without it.
+ */
+function zoneSentence(timezone: string | null | undefined): string {
+  const zone = (timezone ?? '').trim();
+  if (zone === '' || zone.toUpperCase() === 'UTC') {
+    return (
+      'Dates shown in UTC — no zone is recorded for this cycle. UTC is the frame this product ' +
+      'renders in, not a claim about the funder’s own day, which may fall either side of it.'
+    );
+  }
+  return (
+    `Dates shown in ${zone} — the zone recorded for this cycle, which is this pipeline’s ` +
+    'reading of the deadline rule rather than something the funder printed.'
+  );
+}
+
+/**
+ * What to say about an apply URL this product will not turn into a link, in the reason's own
+ * words rather than the blocklist's.
+ *
+ * A blocked host is `SourceLink`'s job and keeps its wording (farweb.org's takeover is a specific
+ * warning, and the commercial aggregators are a licence matter, not a danger). The other two
+ * reasons are new — see `lib/safety.ts` — and must not borrow the blocklist's sentence, which
+ * would tell a reader that `javascript:alert(1)` is a host whose terms prohibit republishing.
+ */
+function refusedUrlSentence(refusal: Exclude<LinkRefusal, { kind: 'blocked_host' }>): string {
+  switch (refusal.kind) {
+    case 'unsupported_scheme':
+      return (
+        `This record's apply address uses the ${refusal.scheme} scheme. This product links only ` +
+        'to absolute http and https addresses, so it is shown here as text and not as a link. ' +
+        'Treat it as a broken record rather than as somewhere to go.'
+      );
+    case 'unreadable':
+      return (
+        'This record’s apply address is not an absolute http or https URL, so this product ' +
+        'cannot tell where it points and will not link it. It is shown here as text.'
+      );
+  }
+}
+
+/**
  * Opportunity detail — spec §8's honesty surfaces in one place: the trust badge, every disputed
  * reading with its own source, the stale-mirror warning, `rawOtherText` verbatim, the quoted AI
  * policy, field-level provenance, and Verify now with its diff.
@@ -94,7 +209,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
   const { program, funder, cycles, provenance, verdict, deadlineOwner } = data;
   const isWatched = watched ?? data.watched;
   const applyUrl = program.applyUrl ?? '';
-  const applyBlocked = blockedHostFor(applyUrl);
+  const applyRefusal = linkRefusal(applyUrl);
 
   async function toggleWatch(): Promise<void> {
     setWatchError(null);
@@ -132,10 +247,19 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
       {/* A URL the pipeline stored is not automatically a URL this page will offer. 345 ARDC
           records once advertised a grant recipient's Facebook page as the place to apply, and
           farweb.org now redirects to a gambling site. */}
-      {applyUrl !== '' && applyBlocked !== null && <SourceLink href={applyUrl} />}
+      {applyUrl !== '' && applyRefusal?.kind === 'blocked_host' && <SourceLink href={applyUrl} />}
+
+      {/* The other two refusals, in their own words. A `javascript:` or protocol-relative address
+          is a broken record, not a hijacked host, and saying so with the blocklist's sentence
+          would be a second false claim laid over the first. */}
+      {applyUrl !== '' && applyRefusal !== null && applyRefusal.kind !== 'blocked_host' && (
+        <p className="blocked-host" role="alert">
+          {refusedUrlSentence(applyRefusal)} <span className="host">{applyUrl}</span>
+        </p>
+      )}
 
       <div className="detail-actions">
-        {applyUrl !== '' && applyBlocked === null && (
+        {applyUrl !== '' && applyRefusal === null && (
           <a className="btn btn-primary" href={applyUrl} target="_blank" rel="noopener noreferrer">
             Apply at the funder
           </a>
@@ -207,9 +331,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                         : 'Published by the funder'}
                     </span>
                     <br />
-                    <span className="cycle-zone">
-                      Dates shown in {cycle.timezone}, the zone the funder published them in.
-                    </span>
+                    <span className="cycle-zone">{zoneSentence(cycle.timezone)}</span>
                   </li>
                 ))}
               </ul>
@@ -264,10 +386,28 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                   ))}
                 </ul>
               )}
-              <p>
-                This program stops at the first thing it cannot work out about you, so answering
-                one of these may reveal the next question rather than a final verdict.
-              </p>
+              {verdict.missingProfileFields.length > 0 ? (
+                <p>
+                  This program stops at the first thing it cannot work out about you, so answering
+                  one of these may reveal the next question rather than a final verdict.
+                </p>
+              ) : (
+                /*
+                  AN UNKNOWN WITH NOTHING TO FILL IN — reachable since the matcher stopped
+                  upgrading an unresolvable axis to `eligible` (close-out review I6). It happens
+                  when a constraint is scoped to something no field on your profile can answer:
+                  an organisation against a county or call-district geography, for instance, where
+                  the org editor has no such input to send you to. Naming a field here would be a
+                  promise the product cannot keep, and saying nothing would leave a bare badge —
+                  so the honest answer is to say there is nothing to answer.
+                */
+                <p>
+                  Nothing you can enter here would settle this one. Something this program asks
+                  for is not a question any field on your profile puts to you, so the matcher
+                  stopped rather than guess. It is still not a &ldquo;no&rdquo; — read the
+                  funder&rsquo;s own page and decide for yourself.
+                </p>
+              )}
             </section>
           )}
 
@@ -282,21 +422,47 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
             </section>
           )}
 
+          {/*
+            ALL SIX ROWS, ALWAYS. Four of these used to be wrapped in
+            `{value !== undefined && (…)}`, so an obligation the funder never mentioned emitted no
+            row at all — beside two rows that correctly said "Not stated". Over the 150 publishable
+            records that was 597 silent rows: `sustainmentObligation` unstated on 150,
+            `licenseObligation` on 149, `indirectCostCapPct` on 149, `reportingObligation` on 149.
+            Every one of the 150 records had at least one.
+
+            All six are read through core's `obligationState` so they cannot drift apart again.
+          */}
           <section className="panel card" aria-label="Obligations if you win">
             <h2>Obligations if you win</h2>
             <dl>
-              {program.obligations.licenseObligation !== undefined && (
-                <>
-                  <dt>Licensing</dt>
-                  <dd>{program.obligations.licenseObligation}</dd>
-                </>
-              )}
-              {program.obligations.indirectCostCapPct !== undefined && (
-                <>
-                  <dt>Indirect cost cap</dt>
-                  <dd className="data">{program.obligations.indirectCostCapPct}%</dd>
-                </>
-              )}
+              <dt>Licensing</dt>
+              <dd
+                className={
+                  statedState(program.obligations.licenseObligation) === 'unstated'
+                    ? 'unstated'
+                    : undefined
+                }
+              >
+                {statedCopy(
+                  statedState(program.obligations.licenseObligation),
+                  program.obligations.licenseObligation ?? '',
+                  LICENSE_UNSTATED,
+                )}
+              </dd>
+              <dt>Indirect cost cap</dt>
+              <dd
+                className={
+                  statedState(program.obligations.indirectCostCapPct) === 'unstated'
+                    ? 'unstated'
+                    : 'data'
+                }
+              >
+                {statedCopy(
+                  statedState(program.obligations.indirectCostCapPct),
+                  `${String(program.obligations.indirectCostCapPct ?? '')}%`,
+                  INDIRECT_UNSTATED,
+                )}
+              </dd>
               <dt>Cost share</dt>
               <dd className={obligationState(program.obligations.costShareRequired) === 'unstated' ? 'unstated' : undefined}>
                 {costShareCopy(obligationState(program.obligations.costShareRequired))}
@@ -305,18 +471,34 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
               <dd className={obligationState(program.obligations.coFunderPreference) === 'unstated' ? 'unstated' : undefined}>
                 {coFunderCopy(obligationState(program.obligations.coFunderPreference))}
               </dd>
-              {program.obligations.sustainmentObligation !== undefined && (
-                <>
-                  <dt>Sustainment</dt>
-                  <dd>{program.obligations.sustainmentObligation}</dd>
-                </>
-              )}
-              {program.obligations.reportingObligation !== undefined && (
-                <>
-                  <dt>Reporting</dt>
-                  <dd>{program.obligations.reportingObligation}</dd>
-                </>
-              )}
+              <dt>Sustainment</dt>
+              <dd
+                className={
+                  statedState(program.obligations.sustainmentObligation) === 'unstated'
+                    ? 'unstated'
+                    : undefined
+                }
+              >
+                {statedCopy(
+                  statedState(program.obligations.sustainmentObligation),
+                  program.obligations.sustainmentObligation ?? '',
+                  SUSTAINMENT_UNSTATED,
+                )}
+              </dd>
+              <dt>Reporting</dt>
+              <dd
+                className={
+                  statedState(program.obligations.reportingObligation) === 'unstated'
+                    ? 'unstated'
+                    : undefined
+                }
+              >
+                {statedCopy(
+                  statedState(program.obligations.reportingObligation),
+                  program.obligations.reportingObligation ?? '',
+                  REPORTING_UNSTATED,
+                )}
+              </dd>
             </dl>
           </section>
 

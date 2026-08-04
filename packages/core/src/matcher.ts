@@ -796,9 +796,25 @@ export const APPLICANT_ENTITY_CONSTRAINT_SUFFIX = ':applicant-entity';
  * non-student profiles). For an organisation, that `unknown` is therefore
  * permanently unresolvable: the UI could never find a matching input to
  * jump to. Known carry-forward finding from Task 8 — handled here by
- * treating those two field names as not-evaluable (silently dropped from
+ * treating those two field names as UNLISTABLE (dropped from
  * `missingProfileFields`) whenever the profile is an organisation, rather
  * than letting them surface as an actionable-looking missing field.
+ *
+ * UNLISTABLE IS NOT ANSWERED — close-out review I6. Dropping the field used
+ * to drop the whole `unknown` with it: `missingFields` stayed empty and
+ * `matchProgram` fell through to `eligible`, so an organisation was told it
+ * satisfies a geography constraint that was never evaluated. The verdict now
+ * stays `unknown` with an EMPTY `missingProfileFields`, which is the honest
+ * pair of claims: something could not be worked out, and there is no input
+ * you could fill in to change that. `VerdictBadge` already renders exactly
+ * that case ("Not an answer yet. Something this program asks for could not be
+ * evaluated from your profile. It is not a 'no'.").
+ *
+ * The direction matters and is preserved: `unknown` still never becomes
+ * `ineligible`, so an unset field can never hide an award. But `unknown` is a
+ * real state in this product, and letting it become a verdict is the same
+ * over-assertion as a phantom obligation, merely pointed at the optimistic
+ * side.
  */
 const ORG_UNRESOLVABLE_GEO_FIELDS = new Set(['county', 'callDistrict']);
 
@@ -864,6 +880,13 @@ export function matchProgram(
   const hardFailures: Constraint[] = [];
   const missingFields = new Set<string>();
   const metPreferences: Constraint[] = [];
+  /**
+   * A hard axis that came back `unknown` and named nothing this profile could ever fill in.
+   * Tracked separately from `missingFields` because the two answer different questions — "is
+   * anything unresolved?" and "what could the reader do about it?" — and collapsing them into one
+   * set is what let an unanswerable axis read as `eligible`.
+   */
+  let unlistableUnknown = false;
 
   for (const constraint of program.constraints) {
     // Financial need is always a weighting, never a bar (spec §4.5 rule 11),
@@ -878,15 +901,22 @@ export function matchProgram(
     if (result.status === 'fail') {
       hardFailures.push(constraint);
     } else if (result.status === 'unknown') {
+      let listedOne = false;
       for (const field of result.missing) {
-        if (isResolvableMissingField(profile, field)) missingFields.add(field);
+        if (isResolvableMissingField(profile, field)) {
+          missingFields.add(field);
+          listedOne = true;
+        }
       }
+      // The axis is unresolved either way. If nothing about it could be put in front of the
+      // reader, say so with an empty list rather than dropping the unknown entirely.
+      if (!listedOne) unlistableUnknown = true;
     }
     // 'pass' and 'not_evaluable' do not block.
   }
 
   if (hardFailures.length > 0) return { kind: 'ineligible', reasons: hardFailures };
-  if (missingFields.size > 0) {
+  if (missingFields.size > 0 || unlistableUnknown) {
     return { kind: 'unknown', missingProfileFields: [...missingFields].sort() };
   }
   if (metPreferences.length > 0) {

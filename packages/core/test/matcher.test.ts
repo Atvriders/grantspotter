@@ -221,7 +221,28 @@ describe('matchProgram — the org/county/call_district carry-forward finding', 
   // or `'callDistrict'` as a missingProfileField the org-side UI could never
   // collect, matchProgram treats them as not-evaluable for org profiles.
 
-  it('does not block an org on an unresolvable county constraint', () => {
+  /**
+   * CLOSE-OUT REVIEW I6 — AN UNRESOLVABLE AXIS STAYS UNKNOWN. IT DOES NOT BECOME A VERDICT.
+   *
+   * Dropping the field from `missingProfileFields` is right: the org editor has no county input,
+   * so linking the reader to one would be a promise the product cannot keep. Dropping the field
+   * and then letting `matchProgram` fall through to `eligible` is NOT right — it tells an
+   * organisation it satisfies a geography constraint that was never evaluated, and nothing
+   * downstream records that an axis went unanswered.
+   *
+   * The direction is the recoverable one (an applicant who is wrongly included reads the funder's
+   * own page; one who is wrongly excluded never sees the award), and it stays that way: `unknown`
+   * still is not `ineligible`. But `unknown` is a real, honest state in this product, and turning
+   * it into a verdict is the same over-assertion as a phantom 12-month obligation or 148 invented
+   * "no cost share required" claims, merely pointed at the optimistic side.
+   *
+   * Latent in today's corpus, and measured: 5 of the 150 publishable records carry a hard
+   * county/call_district geography constraint, and all 5 accept `individual` only — so the
+   * applicant-entity gate returns `ineligible` for every organisation before geography is reached.
+   * Zero records change verdict. Like the `javascript:` href, it is worth closing while it costs
+   * nothing.
+   */
+  it('leaves an org unknown — not eligible — on an unresolvable county constraint', () => {
     const program = makeProgram({
       applicantEntities: ['club_501c3'],
       constraints: [
@@ -232,11 +253,14 @@ describe('matchProgram — the org/county/call_district carry-forward finding', 
       ],
     });
     expect(matchProgram(makeOrg({ entity: 'club_501c3' }), program, NOW)).toEqual({
-      kind: 'eligible',
+      kind: 'unknown',
+      // Empty on purpose: there is no org input that would answer it, so naming one would send
+      // the reader to an editor where nothing they type can change this verdict.
+      missingProfileFields: [],
     });
   });
 
-  it('does not block an org on an unresolvable call_district constraint', () => {
+  it('leaves an org unknown — not eligible — on an unresolvable call_district constraint', () => {
     const program = makeProgram({
       applicantEntities: ['club_501c3'],
       constraints: [
@@ -248,7 +272,42 @@ describe('matchProgram — the org/county/call_district carry-forward finding', 
     });
     expect(
       matchProgram(makeOrg({ entity: 'club_501c3', callsign: undefined }), program, NOW),
-    ).toEqual({ kind: 'eligible' });
+    ).toEqual({ kind: 'unknown', missingProfileFields: [] });
+  });
+
+  it('never turns an unresolvable axis into `ineligible` — the unrecoverable direction', () => {
+    const program = makeProgram({
+      applicantEntities: ['club_501c3'],
+      constraints: [
+        makeConstraint(
+          { axis: 'geography', geo: { type: 'county', values: ['Calcasieu, LA'] } },
+          { id: 'county', hard: true },
+        ),
+      ],
+    });
+    expect(matchProgram(makeOrg({ entity: 'club_501c3' }), program, NOW).kind).not.toBe(
+      'ineligible',
+    );
+  });
+
+  /**
+   * A soft constraint never gates, so an unresolvable SOFT geography axis must not manufacture an
+   * `unknown` either — that would demand an answer for a preference, which is the defect the
+   * "soft unknown does not escalate" rule already forbids.
+   */
+  it('does not escalate a SOFT unresolvable geography axis to unknown', () => {
+    const program = makeProgram({
+      applicantEntities: ['club_501c3'],
+      constraints: [
+        makeConstraint(
+          { axis: 'geography', geo: { type: 'county', values: ['Calcasieu, LA'] } },
+          { id: 'county', hard: false },
+        ),
+      ],
+    });
+    expect(matchProgram(makeOrg({ entity: 'club_501c3' }), program, NOW)).toEqual({
+      kind: 'eligible',
+    });
   });
 
   it('still surfaces a genuinely resolvable missing field for an org alongside the unresolvable one', () => {

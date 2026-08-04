@@ -166,16 +166,35 @@ function OpensMark({ entry }: { entry: CalendarEntry }): JSX.Element {
   );
 }
 
+/**
+ * The day to start work — and, when the deadline it counts back from was never announced, that
+ * fact, said in the mark itself.
+ *
+ * A prep mark is the one mark on this page a planner ACTS on: it is an instruction to begin.
+ * `CloseChip` has carried "projected, not observed" since Task 20; this carried nothing, so
+ * "Start preparing X, 45 days before it 2027-02-28 deadline" read as an unqualified instruction
+ * built on a date the funder never published. In a real 12-month window that is 123 of 127
+ * entries — 4 cycles in this corpus are funder-published.
+ *
+ * THE MARKER GOES BEFORE THE PROGRAMME NAME, in visible text. `.prep-mark` is `white-space:
+ * nowrap` with `text-overflow: ellipsis`, so a qualifier appended after a long programme name is
+ * exactly what a narrow cell truncates away — the marker would disappear precisely where the cell
+ * is tightest. The `estimated` class matches `CloseChip`'s so a projected mark is stylable by the
+ * same rule; the sentence, not the styling, is what carries the claim.
+ */
 function PrepMark({ entry }: { entry: CalendarEntry }): JSX.Element {
   return (
     <Link
       to={`/o/${entry.programId}`}
-      className="prep-mark"
+      className={['prep-mark', entry.isEstimated ? 'estimated' : ''].filter(Boolean).join(' ')}
       aria-label={`Start preparing ${entry.programName}, ${String(
         entry.prepLeadDays,
-      )} days before it ${cycleSpan(entry.cycle)}${sourceSuffix(entry)}`}
+      )} days before it ${cycleSpan(entry.cycle)}, ${
+        entry.isEstimated ? 'projected, not observed' : 'funder-published'
+      }${sourceSuffix(entry)}`}
     >
-      Start preparing: {entry.programName}
+      {entry.isEstimated ? 'Start preparing (projected date): ' : 'Start preparing: '}
+      {entry.programName}
     </Link>
   );
 }

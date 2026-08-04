@@ -490,3 +490,57 @@ describe('MonthGrid — a day 113 entries deep', () => {
     expect(cell.querySelectorAll('a.opens-mark')).toHaveLength(10);
   });
 });
+
+/**
+ * THE PREP MARK CARRIES THE SAME DISTINCTION THE CHIP DOES — close-out review finding I2.
+ *
+ * `CloseChip` has said "projected, not observed" since Task 20; `PrepMark` said nothing, and a
+ * prep mark is the mark on this page a planner ACTS on: it is an instruction to start work.
+ * Measured against the real corpus, a 12-month window holds 127 calendar entries of which 123 are
+ * projected and 4 are funder-published, and `MonthGrid` pushes a prep mark for EVERY entry — so
+ * 123 of 127 prep marks were unqualified instructions to prepare for a date no funder announced.
+ *
+ * The marker is carried in the VISIBLE TEXT, before the programme name, not only in a class and
+ * not only at the end: `.prep-mark` is `white-space: nowrap; text-overflow: ellipsis`, so a
+ * suffix is exactly what a narrow cell truncates away.
+ */
+describe('MonthGrid — a prep mark never hides that its date is projected', () => {
+  it('says projected on the prep mark of a projected cycle, in visible text and in its name', () => {
+    renderGrid();
+    const cell = screen.getByRole('cell', { name: /^16 December 2026$/ });
+    const mark = within(cell).getByRole('link', { name: /start preparing/i });
+    expect(mark).toHaveTextContent(/projected/i);
+    expect(mark).toHaveAccessibleName(/projected, not observed/i);
+    expect(mark).toHaveClass('estimated');
+  });
+
+  it('does not call a funder-published prep mark projected', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={11} entries={entries} now={NOW} />
+      </MemoryRouter>,
+    );
+    const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
+    const mark = within(cell).getByRole('link', { name: /start preparing/i });
+    expect(mark).toHaveTextContent(/ARRL Foundation Scholarship Program/);
+    expect(mark).not.toHaveTextContent(/projected/i);
+    expect(mark).toHaveAccessibleName(/funder-published/i);
+    expect(mark).not.toHaveClass('estimated');
+  });
+
+  /** The fold is layout. It may not launder a projection into an unqualified instruction. */
+  it('keeps the marker on every prep mark inside a fold', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} />
+      </MemoryRouter>,
+    );
+    const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
+    const marks = cell.querySelectorAll('a.prep-mark');
+    expect(marks).toHaveLength(113);
+    for (const mark of marks) {
+      expect(mark.textContent ?? '').toMatch(/projected/i);
+      expect(mark.getAttribute('aria-label') ?? '').toMatch(/projected, not observed/i);
+    }
+  });
+});
