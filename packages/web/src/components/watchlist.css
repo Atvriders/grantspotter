@@ -1,0 +1,250 @@
+/* Watchlist, change digest and delivery settings.
+   Every class here is `wl-`-prefixed on purpose. Four other route tasks landed their own CSS in
+   this bundle at the same time, and a shared generic name (`.panel`, `.move`, `.channels`) is a
+   cascade collision waiting to happen between two files that never see each other.
+   Colour is always a semantic token from tokens.css and is never the only signal: every state
+   below also carries a word. */
+
+.wl-panel {
+  padding: var(--s-4);
+  margin-bottom: var(--s-5);
+  display: grid;
+  gap: var(--s-3);
+}
+
+.wl-lede {
+  max-width: 70ch;
+  color: var(--text-muted);
+}
+
+.wl-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.wl-head-spacer { flex: 1 1 auto; }
+
+.wl-scroll {
+  overflow-x: auto;
+  margin: 0 calc(-1 * var(--s-4));
+  padding: 0 var(--s-4);
+}
+
+.wl-name {
+  display: grid;
+  gap: 2px;
+}
+
+.wl-funder {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/* The deadline cell: the day, then the two facts that qualify it — whether the funder published
+   the window or we projected it, and which zone the day is expressed in. */
+.wl-deadline {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+}
+
+.wl-qualifier {
+  font-size: var(--fs-100);
+  font-weight: 600;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 240 of 244 cycles are projections. Amber, because a projection presented in the same voice as
+   a published date is the failure this product exists to prevent. */
+.wl-qualifier-projected { color: var(--warn); }
+
+.wl-safety {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  padding: 2px var(--s-2) 2px var(--s-1);
+  border-left: 3px solid currentColor;
+  border-radius: var(--r-1);
+  color: var(--no);
+  background: var(--no-soft);
+  font-size: var(--fs-200);
+  font-weight: 640;
+}
+
+.wl-empty {
+  padding: var(--s-5) var(--s-4);
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-2);
+}
+
+.wl-error {
+  padding: var(--s-3) var(--s-4);
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  color: var(--no);
+  border-radius: var(--r-1);
+}
+
+/* ---- change digest ---- */
+
+.wl-digest {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.wl-digest > li {
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-1);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.wl-digest > li.wl-unread {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.wl-kind {
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+}
+
+.wl-digest h3 { font-size: var(--fs-300); }
+
+/* was -> now, set in the data face so a moved date is legible at a glance. The two halves are
+   labelled in words rather than distinguished by colour alone: a deadline moving is not
+   inherently good or bad news, and green/red would assert that it is. */
+.wl-move {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+}
+
+.wl-move-label {
+  font-family: var(--font-text);
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-muted);
+}
+
+.wl-was { color: var(--text-muted); text-decoration: line-through; }
+.wl-now { color: var(--text); font-weight: 700; }
+
+.wl-advice { margin: 0; color: var(--text-muted); font-size: var(--fs-200); }
+
+.wl-actions { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center; }
+
+/* ---- honesty about silence ---- */
+
+.wl-note {
+  padding: var(--s-3) var(--s-4);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: var(--r-1);
+  font-size: var(--fs-200);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.wl-note-warn {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.wl-suppressed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-1);
+  font-family: var(--font-data);
+  font-size: var(--fs-100);
+}
+
+/* ---- delivery ---- */
+
+.wl-channels { max-width: 48rem; }
+
+.wl-field {
+  display: grid;
+  gap: var(--s-1);
+  font-size: var(--fs-200);
+  font-weight: 600;
+}
+
+.wl-field input {
+  font: inherit;
+  font-weight: 400;
+  padding: var(--s-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.wl-field input[aria-invalid='true'] { border-color: var(--no); }
+
+.wl-hint { font-weight: 400; color: var(--text-muted); font-size: var(--fs-100); }
+
+.wl-health,
+.wl-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+  font-size: var(--fs-200);
+}
+
+.wl-health > li,
+.wl-results > li {
+  display: grid;
+  gap: 2px;
+  padding: var(--s-2) var(--s-3);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+}
+
+.wl-health > li.wl-bad,
+.wl-results > li.wl-bad {
+  border-left-color: var(--no);
+  background: var(--no-soft);
+  color: var(--no);
+}
+
+.wl-health > li.wl-good,
+.wl-results > li.wl-good {
+  border-left-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.wl-alert {
+  padding: var(--s-3) var(--s-4);
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  color: var(--no);
+  border-radius: var(--r-1);
+  font-size: var(--fs-200);
+}
