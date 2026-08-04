@@ -122,7 +122,15 @@ export function VerdictBadge({
             : `Unknown, needs ${first}`;
       const title =
         names.length > 0
-          ? `Not an answer yet. This verdict is waiting on: ${names.join(', ')}. Filling one in may reveal the next question rather than a final answer — it never turns into "no".`
+          // The trailing clause used to read `— it never turns into "no"`. That is
+          // false, and in the opposite direction to the over-assertion this copy
+          // exists to avoid: answering a field genuinely CAN produce `ineligible`
+          // (state a 2.0 GPA against a funder's 3.0 floor and the honest verdict is
+          // no). The real invariant, verified across six hard-bar axes, is narrower:
+          // an *unset* field yields `unknown`, never `ineligible`. Promising a
+          // never-no would make the badge lie in exactly the way the rest of this
+          // product refuses to. Flagged by Task 18 while writing the explorer copy.
+          ? `Not an answer yet. This verdict is waiting on: ${names.join(', ')}. Answering one may reveal the next question rather than a final answer — while it stays unanswered, it is a question and not a "no".`
           : 'Not an answer yet. Something this program asks for could not be evaluated from your profile. It is not a "no".';
       return (
         <span className="badge verdict-unknown" role="img" aria-label={label} title={title}>
