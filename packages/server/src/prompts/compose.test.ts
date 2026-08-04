@@ -103,7 +103,7 @@ function sentences(text: string): string[] {
 
 /** Any word that would turn a mention of detection into a promise about detection. */
 const EVASION =
-  /\b(defeat|defeats|defeating|evade|evades|evading|bypass|bypasses|fool|fools|trick|tricks|undetectable|beat the detector|slip past|pass as human|read as human)\b/i;
+  /\b(defeat(?:s|ed|ing)?|evad(?:e|es|ed|ing)|evasion|bypass(?:es|ed|ing)?|fool(?:s|ed|ing)?|trick(?:s|ed|ing)?|dodg(?:e|es|ed|ing)?|circumvent(?:s|ed|ing|ion)?|launder(?:s|ed|ing)?|undetectable|beat(?:s|ing|en)? (?:the detector|detection)|slip(?:s|ped|ping)? past|sneak(?:s|ed|ing)? past|snuck past|get(?:s|ting)? around|got around|go(?:es|ing)? undetected|went undetected|avoid(?:s|ed|ing)? detection|pass(?:es|ed|ing)? as human|read(?:s|ing)? as human)\b/i;
 const NEGATED =
   /\b(not|never|no|none|nothing|excluded|exclude|excludes|cannot|can't|won't|do not|does not|refuse|refuses|instead of|rather than)\b/i;
 
@@ -205,6 +205,23 @@ describe('prompt fragments', () => {
       for (const s of sentences(loadFragment(id))) {
         if (EVASION.test(s)) expect(s, `${id}: "${s}"`).toMatch(NEGATED);
       }
+    }
+  });
+
+  /**
+   * The rule EVASION enforces is polarity, not vocabulary: these words are fine when the sentence
+   * is negating them, forbidden only as a bare promise. A widened regex that turned into a
+   * banned-word list would break the brief's own honesty sentence, which must be able to NAME
+   * defeat, evasion, bypassing, fooling, tricking, dodging, circumventing, laundering,
+   * undetectability, slipping/sneaking past, getting around, going undetected and avoiding
+   * detection in order to disclaim every one of them.
+   */
+  it('still allows honest negated discussion using the whole widened vocabulary', () => {
+    const honest =
+      'This method does not defeat, evade, bypass, fool, trick, dodge, circumvent or launder any AI-detection classifier, is not undetectable, never slips past, sneaks past or gets around it, does not go undetected or avoid detection, and involves no evasion or circumvention of any kind.';
+    for (const s of sentences(honest)) {
+      expect(EVASION.test(s), s).toBe(true);
+      if (EVASION.test(s)) expect(s, s).toMatch(NEGATED);
     }
   });
 });
