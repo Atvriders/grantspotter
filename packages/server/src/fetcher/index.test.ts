@@ -8,6 +8,7 @@ import { ROBOTS_MAX_REDIRECTS, RobotsDisallowedError } from './robots.js';
 import {
   ROBOTS_CACHE_TTL_MS,
   ROBOTS_UNREAD_CACHE_TTL_MS,
+  RequestBudgetExhaustedError,
   backoffMs,
   createFetcher,
   maxRequestsPerFetch,
@@ -658,7 +659,24 @@ describe('every request that reaches the network passes the host gate exactly on
     expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
   });
 
-  it('caps a PAGE that both 429s and 301s at the same additive bound', async () => {
+  /**
+   * THE ASSERTION THIS REPLACES WAS THE DEFECT, WRITTEN DOWN AND PINNED.
+   *
+   * It read `expect(pageRequests).toBe(maxRequestsPerFetch(5, 3))` over `t.at.length - 1`, and the
+   * comment beside it explained away the subtraction as "minus the one robots.txt read". That
+   * subtraction is the whole bug: the README tells a site owner that one page fetch costs their
+   * server at most nine requests, and the test was checking that the PAGE cost nine while quietly
+   * excusing a tenth request to the same machine. Nothing in an access log is excused that way.
+   * The `/robots.txt` read was not the only thing outside the count either — `readRobots` opened a
+   * fresh nine per ORIGIN, so the same shape across an http -> https hop measured 20 requests and
+   * across five hops over six origins on one host, 63 (`npm run measure-pacing`, loopback servers,
+   * commit 2c098d9). Both are 9 now.
+   *
+   * So the number asserted here is the TOTAL a single server saw, robots.txt included, which is the
+   * only number the published sentence can honestly be about. It is unchanged at nine; what changed
+   * is what it counts.
+   */
+  it('costs one server at most nine requests IN TOTAL, robots.txt read included', async () => {
     const seen = new Map<string, number>();
     const t = paced((url) => {
       if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
@@ -668,18 +686,38 @@ describe('every request that reaches the network passes the host gate exactly on
       const hop = Number(/\/p(\d+)$/.exec(url)?.[1] ?? '0');
       return res('', { status: 301, headers: { location: `/p${hop + 1}` } });
     });
+    // The allowance runs out mid-attempt rather than between hops, so what surfaces is the last
+    // thing the server actually said. It said 429 nine times over; we stop asking.
+    await expect(
+      t.fetcher.fetch({ url: 'https://w9xyz-club.org/p0', method: 'GET', accept: 'html' }),
+    ).rejects.toThrow(/429/);
+    expect(t.at).toHaveLength(maxRequestsPerFetch(5, 3));
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  it('still lets the 3xx be the payload when the purse runs out between hops', async () => {
+    // The other way a chain ends, and the one that has always returned a payload rather than
+    // throwing: the hop we just made succeeded, and there is nothing left to follow it with.
+    const seen = new Map<string, number>();
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      const hop = Number(/\/p(\d+)$/.exec(url)?.[1] ?? '0');
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      // /p0 costs four requests, /p1 three, /p2 one — nine with the robots read, and the ninth is
+      // a 301 nothing is left to follow.
+      const failures = hop === 0 ? 3 : hop === 1 ? 2 : 0;
+      if (n <= failures) return res('slow down', { status: 429, headers: { 'retry-after': '0' } });
+      return res('', { status: 301, headers: { location: `/p${hop + 1}` } });
+    });
     const payload = await t.fetcher.fetch({
       url: 'https://w9xyz-club.org/p0',
       method: 'GET',
       accept: 'html',
     });
-    // Out of purse mid-chain: the 3xx itself becomes the payload, exactly as running out of hops
-    // has always done.
     expect(payload.status).toBe(301);
-    const pageRequests = t.at.length - 1; // minus the one robots.txt read
-    expect(pageRequests).toBe(maxRequestsPerFetch(5, 3));
-    const gaps = t.gaps();
-    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+    expect(t.at).toHaveLength(maxRequestsPerFetch(5, 3));
   });
 
   it('bounds one fetch additively rather than by the product of two limits', () => {
@@ -731,6 +769,260 @@ describe('every request that reaches the network passes the host gate exactly on
     expect([a.status, b.status]).toEqual([200, 200]);
     expect(t.at).toHaveLength(3); // one shared read, then the two pages
     expect(t.gaps()).toEqual([FLOOR, FLOOR]);
+  });
+});
+
+/**
+ * THE BUDGET BELONGS TO THE SERVER, THE ROBOTS CACHE BELONGS TO THE ORIGIN, AND THEY ARE DIFFERENT
+ * KEYS ON PURPOSE.
+ *
+ * The pacing lane has always keyed on `normalizeHost` (scheme and port dropped) and the robots
+ * cache on `canonicalOrigin` (scheme and port kept). Both are right for their own job — RFC 9309
+ * §2.3 puts `/robots.txt` at the authority's root, so a service on :8443 publishes its own file —
+ * but the request PURSE was keyed like the second when it is a fact about the first. Every origin a
+ * fetch touched therefore bought a fresh nine-request allowance from the same machine, and the
+ * `/robots.txt` read for each one was not counted against the page's allowance at all.
+ *
+ * Measured with `npm run measure-pacing` against loopback HTTP servers, ONE page fetch, at commit
+ * 2c098d9 and then at this one:
+ *
+ *   one host, one origin, robots + page both at full purse    18 -> 9
+ *   one host, http -> https (real TLS on loopback)            20 -> 9
+ *   one host, five hops across six origins                    63 -> 9   (7 x the published bound)
+ *   one host, two origins, both blocked by robots.txt          2 -> 2   (the shipped arrl.org shape)
+ *   one host, one page fetch across a port change, healthy      4 -> 4   (the ordinary case)
+ *
+ * The last two are the point of the last two: the fix costs the ordinary case nothing, and the two
+ * keys were NOT merged.
+ */
+describe('one purse per server, not per origin', () => {
+  const FLOOR = 1_000;
+
+  function paced(handler: (url: string) => Response, extra: Record<string, unknown> = {}) {
+    const clock = pacingClock();
+    const line = timeline(clock.now, handler);
+    const fetcher = createFetcher({
+      ...baseOpts,
+      transport: line.transport,
+      defaultMinIntervalMs: FLOOR,
+      now: clock.now,
+      sleep: clock.sleep,
+      ...extra,
+    });
+    return { ...line, fetcher };
+  }
+
+  /** A `/robots.txt` that costs the full purse on its own and still resolves: 4 + 4 + 1. */
+  function expensiveRobots(seen: Map<string, number>) {
+    return (url: string): Response | null => {
+      const match = /\/robots(\d*)\.txt$/.exec(url);
+      if (match === null) return null;
+      const hop = Number(match[1] === '' ? '0' : match[1]);
+      if (hop >= 2) return res('User-agent: *\n');
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      if (n <= 3) return res('slow down', { status: 429, headers: { 'retry-after': '0' } });
+      const next = new URL(`/robots${hop + 1}.txt`, url).toString();
+      return res('', { status: 301, headers: { location: next } });
+    };
+  }
+
+  /**
+   * A flaky server, which is the ordinary way this goes wrong: `/robots.txt` 503s three times and
+   * then answers, at each of the two origins. Four requests, one page request, four requests, and
+   * the allowance is gone before the second page can be asked for.
+   *
+   * The counts are what discriminate. Per SERVER (this commit): 4 + 1 + 4 = 9, and we stop. Per
+   * ORIGIN (before it): 4 + 1 + 4 + 1 = 10, and the page comes back 200 — one request past a
+   * ceiling published in a README as a promise to the person whose server that is.
+   */
+  function flakyRobots(seen: Map<string, number>) {
+    return (url: string): Response | null => {
+      if (!url.endsWith('/robots.txt')) return null;
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      return n <= 3 ? res('busy', { status: 503 }) : res('User-agent: *\n');
+    };
+  }
+
+  it('does not buy a second allowance by crossing http to https on one host', async () => {
+    const seen = new Map<string, number>();
+    const robots = flakyRobots(seen);
+    const t = paced((url) => {
+      const rules = robots(url);
+      if (rules !== null) return rules;
+      return url.startsWith('http://')
+        ? res('', { status: 301, headers: { location: 'https://w9xyz-club.org/p' } })
+        : res('<p>end</p>');
+    });
+    await expect(
+      t.fetcher.fetch({ url: 'http://w9xyz-club.org/p', method: 'GET', accept: 'html' }),
+    ).rejects.toBeInstanceOf(RequestBudgetExhaustedError);
+    expect(t.at).toHaveLength(9);
+    // The last request was the https origin's robots.txt, not its page: the chain did cross, and
+    // what stopped it was the machine's allowance rather than the origin's.
+    expect(t.transport.mock.calls.at(-1)?.[0]).toBe('https://w9xyz-club.org/robots.txt');
+  });
+
+  it('does not buy a second allowance by crossing a port on one host', async () => {
+    const seen = new Map<string, number>();
+    const robots = flakyRobots(seen);
+    const t = paced((url) => {
+      const rules = robots(url);
+      if (rules !== null) return rules;
+      return url.includes(':8443')
+        ? res('<p>end</p>')
+        : res('', { status: 301, headers: { location: 'https://w9xyz-club.org:8443/p' } });
+    });
+    await expect(
+      t.fetcher.fetch({ url: 'https://w9xyz-club.org/p', method: 'GET', accept: 'html' }),
+    ).rejects.toBeInstanceOf(RequestBudgetExhaustedError);
+    expect(t.at).toHaveLength(9);
+    expect(t.transport.mock.calls.at(-1)?.[0]).toBe('https://w9xyz-club.org:8443/robots.txt');
+  });
+
+  it('holds at nine however many origins one host answers on', async () => {
+    // Six origins on one hostname, each publishing its own allow-all robots.txt — so each hop is a
+    // cache miss and a real read. Before the fix this cost 12 requests here and 63 in the
+    // constructed worst case (`npm run measure-pacing ceilingManyOrigins`).
+    const chain = [
+      'https://w9xyz-club.org/p',
+      'https://w9xyz-club.org:8443/p',
+      'https://w9xyz-club.org:8444/p',
+      'https://w9xyz-club.org:8445/p',
+      'http://w9xyz-club.org/p',
+      'http://w9xyz-club.org:8080/p',
+    ];
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      const at = chain.indexOf(url);
+      const next = chain[at + 1];
+      return next === undefined
+        ? res('<p>end</p>')
+        : res('', { status: 301, headers: { location: next } });
+    });
+    await expect(
+      t.fetcher.fetch({ url: chain[0] as string, method: 'GET', accept: 'html' }),
+    ).rejects.toBeInstanceOf(RequestBudgetExhaustedError);
+    expect(t.at).toHaveLength(9);
+  });
+
+  /**
+   * NOT A LOOPHOLE — THE DEFINITION. A different host is a different machine, owned by somebody
+   * else, and the promise is made to each of them separately. If this ever becomes one purse for a
+   * whole chain, an apex-to-`www` redirect would spend `www`'s allowance on the apex's failures.
+   */
+  it('gives a genuinely different host its own nine', async () => {
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      return url.includes('k4abc')
+        ? res('<p>end</p>')
+        : res('', { status: 301, headers: { location: 'https://k4abc-club.org/p' } });
+    });
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p',
+      method: 'GET',
+      accept: 'html',
+    });
+    expect(payload.status).toBe(200);
+    // Two requests each: its own robots.txt, then its own page. Neither paid for the other.
+    const perHost = (needle: string): number =>
+      t.transport.mock.calls.filter(([u]) => (u as string).includes(needle)).length;
+    expect([perHost('w9xyz'), perHost('k4abc')]).toEqual([2, 2]);
+  });
+
+  /**
+   * THE TWO KEYS ARE STILL TWO KEYS, and this is the test that fails if somebody "simplifies" the
+   * fix by keying the robots cache on the host as well. RFC 9309 §2.3 scopes `/robots.txt` to a
+   * scheme/host/port triple; a service on :8443 that publishes `Disallow: /` must not be crawled
+   * because :443 published nothing.
+   */
+  it('still reads one robots.txt per ORIGIN even though they share one purse', async () => {
+    const t = paced((url) => {
+      if (url === 'https://w9xyz-club.org/robots.txt') return res('User-agent: *\n');
+      if (url === 'https://w9xyz-club.org:8443/robots.txt') {
+        return res('User-agent: GrantSpotter\nDisallow: /\n');
+      }
+      return res('<p>ok</p>');
+    });
+    expect(
+      (await t.fetcher.fetch({ url: 'https://w9xyz-club.org/p', method: 'GET', accept: 'html' }))
+        .status,
+    ).toBe(200);
+    await expect(
+      t.fetcher.fetch({ url: 'https://w9xyz-club.org:8443/p', method: 'GET', accept: 'html' }),
+    ).rejects.toBeInstanceOf(RobotsDisallowedError);
+    expect(t.transport.mock.calls.filter(([u]) => (u as string).endsWith('/robots.txt'))).toHaveLength(2);
+  });
+
+  /**
+   * THE FOOTPRINT THE SHIPPED REGISTRY ACTUALLY HAS. `sources/arrl-news-rss.ts:6` and
+   * `sources/arrl-scholarship-descriptions.ts:13` name `http://www.arrl.org`; six other modules name
+   * `https://www.arrl.org`. That is two origins on one machine, so a nightly run against an
+   * arrl.org that published `Disallow: /` costs it TWO requests and not one — and no amount of
+   * sharing the purse changes that, because the second read is the RFC doing its job rather than a
+   * bug: we genuinely have not read the rules for `https://www.arrl.org` until we ask it.
+   *
+   * Making it one is a REGISTRY decision, not a fetcher one: spell both source URLs `https://`.
+   * That is not done here because `CATALOG_URL` in `arrl-scholarship-descriptions.ts` is also the
+   * `sourceUrl` stamped on all 111 shipped ARRL scholarship records and on the seed corpus, so
+   * changing it rewrites published provenance — a different change, owned by whoever owns
+   * `sources/` and `seed/`.
+   */
+  it('costs a blocked two-origin host two requests a night, which is what the registry asks for', async () => {
+    const t = paced(() => res('User-agent: GrantSpotter\nDisallow: /\n'));
+    for (const url of ['http://www.arrl.org/news/rss', 'https://www.arrl.org/etp-grants']) {
+      await expect(
+        t.fetcher.fetch({ url, method: 'GET', accept: 'xml' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+    }
+    expect(t.transport.mock.calls.map(([u]) => u)).toEqual([
+      'http://www.arrl.org/robots.txt',
+      'https://www.arrl.org/robots.txt',
+    ]);
+  });
+
+  it('names the server and the number when it stops, rather than reading as a network failure', async () => {
+    const seen = new Map<string, number>();
+    const robots = expensiveRobots(seen);
+    const t = paced((url) => robots(url) ?? res('<p>ok</p>'));
+    const err = await t.fetcher
+      .fetch({ url: 'https://w9xyz-club.org/p', method: 'GET', accept: 'html' })
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(RequestBudgetExhaustedError);
+    expect(err?.message).toContain('w9xyz-club.org');
+    expect(err?.message).toContain('9 HTTP requests');
+    // The generic fall-through it used to hit said only this, which sends whoever is on call to
+    // look at the network for a crawler that is working exactly as designed.
+    expect(err?.message).not.toContain('fetch failed');
+  });
+
+  /**
+   * A CONFIG KNOB MAY NOT TURN DOWN AN RFC. `maxRedirects` governs how far a PAGE is chased;
+   * `ROBOTS_MAX_REDIRECTS` is a floor RFC 9309 §2.3.1.2 puts on being polite and is deliberately
+   * not configurable. Sizing one shared purse off `maxRedirects` alone would let `maxRedirects: 0`
+   * shrink the allowance to four and stop a robots.txt chain the RFC says we must follow.
+   */
+  it('does not let a low maxRedirects shrink what a robots.txt chain may spend', async () => {
+    const t = paced(
+      (url) => {
+        const match = /\/robots(\d*)\.txt$/.exec(url);
+        if (match === null) return res('<p>end</p>');
+        const hop = Number(match[1] === '' ? '0' : match[1]);
+        if (hop >= ROBOTS_MAX_REDIRECTS) return res('User-agent: *\nDisallow: /nope\n');
+        const next = new URL(`/robots${hop + 1}.txt`, url).toString();
+        return res('', { status: 301, headers: { location: next } });
+      },
+      { maxRedirects: 0 },
+    );
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p',
+      method: 'GET',
+      accept: 'html',
+    });
+    expect(payload.status).toBe(200);
+    // All five hops walked, then the page: six requests, inside a purse of nine.
+    expect(t.at).toHaveLength(ROBOTS_MAX_REDIRECTS + 2);
   });
 });
 
