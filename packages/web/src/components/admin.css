@@ -1,0 +1,159 @@
+/* Admin console. Semantic tokens only — no raw colours. */
+
+.admin-section {
+  padding: var(--s-4);
+  margin-bottom: var(--s-5);
+}
+
+.admin-section h2 {
+  font-size: var(--fs-500);
+  margin-bottom: var(--s-3);
+}
+
+.admin-prose {
+  max-width: 70ch;
+  color: var(--text-muted);
+}
+
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s-3);
+  margin-bottom: var(--s-4);
+}
+
+.admin-form label {
+  display: grid;
+  gap: var(--s-1);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+.admin-form input,
+.admin-form select {
+  font: inherit;
+  padding: var(--s-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* The generated password is shown once. It reads as data, not as prose. */
+.secret-banner {
+  display: block;
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-1);
+}
+
+.secret-value {
+  font-family: var(--font-data);
+  font-size: var(--fs-400);
+  user-select: all;
+  word-break: break-all;
+}
+
+.secret-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+
+.admin-copied {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+.admin-alert {
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  border-radius: var(--r-1);
+  color: var(--text);
+}
+
+.admin-notice {
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-1);
+}
+
+.danger-zone {
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+}
+
+.danger-zone h2 {
+  color: var(--no);
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-row-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.admin-row-email {
+  display: block;
+  font-weight: 600;
+}
+
+.admin-row-meta {
+  display: block;
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/* Standing state, not an error: "you", "disabled", and the like. */
+.admin-tag {
+  display: inline-block;
+  margin-right: var(--s-2);
+  padding: 0 var(--s-2);
+  border-radius: var(--r-1);
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 600;
+  background: var(--unk-soft);
+  color: var(--unk);
+}
+
+.admin-tag-self {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.admin-tag-off {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+/* The lock-out warning stands on the row it is about, before anything is clicked. */
+.admin-row-note {
+  display: block;
+  margin-top: var(--s-2);
+  max-width: 46ch;
+  font-size: var(--fs-200);
+  color: var(--warn);
+}
+
+.admin-row-confirm {
+  display: block;
+  margin-top: var(--s-2);
+  max-width: 46ch;
+  font-size: var(--fs-200);
+  color: var(--no);
+}
