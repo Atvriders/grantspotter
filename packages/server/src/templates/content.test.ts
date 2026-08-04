@@ -321,3 +321,148 @@ describe('component layer — budget, sustainability, evaluation, capacity', () 
  * a pre-filled salutation, a hard-coded year or dollar figure, a claim about what a recommender
  * saw, a report that congratulates itself before anything was counted.
  */
+describe('component layer — correspondence and reporting', () => {
+  const byId = (id: string) => all.find((t) => t.id === id);
+
+  const CORRESPONDENCE = [
+    'letter-of-inquiry',
+    'scholarship-personal-essay',
+    'recommendation-request-email',
+    'thank-you-letter',
+    'interim-final-report',
+  ];
+
+  it('completes the component layer at exactly 13 templates', () => {
+    expect(components.length).toBe(13);
+  });
+
+  it('ships the five correspondence and reporting components', () => {
+    for (const id of CORRESPONDENCE) {
+      expect(byId(id), id).toBeDefined();
+    }
+  });
+
+  it('addresses the scholarship essay to the individual applicant, not a club', () => {
+    const essay = byId('scholarship-personal-essay');
+    expect(essay?.appliesTo).toEqual(['ham_scholarship']);
+    expect(essay?.slots.some((s) => s.startsWith('student.'))).toBe(true);
+    expect(essay?.slots.some((s) => s.startsWith('club.'))).toBe(false);
+  });
+
+  it('tells the recommendation request to supply the recommender with facts and a deadline', () => {
+    const rec = byId('recommendation-request-email');
+    expect(rec?.slots).toContain('recommender.name');
+    expect(rec?.slots).toContain('recommender.deadline');
+    expect(rec?.body).toMatch(/sponsor|reference|letter/i);
+  });
+
+  it('makes the report compare promised numbers against actual numbers', () => {
+    const rep = byId('interim-final-report');
+    expect(rep?.slots).toContain('report.spendToDate');
+    expect(rep?.slots).toContain('report.outcomeSummary');
+    expect(rep?.body).toMatch(/promised/i);
+    expect(rep?.appliesTo).toEqual([
+      'ham_grant',
+      'ham_scholarship',
+      'adjacent_stem',
+      'equipment_in_kind',
+    ]);
+  });
+
+  it('never pre-fills the person it is addressed to', () => {
+    // A salutation is the first fact in a letter and the easiest one to invent. Every `Dear` in
+    // this set must be followed immediately by a slot, so an unfilled draft says
+    // `Dear [TODO: donor.contactName — …]` and cannot be sent by accident.
+    for (const id of CORRESPONDENCE) {
+      const body = byId(id)?.body ?? '';
+      for (const m of body.matchAll(/Dear\s+(\S+)/g)) {
+        expect(m[1], `${id} salutation "${m[0]}"`).toMatch(/^\{\{/);
+      }
+    }
+  });
+
+  it('states no date, year or dollar figure of its own', () => {
+    // Guidance text is exempt from nothing: a template that writes a plausible year or amount
+    // into a letter to a funder has asserted it, and the applicant is the one who signs.
+    for (const id of CORRESPONDENCE) {
+      const outsideSlots = (byId(id)?.body ?? '').replace(/\{\{[^}]*\}\}/g, '');
+      expect(outsideSlots, `${id} carries a calendar date`).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(outsideSlots, `${id} carries a year`).not.toMatch(/\b(?:19|20)\d{2}\b/);
+      expect(outsideSlots, `${id} carries a dollar figure`).not.toMatch(/\$\s?[\d,]/);
+    }
+  });
+
+  it('renders every fact as a visible gap for an applicant who has stated nothing', () => {
+    const empty = buildSlotContext({});
+    for (const id of CORRESPONDENCE) {
+      const t = byId(id);
+      const filled = fillTemplate(t?.body ?? '', empty);
+      expect(filled.unresolvedSlots, id).toEqual(t?.slots);
+      expect(filled.unresolvedSlots.length, id).toBeGreaterThan(0);
+      // Outside the gap markers there must be nothing that reads as a supplied fact. The markers
+      // themselves are stripped first on purpose: a hint's "e.g. 2029" is an instruction to the
+      // writer, not a year this applicant claimed.
+      const outsideGaps = stripTodoMarkers(filled.markdown);
+      expect(outsideGaps, `${id} rendered a date`).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(outsideGaps, `${id} rendered a dollar figure`).not.toMatch(/\$\s?[\d,]/);
+    }
+  });
+
+  it('never welds an invented figure to a live slot', () => {
+    // Task 4's finding, and it lands hardest here. A model sentence that mixes real slots with
+    // invented specifics — "Three of our members will run a four-session class at
+    // {{project.venue}}" — renders as a complete, TRUE-LOOKING sentence carrying no `[TODO: …]`
+    // at all. Task 14's export gate counts zero open todos and releases it: a fabrication shaped
+    // to pass the exact check built to stop it, in a letter addressed to a named human.
+    //
+    // The rule: a sentence is either fully self-contained (no slots, so nothing of the
+    // applicant's renders beside it) or fully slotted (no invented specifics). Never a hybrid.
+    const COUNT_WORD =
+      /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|hundred|dozen|several)\b/i;
+    for (const id of CORRESPONDENCE) {
+      for (const line of (byId(id)?.body ?? '').split('\n')) {
+        if (!line.includes('{{')) continue;
+        // A markdown list marker and a leading `**bold label**` are the template's own
+        // scaffolding — the shape of the guidance, not a claim inside it. Everything after them
+        // is text the applicant may paste, and it may carry no figure this template invented.
+        const prose = line
+          .replace(/^\s*(?:[-*>]\s+|\d+\.\s+)+/, '')
+          .replace(/^\*\*[^*]*\*\*/, '');
+        expect(prose, `${id}: ${line.trim()}`).not.toMatch(/\d/);
+        expect(prose, `${id}: ${line.trim()}`).not.toMatch(COUNT_WORD);
+      }
+    }
+  });
+
+  it("leaves the recommender's own claims to the recommender", () => {
+    const body = byId('recommendation-request-email')?.body ?? '';
+    // The specific failure: a template that writes "you supervised my capstone" has drafted the
+    // letter. The applicant then asks a near-stranger to sign a claim the applicant invented, and
+    // the recommender is the one whose name is on it. This template may tell the applicant what to
+    // SUPPLY — dates, the course, the project, the counts — and may not assert what was observed.
+    expect(body).not.toMatch(/\byou (?:supervised|taught|mentored|advised|observed|watched) (?:me|my)\b/i);
+    expect(body).not.toMatch(/\b(?:as you (?:know|will recall|saw)|you have (?:seen|watched))\b/i);
+    expect(body).toMatch(/never draft their opinion for them/i);
+    expect(body).toMatch(/let them decide what they are willing to say/i);
+  });
+
+  it('never asserts an outcome the report has not measured', () => {
+    const body = byId('interim-final-report')?.body ?? '';
+    expect(body).not.toMatch(/\b(?:met|exceeded|achieved|delivered) (?:its|our|all|the) (?:objectives|goals|targets|outcomes)\b/i);
+    expect(body).not.toMatch(/\bthe project was a success\b/i);
+    // The awarded figure is not the requested figure, and a report that prints one for the other
+    // has told a funder they gave money they may not have given.
+    expect(body).toMatch(/Copy the figure from the award letter/);
+  });
+
+  it('leaves every funder-specific requirement to the overlays', () => {
+    // Funder facts belong in the funder layer, where a `sources` block backs them. A component
+    // asserting "this program requires three references" is the Yaesu 12-month obligation again:
+    // a rule in the applicant's hands that the funder's own page never states.
+    for (const id of CORRESPONDENCE) {
+      const body = byId(id)?.body ?? '';
+      expect(body, id).not.toMatch(/\b(?:ARDC|QCWA|YASME|ARRL|Yaesu|ARISS|IEEE|NASA)\b/);
+      expect(body, id).not.toMatch(/requires (?:three|two|four) (?:references|letters)/i);
+    }
+  });
+});
