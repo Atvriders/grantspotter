@@ -1,5 +1,7 @@
 import type { Funder, OrgProfile, Program, StudentProfile } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
+import { fillTemplate, todoFor } from './fill.js';
+import { getTemplate } from './load.js';
 import {
   SLOT_VOCABULARY,
   buildSlotContext,
@@ -459,6 +461,111 @@ describe('describeSlotKnowledge', () => {
     for (const [path, entry] of Object.entries(knowledge)) {
       if (entry.state === 'known') continue;
       expect(Object.hasOwn(ctx, path), `${path} must leave a gap`).toBe(false);
+    }
+  });
+});
+
+/**
+ * TASK 6'S GAP, CLOSED.
+ *
+ * The thank-you letter and the interim/final report both had to say what a funder actually
+ * awarded — which is not always what the applicant requested — and until this slot existed they
+ * could only say so in prose ("copy the figure from the award letter"). Prose is invisible to
+ * anything that walks `SLOT_VOCABULARY` or a template's derived `.slots`, so a checklist built on
+ * that vocabulary could never surface either figure for confirmation. `project.awardAmount` is
+ * that slot, and it never carries an origin of `profile` or `program`: nothing in either shape
+ * states an award, only the award letter does, so it can only ever arrive as an `answer`.
+ */
+describe('project.awardAmount', () => {
+  const IN_KIND_PROGRAM: Program = {
+    ...MAXIMAL_PROGRAM,
+    amount: {
+      instrument: 'in_kind_equipment',
+      amountRaw: 'one Icom IC-7300',
+      awardCountRaw: 'Multiple per year',
+    },
+  };
+
+  it('is a user-supplied sibling of project.requestAmount, not derivable from a profile or a program', () => {
+    expect(slotDef('project.awardAmount')?.source).toBe('user');
+    expect(slotDef('project.requestAmount')?.source).toBe('user');
+    expect(slotDef('project.awardAmount')?.hint).toMatch(/award letter/);
+  });
+
+  it('is unknown before anyone has said what was awarded, even against a full profile and a cash program', () => {
+    const k = describeSlotKnowledge({ profile: MAXIMAL_ORG, program: MAXIMAL_PROGRAM, funder: FUNDER });
+    expect(k['project.awardAmount']).toEqual({ state: 'unknown' });
+  });
+
+  it('is never invented from a profile or an opportunity record — only buildSlotContext leaves it out', () => {
+    const ctx = buildSlotContext({ profile: MAXIMAL_ORG, program: MAXIMAL_PROGRAM, funder: FUNDER });
+    expect(ctx['project.awardAmount']).toBeUndefined();
+  });
+
+  it('becomes known, with origin "answer", once the applicant states it', () => {
+    const k = describeSlotKnowledge({ answers: { 'project.awardAmount': '$3,000' } });
+    expect(k['project.awardAmount']).toEqual({ state: 'known', value: '$3,000', origin: 'answer' });
+  });
+
+  it('is not_applicable when the opportunity record states a non-cash instrument', () => {
+    const k = describeSlotKnowledge({ program: IN_KIND_PROGRAM });
+    expect(k['project.awardAmount']?.state).toBe('not_applicable');
+    const entry = k['project.awardAmount'];
+    expect(entry.state === 'not_applicable' && entry.reason.length).toBeGreaterThan(20);
+  });
+
+  /**
+   * The judgment call the task brief calls out directly: an award that has not been decided yet
+   * is silence, not a stated fact ruling the slot out. Only a program that has told us, in its own
+   * published record, that it never pays in dollars may move this to `not_applicable` — never the
+   * mere absence of a decision.
+   */
+  it('stays unknown — never not_applicable — for a cash program or no program at all', () => {
+    expect(describeSlotKnowledge({ program: MAXIMAL_PROGRAM })['project.awardAmount']).toEqual({
+      state: 'unknown',
+    });
+    expect(describeSlotKnowledge({})['project.awardAmount']).toEqual({ state: 'unknown' });
+  });
+
+  it('lets an explicit answer overrule the non-cash not_applicable call, same as every other slot', () => {
+    const k = describeSlotKnowledge({
+      program: IN_KIND_PROGRAM,
+      answers: { 'project.awardAmount': 'one Icom IC-7300' },
+    });
+    expect(k['project.awardAmount']).toEqual({
+      state: 'known',
+      value: 'one Icom IC-7300',
+      origin: 'answer',
+    });
+  });
+
+  it('resolves independently of project.requestAmount — the two never conflate', () => {
+    const ctx = buildSlotContext({
+      answers: { 'project.requestAmount': '$5,000', 'project.awardAmount': '$3,000' },
+    });
+    expect(ctx['project.requestAmount']).toBe('$5,000');
+    expect(ctx['project.awardAmount']).toBe('$3,000');
+  });
+
+  /**
+   * The acceptance bar for this whole task: a checklist that walks a template's derived `.slots`
+   * (exactly what Task 14 does) must now find `project.awardAmount` in both templates, and the
+   * report must keep `project.requestAmount` distinct rather than reusing it for the award.
+   */
+  it('is visible to a checklist walking each template\'s derived slot list', () => {
+    const thankYou = getTemplate('thank-you-letter');
+    const report = getTemplate('interim-final-report');
+    expect(thankYou.slots).toContain('project.awardAmount');
+    expect(report.slots).toContain('project.awardAmount');
+    expect(report.slots).toContain('project.requestAmount');
+  });
+
+  it('renders as a [TODO: …] gap in both templates against an empty context', () => {
+    for (const id of ['thank-you-letter', 'interim-final-report']) {
+      const t = getTemplate(id);
+      const { markdown, unresolvedSlots } = fillTemplate(t.body, {});
+      expect(unresolvedSlots, id).toContain('project.awardAmount');
+      expect(markdown, id).toContain(todoFor('project.awardAmount'));
     }
   });
 });

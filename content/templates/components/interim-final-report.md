@@ -31,7 +31,7 @@ Check the funder's published reporting requirement before you write. Some awards
 
 **Requested in the application.** {{project.requestAmount}}
 
-**Awarded.**
+**Awarded.** {{project.awardAmount}}
 
 > Copy the figure from the award letter. It is not always the figure you requested, and this template will not assume it was.
 

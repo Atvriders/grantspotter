@@ -44,6 +44,13 @@ export const SLOT_VOCABULARY: readonly SlotDef[] = [
   { path: 'project.problem', label: 'What breaks today', hint: 'the specific failure, naming the object and when it started', source: 'user' },
   { path: 'project.summary', label: 'One-paragraph summary', hint: 'what you will do, for whom, by when, in three sentences', source: 'user' },
   { path: 'project.requestAmount', label: 'Amount requested', hint: 'the dollar amount you are asking this funder for', source: 'user' },
+  // Sibling of `project.requestAmount`, added because a thank-you letter and an interim/final
+  // report both have to name what the funder actually gave — which is not always what was asked
+  // for — and until this slot existed both templates could only say so in prose, invisible to any
+  // reader that walks the vocabulary rather than the rendered markdown. `source: 'user'` on
+  // purpose: nothing in a `Profile` or a `Program` states an award, only the award letter does,
+  // so this can never be auto-filled and must always arrive as an answer.
+  { path: 'project.awardAmount', label: 'Amount awarded', hint: 'the dollar amount stated on the award letter, which is not always the amount you requested', source: 'user' },
   { path: 'project.budgetTotal', label: 'Total project cost', hint: 'the total cost including money from every source', source: 'user' },
   { path: 'project.startDate', label: 'Start date', hint: 'the date work begins, e.g. 2027-01-15', source: 'user' },
   { path: 'project.endDate', label: 'End date', hint: 'the date work finishes, e.g. 2027-06-30', source: 'user' },
@@ -180,6 +187,24 @@ const NO_URL_ROUTES: ReadonlySet<Program['applyVia']> = new Set([
 ]);
 
 /**
+ * Instruments the opportunity record can carry that never pay out in dollars. This is a fact
+ * about the funding MECHANISM, stated by the program record itself and true for every award that
+ * mechanism ever makes — not a guess about whether any particular applicant's decision has come
+ * back yet. That distinction is the whole point: `project.awardAmount` is `unknown` until an
+ * applicant says otherwise, for every program, always — that is silence, and silence before a
+ * decision is never grounds for `not_applicable`. Only a program that has told us it pays in
+ * equipment, service, a discount, a rebate or tuition coverage has said, permanently, that a
+ * dollar figure is not the shape of its award.
+ */
+const NON_CASH_INSTRUMENTS: ReadonlySet<Program['amount']['instrument']> = new Set([
+  'in_kind_equipment',
+  'in_kind_service',
+  'discounted_purchase',
+  'per_member_rebate',
+  'tuition_coverage',
+]);
+
+/**
  * Classify every slot in the vocabulary against what this applicant and this opportunity record
  * actually say. This is the source of truth; `buildSlotContext` is its `known` projection.
  */
@@ -254,6 +279,13 @@ export function describeSlotKnowledge(input: SlotContextInput): SlotKnowledgeMap
     notApplicable(
       'funder.applyContact',
       'the opportunity record states this program publishes no application route at all',
+    );
+  }
+
+  if (program !== undefined && NON_CASH_INSTRUMENTS.has(program.amount.instrument)) {
+    notApplicable(
+      'project.awardAmount',
+      `the opportunity record states this program pays out as "${program.amount.instrument}", not cash, so there is no dollar amount for an award letter to state — describe what was actually awarded instead`,
     );
   }
 

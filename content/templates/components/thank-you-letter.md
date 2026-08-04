@@ -19,7 +19,7 @@ Dear {{donor.contactName}},
 
 > Sentence 1 — thanks, naming the award exactly as the funder named it and the amount exactly as the award letter states it.
 
-Thank you for the {{funder.programName}} award to {{club.name}} ({{club.callsign}}).
+Thank you for the {{funder.programName}} award of {{project.awardAmount}} to {{club.name}} ({{club.callsign}}).
 
 > Sentence 2 — one concrete thing that has already happened because of it, with a number and a date. If nothing has happened yet, say so and give the date it will. An unspent grant honestly reported is fine; an invented milestone is not.
 
