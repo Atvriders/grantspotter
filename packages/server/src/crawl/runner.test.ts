@@ -18,6 +18,36 @@ import { approveReviewItem, confidenceFor } from '../review/index.js';
 import { funderFor, SOURCES } from '../sources/registry.js';
 import { healthMessageFor, runCrawl, runSource } from './runner.js';
 
+/**
+ * THE 5000 ms FLAKE, DIAGNOSED BEFORE IT WAS TIMED OUT.
+ *
+ * Symptom: this file passes 53/53 standalone and intermittently fails one or two tests with
+ * "Test timed out in 5000ms" during a full `npm test`. In this repo four flaky-or-weak tests have
+ * each turned out to be pointing at a real defect, so the timeout was the LAST thing changed.
+ *
+ * IT IS NOT A RACE. There is no timer, no polling, no `waitFor`, no retry and no network anywhere
+ * in this file: `fixtureFetcher` resolves from a committed payload in the same tick, better-sqlite3
+ * is synchronous, and every promise is awaited by the test that created it. There is nothing here
+ * that can be satisfied before the work it is waiting on has happened — the failure mode that
+ * produced the other four. What the tests below do is CPU work, and a lot of it: each
+ * `crawlAndApprove('arrl-scholarship-descriptions')` runs cheerio over the real 144 KB captured
+ * catalogue, normalizes 111 records, diffs them, queues 111 review items and then approves all 111
+ * one at a time — the whole ingestion path, on purpose, because the defect this block exists to
+ * prevent survived 37 commits of tests that hand-wrote the owner's id instead of crawling for it.
+ *
+ * MEASURED on this 36-core host, standalone, three runs: the worst test ("converges on IDENTICAL
+ * cycle rows", which does FOUR of those crawl+approve cycles across two databases) takes
+ * 3.39 s / 3.18 s / 3.24 s — 64-68% of the 5000 ms default already, with nothing left for a busy
+ * machine. Reproduced deterministically by running this file with 36 competing busy loops: the same
+ * test failed at 5242 ms and 6552 ms with "Test timed out in 5000ms", and never any other way.
+ *
+ * So the budget is the bug: a genuinely 3.4-second test was being given 5 seconds. Raised for the
+ * whole file rather than sprinkled per test, because every test here drives the same real crawl and
+ * the next one added will too. 30 s is ~9x the measured worst case, and still fails a real hang
+ * inside half a minute — the reason it is not simply enormous.
+ */
+vi.setConfig({ testTimeout: 30_000 });
+
 const NOW = '2026-08-02T00:00:00.000Z';
 let db: Database.Database;
 

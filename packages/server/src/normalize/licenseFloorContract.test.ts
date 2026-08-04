@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { Program } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 // The offline corpus loader: every committed REAL capture, parsed by its own source module and
@@ -5,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 // with `scripts/profile-corpus.ts` and with `packages/core/test/matcher.test.ts` rather than
 // reimplemented, so this audit and the profiler can never disagree about what "the corpus" is.
 import { loadCorpus } from '../../../../scripts/profile-corpus.js';
+import { SOURCES } from '../sources/registry.js';
+import { FIXTURE_ROOT } from '../../test/fixtures.js';
 
 /**
  * THE MISSING-LICENCE-FLOOR INVARIANT.
@@ -174,62 +178,295 @@ const LICENCE_MENTION = new RegExp(
 // ---------------------------------------------------------------- the allow-list
 
 /**
- * Programs that carry NO licence floor and SHOULD NOT. Each entry names the funder's own reason.
- * Adding one is the reviewed decision that an unlicensed applicant may legitimately be shown this
- * program; it is not a way to silence the test.
+ * WHY EACH EXEMPTION CARRIES EVIDENCE AND NOT ONLY PROSE (close-out review, cross-cutting).
+ *
+ * Every allow-list in this repo used to be gated by a STRING-LENGTH check on its reason —
+ * `expect(reason.length).toBeGreaterThan(80)` was this file's. That is not a guard. It is
+ * satisfied by eighty characters of anything, it cannot tell a true reason from a false one, and
+ * it goes on passing forever after the fact it describes has stopped being true. This project has
+ * already been burned twice by exactly that shape: an invariant that failed open, and 18 tracked
+ * defects that read as coverage.
+ *
+ * So every entry below now states its reason in a form the test EXECUTES. The prose stays, because
+ * a human still has to read it, but the prose is documentation and the `evidence` is the guard. If
+ * austinhams.org publishes a licence rule tomorrow, or the Yaesu page grows a licence sentence
+ * outside its theme's GPL header, or North Fulton stops publishing its explicit `NONE`, the entry
+ * fails and names itself — instead of sitting here asserting something nobody rechecked.
+ *
+ * The kinds are deliberately few, and each is a claim about something committed to this repo:
  */
-const NO_FLOOR_BY_DESIGN: ReadonlyMap<string, string> = new Map([
+type Evidence =
+  /**
+   * The record publishes an ANSWER, not a gap: a hard `license` constraint whose `licenseMin` is
+   * `NONE`, read off the funder's own stated value. `licenceFloorOf` treats that as "no floor" on
+   * purpose (it is functionally identical for a matcher), which is exactly why it needs an entry
+   * here — and why the entry must prove the answer is still being published.
+   */
+  | { readonly kind: 'publishes_an_explicit_no_licence_answer'; readonly rawText: string }
+  /**
+   * The funder's committed capture never says "licen" at all, so any floor this codebase imposed
+   * would be invented rather than read. Fails if the page starts talking about licences — which is
+   * the whole point, since RULE A cannot fire on a record with no floor and no trigger text.
+   */
+  | { readonly kind: 'capture_never_mentions_a_licence' }
+  /**
+   * The capture DOES say "licen", but only in contexts that are not an applicant licence rule.
+   * Every occurrence must land in one of the named contexts, and every named context must still
+   * match something — so neither a new sentence nor a deleted one leaves the entry unexamined.
+   */
+  | { readonly kind: 'capture_mentions_licence_only_as'; readonly contexts: readonly string[] }
+  /** The record's own published text says, verbatim, that no licence is required. */
+  | { readonly kind: 'record_text_states'; readonly phrase: string }
+  /**
+   * A PORTAL record, whose licence rules are its catalogue's. The claim "one of the awards behind
+   * this portal genuinely requires no licence, so a floor here would exclude in the wrong
+   * direction" is checkable: the catalogue must still publish at least one award with an explicit
+   * `NONE`. If the catalogue ever stops, this exemption's reasoning has evaporated and it says so.
+   */
+  | { readonly kind: 'catalogue_contains_an_unlicensed_award'; readonly catalogueSourceId: string };
+
+interface Exemption {
+  readonly reason: string;
+  readonly evidence: Evidence;
+}
+
+/** The committed REAL captures for a source — the `NN-` files `loadCorpus` itself feeds the parser. */
+function realCaptures(sourceId: string): Array<{ file: string; body: string }> {
+  const dir = path.join(FIXTURE_ROOT, sourceId);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => /^\d\d-/.test(f))
+    .sort()
+    .map((file) => ({ file, body: readFileSync(path.join(dir, file), 'utf8') }));
+}
+
+/** Every "licen" occurrence in a captured page, with enough of its neighbourhood to judge it. */
+function licenceWindows(body: string): string[] {
+  const out: string[] = [];
+  const re = /licen/gi;
+  for (let m = re.exec(body); m !== null; m = re.exec(body)) {
+    out.push(body.slice(Math.max(0, m.index - 70), m.index + 70).replace(/\s+/g, ' '));
+  }
+  return out;
+}
+
+/**
+ * Programs that carry NO licence floor and SHOULD NOT. Each entry names the funder's own reason
+ * AND the evidence for it. Adding one is the reviewed decision that an unlicensed applicant may
+ * legitimately be shown this program; it is not a way to silence the test, and an entry whose
+ * evidence stops holding fails rather than lingering.
+ */
+const NO_FLOOR_BY_DESIGN: ReadonlyMap<string, Exemption> = new Map([
   [
     'arrl-scholarship-descriptions::The North Fulton Amateur Radio League Scholarship',
-    'The one genuinely unlicensed-OK award in this corpus: the ARRL catalog value for this entry ' +
-      'is literally the bare word "None", and normalize/axes/license.ts\'s NO_LICENSE branch ' +
-      'exists precisely for it. It publishes a hard licenseMin: NONE — an answer, not a gap.',
+    {
+      reason:
+        'The one genuinely unlicensed-OK award in this corpus: the ARRL catalog value for this ' +
+        'entry is literally the bare word "None", and normalize/axes/license.ts\'s NO_LICENSE ' +
+        'branch exists precisely for it. It publishes a hard licenseMin: NONE — an answer, not a gap.',
+      evidence: { kind: 'publishes_an_explicit_no_licence_answer', rawText: 'None' },
+    },
   ],
   [
     'arrl-scholarship-program::scholarship-program',
-    'The ARRL Foundation PORTAL record, not an award. It is a directory over the 170+ scholarships ' +
-      'whose per-award licence rules are the 111 arrl-scholarship-descriptions records, and one of ' +
-      'those (North Fulton) genuinely requires no licence — so a corpus-wide floor on the portal ' +
-      'would contradict the funder\'s own catalog in the EXCLUDING direction, telling an ' +
-      'unlicensed applicant not to look at a list that contains an award for them.',
+    {
+      reason:
+        'The ARRL Foundation PORTAL record, not an award. It is a directory over the 170+ ' +
+        'scholarships whose per-award licence rules are the 111 arrl-scholarship-descriptions ' +
+        'records, and one of those (North Fulton) genuinely requires no licence — so a ' +
+        'corpus-wide floor on the portal would contradict the funder\'s own catalog in the ' +
+        'EXCLUDING direction, telling an unlicensed applicant not to look at a list that ' +
+        'contains an award for them.',
+      evidence: {
+        kind: 'catalogue_contains_an_unlicensed_award',
+        catalogueSourceId: 'arrl-scholarship-descriptions',
+      },
+    },
   ],
   [
     'manual-tier-d::rca-scholarship-program',
-    'The Radio Club of America record says so in its own curated text: "A ham licence is NOT ' +
-      'required." The trigger here is a NEGATION of a requirement, which is the false positive ' +
-      'LICENCE_MENTION knowingly accepts. RCA funds a wireless-career track at ~9 participating ' +
-      'schools and the university selects recipients; the student never applies to RCA.',
+    {
+      reason:
+        'The Radio Club of America record says so in its own curated text: "A ham licence is NOT ' +
+        'required." The trigger here is a NEGATION of a requirement, which is the false positive ' +
+        'LICENCE_MENTION knowingly accepts. RCA funds a wireless-career track at ~9 participating ' +
+        'schools and the university selects recipients; the student never applies to RCA.',
+      evidence: { kind: 'record_text_states', phrase: 'A ham licence is NOT required.' },
+    },
   ],
   [
     'austin-arc::austin-arc-scholarships',
-    'The live capture of austinhams.org/scholarships/ contains no occurrence of the string ' +
-      '"licen" at all. The club funds Central-Texas students in engineering, computer science, ' +
-      'public service, healthcare "and more", and states no amateur licence rule anywhere. ' +
-      'Inventing a TECH floor here would be this codebase guessing against a page it has read.',
+    {
+      reason:
+        'The live capture of austinhams.org/scholarships/ contains no occurrence of the string ' +
+        '"licen" at all. The club funds Central-Texas students in engineering, computer science, ' +
+        'public service, healthcare "and more", and states no amateur licence rule anywhere. ' +
+        'Inventing a TECH floor here would be this codebase guessing against a page it has read.',
+      evidence: { kind: 'capture_never_mentions_a_licence' },
+    },
   ],
   [
     'sara::sara-student-teacher-grants',
-    'SARA\'s $200 student and teacher project grants fund RADIO ASTRONOMY projects, which are ' +
-      'receive-only and need no transmitting licence; the Society of Amateur Radio Astronomers ' +
-      'says nothing about licensing on its grants page (the capture contains no "licen" string). ' +
-      'This is one of exactly two programs the unlicensed high-school profile can reach, and that ' +
-      'is correct rather than a leak.',
+    {
+      reason:
+        'SARA\'s $200 student and teacher project grants fund RADIO ASTRONOMY projects, which are ' +
+        'receive-only and need no transmitting licence; the Society of Amateur Radio Astronomers ' +
+        'says nothing about licensing on its grants page (the capture contains no "licen" string). ' +
+        'This is one of exactly two programs the unlicensed high-school profile can reach, and ' +
+        'that is correct rather than a leak.',
+      evidence: { kind: 'capture_never_mentions_a_licence' },
+    },
   ],
   [
     'ncdxf-grants::ncdxf-grant-program',
-    'The DXpedition grant page\'s only "licen" string is "the licensing and landing permission", ' +
-      'a criterion about the EXPEDITION\'s operating permits in a foreign entity, not about the ' +
-      'applicant\'s licence class. NCDXF funds expedition teams and states no applicant licence ' +
-      'requirement; the record\'s own notes already say it is not a collegiate program.',
+    {
+      reason:
+        'The DXpedition grant page\'s only "licen" string is "the licensing and landing ' +
+        'permission", a criterion about the EXPEDITION\'s operating permits in a foreign entity, ' +
+        'not about the applicant\'s licence class. NCDXF funds expedition teams and states no ' +
+        'applicant licence requirement; the record\'s own notes already say it is not a ' +
+        'collegiate program.',
+      evidence: {
+        kind: 'capture_mentions_licence_only_as',
+        contexts: ['the licensing and landing permission'],
+      },
+    },
   ],
   [
     'yaesu-dr2x::yaesu-dr2x-repeater-program',
-    'A hardware discount on a repeater, not a personal award. The captured page\'s only "licen" ' +
-      'strings are the GPL and MIT notices in its own theme CSS/JS headers. The real obligation ' +
-      'the programme does impose — twelve months of on-air service — is modelled as an Obligation ' +
-      'in OBLIGATIONS_BY_SOURCE, not as an eligibility axis.',
+    {
+      reason:
+        'A hardware discount on a repeater, not a personal award. The captured page\'s only ' +
+        '"licen" strings are the GPL and MIT notices in its own theme CSS/JS headers. The real ' +
+        'obligation the programme does impose — twelve months of on-air service — is modelled as ' +
+        'an Obligation in OBLIGATIONS_BY_SOURCE, not as an eligibility axis.',
+      evidence: {
+        kind: 'capture_mentions_licence_only_as',
+        // Divi's GPL v2 theme header (4 hits) and Animate.css's MIT notice (3 hits). Both are
+        // software licences in a <style> block, which is why "licen" on this page proves nothing
+        // about who may apply.
+        contexts: ['GNU General Public License', 'Licensed under the MIT license'],
+      },
+    },
   ],
 ]);
+
+/**
+ * Runs one entry's evidence and returns the reason it no longer holds, or `undefined`.
+ *
+ * The source id is derived from the key rather than restated in the entry: `source::externalKey`
+ * IS the ingest identity, so an entry can never name one source and check another's fixtures.
+ */
+function evidenceFailure(
+  key: string,
+  entry: Exemption,
+  program: Program | undefined,
+  programs: readonly Program[],
+): string | undefined {
+  const sourceId = key.slice(0, key.indexOf('::'));
+  const { evidence } = entry;
+  switch (evidence.kind) {
+    case 'publishes_an_explicit_no_licence_answer': {
+      if (program === undefined) return `${key}: not in the corpus, so its evidence cannot be read`;
+      const answer = program.constraints.find(
+        (c) => c.spec.axis === 'license' && c.hard && c.spec.licenseMin === 'NONE',
+      );
+      if (answer === undefined) {
+        return (
+          `${key} claims it publishes an explicit "no licence required" ANSWER, but it now ` +
+          'carries no hard license constraint with licenseMin NONE at all. A gap is not an ' +
+          'answer: this is now an ordinary missing floor and the exemption no longer applies.'
+        );
+      }
+      if (answer.rawText.trim() !== evidence.rawText) {
+        return (
+          `${key} publishes licenseMin NONE read off ${JSON.stringify(answer.rawText)}, but the ` +
+          `entry was signed against ${JSON.stringify(evidence.rawText)}. Re-read the funder's ` +
+          'page: the value the answer was derived from has changed.'
+        );
+      }
+      return undefined;
+    }
+    case 'capture_never_mentions_a_licence': {
+      const captures = realCaptures(sourceId);
+      if (captures.length === 0) {
+        return (
+          `${key}: no committed NN-* capture for "${sourceId}", so "the page never mentions a ` +
+          'licence" is being asserted about a page nothing here can read.'
+        );
+      }
+      const talking = captures
+        .map((c) => ({ file: c.file, windows: licenceWindows(c.body) }))
+        .filter((c) => c.windows.length > 0);
+      if (talking.length === 0) return undefined;
+      return (
+        `${key} is exempt because its capture never says "licen" — it now does, ` +
+        `${talking.map((t) => `${t.file}: ${t.windows.length}`).join(', ')}. First: ` +
+        `"…${talking[0].windows[0]}…". Re-read the page and either impose the floor or ` +
+        're-sign this entry with the context it appears in.'
+      );
+    }
+    case 'capture_mentions_licence_only_as': {
+      const captures = realCaptures(sourceId);
+      if (captures.length === 0) {
+        return `${key}: no committed NN-* capture for "${sourceId}" to check the contexts against.`;
+      }
+      const windows = captures.flatMap((c) => licenceWindows(c.body));
+      if (windows.length === 0) {
+        return (
+          `${key} names the contexts its capture's "licen" strings appear in, but the capture ` +
+          'now contains none at all. The evidence is stale — use ' +
+          'capture_never_mentions_a_licence, or recapture the page.'
+        );
+      }
+      const unexplained = windows.filter((w) => !evidence.contexts.some((c) => w.includes(c)));
+      if (unexplained.length > 0) {
+        return (
+          `${key} is exempt because every "licen" on its page is one of ` +
+          `${JSON.stringify(evidence.contexts)} — ${unexplained.length} occurrence(s) now are ` +
+          `not. First: "…${unexplained[0]}…".`
+        );
+      }
+      const dead = evidence.contexts.filter((c) => !windows.some((w) => w.includes(c)));
+      if (dead.length > 0) {
+        return (
+          `${key} lists context(s) ${JSON.stringify(dead)} that no longer appear on the captured ` +
+          'page. A context that matches nothing is dead documentation and the next reader learns ' +
+          'to stop trusting the list.'
+        );
+      }
+      return undefined;
+    }
+    case 'record_text_states': {
+      if (program === undefined) return `${key}: not in the corpus, so its evidence cannot be read`;
+      if (textSurfaceOf(program).includes(evidence.phrase)) return undefined;
+      return (
+        `${key} is exempt because its own published text says ` +
+        `${JSON.stringify(evidence.phrase)}. It no longer does. The record can no longer be ` +
+        'cited as saying a licence is not required.'
+      );
+    }
+    case 'catalogue_contains_an_unlicensed_award': {
+      const catalogue = programs.filter((p) => keyOf(p).startsWith(`${evidence.catalogueSourceId}::`));
+      if (catalogue.length === 0) {
+        return (
+          `${key} defers to the "${evidence.catalogueSourceId}" catalogue, which produced NO ` +
+          'programs at all — so the reasoning behind this exemption cannot be checked.'
+        );
+      }
+      const unlicensed = catalogue.filter((p) =>
+        p.constraints.some((c) => c.spec.axis === 'license' && c.hard && c.spec.licenseMin === 'NONE'),
+      );
+      if (unlicensed.length > 0) return undefined;
+      return (
+        `${key} is exempt because at least one award in the "${evidence.catalogueSourceId}" ` +
+        `catalogue genuinely requires no licence. None of its ${String(catalogue.length)} awards ` +
+        'does any more, so a floor on the portal would no longer exclude anybody wrongly — ' +
+        'delete this exemption and let RULE B impose one.'
+      );
+    }
+  }
+}
 
 /**
  * Programs that carry no licence floor and SHOULD. These are not exemptions; they are this
@@ -258,6 +495,41 @@ const NO_FLOOR_BY_DESIGN: ReadonlyMap<string, string> = new Map([
 const NO_FLOOR_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([]);
 
 const ALLOWED = new Set([...NO_FLOOR_BY_DESIGN.keys(), ...NO_FLOOR_KNOWN_DEFECTS.keys()]);
+
+/**
+ * THE OTHER WAY THIS AUDIT GOES QUIET: A SOURCE LEAVING THE POPULATION.
+ *
+ * RULE A and RULE B scan `loadCorpus()`. `loadCorpus` does not fail when a source cannot be
+ * loaded — it SKIPS it and records a `why`, because the profiler it was written for would rather
+ * report 25 sources than nothing. Nothing here read that list, so a source whose fixture was moved,
+ * whose `requests()` threw, or whose parser started throwing simply left the audited population and
+ * every programme it publishes escaped both rules, silently and permanently.
+ *
+ * MEASURED, before this guard existed: hiding the committed captures for `qcwa` and `ylrl` — two
+ * of the three sources whose historical wrong awards this whole file exists to prevent — dropped
+ * five programmes out of the corpus and **all 15 tests in this file stayed green**. The old
+ * vacuity guard (`loaded.length >= 20`, against 26) had 6 sources of headroom by construction and
+ * could not see it.
+ *
+ * So a source producing no audited records is now a FAILURE unless it is listed here, and each
+ * entry carries the EXACT `why` string `loadCorpus` reports — machine-checkable, not prose. The
+ * list is guarded in both directions: an entry that starts loading again, or that starts skipping
+ * for a different reason, fails just as loudly as an unlisted source that disappears.
+ */
+const NOT_IN_THE_AUDITED_POPULATION: ReadonlyMap<string, { why: string; reason: string }> = new Map([
+  [
+    'arrl-news-rss',
+    {
+      // Verbatim from `loadCorpus`, which derives it from `isSignalSource(source)`.
+      why: 'signal-only source: produces change events, not candidates',
+      reason:
+        'The ARRL news feed is a SIGNAL source: it emits ChangeEvents so a human notices a funder ' +
+        'announcement, and produces no candidate programme at all (runner.test.ts pins "emits ' +
+        'ChangeEvents for relevant items and NO review items"). There is nothing for a licence ' +
+        'floor to be missing from — it publishes no record any applicant can be shown.',
+    },
+  ],
+]);
 
 // ---------------------------------------------------------------- the invariant
 
@@ -316,13 +588,71 @@ describe('licence floors: no program may state a licence requirement and then no
     expect(stale).toEqual([]);
   });
 
-  it('gives every listed program a real reason and never lists one twice', () => {
-    for (const [key, reason] of [...NO_FLOOR_BY_DESIGN, ...NO_FLOOR_KNOWN_DEFECTS]) {
-      expect(reason.length, `${key} needs a real reason, not a placeholder`).toBeGreaterThan(80);
+  /**
+   * THE GUARD THAT REPLACED `reason.length > 80`.
+   *
+   * A length check is satisfied by padding and proves nothing; this runs each entry's stated
+   * reason against the committed captures and the loaded corpus, so an exemption whose premise has
+   * stopped being true fails and names itself. Every kind is defined at `Evidence` above with the
+   * failure it is meant to catch.
+   */
+  it('every by-design exemption still has the evidence it was signed with', async () => {
+    const { programs } = await corpus();
+    const byKey = new Map(programs.map((p) => [keyOf(p), p]));
+    const failures: string[] = [];
+    for (const [key, entry] of NO_FLOOR_BY_DESIGN) {
+      const failure = evidenceFailure(key, entry, byKey.get(key), programs);
+      if (failure !== undefined) failures.push(failure);
     }
+    expect(failures).toEqual([]);
+  });
+
+  it('never lists the same program as both by-design and a known defect', () => {
     const both = [...NO_FLOOR_BY_DESIGN.keys()].filter((k) => NO_FLOOR_KNOWN_DEFECTS.has(k));
     expect(both).toEqual([]);
   });
+
+  /**
+   * VACUITY GUARD FOR THE EVIDENCE ITSELF. Every kind defined above must actually be exercised by
+   * a live entry — otherwise a kind could rot into a no-op (or be quietly narrowed) and no entry
+   * would notice, which is the same "a gate that checks nothing" failure the evidence exists to
+   * end. Read as: these are the four shapes of proof this list currently rests on.
+   */
+  it('exercises every evidence kind it defines', () => {
+    const used = new Set([...NO_FLOOR_BY_DESIGN.values()].map((e) => e.evidence.kind));
+    expect([...used].sort()).toEqual([
+      'capture_mentions_licence_only_as',
+      'capture_never_mentions_a_licence',
+      'catalogue_contains_an_unlicensed_award',
+      'publishes_an_explicit_no_licence_answer',
+      'record_text_states',
+    ]);
+  });
+});
+
+/**
+ * A TRACKED DEFECT MAY NEVER BE GREEN HERE.
+ *
+ * `NO_FLOOR_KNOWN_DEFECTS` is empty today, and this is the guard that keeps adding to it a
+ * deliberate, visible act. The close-out review's cross-cutting finding was that the sibling
+ * `WRITE_ONLY_KNOWN_DEFECTS` holds 19 entries, every one labelled "DEFECT", every one reported as
+ * a passing test — and that the resulting green count was being cited as a health signal. An entry
+ * in this map means a program this product SHOWS to an applicant it should not; it is outstanding
+ * work, and outstanding work that reports as passing is how a defect becomes documentation.
+ *
+ * So the map cannot quietly gain a member. Anything added has to be emitted as `it.todo` — which
+ * prints on every run and is counted separately from passing — and signed in
+ * `packages/server/test/vitestCoverageContract.test.ts`'s `SKIPPED_BY_DESIGN`, which is the
+ * repo-wide invariant that no statically skipped block goes unexplained. Both of those are
+ * deliberate acts by whoever records the defect; this assertion is what makes them unavoidable.
+ */
+it('has no tracked licence-floor defect quietly reporting as a pass', () => {
+  expect(
+    [...NO_FLOOR_KNOWN_DEFECTS.keys()],
+    'a program in NO_FLOOR_KNOWN_DEFECTS is shown to applicants it should exclude. Do not leave ' +
+      'it here as a silently-passing allow-list entry: emit it as `it.todo` so it prints on every ' +
+      'run as outstanding, and sign that skip in vitestCoverageContract.test.ts SKIPPED_BY_DESIGN.',
+  ).toEqual([]);
 });
 
 // ---------------------------------------------------------------- the instance
@@ -560,9 +890,12 @@ describe('the licence detector actually sees the class', () => {
    *      "produced nothing at all" is expressible without a single magic number, per source. This
    *      is the assertion that actually fails when a fixture moves or a parser breaks, and it does
    *      not move when a funder adds or removes awards.
-   *   2. THE LOADER REALLY WALKED THE REGISTRY, rather than returning an empty plan that would
-   *      make claim 1 pass over an empty list. Stated as a source COUNT, which changes only when
-   *      somebody deliberately adds or removes a source module — never as data drifts.
+   *   2. EVERY REGISTERED SOURCE IS IN THE AUDITED POPULATION, or is signed for in
+   *      `NOT_IN_THE_AUDITED_POPULATION` with the exact reason `loadCorpus` reports for skipping
+   *      it. This is the claim that replaced `loaded.length >= 20`, which had six sources of
+   *      headroom and was measured to survive TWO of this file's own three historical sources
+   *      vanishing (see the comment on that map). It is an identity, not a threshold: it cannot be
+   *      satisfied by lowering anything.
    *   3. THE POPULATION RULE B SCANS IS REAL, stated against the size of this file's own
    *      allow-list: reviewed exceptions must stay a small minority of individual-facing programs.
    *      It rescales itself if the allow-list ever legitimately grows.
@@ -583,9 +916,10 @@ describe('the licence detector actually sees the class', () => {
       .sort();
     expect(silent).toEqual([]);
 
-    // 2 — and there were sources to be silent about. `SOURCES` holds 26 modules today; this is a
-    // deliberate-change tripwire, not a data threshold.
-    expect(loaded.length).toBeGreaterThanOrEqual(20);
+    // 2 — and the audited population is EVERY registered source bar the signed exceptions. An
+    // identity rather than a floor: adding or removing a source module moves both sides at once,
+    // and a source dropping out moves only one.
+    expect(loaded.length).toBe(SOURCES.length - NOT_IN_THE_AUDITED_POPULATION.size);
 
     // 3 — RULE B's population dwarfs the reviewed exceptions it is allowed to skip.
     const individual = programs.filter((p) => p.applicantEntities.includes('individual'));
@@ -596,6 +930,58 @@ describe('the licence detector actually sees the class', () => {
     const withFloor = programs.filter((p) => licenceFloorOf(p) !== undefined);
     expect(withFloor.length).toBeGreaterThan(individual.length / 2);
     expect(new Set(withFloor.map((p) => licenceFloorOf(p)))).toEqual(new Set(['TECH', 'GENERAL']));
+  });
+
+  /**
+   * Claim 2 as a NAMED failure rather than a count mismatch. `26 !== 24` tells a reader nothing;
+   * this tells them which source left the audit and what `loadCorpus` said when it dropped it.
+   */
+  it('audits every registered source, and names any that has left the population', async () => {
+    const { loaded, skipped } = await corpus();
+    const audited = new Set(loaded.map((e) => e.sourceId));
+    const why = new Map(skipped.map((e) => [e.sourceId, e.why]));
+    const gone = SOURCES.map((s) => s.id)
+      .filter((id) => !audited.has(id) && !NOT_IN_THE_AUDITED_POPULATION.has(id))
+      .map(
+        (id) =>
+          `source "${id}" produced NO audited records — loadCorpus reports: ` +
+          `${why.get(id) ?? 'it was neither loaded nor skipped, which should be impossible'}. ` +
+          'Every programme it publishes is now outside RULE A and RULE B. Restore the source, or ' +
+          'sign it in NOT_IN_THE_AUDITED_POPULATION with the exact `why` loadCorpus reports.',
+      )
+      .sort();
+    expect(gone).toEqual([]);
+  });
+
+  it('keeps NOT_IN_THE_AUDITED_POPULATION honest in both directions', async () => {
+    const { loaded, skipped } = await corpus();
+    const audited = new Set(loaded.map((e) => e.sourceId));
+    const why = new Map(skipped.map((e) => [e.sourceId, e.why]));
+    const registered = new Set(SOURCES.map((s) => s.id));
+    const stale: string[] = [];
+    for (const [id, entry] of NOT_IN_THE_AUDITED_POPULATION) {
+      if (!registered.has(id)) {
+        stale.push(`"${id}" is not a registered source any more — delete the entry.`);
+        continue;
+      }
+      if (audited.has(id)) {
+        stale.push(
+          `"${id}" IS being audited now, so the exemption is dead documentation — delete it and ` +
+            'let RULE A and RULE B see the source.',
+        );
+        continue;
+      }
+      const actual = why.get(id);
+      if (actual !== entry.why) {
+        stale.push(
+          `"${id}" is excluded for a DIFFERENT reason than the one signed. Signed: ` +
+            `${JSON.stringify(entry.why)}. loadCorpus now says: ${JSON.stringify(actual)}. A ` +
+            'signal-only source producing no candidates and a source whose parser started ' +
+            'throwing look identical from here; only the reason distinguishes them.',
+        );
+      }
+    }
+    expect(stale).toEqual([]);
   });
 
   it('scans a surface that includes the field the NCDXF sentence was hiding in', async () => {

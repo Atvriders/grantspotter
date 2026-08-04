@@ -1,5 +1,10 @@
+/// <reference types="vite/client" />
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fixturePayload, hasFixture, loadFixture } from '../../test/fixtures.js';
+import { fixturePayload, fixtureFile, hasFixture, loadFixture } from '../../test/fixtures.js';
+import { splitByLabels } from './util/text.js';
 import {
   ARRL_SCHOLARSHIP_LABELS,
   arrlScholarshipDescriptions,
@@ -13,6 +18,23 @@ const URL = 'http://www.arrl.org/scholarship-descriptions';
 const LIVE = '00-www-arrl-org-scholarship-descriptions.html';
 
 const pathological = () => parseScholarshipCatalog(loadFixture(SOURCE_ID, 'pathological.html'), URL);
+
+/**
+ * The committed capture of the real page, loaded with a failure that says what is wrong.
+ *
+ * Every test that reads the live page went through `skipIf(!hasFixture(...))` until now, which
+ * meant the strongest evidence in this file — the damage the label rules prevent, measured on the
+ * funder's actual 111 records — was one `rm` away from reporting "skipped" inside a green run.
+ */
+function theLiveCapture(): string {
+  expect(
+    hasFixture(SOURCE_ID, LIVE),
+    `the committed capture of the real ARRL catalogue is missing from ${fixtureFile(SOURCE_ID, LIVE)}. ` +
+      'It is tracked in git and is the only evidence that the label rules prevent real damage; ' +
+      'restore it rather than skipping the tests that read it.',
+  ).toBe(true);
+  return loadFixture(SOURCE_ID, LIVE);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -106,11 +128,22 @@ describe('the every-alternate-ends-in-a-colon invariant', () => {
    * this asserts the DAMAGE, not just the table. Against the real capture, the bare alternate
    * invents a `Recipient` field on the YASME record and truncates `Other`; the colon-terminated
    * form does neither.
+   *
+   * NO LONGER `it.skipIf(!hasFixture(...))` (close-out review, verdict 2: "delete the fixture and
+   * it reports SKIPPED, not failed"). MEASURED before the change: moving
+   * `00-www-arrl-org-scholarship-descriptions.html` aside turned this file into
+   * "31 passed | 7 skipped — Test Files 1 passed", so the one test that proves the DAMAGE — and
+   * the six that check the live page — evaporated while the run stayed green. A conditional skip
+   * is only honest when the condition can legitimately hold; this one cannot. The capture is
+   * COMMITTED (`git ls-files fixtures/arrl-scholarship-descriptions/`), `fixtures/` is not
+   * ignored, and `sources/registry.test.ts` independently fails any registered source with no
+   * real `NN-*` capture. So its absence is a broken checkout or a deleted fixture, and both of
+   * those should be a red, which `theLiveCapture()` below makes them.
    */
-  it.skipIf(!hasFixture(SOURCE_ID, LIVE))(
+  it(
     'proves the damage on the real page: a bare alternate invents a field, a colon-terminated one does not',
     () => {
-      const html = loadFixture(SOURCE_ID, LIVE);
+      const html = theLiveCapture();
       const yasmeFrom = (labels: Record<string, string[]>) =>
         parseScholarshipCatalog(html, URL, labels).entries.find((e) => /YASME/i.test(e.name));
 
@@ -123,6 +156,370 @@ describe('the every-alternate-ends-in-a-colon invariant', () => {
       expect(withColon?.rawFields.Other).toMatch(/brief report/);
     },
   );
+});
+
+// ------------------------------------------------------------------ the widened guard
+/**
+ * WHY THE TWO CHECKS ABOVE ARE NOT YET AN INVARIANT (close-out review, verdict 2).
+ *
+ * "Binds for one constant only. Discovery is a single imported `ARRL_SCHOLARSHIP_LABELS`, not a
+ * scan; `splitByLabels` is generic and a second label table anywhere is invisible."
+ *
+ * That is the same defect class as the egress rule's, which was rooted at `sources/` while two
+ * live modules already imported out of it: a rule that is true of the one thing somebody
+ * remembered to import. `splitByLabels` is a general facility over funder prose — any source that
+ * ever parses a labelled block will declare a table — and the prose-collision defect it guards
+ * against (a bare alternate matching the funder's own sentence) is a property of ANY table, not of
+ * this one. MEASURED: a second table with a bare alternate, declared and used in a new file under
+ * `sources/`, left every test in this file green.
+ *
+ * So discovery is now a scan, in four parts, each of which fails by name:
+ *
+ *   H0 — `splitByLabels` may only be reached from the trees this file scans. A parser that starts
+ *        splitting funder prose from `normalize/` or `api/` would otherwise declare its table
+ *        outside the walk, which is exactly how the egress rule was defeated.
+ *   H1 — every EXPORTED label table in those trees passes BOTH checks, not just the one imported
+ *        by name at the top of this file.
+ *   H2a — every label table is exported, so H1 can see it. A module-local table is invisible to a
+ *        runtime scan by construction, so the static half closes that door instead.
+ *   H2b — no `splitByLabels` call may pass a table H1 cannot reach: never an inline object
+ *         literal, and only an identifier that resolves to a scanned export.
+ *
+ * H1's detector and H2's parsers are pure functions, exercised below against hand-built inputs
+ * that reproduce each escape, so the scan cannot rot into "found nothing, therefore fine".
+ */
+const SOURCE_TREE_MODULES = import.meta.glob(
+  ['./**/*.ts', '!./**/*.test.ts', '../federal/**/*.ts', '!../federal/**/*.test.ts'],
+  { eager: true },
+) as Record<string, Record<string, unknown>>;
+
+/**
+ * `packages/server/src` — H0 walks all of it; H1/H2 scan only the trees below.
+ *
+ * Resolved WITHOUT `new URL(...)`: this file declares a module-level `const URL` above, which
+ * shadows the global constructor for the whole module — the same shadowing that made
+ * `absoluteApplyUrl` silently return undefined and cost all 111 records their apply link (see the
+ * `CATALOG_URL` rename in the module under test). `fileURLToPath` takes the string directly.
+ */
+const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** The trees that parse funder prose, and therefore the trees a label table may live in. */
+const SCANNED_TREES = ['sources', 'federal'] as const;
+
+function tsFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...tsFilesUnder(full));
+    else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) out.push(full);
+  }
+  return out;
+}
+
+/** Prose about splitting labels is not splitting labels. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
+/**
+ * The shape of a label table at runtime: a non-empty plain object whose every value is a non-empty
+ * array of non-empty strings — i.e. exactly what `splitByLabels` accepts. Deliberately structural
+ * rather than name-based (`/_LABELS$/`), because a table called `FIELDS` is the same hazard.
+ */
+export function isLabelTable(value: unknown): value is Record<string, string[]> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return false;
+  return entries.every(
+    ([, v]) =>
+      Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s.length > 0),
+  );
+}
+
+/** Every label-shaped export of one module namespace. Pure, so the negative control can drive it. */
+export function labelTablesIn(
+  namespace: Record<string, unknown>,
+): Array<{ name: string; table: Record<string, string[]> }> {
+  return Object.entries(namespace)
+    .filter(([, v]) => isLabelTable(v))
+    .map(([name, v]) => ({ name, table: v as Record<string, string[]> }));
+}
+
+/** Every exported label table in the scanned trees, keyed by where it lives. */
+function discoveredLabelTables(): Array<{
+  where: string;
+  name: string;
+  table: Record<string, string[]>;
+}> {
+  return Object.entries(SOURCE_TREE_MODULES).flatMap(([where, namespace]) =>
+    labelTablesIn(namespace).map((t) => ({ where, ...t })),
+  );
+}
+
+/**
+ * The second argument of every `splitByLabels(...)` call in a file, as written. `null` marks a call
+ * whose table is not a plain identifier — an inline object literal, a call, a member expression —
+ * which is a table no runtime export scan can ever reach.
+ */
+export function splitByLabelsCallSites(src: string): Array<string | null> {
+  const clean = stripComments(src);
+  const out: Array<string | null> = [];
+  // CALL sites only. `util/text.ts` DECLARES `export function splitByLabels(flatText, byKey)`,
+  // whose parameter list is not an argument list — counting it as one made the scan report the
+  // facility's own definition as an unreachable table.
+  const re = /(?<!function\s)\bsplitByLabels\s*\(/g;
+  for (let m = re.exec(clean); m !== null; m = re.exec(clean)) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    const start = i;
+    for (; i < clean.length && depth > 0; i += 1) {
+      const ch = clean[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+      else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    }
+    const inner = clean.slice(start, i - 1);
+    // Top-level comma split: nested calls/objects must not be mistaken for an argument boundary.
+    const args: string[] = [];
+    let d = 0;
+    let last = 0;
+    for (let j = 0; j < inner.length; j += 1) {
+      const ch = inner[j];
+      if (ch === '(' || ch === '[' || ch === '{') d += 1;
+      else if (ch === ')' || ch === ']' || ch === '}') d -= 1;
+      else if (ch === ',' && d === 0) {
+        args.push(inner.slice(last, j));
+        last = j + 1;
+      }
+    }
+    args.push(inner.slice(last));
+    const second = (args[1] ?? '').trim();
+    out.push(/^[A-Za-z_$][\w$]*$/.test(second) ? second : null);
+  }
+  return out;
+}
+
+/** Every `const X: Record<string, string[]>` declaration in a file, and whether it is exported. */
+export function labelTableDeclarations(src: string): Array<{ name: string; exported: boolean }> {
+  const clean = stripComments(src);
+  const out: Array<{ name: string; exported: boolean }> = [];
+  const re = /(export\s+)?const\s+([A-Za-z_$][\w$]*)\s*:\s*Record\s*<\s*string\s*,\s*string\s*\[\s*\]\s*>/g;
+  for (let m = re.exec(clean); m !== null; m = re.exec(clean)) {
+    out.push({ name: m[2], exported: m[1] !== undefined });
+  }
+  return out;
+}
+
+/** Names a file imports, so an identifier passed to `splitByLabels` can be traced to its module. */
+function importedNames(src: string): Set<string> {
+  const names = new Set<string>();
+  for (const m of stripComments(src).matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from/g)) {
+    for (const part of m[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name !== undefined && name !== '') names.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * A parameter typed as a label table whose DEFAULT is another identifier — the shape
+ * `parseScholarshipCatalog` uses (`labels: Record<string, string[]> = ARRL_SCHOLARSHIP_LABELS`).
+ * The seam is legitimate; what matters is that the default it falls back to is a scanned table.
+ */
+function labelTableParameterDefaults(src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const re =
+    /([A-Za-z_$][\w$]*)\s*:\s*Record\s*<\s*string\s*,\s*string\s*\[\s*\]\s*>\s*=\s*([A-Za-z_$][\w$]*)/g;
+  for (let m = re.exec(stripComments(src)); m !== null; m = re.exec(stripComments(src))) {
+    out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+describe('the label-table invariants bind every table, not the one imported by name', () => {
+  const discovered = discoveredLabelTables();
+
+  // VACUITY GUARD. If the glob stops resolving, or the shape detector stops recognising a table,
+  // every assertion below passes over an empty list — the "gate that checks nothing" failure.
+  // Pinned by IDENTITY, not by name: this must be the very object the parser ships.
+  it('finds the shipped ARRL table by scanning, not by importing it', () => {
+    expect(Object.keys(SOURCE_TREE_MODULES).length).toBeGreaterThan(20);
+    const arrl = discovered.find((d) => d.name === 'ARRL_SCHOLARSHIP_LABELS');
+    expect(arrl?.where).toBe('./arrl-scholarship-descriptions.ts');
+    expect(arrl?.table).toBe(ARRL_SCHOLARSHIP_LABELS);
+  });
+
+  // H1 — both checks, over every discovered table.
+  it('holds the no-prefix and every-alternate-ends-in-a-colon rules for EVERY discovered table', () => {
+    const offenders: string[] = [];
+    for (const { where, name, table } of discovered) {
+      for (const c of findAlternatePrefixCollisions(table)) {
+        offenders.push(
+          `${where} :: ${name} — ${JSON.stringify(c.shorter)} is a proper prefix of ` +
+            `${JSON.stringify(c.longer)}; the shorter can match where the longer was meant.`,
+        );
+      }
+      for (const bare of findAlternatesWithoutColon(table)) {
+        offenders.push(
+          `${where} :: ${name} — ${bare} does not end in a colon, so it matches the funder's own ` +
+            'prose wherever a line happens to open with that word (the YASME/"Recipient" defect).',
+        );
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // H0 — the walk covers every file that can reach `splitByLabels`.
+  it('lets nothing outside the scanned trees reach splitByLabels', () => {
+    const strays = tsFilesUnder(SERVER_SRC)
+      .filter((f) => /\bsplitByLabels\b/.test(stripComments(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(SERVER_SRC, f))
+      .filter((rel) => !SCANNED_TREES.some((tree) => rel.startsWith(`${tree}${path.sep}`)));
+    expect(
+      strays,
+      'these files split funder prose by label but live outside the trees this invariant scans, ' +
+        `so their tables are unguarded. Either move the parser into ${SCANNED_TREES.join('/')}, ` +
+        'or widen SCANNED_TREES and the glob above together.',
+    ).toEqual([]);
+  });
+
+  // H2a + H2b — the static half, for tables a runtime export scan cannot see.
+  it('keeps every label table reachable by the scan: exported, and never passed inline', () => {
+    const exportedByFile = new Map<string, Set<string>>();
+    for (const { where, name } of discovered) {
+      const abs = path.resolve(SERVER_SRC, 'sources', where);
+      exportedByFile.set(abs, (exportedByFile.get(abs) ?? new Set()).add(name));
+    }
+
+    const problems: string[] = [];
+    for (const tree of SCANNED_TREES) {
+      for (const file of tsFilesUnder(path.join(SERVER_SRC, tree))) {
+        const src = readFileSync(file, 'utf8');
+        const rel = path.relative(SERVER_SRC, file);
+
+        for (const decl of labelTableDeclarations(src)) {
+          if (decl.exported) continue;
+          problems.push(
+            `${rel} declares a module-local label table \`${decl.name}\`. A table nothing exports ` +
+              'is invisible to the scan above, so its alternates are unchecked — export it.',
+          );
+        }
+
+        const calls = splitByLabelsCallSites(src);
+        if (calls.length === 0) continue;
+        const localExports = exportedByFile.get(file) ?? new Set<string>();
+        const imported = importedNames(src);
+        const defaults = labelTableParameterDefaults(src);
+        const known = (id: string | undefined): boolean =>
+          id !== undefined && (localExports.has(id) || imported.has(id));
+        // A parameter is covered by the table it DEFAULTS to; one hop only, so a chain of
+        // defaults cannot launder an unscanned table through two parameters.
+        const covered = (id: string): boolean => known(id) || known(defaults.get(id));
+        for (const id of calls) {
+          if (id === null) {
+            problems.push(
+              `${rel} passes splitByLabels a table that is not a plain identifier (an inline ` +
+                'object literal or an expression). Such a table can never be reached by the scan ' +
+                'above — hoist it to an exported const.',
+            );
+            continue;
+          }
+          if (!covered(id)) {
+            problems.push(
+              `${rel} passes splitByLabels \`${id}\`, which is neither an exported label table in ` +
+                'this file, nor an imported name, nor a parameter defaulting to one. The scan ' +
+                'above cannot check its alternates.',
+            );
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  // ---- negative controls: the scan's own parts, driven against the escapes they exist to catch.
+
+  it('recognises a label table by shape, and refuses things that only look like one', () => {
+    expect(isLabelTable({ Other: ['Other:'] })).toBe(true);
+    expect(isLabelTable({})).toBe(false);
+    expect(isLabelTable({ a: [] })).toBe(false);
+    expect(isLabelTable({ a: ['x'], b: 'y' })).toBe(false);
+    expect(isLabelTable(['Other:'])).toBe(false);
+    expect(isLabelTable(null)).toBe(false);
+  });
+
+  it('would flag a SECOND table declared anywhere in the scanned trees', () => {
+    // The exact break the close-out review described, as a module namespace the scan would meet.
+    const secondModule = {
+      QCWA_LABELS: { Recipient: ['Recipient'], Amount: ['Award Amount:'] },
+      parseSomething: () => undefined,
+    };
+    const found = labelTablesIn(secondModule);
+    expect(found.map((f) => f.name)).toEqual(['QCWA_LABELS']);
+    expect(findAlternatesWithoutColon(found[0].table)).toEqual(['Recipient: "Recipient"']);
+  });
+
+  it('reads the table out of a splitByLabels call, and flags one it cannot reach', () => {
+    expect(splitByLabelsCallSites('const x = splitByLabels(text, MY_LABELS);')).toEqual([
+      'MY_LABELS',
+    ]);
+    expect(
+      splitByLabelsCallSites('splitByLabels(flatten(html, { keep: true }), TABLE)'),
+    ).toEqual(['TABLE']);
+    expect(splitByLabelsCallSites('splitByLabels(text, { Recipient: ["Recipient"] })')).toEqual([
+      null,
+    ]);
+    expect(splitByLabelsCallSites('// splitByLabels(text, GHOST)\n')).toEqual([]);
+    // The facility's own declaration is not a call, and its parameter list is not a table.
+    expect(
+      splitByLabelsCallSites(
+        'export function splitByLabels(flat: string, byKey: Record<string, string[]>) {}',
+      ),
+    ).toEqual([]);
+  });
+
+  it('sees an unexported table declaration, and does not mistake an exported one for it', () => {
+    expect(
+      labelTableDeclarations('const HIDDEN: Record<string, string[]> = { A: ["A"] };'),
+    ).toEqual([{ name: 'HIDDEN', exported: false }]);
+    expect(
+      labelTableDeclarations('export const SHOWN: Record<string, string[]> = { A: ["A:"] };'),
+    ).toEqual([{ name: 'SHOWN', exported: true }]);
+  });
+});
+
+/**
+ * THE COLON RULE IS A CLAIM ABOUT THE PARSER, AND THIS IS WHERE IT IS CHECKED.
+ *
+ * `findAlternatesWithoutColon` inspects the TABLE. It says nothing about what `util/text.ts` then
+ * does with it — and the whole reason a trailing colon is safe is a property of
+ * `buildLabelRegExp`: the alternate's own colon is inside the pattern and therefore REQUIRED,
+ * while the `:?` it appends afterwards is a second, optional one. If a future edit stripped the
+ * colon before building the pattern, or made it optional, every table in the repo would keep
+ * passing the check above while the parser went straight back to matching prose.
+ *
+ * So this asserts the behaviour, on the exact sentence that produced the defect.
+ */
+describe('a colon-terminated alternate cannot match the funder’s prose', () => {
+  const PROSE =
+    'Applicant must be an active member.\n' +
+    'Recipient is to provide YASME a brief report of his/her Amateur Radio activities.\n' +
+    'Other scholarships may also be combined with this one.';
+
+  it('matches a real "Label:" line and ignores the same word opening a sentence', () => {
+    const withColon = splitByLabels(PROSE, { Recipient: ['Recipient:'], Other: ['Other:'] });
+    expect(withColon.Recipient).toBeUndefined();
+    expect(withColon.Other).toBeUndefined();
+    expect(withColon.__preamble).toBe(PROSE);
+
+    const labelled = splitByLabels(`Recipient: Jane Doe\n${PROSE}`, { Recipient: ['Recipient:'] });
+    expect(labelled.Recipient).toMatch(/^Jane Doe/);
+  });
+
+  it('shows the same table WITHOUT the colon slicing the sentence in half — the defect itself', () => {
+    const bare = splitByLabels(PROSE, { Recipient: ['Recipient'], Other: ['Other'] });
+    expect(bare.Recipient).toMatch(/^is to provide YASME a brief report/);
+    expect(bare.Other).toMatch(/^scholarships may also be combined/);
+  });
 });
 
 describe('parseScholarshipCatalog against the pathological fixture', () => {
@@ -439,22 +836,22 @@ describe('the SourceModule wrapper', () => {
   });
 });
 
-describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', () => {
+describe('against the captured live page', () => {
   it('finds four accordions and at least 100 real entries', () => {
-    const result = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const result = parseScholarshipCatalog(theLiveCapture(), URL);
     expect(result.accordionCount).toBe(4);
     expect(result.entries.length).toBeGreaterThanOrEqual(100);
   });
 
   it('names every entry and gives almost all of them a Field of Study', () => {
-    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const { entries } = parseScholarshipCatalog(theLiveCapture(), URL);
     for (const e of entries) expect(e.name.length).toBeGreaterThan(2);
     const withField = entries.filter((e) => e.rawFields['Field of Study'] !== undefined);
     expect(withField.length / entries.length).toBeGreaterThan(0.9);
   });
 
   it('does not contain the discontinued Chicago FM Club Scholarship', () => {
-    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const { entries } = parseScholarshipCatalog(theLiveCapture(), URL);
     expect(entries.map((e) => e.name).join('|')).not.toMatch(/Chicago FM Club/i);
   });
 
@@ -462,7 +859,7 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
   // 111 (79%) live entries, with no closing label to stop it, and used to append onto whichever
   // field happened to be last. It must be gone from every field now, not merely reduced.
   it('strips the "Go Now" CTA from every one of the 111 live entries', () => {
-    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const { entries } = parseScholarshipCatalog(theLiveCapture(), URL);
     const polluted = entries.filter((e) =>
       Object.values(e.rawFields).some((v) => /go\s*now/i.test(v)),
     );
@@ -478,7 +875,7 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
    * already looking at, because normalize/ had nothing else to fall back to.
    */
   it('keeps the application href off the CTA it strips, for the 89 entries that carry one', () => {
-    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const { entries } = parseScholarshipCatalog(theLiveCapture(), URL);
     const withApply = entries.filter((e) => e.rawFields.applyUrl !== undefined);
     expect(withApply).toHaveLength(89);
     for (const e of withApply) {
@@ -491,7 +888,7 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
   // entry that does not carry it is an inference, not a reading, so those keep the catalogue URL
   // and the record says so by omission.
   it('writes no applyUrl for an entry whose own body names no route', () => {
-    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const { entries } = parseScholarshipCatalog(theLiveCapture(), URL);
     const without = entries.filter((e) => e.rawFields.applyUrl === undefined);
     expect(without).toHaveLength(entries.length - 89);
     expect(without.map((e) => e.name)).toContain('The Louisiana Memorial Scholarship');

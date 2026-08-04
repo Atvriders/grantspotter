@@ -1,8 +1,182 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type Database from 'better-sqlite3';
 import { openTestDb } from '../test/testDb.js';
+import { MIGRATIONS_DIR } from './migrate.js';
+
+// ------------------------------------------------------- the DDL scan, wherever the DDL lives
+
+/**
+ * WHY THE SCAN IS NO LONGER `migrations/*.sql` (close-out review, verdict 10).
+ *
+ * "Binds for `migrations/`. `schemaConformance.test.ts:122` globs MIGRATIONS_DIR only — and
+ * `db/ingestSchema.ts:31,76` runs CREATE TABLE / CREATE INDEX outside it, which is **where the
+ * original defect lived**."
+ *
+ * That is exact. `ingestSchema.ts`'s own header describes the very defect: it used to run
+ * `CREATE TABLE IF NOT EXISTS programs (...)` with its own column list, which no-opped against the
+ * migrated database and produced `SQLITE_CONSTRAINT: NOT NULL constraint failed: programs.summary`
+ * on the first nightly crawl. The check written to make that impossible could not see the file it
+ * happened in. Five recurrences of the same trap are on record in this project (`programs`,
+ * `idx_snapshots_source`, the R24 `applications` note, and the two the header names).
+ *
+ * So the scan now DISCOVERS its own inputs: every migration, plus every non-test TypeScript file
+ * under `packages/server/src` that declares a table or an index, found by reading them rather than
+ * by a list somebody maintains. `db/migrate.ts` (`schema_migrations`) and `db/ingestSchema.ts`
+ * (`review_rejects`, `idx_audit_entity`) are both in it today; a sixth recurrence in a seventh file
+ * would be too.
+ *
+ * TEST FILES ARE EXCLUDED, deliberately and narrowly: `api/applications.test.ts` builds a
+ * DELIBERATELY partial schema in its own `:memory:` database to prove the trap fires, so scanning
+ * it would fail this invariant for demonstrating it. Nothing a test file execs can reach the
+ * production database — the ordering hazard is between statements run at BOOT, and no test file
+ * runs at boot.
+ */
+const SERVER_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Every `CREATE` of a named schema object. WIDER THAN THE OLD `(table|index)` PATTERN, which the
+ * review noted "misses CREATE TEMP TABLE, quoted identifiers, CREATE VIEW, CREATE VIRTUAL TABLE" —
+ * every one of those shares SQLite's single schema namespace, so every one of them can be the
+ * silent second declaration. `unparsedCreates` below is the guard on the guard: anything spelled
+ * `create` that this pattern does NOT understand is reported rather than skipped, because a
+ * pattern that silently `continue`s is how the contrast invariant was defeated.
+ */
+const DDL = new RegExp(
+  String.raw`\bcreate\s+(?:or\s+replace\s+)?(?:unique\s+)?(?:temp(?:orary)?\s+)?` +
+    String.raw`(table|index|view|virtual\s+table|trigger)\s+(?:if\s+not\s+exists\s+)?` +
+    String.raw`([a-z0-9_]+|"[^"]+"|` + '`[^`]+`' + String.raw`|\[[^\]]+\])`,
+  'gi',
+);
+
+/** Prose about creating a table is not creating a table. Strips SQL `--` and TS comments alike. */
+function stripComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '')
+    .replace(/--[^\n]*/g, '');
+}
+
+/** `CREATE VIRTUAL TABLE` occupies the same namespace as `CREATE TABLE`; so does a TEMP one. */
+function normaliseKey(kind: string, name: string): string {
+  const k = kind.toLowerCase().replace(/\s+/g, ' ') === 'virtual table' ? 'table' : kind.toLowerCase();
+  return `${k} ${name.replace(/^["`[]|["`\]]$/g, '').toLowerCase()}`;
+}
+
+interface DdlFile {
+  /** Repo-relative-ish label used in failure messages. */
+  where: string;
+  text: string;
+}
+
+/**
+ * Every string / template literal in a TypeScript file. Comments are already gone; what is left is
+ * code, and DDL in code always lives inside a literal.
+ */
+export function stringLiterals(src: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const quote = src[i];
+    if (quote !== "'" && quote !== '"' && quote !== '`') {
+      i += 1;
+      continue;
+    }
+    let j = i + 1;
+    let buf = '';
+    while (j < src.length && src[j] !== quote) {
+      if (src[j] === '\\') {
+        buf += src[j] + (src[j + 1] ?? '');
+        j += 2;
+        continue;
+      }
+      buf += src[j];
+      j += 1;
+    }
+    out.push(buf);
+    i = j + 1;
+  }
+  return out;
+}
+
+/**
+ * WHY A LITERAL HAS TO LOOK LIKE A STATEMENT TO BE SCANNED.
+ *
+ * `db/repositories/applications.ts` throws an error whose message ARGUES FOR this very rule —
+ * "SQLite matches CREATE TABLE IF NOT EXISTS on the name, so the second definition silently never
+ * runs" — and scanning its raw text declared four phantom objects (`table in`, `table on`,
+ * `index statements`, …) and reported the sentence itself as an unreadable CREATE. English prose
+ * that mentions DDL is not DDL. A literal that BEGINS with a SQL statement keyword is; one that
+ * begins mid-sentence is not, and no statement this codebase execs begins mid-sentence.
+ */
+const SQL_STATEMENT = /^\s*(?:create|alter|drop|pragma|insert|replace|update|delete|select|with|begin)\b/i;
+
+function tsFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...tsFilesUnder(full));
+    else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) out.push(full);
+  }
+  return out;
+}
+
+/** Every file this invariant reads: all migrations, plus every product file that declares DDL. */
+function ddlFiles(): DdlFile[] {
+  const files: DdlFile[] = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => ({
+      where: `migrations/${f}`,
+      text: stripComments(readFileSync(path.join(MIGRATIONS_DIR, f), 'utf8')),
+    }));
+
+  for (const abs of tsFilesUnder(SERVER_SRC)) {
+    const text = stringLiterals(stripComments(readFileSync(abs, 'utf8')))
+      .filter((lit) => SQL_STATEMENT.test(lit))
+      .join('\n;\n');
+    DDL.lastIndex = 0;
+    if (!DDL.test(text)) continue;
+    files.push({ where: path.relative(SERVER_SRC, abs).split(path.sep).join('/'), text });
+  }
+  return files;
+}
+
+/** `"table programs" -> [the files that declare it]`, across every scanned file. */
+function declarations(files: readonly DdlFile[]): Map<string, string[]> {
+  const declared = new Map<string, string[]>();
+  for (const file of files) {
+    DDL.lastIndex = 0;
+    for (let m = DDL.exec(file.text); m !== null; m = DDL.exec(file.text)) {
+      const key = normaliseKey(m[1], m[2]);
+      declared.set(key, [...(declared.get(key) ?? []), file.where]);
+    }
+  }
+  return declared;
+}
+
+/**
+ * Every `create` the pattern above did not consume — a `CREATE TABLE ${name}` built by string
+ * interpolation, a syntax it does not know, a quoting style it does not handle. The pattern is the
+ * only thing standing between a duplicate declaration and silence, so anything it cannot read is a
+ * failure rather than a skip.
+ */
+function unparsedCreates(file: DdlFile): string[] {
+  const consumed: Array<[number, number]> = [];
+  DDL.lastIndex = 0;
+  for (let m = DDL.exec(file.text); m !== null; m = DDL.exec(file.text)) {
+    consumed.push([m.index, m.index + m[0].length]);
+  }
+  const out: string[] = [];
+  const bare = /\bcreate\b/gi;
+  for (let m = bare.exec(file.text); m !== null; m = bare.exec(file.text)) {
+    if (consumed.some(([start, end]) => m.index >= start && m.index < end)) continue;
+    out.push(`${file.where}: "${file.text.slice(m.index, m.index + 90).replace(/\s+/g, ' ')}…"`);
+  }
+  return out;
+}
 
 /**
  * Plan 3's declared read-contract with Plans 1 and 2. If this test fails, a
@@ -104,46 +278,122 @@ describe('schema conformance (Plan 3 read-contract)', () => {
   });
 
   /**
-   * The two-definitions-one-name trap, made executable (it has now recurred
-   * three times in this repo: `CREATE TABLE IF NOT EXISTS programs` in Plan 2's
-   * ingestion schema, `idx_snapshots_source` beside it, and the R24 note on
-   * `applications`). SQLite matches `IF NOT EXISTS` on the NAME alone, so a
-   * second declaration of an existing name is a silent no-op and the shape you
-   * think you added never exists. Scanning the migration text on disk is the
-   * only way to see it, because the database cannot tell you about a statement
-   * that did nothing.
+   * The two-definitions-one-name trap, made executable — now over EVERY file that declares a
+   * table or an index, not only `migrations/`. SQLite matches `IF NOT EXISTS` on the NAME alone,
+   * so a second declaration of an existing name is a silent no-op and the shape you think you
+   * added never exists. Reading the text on disk is the only way to see it, because the database
+   * cannot tell you about a statement that did nothing.
+   *
+   * See the header above `ddlFiles` for why the migrations-only version could not see the file the
+   * original defect lived in.
    */
-  it('declares every table and index name exactly once across all migrations', async () => {
-    const { readdirSync, readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { MIGRATIONS_DIR } = await import('./migrate.js');
-
-    const declared = new Map<string, string[]>();
-    for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
-      const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8')
-        .replace(/--[^\n]*/g, '')
-        .toLowerCase();
-      for (const m of sql.matchAll(
-        /create\s+(?:unique\s+)?(table|index)\s+(?:if\s+not\s+exists\s+)?([a-z0-9_]+)/g,
-      )) {
-        const key = `${m[1]} ${m[2]}`;
-        declared.set(key, [...(declared.get(key) ?? []), file]);
-      }
-    }
-
+  it('declares every table and index name exactly once, across migrations AND product code', () => {
+    const files = ddlFiles();
+    const declared = declarations(files);
     const duplicated = [...declared.entries()]
-      .filter(([, files]) => files.length > 1)
-      .map(([key, files]) => `${key} declared in ${files.join(', ')}`);
+      .filter(([, where]) => where.length > 1)
+      .map(([key, where]) => `${key} declared in ${where.join(', ')}`)
+      .sort();
     expect(
       duplicated,
-      'SQLite matches IF NOT EXISTS on the name, so the second declaration never runs',
+      'SQLite matches IF NOT EXISTS on the name, so the second declaration never runs and its ' +
+        'shape never exists. Give it a distinct name, or delete it and let the owner keep it.',
     ).toEqual([]);
+  });
 
-    // Vacuity guard: a regex that stopped matching would pass the check above
-    // on an empty set, which is the same silence the check exists to break.
-    expect(declared.has('table programs')).toBe(true);
-    expect(declared.has('table program_search')).toBe(true);
-    expect(declared.has('index idx_pf_lookup')).toBe(true);
+  /**
+   * VACUITY GUARDS FOR THE SCAN ITSELF. A regex that stopped matching, or a walk that stopped
+   * walking, would pass the check above over an empty set — the same silence it exists to break.
+   * `db/ingestSchema.ts` is named because it is the exact file the original defect lived in and
+   * the exact file the migrations-only scan could not see.
+   */
+  it('scans every file that declares schema, including the ones outside migrations/', () => {
+    const where = ddlFiles().map((f) => f.where);
+    expect(where.filter((w) => w.startsWith('migrations/')).length).toBeGreaterThan(5);
+    expect(where).toContain('db/ingestSchema.ts');
+    expect(where).toContain('db/migrate.ts');
+
+    const declared = declarations(ddlFiles());
+    // Two from migrations, two from the product files above: if either half of the scan went
+    // quiet, one of these four disappears.
+    expect(declared.get('table programs')).toEqual(['migrations/001-init.sql']);
+    expect(declared.get('index idx_pf_lookup')).toEqual(['migrations/030-browse-projection.sql']);
+    expect(declared.get('table review_rejects')).toEqual(['db/ingestSchema.ts']);
+    expect(declared.get('index idx_audit_entity')).toEqual(['db/ingestSchema.ts']);
+    expect(declared.get('table schema_migrations')).toEqual(['db/migrate.ts']);
+  });
+
+  /**
+   * The prose/statement boundary, pinned. If `stringLiterals` or `SQL_STATEMENT` ever widened, the
+   * error message in `db/repositories/applications.ts` — which is an ARGUMENT for this invariant,
+   * written in English, mentioning CREATE TABLE four times — would start declaring phantom tables
+   * named after the words following it.
+   */
+  it('reads SQL statements in product code, and not English sentences about them', () => {
+    const literals = stringLiterals(
+      `const sql = 'CREATE TABLE ok (id TEXT)';\n` +
+        `const help = 'do NOT delete Plan 1\\'s CREATE TABLE, because its CREATE INDEX statements';`,
+    );
+    expect(literals.filter((l) => SQL_STATEMENT.test(l))).toEqual(['CREATE TABLE ok (id TEXT)']);
+
+    // …and the real file is in the scan's blind spot on purpose: it declares nothing.
+    expect(ddlFiles().map((f) => f.where)).not.toContain('db/repositories/applications.ts');
+  });
+
+  /**
+   * THE GUARD ON THE GUARD. The contrast invariant was defeated by a token its parser silently
+   * skipped; the same shape here would be a `CREATE` this pattern cannot read — an interpolated
+   * name, a syntax it does not know — which would drop out of the duplicate check without a word.
+   * Every `create` in every scanned file must be one the pattern understood.
+   */
+  it('understands every CREATE it scans, and reports the ones it cannot read', () => {
+    const escaped = ddlFiles().flatMap(unparsedCreates);
+    expect(
+      escaped,
+      'this CREATE was not matched by the DDL pattern, so its name is invisible to the ' +
+        'duplicate-declaration check. Widen the pattern rather than leaving the statement ' +
+        'unscanned.',
+    ).toEqual([]);
+  });
+
+  it('recognises the DDL shapes the old (table|index)-only pattern missed', () => {
+    const kinds = declarations([
+      {
+        where: 'synthetic',
+        text: [
+          'CREATE TEMP TABLE scratch (a);',
+          'CREATE VIRTUAL TABLE docs USING fts5(body);',
+          'CREATE VIEW open_programs AS SELECT 1;',
+          'CREATE TRIGGER touch AFTER UPDATE ON programs BEGIN SELECT 1; END;',
+          'CREATE UNIQUE INDEX IF NOT EXISTS "idx_quoted" ON programs (id);',
+        ].join('\n'),
+      },
+    ]);
+    expect([...kinds.keys()].sort()).toEqual([
+      'index idx_quoted',
+      'table docs',
+      'table scratch',
+      'trigger touch',
+      'view open_programs',
+    ]);
+    // A virtual table and a plain table of the same name are ONE name to SQLite, which is the
+    // whole reason the kinds are folded together rather than kept apart.
+    const clash = declarations([
+      { where: 'a.sql', text: 'CREATE TABLE docs (a);' },
+      { where: 'b.ts', text: 'CREATE VIRTUAL TABLE docs USING fts5(body);' },
+    ]);
+    expect(clash.get('table docs')).toEqual(['a.sql', 'b.ts']);
+  });
+
+  it('sees a CREATE it cannot parse rather than skipping it', () => {
+    expect(
+      unparsedCreates({ where: 'x.ts', text: 'db.exec(`CREATE TABLE ${name} (id TEXT)`);' }),
+    ).toHaveLength(1);
+    expect(unparsedCreates({ where: 'x.sql', text: 'CREATE TABLE ok (id TEXT);' })).toEqual([]);
+    // `created_at` is not a CREATE, and a comment about creating tables is not one either.
+    expect(
+      unparsedCreates({ where: 'x.sql', text: stripComments('-- CREATE TABLE ghost\ncreated_at') }),
+    ).toEqual([]);
   });
 });
 
