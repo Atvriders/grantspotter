@@ -21,6 +21,21 @@
  * numbers are reproducible and comparing two runs is meaningful. Sources whose only committed
  * fixture is a synthetic `pathological.*` file are skipped and listed, so under-coverage is
  * visible rather than silent.
+ *
+ * WHAT THIS MEASURES (remediation 2026-08-03). The corpus is the set of programs the product
+ * would actually SHOW, not everything `normalizeRaw` can produce. Those differ: `do_not_publish`
+ * records — past awards and cross-check-only rows — are stored deliberately (a funder's grant
+ * history is the best evidence of who that funder funds) but are suppressed by
+ * `buildReviewItems`, so no user ever sees them as opportunities. Until this fix the profiler
+ * counted every produced record, and as real fixtures landed its corpus grew from 178 to 742
+ * while 545 of those 742 were records the product suppresses — so every eligibility figure taken
+ * with it was measured against a population that does not exist for a user, which is worse than
+ * having no tool at all.
+ *
+ * The suppression rule is not reimplemented here: `isDoNotPublish` is imported from
+ * `normalize/index.ts` — the same predicate `buildReviewItems` and the approve path call — so the
+ * tool and the product cannot drift. If a new suppressed record type is classified there, this
+ * profiler starts excluding it in the same commit.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -34,7 +49,7 @@ import type {
 } from '../packages/core/src/index.js';
 import { matchAll } from '../packages/core/src/matcher.js';
 import { contextForSource } from '../packages/server/src/crawl/context.js';
-import { normalizeRaw } from '../packages/server/src/normalize/index.js';
+import { isDoNotPublish, normalizeRaw } from '../packages/server/src/normalize/index.js';
 import { SOURCES } from '../packages/server/src/sources/registry.js';
 import {
   hasFollowUp,
@@ -66,10 +81,21 @@ const LEGACY_FIXTURES: Record<string, Array<{ file: string; requestIndex: number
   'grants-gov-federal': [{ file: 'search2-response.json', requestIndex: 0 }],
 };
 
+/**
+ * Re-exported so this tool's own test can assert against the SAME predicate the product enforces
+ * rather than a copy of the rule. Importing it from anywhere else would be the drift this fix
+ * exists to prevent.
+ */
+export { isDoNotPublish };
+
 export interface CorpusLoad {
+  /** Publishable programs only: what the review queue would let a user see. */
   programs: Program[];
-  loaded: Array<{ sourceId: string; programs: number }>;
+  /** Per source: how many publishable programs it yielded, and how many were suppressed. */
+  loaded: Array<{ sourceId: string; programs: number; suppressed: number }>;
   skipped: Array<{ sourceId: string; why: string }>;
+  /** Total records normalize produced that carry `do_not_publish` and were excluded above. */
+  suppressed: number;
 }
 
 function payloadFor(sourceId: string, file: string, url: string): FetchedPayload {
@@ -82,11 +108,16 @@ function payloadFor(sourceId: string, file: string, url: string): FetchedPayload
   };
 }
 
-/** Every candidate Program the committed fixtures can produce, normalized exactly as the crawler does. */
+/**
+ * Every candidate Program the committed fixtures can produce, normalized exactly as the crawler
+ * does, MINUS the records the review queue suppresses (see the file header). The suppressed count
+ * is carried out rather than silently dropped, so the tool reports what it left out.
+ */
 export async function loadCorpus(): Promise<CorpusLoad> {
   const programs: Program[] = [];
   const loaded: CorpusLoad['loaded'] = [];
   const skipped: CorpusLoad['skipped'] = [];
+  let suppressed = 0;
 
   for (const source of SOURCES) {
     const dir = path.join(FIXTURE_ROOT, source.id);
@@ -141,11 +172,20 @@ export async function loadCorpus(): Promise<CorpusLoad> {
     }
     const ctx = contextForSource(source, PROFILE_NOW_ISO);
     const produced = raws.map((raw) => normalizeRaw(raw, ctx));
-    programs.push(...produced);
-    loaded.push({ sourceId: source.id, programs: produced.length });
+    // The suppression the product applies, applied here with the product's own predicate. A
+    // past award or a cross-check row is stored evidence, never an opportunity: measuring
+    // eligibility over records no user can ever be shown makes every figure below a fiction.
+    const publishable = produced.filter((program) => !isDoNotPublish(program));
+    programs.push(...publishable);
+    suppressed += produced.length - publishable.length;
+    loaded.push({
+      sourceId: source.id,
+      programs: publishable.length,
+      suppressed: produced.length - publishable.length,
+    });
   }
 
-  return { programs, loaded, skipped };
+  return { programs, loaded, skipped, suppressed };
 }
 
 // ---------------------------------------------------------------- profiles
@@ -365,10 +405,16 @@ async function main(): Promise<void> {
   const detail = args.includes('--detail');
   const wanted = args.filter((a) => !a.startsWith('--'));
 
-  const { programs, loaded, skipped } = await loadCorpus();
+  const { programs, loaded, skipped, suppressed } = await loadCorpus();
   console.log('=== GrantSpotter corpus profile ===');
-  console.log(`now: ${PROFILE_NOW_ISO}   corpus: ${programs.length} program(s) from committed fixtures`);
-  for (const entry of loaded) console.log(`  loaded  ${entry.sourceId.padEnd(38)} ${entry.programs}`);
+  console.log(
+    `now: ${PROFILE_NOW_ISO}   corpus: ${programs.length} publishable program(s) from committed fixtures ` +
+      `(${suppressed} do_not_publish record(s) excluded, ${programs.length + suppressed} normalized in total)`,
+  );
+  for (const entry of loaded) {
+    const note = entry.suppressed > 0 ? `   (+${entry.suppressed} suppressed, not shown to users)` : '';
+    console.log(`  loaded  ${entry.sourceId.padEnd(38)} ${entry.programs}${note}`);
+  }
   for (const entry of skipped) console.log(`  skipped ${entry.sourceId.padEnd(38)} ${entry.why}`);
 
   const selected = wanted.length > 0 ? PROFILES.filter((p) => wanted.includes(p.key)) : PROFILES;

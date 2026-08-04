@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
+// The dev tool this remediation's numbers come from. See the describe block at the foot of this
+// file for why its test lives here rather than beside it.
+import { isDoNotPublish, loadCorpus } from '../../../scripts/profile-corpus.js';
 import {
   APPLICANT_ENTITY_CONSTRAINT_SUFFIX,
   evaluateConstraint,
   matchAll,
   matchProgram,
 } from '../src/matcher.js';
-import type { ConstraintSpec } from '../src/types.js';
+import type { ConstraintSpec, DegreeLevel, Stage, StudentProfile } from '../src/types.js';
 import { makeConstraint, makeOrg, makeProgram, makeStudent } from './fixtures.js';
 
 const NOW = '2027-03-01T00:00:00.000Z';
@@ -392,6 +395,205 @@ describe('field_of_study — free-text corpus values', () => {
     // is not "medicine", and an arts student is not a liberal-arts student here.
     expect(status(fos(['Any'], ['Medicine']), 'Medical Physics')).toBe('pass');
     expect(status(fos(['Any'], ['Liberal Arts']), 'Studio Arts')).toBe('pass');
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the stage taxonomy is not a partition.
+ *
+ * `Stage` mixes two different kinds of fact. `HS_SENIOR`/`UNDERGRAD`/`GRAD` name an academic
+ * LEVEL and are broadly exclusive; `VETERAN` and `RETRAINING_ADULT` name a STATUS a person
+ * carries WHILE enrolled at one of those levels. A profile has room for exactly one `stage`, so
+ * an applicant who is both — the 41-year-old on the GI Bill, the parent back at community
+ * college — has to give up the level to state the status, and a set-membership test then reads
+ * that as "not an undergraduate".
+ *
+ * Reported case: The Frankford Radio Club (FRC) Scholarship, whose clause hardens correctly to
+ * [HS_SENIOR, UNDERGRAD, VETERAN] from the funder's own "open to graduating high school seniors,
+ * undergraduate students and US miltary veterans". A returning adult studying part-time for an
+ * AAS — who IS an undergraduate — was hard-excluded from an undergraduate award. Eleven awards in
+ * the committed corpus excluded the `adult-parttime` profile on this axis.
+ *
+ * The fix is subsumption, not a special case: a status stage also satisfies whatever LEVEL the
+ * applicant's `degreeLevel` states. It deliberately does not run the other way — an undergraduate
+ * is not thereby a veteran — and deliberately does not promote `HS_SENIOR` to `UNDERGRAD`.
+ */
+describe('age_stage — stages that overlap in reality', () => {
+  const stages = (values: Stage[]): ConstraintSpec => ({ axis: 'age_stage', stages: values });
+  const status = (spec: ConstraintSpec, profile: Partial<StudentProfile>): string =>
+    evaluateConstraint(spec, makeStudent(profile), NOW).status;
+  const enrolled = (stage: Stage, degreeLevel?: DegreeLevel): Partial<StudentProfile> => ({
+    stage,
+    degreeLevel,
+  });
+
+  // Verbatim from the committed ARRL scholarship-descriptions fixture, funder's own typo included.
+  const frankford = makeProgram({
+    id: 'frankford-rc',
+    name: 'The Frankford Radio Club (FRC) Scholarship',
+    constraints: [
+      makeConstraint(stages(['HS_SENIOR', 'UNDERGRAD', 'VETERAN']), {
+        id: 'stage',
+        hard: true,
+        rawText:
+          'The scholarship is open to graduating high school seniors, undergraduate students and US miltary veterans',
+      }),
+    ],
+  });
+
+  it('matches a 41-year-old part-time AAS student against the Frankford RC award', () => {
+    // The `adult-parttime` profile from scripts/profile-corpus.ts, exactly.
+    const adultLearner = makeStudent({
+      stage: 'RETRAINING_ADULT',
+      degreeLevel: 'ASSOC',
+      partTime: true,
+      birthDate: '1985-07-09T00:00:00.000Z',
+      fieldOfStudy: 'Electronics Technology',
+    });
+    expect(matchProgram(adultLearner, frankford, NOW)).toEqual({ kind: 'eligible' });
+  });
+
+  it('still excludes a high-school senior from a graduate-only award', () => {
+    const gradOnly = makeProgram({
+      id: 'grad-only',
+      constraints: [makeConstraint(stages(['GRAD']), { id: 'stage', hard: true })],
+    });
+    const hsSenior = makeStudent({
+      stage: 'HS_SENIOR',
+      degreeLevel: 'BACH',
+      birthDate: '2009-01-15T00:00:00.000Z',
+    });
+    const verdict = matchProgram(hsSenior, gradOnly, NOW);
+    expect(verdict.kind).toBe('ineligible');
+    if (verdict.kind !== 'ineligible') throw new Error('unreachable');
+    expect(verdict.reasons.map((r) => r.id)).toEqual(['stage']);
+  });
+
+  it('reads a status stage at the level the applicant says they are enrolled at', () => {
+    // A returning adult in an associate or bachelor's program IS an undergraduate...
+    expect(status(stages(['UNDERGRAD']), enrolled('RETRAINING_ADULT', 'ASSOC'))).toBe('pass');
+    expect(status(stages(['UNDERGRAD']), enrolled('RETRAINING_ADULT', 'BACH'))).toBe('pass');
+    expect(status(stages(['UNDERGRAD']), enrolled('RETRAINING_ADULT', 'CERT'))).toBe('pass');
+    // ...and one in a master's is a graduate student, and not an undergraduate.
+    expect(status(stages(['GRAD']), enrolled('RETRAINING_ADULT', 'GRAD'))).toBe('pass');
+    expect(status(stages(['UNDERGRAD']), enrolled('RETRAINING_ADULT', 'GRAD'))).toBe('fail');
+    // A veteran is the same shape of fact: a status carried while enrolled somewhere.
+    expect(status(stages(['UNDERGRAD']), enrolled('VETERAN', 'BACH'))).toBe('pass');
+    expect(status(stages(['GRAD']), enrolled('VETERAN', 'GRAD'))).toBe('pass');
+    expect(status(stages(['UNDERGRAD']), enrolled('VETERAN', 'GRAD'))).toBe('fail');
+    // The status itself still matches the award written for it.
+    expect(status(stages(['VETERAN']), enrolled('VETERAN', 'GRAD'))).toBe('pass');
+    expect(status(stages(['RETRAINING_ADULT']), enrolled('RETRAINING_ADULT', 'GRAD'))).toBe('pass');
+  });
+
+  it('includes a status stage at either level when the applicant has not said which', () => {
+    // No degreeLevel to refine with. They are enrolled SOMEWHERE, and hiding the award is the
+    // unrecoverable error, so both levels are allowed; the funder's own wording is rendered.
+    expect(status(stages(['UNDERGRAD']), enrolled('RETRAINING_ADULT'))).toBe('pass');
+    expect(status(stages(['GRAD']), enrolled('RETRAINING_ADULT'))).toBe('pass');
+    expect(status(stages(['UNDERGRAD']), enrolled('VETERAN'))).toBe('pass');
+    expect(status(stages(['GRAD']), enrolled('VETERAN'))).toBe('pass');
+    // But an adult returner is still not a graduating high-school senior.
+    expect(status(stages(['HS_SENIOR']), enrolled('RETRAINING_ADULT'))).toBe('fail');
+    expect(status(stages(['HS_SENIOR']), enrolled('RETRAINING_ADULT', 'ASSOC'))).toBe('fail');
+    expect(status(stages(['HS_SENIOR']), enrolled('VETERAN', 'BACH'))).toBe('fail');
+  });
+
+  it('does not run subsumption backwards: a level never implies a status', () => {
+    // Nothing in the profile says this undergraduate served, or is returning to school. An award
+    // written FOR veterans is not one we may claim on their behalf.
+    expect(status(stages(['VETERAN']), enrolled('UNDERGRAD', 'BACH'))).toBe('fail');
+    expect(status(stages(['RETRAINING_ADULT']), enrolled('UNDERGRAD', 'BACH'))).toBe('fail');
+    expect(status(stages(['VETERAN']), enrolled('GRAD', 'GRAD'))).toBe('fail');
+    expect(status(stages(['RETRAINING_ADULT']), enrolled('HS_SENIOR'))).toBe('fail');
+  });
+
+  it('does not promote a high-school senior to undergraduate, or a grad to undergrad', () => {
+    // Deliberate non-subsumption. "Undergraduate students" reads as currently enrolled, and a
+    // graduating senior is an incoming one; the corpus has awards for each written separately
+    // (11 individual-facing awards name HS_SENIOR alone). This is also the `hs-unlicensed`
+    // regression canary in scripts/profile-corpus.ts: it must not gain awards from this change.
+    expect(status(stages(['UNDERGRAD']), enrolled('HS_SENIOR', 'BACH'))).toBe('fail');
+    expect(status(stages(['GRAD']), enrolled('HS_SENIOR', 'BACH'))).toBe('fail');
+    expect(status(stages(['UNDERGRAD']), enrolled('GRAD', 'GRAD'))).toBe('fail');
+    expect(status(stages(['HS_SENIOR']), enrolled('UNDERGRAD', 'BACH'))).toBe('fail');
+  });
+
+  it('leaves the age half of the axis alone', () => {
+    const youngOnly: ConstraintSpec = {
+      axis: 'age_stage',
+      stages: ['UNDERGRAD'],
+      ageMax: 25,
+    };
+    // The stage now passes by subsumption, but 41 is still over the funder's ceiling.
+    expect(
+      status(youngOnly, {
+        stage: 'RETRAINING_ADULT',
+        degreeLevel: 'ASSOC',
+        birthDate: '1985-07-09T00:00:00.000Z',
+      }),
+    ).toBe('fail');
+    expect(
+      status(youngOnly, {
+        stage: 'RETRAINING_ADULT',
+        degreeLevel: 'ASSOC',
+        birthDate: '2006-03-01T00:00:00.000Z',
+      }),
+    ).toBe('pass');
+  });
+
+  it('still asks for the stage when the profile has none', () => {
+    expect(evaluateConstraint(stages(['UNDERGRAD']), makeStudent(), NOW)).toEqual({
+      status: 'unknown',
+      missing: ['stage'],
+    });
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the measuring tool measured the wrong population.
+ *
+ * `scripts/profile-corpus.ts` is the tool every matcher fix in this remediation has been judged
+ * with. It built its corpus from `normalizeRaw` and kept EVERY record, including the ones the
+ * review queue suppresses — past awards and cross-check rows, which are stored on purpose as
+ * evidence of who a funder funds but are never shown as opportunities. As real fixtures landed
+ * its corpus grew to 742, of which 545 were suppressed records. Numbers taken over a population
+ * that no user can ever see are worse than no numbers at all.
+ *
+ * WHY THIS TEST IS IN A CORE TEST FILE. The profiler lives at the repo root because it reaches
+ * into both packages, and no vitest project covers `scripts/` (the workspace is `packages/*`), so
+ * a test file next to it would never run. `packages/server/src/crawl/verifySources.test.ts`
+ * already reaches out to `scripts/` for the same reason. Core's purity rule binds
+ * `packages/core/src`, not its tests (see purity.test.ts's own note).
+ */
+describe('scripts/profile-corpus — the corpus is what the product would show', () => {
+  it('excludes every do_not_publish record, and reports how many it excluded', async () => {
+    const { programs, loaded, suppressed } = await loadCorpus();
+
+    // The whole point: not one suppressed record survives into the measured corpus.
+    expect(programs.filter((p) => isDoNotPublish(p))).toEqual([]);
+
+    // Real counts, from the committed fixtures. 742 records normalize; 545 of them are
+    // suppressed (544 `past_award` + the 1 `crosscheck` row), leaving 197 the product would
+    // actually show. These move when fixtures land — update them, do not soften them, and
+    // check WHICH source moved: `loaded` carries the split per source.
+    expect(suppressed).toBe(545);
+    expect(programs).toHaveLength(197);
+    expect(programs.length + suppressed).toBe(742);
+
+    // The canonical case from the do_not_publish fix: the ARRL club-grant page yields the ONE
+    // real ARRL Club Grant Program plus 37 clubs that have already RECEIVED money.
+    expect(loaded.find((e) => e.sourceId === 'arrl-club-grant')).toEqual({
+      sourceId: 'arrl-club-grant',
+      programs: 1,
+      suppressed: 37,
+    });
+    // ...and the three sources that are ENTIRELY past awards contribute nothing to show.
+    for (const sourceId of ['ardc-award-tables', 'nsf-awards', 'usaspending']) {
+      const entry = loaded.find((e) => e.sourceId === sourceId);
+      expect(entry?.programs, `${sourceId} publishes nothing`).toBe(0);
+      expect(entry?.suppressed, `${sourceId} is all past awards`).toBeGreaterThan(0);
+    }
   });
 });
 

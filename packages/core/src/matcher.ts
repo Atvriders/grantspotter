@@ -359,6 +359,85 @@ function readFieldRequirement(fields: string[], excludedFields: string[]): Field
   return { informative, unrestricted, widened, excluded };
 }
 
+// ---------------------------------------------------------------------------
+// stage matching
+//
+// `Stage` is not a partition, and treating it as one produces false excludes.
+// It mixes two kinds of fact:
+//
+//   LEVEL   HS_SENIOR, UNDERGRAD, GRAD — where in education the applicant is.
+//   STATUS  VETERAN, RETRAINING_ADULT  — who the applicant is WHILE enrolled at
+//           one of those levels. Neither says anything about the level itself:
+//           a veteran may be an undergraduate or a graduate student, and a
+//           returning adult is, by definition, enrolled in something.
+//
+// `StudentProfile` has room for exactly one `stage`, so an applicant who is
+// both has to give up the level in order to state the status — and a plain
+// `stages.includes(profile.stage)` then reads "RETRAINING_ADULT" as "not an
+// undergraduate". Reported case: The Frankford Radio Club (FRC) Scholarship,
+// whose clause hardens correctly to [HS_SENIOR, UNDERGRAD, VETERAN] straight
+// from the funder's "open to graduating high school seniors, undergraduate
+// students and US miltary veterans" — and which hard-excluded a 41-year-old
+// studying part-time for an AAS. Eleven awards in the committed corpus excluded
+// that applicant on this axis; six of them were awards for undergraduates.
+//
+// The fix belongs here rather than in the extractors: writing RETRAINING_ADULT
+// into records alongside UNDERGRAD would put a stage in the record that the
+// funder never wrote. What the funder wrote is right; the comparison was wrong.
+//
+// DIRECTION OF ERROR, as everywhere else in this file. A false include shows
+// someone an award they may not win and they read the funder's page; a false
+// exclude hides it silently and forever. Adult learners returning to school are
+// a core constituency of this corpus — one award in it (Marte Wessel K0EPE)
+// exists specifically for part-time students working full-time.
+// ---------------------------------------------------------------------------
+
+/**
+ * Stages that describe a status rather than an academic level. These are the only
+ * ones that subsume anything: they take on whatever level the applicant is
+ * actually enrolled at. Adding a stage to `Stage` that names a status (a
+ * "PARENT" or "CAREER_CHANGER") means adding it here too.
+ */
+const STATUS_STAGES: ReadonlySet<Stage> = new Set<Stage>(['VETERAN', 'RETRAINING_ADULT']);
+
+/**
+ * The academic level each `degreeLevel` puts an applicant at. `CERT` and `ASSOC`
+ * are undergraduate study: the community-college certificate and the two-year
+ * associate degree are exactly the routes a returning adult takes, and reading
+ * them as anything else would re-create the defect for the people it hurt most.
+ */
+const LEVEL_STAGE_FOR_DEGREE: Record<DegreeLevel, Stage> = {
+  CERT: 'UNDERGRAD',
+  ASSOC: 'UNDERGRAD',
+  BACH: 'UNDERGRAD',
+  GRAD: 'GRAD',
+};
+
+/**
+ * Every stage an applicant genuinely satisfies, given the one stage they stated
+ * and the degree level they are enrolled at.
+ *
+ * Subsumption runs in ONE direction only. A status stage implies a level; a
+ * level never implies a status, because nothing in the profile says an
+ * undergraduate served in the military or is returning to school, and claiming
+ * a veterans' award on their behalf is not "generous", it is wrong.
+ *
+ * `HS_SENIOR` is deliberately NOT promoted to `UNDERGRAD`: "undergraduate
+ * students" reads as currently enrolled, a graduating senior is an incoming one,
+ * and the corpus writes awards for each separately — 11 individual-facing awards
+ * name HS_SENIOR alone. Nor does `GRAD` imply `UNDERGRAD`.
+ *
+ * When a status stage carries no `degreeLevel`, the applicant is enrolled
+ * somewhere and has just not said where, so both levels are allowed rather than
+ * neither. That is the recoverable direction; `HS_SENIOR` is still not among
+ * them, because an adult returner is not a graduating high-school senior.
+ */
+export function stagesSatisfiedBy(stage: Stage, degreeLevel: DegreeLevel | undefined): Stage[] {
+  if (!STATUS_STAGES.has(stage)) return [stage];
+  if (degreeLevel === undefined) return [stage, 'UNDERGRAD', 'GRAD'];
+  return [stage, LEVEL_STAGE_FOR_DEGREE[degreeLevel]];
+}
+
 function isStudent(profile: Profile): profile is StudentProfile {
   return profile.kind === 'student';
 }
@@ -507,7 +586,12 @@ export function evaluateConstraint(
       const stages: Stage[] = spec.stages;
       if (stages.length > 0) {
         if (profile.stage === undefined) missing.push('stage');
-        else if (!stages.includes(profile.stage)) failed = true;
+        else {
+          // Set membership over every stage the applicant genuinely satisfies, not just the one
+          // their profile had room to state. See stagesSatisfiedBy above.
+          const mine = stagesSatisfiedBy(profile.stage, profile.degreeLevel);
+          if (!mine.some((stage) => stages.includes(stage))) failed = true;
+        }
       }
       if (spec.ageMin !== undefined || spec.ageMax !== undefined) {
         if (profile.birthDate === undefined) {
