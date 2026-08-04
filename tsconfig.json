@@ -12,6 +12,12 @@
     "packages/server/src/**/*.ts",
     "packages/server/test/**/*.ts",
     "vitest.workspace.ts",
-    "packages/*/vitest.config.ts"
+    "packages/*/vitest.config.ts",
+    // scripts/ is dev tooling, but it was invisible to tsc: `packages/*/vitest.config.ts`
+    // does not match `scripts/vitest.config.ts`, so the corpus profiler every acceptance
+    // figure in the Plan 2 remediation came from was never typechecked. Same shape as the
+    // vitest-include hole that recurred four times — a config that silently covers less
+    // than the tree it appears to describe. See packages/server/test/vitestCoverageContract.test.ts.
+    "scripts/**/*.ts"
   ]
 }
