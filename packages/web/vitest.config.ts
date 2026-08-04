@@ -1,10 +1,18 @@
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // The same JSX transform the app builds with, so a component test compiles the way the bundle
+  // does rather than through a second, subtly different pipeline.
+  plugins: [react()],
   test: {
     name: 'web',
     // Components need a DOM to render into; 'node' can't do that.
     environment: 'jsdom',
+    // Every test imports what it uses. No ambient `describe`/`it`/`expect`.
+    globals: false,
+    // jest-dom matchers + an automatic RTL `cleanup()` between tests.
+    setupFiles: ['./src/test/setup.ts'],
     // BOTH trees. Plan 1 has no web tests yet, but Plans 3-5 put all 27 of
     // theirs beside the code under `src/`, 20 of them `.tsx`. With only
     // `test/**` here, `npm test` goes GREEN while running none of the web

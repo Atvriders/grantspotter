@@ -1,0 +1,149 @@
+/* GrantSpotter design tokens.
+   Two themes. `prefers-color-scheme` is the default signal; the `data-theme`
+   attribute on <html> overrides it in both directions so the in-app toggle wins. */
+
+:root {
+  /* ---- surfaces ---- */
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --surface-3: #e4e8ee;
+  --border: #d6dbe3;
+  --border-strong: #b6bec9;
+
+  /* ---- text ---- */
+  --text: #14181f;
+  --text-muted: #5a6371;
+  --text-faint: #6b7482;
+
+  /* ---- accent: deep teal. Cool on purpose, so amber and red read as signals ---- */
+  --accent: #0f6f7a;
+  --accent-hover: #0b5a63;
+  --accent-ink: #ffffff;
+  --accent-soft: #e2f1f3;
+
+  /* ---- verdict semantics (spec §5) ---- */
+  --ok: #16703e;        /* eligible */
+  --ok-soft: #e4f4ea;
+  --pref: #5b3fbf;      /* eligible_preferred */
+  --pref-soft: #ece7fb;
+  --no: #a8323f;        /* ineligible */
+  --no-soft: #fbe8ea;
+  --unk: #5a6371;       /* unknown — a real state, never a blank */
+  --unk-soft: #e9ecf1;
+
+  /* ---- trust semantics (spec §8) ---- */
+  --warn: #8a5a06;      /* lastVerifiedAt older than 90 days */
+  --warn-soft: #fdf1dc;
+
+  /* ---- type ---- */
+  --font-text: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-data: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --fs-100: 0.75rem;    /* 12px — micro labels, table column heads */
+  --fs-200: 0.8125rem;  /* 13px — metadata, badges */
+  --fs-300: 0.9375rem;  /* 15px — body, table cells */
+  --fs-400: 1.0625rem;  /* 17px — lead paragraph */
+  --fs-500: 1.375rem;   /* 22px — section heading */
+  --fs-600: 1.75rem;    /* 28px — page title */
+  --fs-700: 2.25rem;    /* 36px — display figure (the ineligible count) */
+
+  --lh-tight: 1.2;
+  --lh-normal: 1.5;
+  --lh-loose: 1.65;
+  --tracking-caps: 0.06em;
+
+  /* ---- spacing (4px base) ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+
+  /* ---- shape ---- */
+  --r-1: 4px;
+  --r-2: 8px;
+  --r-3: 14px;
+  --rail-w: 208px;
+  --topbar-h: 56px;
+  --content-max: 1280px;
+
+  /* ---- elevation: hairlines, not drop shadows ---- */
+  --shadow-1: 0 1px 2px rgb(20 24 31 / 0.06);
+  --shadow-2: 0 8px 24px rgb(20 24 31 / 0.12);
+
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #151b23;
+  --surface-2: #1c242e;
+  --surface-3: #232d39;
+  --border: #2b3542;
+  --border-strong: #3d4a5a;
+
+  --text: #e6edf3;
+  --text-muted: #a8b3c1;
+  --text-faint: #96a2b1;
+
+  --accent: #3fb6c0;
+  --accent-hover: #63c8d0;
+  --accent-ink: #06232a;
+  --accent-soft: #10333a;
+
+  --ok: #54c98a;
+  --ok-soft: #10281c;
+  --pref: #a99bf5;
+  --pref-soft: #1e1a35;
+  --no: #f2818f;
+  --no-soft: #33161c;
+  --unk: #a8b3c1;
+  --unk-soft: #1c242e;
+
+  --warn: #e5b567;
+  --warn-soft: #2f2411;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117;
+    --surface: #151b23;
+    --surface-2: #1c242e;
+    --surface-3: #232d39;
+    --border: #2b3542;
+    --border-strong: #3d4a5a;
+
+    --text: #e6edf3;
+    --text-muted: #a8b3c1;
+    --text-faint: #96a2b1;
+
+    --accent: #3fb6c0;
+    --accent-hover: #63c8d0;
+    --accent-ink: #06232a;
+    --accent-soft: #10333a;
+
+    --ok: #54c98a;
+    --ok-soft: #10281c;
+    --pref: #a99bf5;
+    --pref-soft: #1e1a35;
+    --no: #f2818f;
+    --no-soft: #33161c;
+    --unk: #a8b3c1;
+    --unk-soft: #1c242e;
+
+    --warn: #e5b567;
+    --warn-soft: #2f2411;
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5);
+    --shadow-2: 0 8px 24px rgb(0 0 0 / 0.6);
+  }
+}

@@ -13,6 +13,7 @@
     "build": "npm run build -w @grantspotter/core && npm run build -w @grantspotter/server && npm run build -w @grantspotter/web",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @grantspotter/server",
     "dev:web": "npm run dev -w @grantspotter/web",
