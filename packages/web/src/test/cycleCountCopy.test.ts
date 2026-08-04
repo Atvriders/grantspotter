@@ -36,9 +36,49 @@
  *
  * WHAT THIS TEST DOES. It reads every non-test source file under `packages/web/src`, removes
  * comments (a comment may carry a figure, provided it names the corpus it describes), and fails on
- * a literal quantity attached to a plural "cycles" / "windows" / "deadlines" / "dates". A derived
- * count is a JSX expression, not a literal, so `Calendar`'s `{published} funder-published` passes
- * and a typed-in `4 of 243 cycles` does not.
+ * a literal census of the corpus. A derived count is a JSX expression, not a literal, so
+ * `Calendar`'s `{published} funder-published` passes and a typed-in `4 of 243 cycles` does not.
+ *
+ * THE HOLE THAT WAS IN IT, AND WHY THE SHAPE CHANGED. The first version of this guard matched a
+ * quantity attached to one of four nouns — cycles, windows, deadlines, dates. So this passed it,
+ * with the whole web suite green, while being the very sentence the guard exists to prevent:
+ *
+ *     Only 4 of the 243 dated EVENTS in this corpus are dates a funder has actually published
+ *
+ * Adding "events" to the list would have bought one synonym. What is actually being forbidden is
+ * not a noun, it is a CENSUS: a literal number claiming what share of a population this corpus
+ * holds. So there are three detectors now, and evading the guard means evading all three at once:
+ *
+ *   CENSUS  — "N of [the] M ⟨anything plural⟩". Noun-agnostic: the two numerals ARE the census,
+ *             whatever it is counting. Catches the sentence above, and "4 of the 243 items",
+ *             "4 of the 243 thingamabobs", and anything else the next author reaches for.
+ *   SUBJECT — a quantity attached to a plural noun from the corpus-item family. This is the
+ *             original rule, with the family widened, and it is what catches a census with only
+ *             one numeral in it: "Four of the corpus's cycles", "243 cycles".
+ *   CLAIM   — a partitive quantity ("N of …", "N in …", "2% of …") sharing a sentence with a
+ *             phrase that asserts who published a date. Noun-agnostic AND numeral-count-agnostic:
+ *             catches "only four of them are funder-published" and "just 2% of these are dates a
+ *             funder has actually published", where the noun is a pronoun and there is no M.
+ *
+ * All three run over the WHOLE file rather than line by line, because JSX wraps prose: the
+ * offending sentence occupied five lines, and a per-line sweep only ever saw the first of them.
+ *
+ * WHAT STILL EVADES IT, said plainly, because a guard that reads as complete and is not is worse
+ * than a known gap:
+ *
+ *   1. A figure ASSEMBLED at render time — `{'4 of '}{total} events` — is not a literal and no
+ *      source sweep can see it. `components/ExportMenu.test.tsx` and `routes/Exports.test.tsx`
+ *      close this for the two screens that carried the defect, by asserting the rendered DOM
+ *      states no count; every other screen is uncovered against that particular edit.
+ *   2. A single-numeral census whose noun is outside SUBJECT and whose claim is paraphrased past
+ *      CLAIM — "only 4 of the dated things here come straight from the grantmaker". CENSUS wants
+ *      a second numeral, SUBJECT wants a known noun, CLAIM wants a known phrasing; that sentence
+ *      has none of the three. Deliberately: requiring less of each is how a guard starts failing
+ *      on ordinary prose ("One of these values was not accepted") and gets deleted.
+ *   3. Vaguer quantities than a numeral — "a dozen", "hundreds of", "nine in ten". NUMBER stops
+ *      at ten and at four digits.
+ *   4. Copy outside `packages/web/src`: `components/*.css` comments, the server package and
+ *      README all still carry 243/244 sentences. This sweep has never claimed them.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -57,10 +97,21 @@ const WEB_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
  */
 const QUARANTINE: ReadonlyMap<string, string> = new Map([
   [
-    'routes/Exports.tsx',
-    'Owned by another pass in this change set: "Only 4 of the 243 dated windows in this corpus" ' +
-      '(and its assertion in Exports.test.tsx) must move together, and neither file is this ' +
-      'pass\'s to edit. The measured figure for the shipping corpus is in this file\'s header.',
+    'lib/profileFields.ts',
+    'Newly caught by the widened rule, not a new defect: "110 of the 111 ARRL catalog entries ' +
+      'gate on it" is a census typed into help text a user reads. Not this pass\'s file to edit.',
+  ],
+  [
+    'routes/Opportunity.tsx',
+    'Newly caught by the widened rule, not a new defect: "111 entries in the ARRL scholarship ' +
+      'catalog share one close date" is a census typed into rendered copy. Not this pass\'s file.',
+  ],
+  [
+    'routes/Sources.tsx',
+    'Newly caught by the widened rule, not a new defect: "the deadline 112 of 150 programmes ' +
+      'inherit" is a census typed into rendered copy, and it is ALREADY drifting the way 243/244 ' +
+      'did — `normalize/deadline.ts` says 112 of 152 for the same population, and `data/seed/` ' +
+      'holds 143 records rather than either denominator. Not this pass\'s file to edit.',
   ],
 ]);
 
@@ -115,19 +166,81 @@ export function stripComments(source: string): string {
   return out;
 }
 
-const QUANTITY = String.raw`(?:\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)`;
 /**
- * PLURAL ONLY, and that is a deliberate limit rather than an oversight. `MonthGrid`'s "One window"
- * and `Sources`' "one of them owned the deadline" are ordinary prose, and a guard that fails on
- * ordinary prose gets weakened or deleted — which is worse than no guard. A count claim about a
- * corpus is plural in every phrasing this repository has ever used for it, including "1 of 244
- * cycles".
+ * A literal quantity. `2%` is a census too — "only 2% of these are funder-published" rots at
+ * exactly the same rate as "only 4 of 243".
+ *
+ * The trailing `(?!\w)` rather than `\b`, because `\b` does not exist between `%` and the space
+ * after it, and `2% of these` slipped the whole guard while `2 of these` did not.
  */
-const SUBJECT = String.raw`(?:cycles|windows|deadlines|dates)`;
-const COUNT_CLAIM = new RegExp(
-  String.raw`\b${QUANTITY}\b(?:\s+(?:of|in)\s+[^.!?<>]{0,50}?)?\s+${SUBJECT}\b`,
+const NUMBER = String.raw`\b(?:\d{1,4}\s?%|\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)(?!\w)`;
+
+/**
+ * "N of …", "N in …", "N out of …". The partitive is what makes a number a CENSUS rather than a
+ * count of anything else, and it is the one piece every version of this defect has had.
+ *
+ * It is also what keeps the guard off ordinary prose. `ExportMenu` and `Exports` both say "which
+ * of the two kinds it is" and "marked four ways" in the corrected copy: quantities, but not
+ * partitive ones, so nothing here looks at them.
+ */
+const PARTITIVE = String.raw`${NUMBER}(?:\s+out)?\s+(?:of|in)\s+`;
+
+/** Words a sentence may put between the denominator and its noun: "the 243 DATED windows". */
+const PLURAL_OBJECT = String.raw`(?:[a-z’'-]+\s+){0,3}[a-z’'-]{3,}s\b`;
+const DETERMINER = String.raw`(?:(?:the|these|those|this|its|their|our|all|a)\s+)?`;
+
+/**
+ * CENSUS. "N of [the] M ⟨anything plural⟩", and the noun is deliberately unconstrained: two
+ * numerals either side of a partitive is a share-of-population claim whatever it is counting, and
+ * "4 of the 243 dated events" must not be reachable by picking a noun this file has not heard of.
+ */
+const CENSUS = new RegExp(
+  String.raw`${PARTITIVE}${DETERMINER}(?:corpus[’']?s?\s+)?${NUMBER}\s+${PLURAL_OBJECT}`,
   'gi',
 );
+
+/**
+ * SUBJECT. The original rule, whose noun family is now wide enough to cover the words this corpus
+ * is actually described with. It earns its place beside CENSUS by catching a census with only ONE
+ * numeral in it — "Four of the corpus's cycles", "243 cycles" — where there is no denominator for
+ * CENSUS to see.
+ *
+ * PLURAL ONLY, and that is a deliberate limit rather than an oversight. `MonthGrid`'s "One window"
+ * and `Sources`' "one of them owned the deadline" are ordinary prose, and a guard that fails on
+ * ordinary prose gets weakened or deleted — which is worse than no guard.
+ */
+const SUBJECT = String.raw`(?:cycles|windows|deadlines|dates|events|entries|items|records|rows|programmes|programs|opportunities|grants|listings|vevents)`;
+const SUBJECT_COUNT = new RegExp(
+  String.raw`${NUMBER}(?:\s+(?:of|in)\s+[^.!?<>]{0,50}?)?\s+${SUBJECT}\b`,
+  'gi',
+);
+
+/**
+ * CLAIM. A phrase that asserts WHO a date came from. Multi-word prose on purpose: `nextIsEstimated`
+ * and `isEstimated` are identifiers all over this package, and a guard that trips on an identifier
+ * would be read as noise.
+ */
+const PUBLISHED_CLAIM = String.raw`(?:funder[-\s]published|published by (?:the|a|its|their|that)\s+funder|(?:a|the)\s+funder\s+(?:has\s+|have\s+)?(?:not\s+)?(?:actually\s+)?(?:published|announced|printed)|dates?\s+a\s+funder|projected from a recurrence|projections?\s+from a recurrence|estimated by GrantSpotter)`;
+
+/**
+ * A partitive quantity in the same sentence as that claim, in either order. This is the detector
+ * that needs neither a second numeral nor a known noun, so it reaches the phrasings where the
+ * population is a pronoun: "only four of them are funder-published".
+ *
+ * `[^.!?<>]` bounds the window to one sentence and stops it crossing a JSX tag — the same fence
+ * the original rule used, and the reason a `{derived}` count on the next element cannot drag an
+ * unrelated literal into a match.
+ */
+const CLAIM_COUNT = new RegExp(
+  String.raw`(?:${PARTITIVE}[^.!?<>]{0,80}?${PUBLISHED_CLAIM}|${PUBLISHED_CLAIM}[^.!?<>]{0,80}?${PARTITIVE})`,
+  'gi',
+);
+
+const DETECTORS: ReadonlyMap<string, RegExp> = new Map([
+  ['CENSUS', CENSUS],
+  ['SUBJECT', SUBJECT_COUNT],
+  ['CLAIM', CLAIM_COUNT],
+]);
 
 interface Hit {
   file: string;
@@ -145,17 +258,33 @@ function sourceFiles(dir: string): string[] {
   return out.sort();
 }
 
+/**
+ * WHOLE TEXT, NOT LINE BY LINE. JSX wraps prose at 100 columns, so the sentence this file exists
+ * to forbid arrived spread over five lines; a per-line sweep saw "Only 4 of the 243 dated" and
+ * nothing that followed it. Matching the file as one string costs a newline count to report the
+ * line number and closes a hole that needed no cleverness at all to walk through.
+ */
+export function countClaims(text: string): { detector: string; line: number; text: string }[] {
+  const found: { detector: string; line: number; text: string }[] = [];
+  for (const [detector, pattern] of DETECTORS) {
+    for (const match of text.matchAll(pattern)) {
+      found.push({
+        detector,
+        line: text.slice(0, match.index).split('\n').length,
+        text: match[0].replace(/\s+/g, ' ').trim(),
+      });
+    }
+  }
+  return found;
+}
+
 function countClaimsIn(file: string): Hit[] {
   const relative = path.relative(WEB_SRC, file);
-  const hits: Hit[] = [];
-  stripComments(readFileSync(file, 'utf8'))
-    .split('\n')
-    .forEach((line, index) => {
-      for (const match of line.matchAll(COUNT_CLAIM)) {
-        hits.push({ file: relative, line: index + 1, text: match[0].trim() });
-      }
-    });
-  return hits;
+  return countClaims(stripComments(readFileSync(file, 'utf8'))).map((hit) => ({
+    file: relative,
+    line: hit.line,
+    text: `[${hit.detector}] ${hit.text}`,
+  }));
 }
 
 describe('hard-coded cycle counts in user-facing copy', () => {
@@ -187,6 +316,67 @@ describe('hard-coded cycle counts in user-facing copy', () => {
     expect(stripComments('{/* 4 of 243 cycles */}\nconst a = 1;')).not.toContain('cycles');
   });
 
+  /**
+   * WHAT THE RULE IS, WRITTEN AS EXAMPLES INSTEAD OF AS A REGEX.
+   *
+   * The first version of this guard passed a green suite while `routes/Exports.tsx` printed
+   * "Only 4 of the 243 dated EVENTS in this corpus are dates a funder has actually published",
+   * because its noun list held four words and "events" was not one of them. Nothing in the file
+   * said what the rule was FOR, so nothing noticed that the rule and its purpose had come apart.
+   *
+   * These are that purpose, as sentences. Each caught line is a phrasing the defect has taken or
+   * could trivially take next; each ignored line is real copy from this package that must stay
+   * legal, because a guard that fires on "One of these values was not accepted" is a guard the
+   * next person deletes.
+   */
+  const CAUGHT = [
+    'Only 4 of the 243 dated windows in this corpus are dates a funder has actually published',
+    'Only 4 of the 243 dated events in this corpus are dates a funder has actually published',
+    'Only 4 of the 243 dated thingamabobs in this corpus are the funder’s own',
+    'only 4 of 243 cycles in this corpus are dates a funder has actually published',
+    'Only 4 of the corpus’s 244 cycles are funder-published',
+    'Four of the corpus’s cycles are of this kind',
+    'The calendar carries 243 events',
+    'Only four of them are funder-published; the rest are guesses',
+    'Just 2% of these are dates a funder has actually published',
+    // Wrapped the way JSX wraps it, which is how the last one hid from a line-by-line sweep.
+    'Only 4 of the 243 dated\n          events in this corpus are dates a funder has\n          actually published',
+  ];
+
+  const IGNORED = [
+    // The corrected copy, from ExportMenu and Exports. Quantities, but not a census.
+    'Every date in the calendar file says which of the two kinds it is — a window the funder ' +
+      'published, or one GrantSpotter projected from the recurrence that program has followed',
+    'A projected event is marked four ways — an “(estimated)” title prefix, a tentative status, ' +
+      'a custom property and a note in its description',
+    // Ordinary prose that happens to be partitive or plural. `Profile`, `MonthGrid`, `Sources`.
+    'One of these values was not accepted: the callsign is not a callsign',
+    'One window',
+    'Six parsers once returned zero records from their own live pages',
+    // Derived, which is the sanctioned fix: an expression is not a literal.
+    '{data.entries.length} dated cycles between {from} and {to} — {published} funder-published',
+  ];
+
+  it('catches every phrasing the census has taken, whatever noun it reaches for', () => {
+    for (const sentence of CAUGHT) {
+      expect(
+        countClaims(sentence).map((h) => h.detector),
+        `NOT CAUGHT: "${sentence}". A census this guard lets through is a false statistic on ` +
+          'screen with a green suite behind it, which is exactly how the last one survived.',
+      ).not.toEqual([]);
+    }
+  });
+
+  it('leaves ordinary prose and derived counts alone, so it does not get deleted', () => {
+    for (const sentence of IGNORED) {
+      expect(
+        countClaims(sentence),
+        `FALSE POSITIVE: "${sentence}". This is legal copy. Narrow the detector that fired ` +
+          'rather than rewording the product around a guard.',
+      ).toEqual([]);
+    }
+  });
+
   it('finds none outside the quarantine', () => {
     const hits = files
       .flatMap(countClaimsIn)
@@ -194,10 +384,11 @@ describe('hard-coded cycle counts in user-facing copy', () => {
       .map((hit) => `${hit.file}:${String(hit.line)} — "${hit.text}"`);
     expect(
       hits,
-      'A cycle/window/deadline count typed into copy goes stale on its own: the shipping corpus ' +
-        'reports 252 cycles with 2 funder-published on 2026-08-04 and 248 with 0 on 2027-02-01. ' +
-        'Derive it from the rows the component holds (see Calendar.tsx and Watchlist.tsx), or ' +
-        'make the claim without the number.',
+      'A census of the corpus typed into copy goes stale on its own, whatever noun it counts: ' +
+        'the shipping corpus reports 252 cycles with 2 funder-published on 2026-08-04 and 248 ' +
+        'with 0 on 2027-02-01, from the same unedited files. Derive it from the rows the ' +
+        'component holds (see Calendar.tsx and Watchlist.tsx), or make the claim without the ' +
+        'number, as ExportMenu.tsx and Exports.tsx do.',
     ).toEqual([]);
   });
 

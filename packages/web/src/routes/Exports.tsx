@@ -98,11 +98,15 @@ export function ExportsRoute(): JSX.Element {
           THE FEED'S SCOPE IS PART OF THE URL, and which URL does what is not something this screen
           may leave unsaid. It used to be inferred from the watchlist's SIZE: `/calendar/:token`
           served every publishable deadline while nothing was starred and only the starred
-          programmes as soon as something was — measured on this corpus at 243 events, then 5, from
-          the same unchanged URL. A subscriber who starred their first opportunity lost 238
-          deadlines out of a calendar they had already installed, silently and remotely, and the
-          only screen that could have warned them is this one. There are two URLs now, each with a
-          meaning that holds, and this is where the user chooses between them.
+          programmes as soon as something was — measured over the FIXTURE corpus, on the fixed
+          clock `api/exportsCorpus.test.ts` pins, at 243 VEVENTs and then 5 from the same unchanged
+          URL. (Which corpus is named on purpose: "this corpus" stood here unqualified and meant
+          whichever one the reader assumed, and `data/seed/` — the corpus a fresh install actually
+          serves — is a different population on a moving clock.) A subscriber who starred their
+          first opportunity lost 238 deadlines out of a calendar they had already installed,
+          silently and remotely, and the only screen that could have warned them is this one. There
+          are two URLs now, each with a meaning that holds, and this is where the user chooses
+          between them.
         */}
         <p className="export-note">
           Two feed URLs, and each one always means the same thing. The plain URL carries every
@@ -112,12 +116,34 @@ export function ExportsRoute(): JSX.Element {
           nothing. You choose the scope when you subscribe and it stays chosen: starring an
           opportunity fills the watchlist feed, and it never empties the plain one.
         </p>
+        {/*
+          NO COUNT IN THIS SENTENCE, DELIBERATELY — the same decision `components/ExportMenu.tsx`
+          took for the same claim, so the product says one thing about it in both places.
+
+          It read "Only 4 of the 243 dated windows in this corpus are dates a funder has actually
+          published". 4-of-243 is a real measurement, but of the FIXTURE corpus on a fixed clock
+          (`exports/corpus.test.ts`), and a user reading this screen is looking at whatever corpus
+          is installed. On `data/seed/`, which is what a fresh install serves, the figure is not a
+          constant to correct: through this calendar's own two-year window it is 252 cycles with 2
+          funder-published on 2026-08-04, 250 with 1 on 2026-10-01 and 248 with 0 on 2027-02-01,
+          because the three seed records that declare a funder-published window simply age out.
+          Two other totals for the same claim — 243 and 244 — were committed in this tree at once,
+          which is what an unsourceable number does.
+
+          This component holds a token and an error string; it renders no cycles, so unlike
+          `Calendar` and `Watchlist` it has nothing to derive an honest figure FROM. What survives
+          is the part that is proved: the split itself, and the four marks `exports/ics.ts` writes
+          onto every projected event (`(estimated)` prefix, STATUS:TENTATIVE, X-GRANTSPOTTER-
+          ESTIMATED and the DESCRIPTION note), which `exports/ics.test.ts` asserts one by one.
+          `test/cycleCountCopy.test.ts` fails if a literal count comes back to this file, and
+          `Exports.test.tsx` fails if one is assembled at render time out of pieces.
+        */}
         <p className="export-note">
-          Only 4 of the 243 dated windows in this corpus are dates a funder has actually published;
-          the rest are this pipeline&rsquo;s projection from a prior cycle. Every projected event in
-          the file is marked four ways — an &ldquo;(estimated)&rdquo; title prefix, a tentative
-          status, a custom property and a note in its description — so nothing here reads as a
-          promise the funder made.
+          Every date in these files says which of the two kinds it is: a window the funder
+          published, or one GrantSpotter projected from the recurrence that program has followed.
+          A projected event is marked four ways — an &ldquo;(estimated)&rdquo; title prefix, a
+          tentative status, a custom property and a note in its description — so nothing here reads
+          as a promise the funder made.
         </p>
         <div className="export-links">
           <a className="btn" download href={exportHref('/api/exports/deadlines.ics')}>One-off .ics</a>

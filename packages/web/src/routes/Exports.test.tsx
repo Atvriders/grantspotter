@@ -87,10 +87,45 @@ describe('ExportsRoute', () => {
     expect(await screen.findByText(/Print \/ Save as PDF/)).toBeInTheDocument();
   });
 
-  it('says most calendar dates are projected, not funder-published', async () => {
+  /**
+   * THIS REPLACES AN ASSERTION THAT PINNED A FALSE STATISTIC ON SCREEN. It required this route to
+   * render "4 of the 243 dated windows in this corpus are dates a funder has actually published",
+   * so the copy could not be corrected without correcting the test in the same commit — which is
+   * how the sentence outlived the pass that removed it from the other five components.
+   *
+   * 4-of-243 is a real measurement of the FIXTURE corpus on a fixed clock, and a lie on this
+   * screen, which a user reads against whatever corpus is installed. On `data/seed/` the figure is
+   * not a constant at all: 252 cycles with 2 funder-published on 2026-08-04, 250 with 1 on
+   * 2026-10-01, 248 with 0 on 2027-02-01, as `test/cycleCountCopy.test.ts` records.
+   *
+   * The assertion is not weakened, it is moved onto what is actually provable. The claim the
+   * screen now makes — every date declares which kind it is, and a projection carries four marks —
+   * is asserted here in both directions: the sentence must be present, AND no count of dated
+   * things may be on screen. The second half is DOM-level on purpose. `cycleCountCopy` sweeps
+   * SOURCE, so a figure assembled at render time (`{'4 of '}{total} windows`) is invisible to it
+   * and would be exactly what a determined edit produces.
+   */
+  it('says every calendar date declares whether the funder published it, without counting them', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'none' } }, 404));
     render(<MemoryRouter><ExportsRoute /></MemoryRouter>);
-    expect(await screen.findByText(/4 of the 243 dated windows/i)).toBeInTheDocument();
+
+    const note = await screen.findByText(/every date in these files/i);
+    expect(note).toHaveTextContent(/the funder\s+published/i);
+    expect(note).toHaveTextContent(/projected from the recurrence/i);
+    // The four marks `exports/ics.ts` writes and `exports/ics.test.ts` proves, named as four
+    // because they are four lines of code, not four rows of a corpus.
+    expect(note).toHaveTextContent(/marked four ways/i);
+    expect(note).toHaveTextContent(/\(estimated\)/i);
+    expect(note).toHaveTextContent(/tentative status/i);
+
+    const onScreen = (document.body.textContent ?? '').replace(/\s+/g, ' ');
+    expect(
+      onScreen,
+      'A count of dated windows/cycles/events rendered here goes stale on its own clock. Say the ' +
+        'distinction, which is proved, and leave the arithmetic to a screen that holds the rows.',
+    ).not.toMatch(
+      /\b(?:\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten)\b(?:\s+(?:of|in)\s+[^.!?]{0,50}?)?\s+(?:cycles|windows|deadlines|dates|events|entries|items|records|rows|programmes|programs)\b/i,
+    );
   });
 
   /**
