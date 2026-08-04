@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { PLACEHOLDER_MARKER } from '../config.js';
 
 /**
  * A README is the first thing that rots, and this one carries the two claims whose absence would
@@ -186,6 +187,25 @@ describe('README honesty surfaces', () => {
     // The screen exists; a README that still called it API-only would be the product's front page
     // contradicting the product.
     expect(readme).toMatch(/first-run screen/i);
+  });
+
+  /**
+   * The Deploying section used to open with `cp .env.example .env`. That file is gone — the owner
+   * asked for one file to edit — so the instruction is now a pointer to nothing, and a README that
+   * still printed it would strand a reader on step one. The replacement design has a sharp edge
+   * that has to be documented rather than discovered: the compose file ships working-looking
+   * literals, and the server refuses two of them by value.
+   */
+  it('does not send the reader to a file this repository no longer ships', () => {
+    expect(readme).not.toContain('.env.example');
+    expect(readme).not.toMatch(/cp \.env/);
+  });
+
+  it('says the shipped values are placeholders and that the server rejects them', () => {
+    expect(readme).toContain('docker-compose.yml');
+    expect(readme).toContain(PLACEHOLDER_MARKER); // the marker, imported, not a retyped copy
+    expect(readme).toMatch(/refuses? to start|refuses the shipped/i);
+    expect(readme).toContain('openssl rand -hex 32');
   });
 
   it('gives the deploy path including the workflow_dispatch gotcha', () => {

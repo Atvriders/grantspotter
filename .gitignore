@@ -18,6 +18,10 @@ scripts/**/*.js
 scripts/**/*.d.ts
 scripts/**/*.js.map
 scripts/**/*.d.ts.map
+# Configuration lives in docker-compose.yml now and `.env.example` is gone, but these stay: docker
+# compose still reads a `.env` beside the compose file (HOST_PORT is the one thing left that comes
+# from it), people make one out of habit, and the day one of them puts a real secret in it is the
+# day this line is the only thing standing between that secret and a public repository.
 .env
 .env.local
 data/*.sqlite

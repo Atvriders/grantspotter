@@ -9,6 +9,8 @@ node_modules
 dist
 **/dist
 coverage
+# Kept even though configuration moved into docker-compose.yml: an operator's `.env` is still a
+# file that can exist here, and baking one into an image would ship their secret to whoever pulls it.
 .env
 .env.local
 data/*.sqlite

@@ -59,7 +59,7 @@ function readConfig(): AppConfig {
   } catch (err) {
     if (err instanceof ConfigError) {
       console.error(`[config] ${err.message}`);
-      console.error('[config] Refusing to start. See .env.example.');
+      console.error('[config] Refusing to start. Edit docker-compose.yml.');
       process.exit(1);
     }
     throw err;

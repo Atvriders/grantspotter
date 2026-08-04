@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildUserAgent, ConfigError, loadConfig } from '../src/config.js';
+import {
+  buildUserAgent,
+  ConfigError,
+  loadConfig,
+  MIN_SESSION_SECRET_LENGTH,
+  PLACEHOLDER_CONTACT_URL,
+  PLACEHOLDER_SESSION_SECRET,
+} from '../src/config.js';
 
 const VALID = {
   SESSION_SECRET: 'a'.repeat(32),
@@ -23,6 +30,81 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...VALID, SESSION_SECRET: 'tooshort' })).toThrow(
       /at least 32 characters; got 8/,
     );
+  });
+
+  /**
+   * `docker-compose.yml` ships these two values as literals now — the owner wanted one file to
+   * edit, not a `.env` to copy — so the `${VAR:?…}` interpolation that used to stop
+   * `docker compose up` in its tracks is gone. On a public repository the naive version of that
+   * change is a vulnerability, not a convenience: every deployment that skipped the edit would
+   * sign its session cookies with a key published on GitHub. These are the tests that hold the
+   * replacement fail-fast in place.
+   */
+  describe('the placeholders shipped in docker-compose.yml', () => {
+    it('refuses the exact SESSION_SECRET the compose file ships', () => {
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: PLACEHOLDER_SESSION_SECRET })).toThrow(
+        ConfigError,
+      );
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: PLACEHOLDER_SESSION_SECRET })).toThrow(
+        /SESSION_SECRET is still the placeholder/,
+      );
+    });
+
+    it('refuses the exact CONTACT_URL the compose file ships, though it is a valid https URL', () => {
+      // It parses. Nothing about its SHAPE is wrong, which is why the check has to be by value.
+      expect(new URL(PLACEHOLDER_CONTACT_URL).protocol).toBe('https:');
+      expect(() => loadConfig({ ...VALID, CONTACT_URL: PLACEHOLDER_CONTACT_URL })).toThrow(
+        /CONTACT_URL is still the placeholder/,
+      );
+    });
+
+    it('refuses a half-edited value, because a half-edited value is still published', () => {
+      // What a hurried operator actually does: pastes the real thing beside the placeholder
+      // rather than over it, or edits the readable half and leaves the marker.
+      const pastedBeside = `${PLACEHOLDER_SESSION_SECRET}${'f'.repeat(64)}`;
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: pastedBeside })).toThrow(
+        /SESSION_SECRET is still the placeholder/,
+      );
+      expect(() =>
+        loadConfig({ ...VALID, CONTACT_URL: 'https://radioclub.example.org/CHANGE_ME' }),
+      ).toThrow(/CONTACT_URL is still the placeholder/);
+      // Lowercased by an operator who retyped it rather than pasting.
+      expect(() =>
+        loadConfig({ ...VALID, SESSION_SECRET: 'change_me_i_will_do_this_properly_tomorrow' }),
+      ).toThrow(/SESSION_SECRET is still the placeholder/);
+    });
+
+    it('says "you did not change this", never "too short", whatever the length', () => {
+      // The ordering test, and the reason the placeholder check sits above the length rule. A
+      // short placeholder that reported "must be at least 32 characters" would be advice an
+      // operator can follow — pad it — arriving at a server that starts on a published secret.
+      const short = 'CHANGE_ME';
+      expect(short.length).toBeLessThan(MIN_SESSION_SECRET_LENGTH);
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: short })).toThrow(
+        /SESSION_SECRET is still the placeholder/,
+      );
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: short })).not.toThrow(/at least 32/);
+    });
+
+    it('names the command that produces a value it will accept', () => {
+      // The error is the operator's only instruction at that moment. `openssl rand -hex 32`
+      // yields 64 hex characters, which clears MIN_SESSION_SECRET_LENGTH and contains no marker.
+      let message = '';
+      try {
+        loadConfig({ ...VALID, SESSION_SECRET: PLACEHOLDER_SESSION_SECRET });
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toContain('openssl rand -hex 32');
+      expect(message).toContain('docker-compose.yml');
+      expect(() => loadConfig({ ...VALID, SESSION_SECRET: 'a1b2c3d4'.repeat(8) })).not.toThrow();
+    });
+
+    it('lets a real value through unmolested', () => {
+      // Vacuity guard on the marker test: it must reject placeholders, not secrets in general.
+      const real = 'd41d8cd98f00b204e9800998ecf8427e' + 'd41d8cd98f00b204e9800998ecf8427e';
+      expect(loadConfig({ ...VALID, SESSION_SECRET: real }).sessionSecret).toBe(real);
+    });
   });
 
   it('refuses a missing or malformed CONTACT_URL', () => {

@@ -1,11 +1,25 @@
 # GrantSpotter. Pulls the image published by GitHub Actions; it does not build.
 #
-#   cp .env.example .env      then fill in SESSION_SECRET and CONTACT_URL
+# There is no .env file and nothing to copy. Edit the two values marked EDIT THIS below,
+# then:
+#
 #   docker compose pull
 #   docker compose up -d
 #
-# HOST_PORT is a variable on purpose: 3030 is a popular default and is already
-# claimed by other stacks on a typical host. Change it in .env, not here.
+# Both of those ship as placeholders containing CHANGE_ME, and the server refuses to start
+# while either is still in place — see packages/server/src/config.ts. That refusal replaces
+# the ":?" interpolation guard this file used to carry, and it exists because this repository
+# is public: a session secret published on GitHub is one anyone can forge cookies with, and a
+# crawler with a placeholder contact URL is one the ~25 small nonprofits it polls can neither
+# identify nor ask to stop.
+#
+# Upgrading from the version of this file that read a .env? These are literal values now, and
+# a literal here beats anything in a .env — an old SESSION_SECRET left in that file is ignored,
+# and the server refuses to start until it is pasted in below. HOST_PORT is the exception: it
+# is still interpolated, so `HOST_PORT=8080 docker compose up -d` and a .env both still work
+# for it. It stays a variable because it has a safe default, because getting it wrong costs a
+# URL rather than a security property, and because a host that has to move off 3030 should not
+# have to edit a tracked file to do it.
 
 services:
   grantspotter:
@@ -14,21 +28,29 @@ services:
     restart: unless-stopped
     init: true
     ports:
+      # host:container. Change the left-hand number if 3030 is already claimed on this host;
+      # the container always listens on 3030.
       - "${HOST_PORT:-3030}:3030"
     environment:
       PORT: 3030
       DATA_DIR: /data
-      # Required. The container refuses to start without these two, and neither has a
-      # default anywhere in the image, the compose file or the code. A shared default
-      # session secret is not a secret; an anonymous crawler is one the ~25 small
-      # nonprofits it polls cannot identify or ask to stop.
-      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env; there is no default}
-      CONTACT_URL: ${CONTACT_URL:?set CONTACT_URL in .env; it identifies your crawler to the sites it polls}
-      CRAWL_ENABLED: ${CRAWL_ENABLED:-true}
-      CRAWL_CRON: ${CRAWL_CRON:-17 3 * * *}
-      # Optional. Everything works without them.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      SIMPLER_GRANTS_API_KEY: ${SIMPLER_GRANTS_API_KEY:-}
+
+      # EDIT THIS — required, no default, and the placeholder below is refused by value.
+      # Generate a real one with:  openssl rand -hex 32
+      SESSION_SECRET: CHANGE_ME_generate_one_with_openssl_rand_hex_32_and_paste_it_here
+
+      # EDIT THIS — required, no default, and the placeholder below is refused by value.
+      # An http(s) page you control. It goes into the crawler's User-Agent so a site owner
+      # can find out who is polling them, for example https://www.example.org/grantspotter
+      CONTACT_URL: https://example.org/CHANGE_ME_to_a_page_that_says_who_runs_this
+
+      CRAWL_ENABLED: "true"
+      CRAWL_CRON: "17 3 * * *"
+
+      # Optional. Everything works with these empty: the deterministic parsers, the rule-based
+      # scoring and the copy-prompt flow need no key. Paste one in to use it.
+      ANTHROPIC_API_KEY: ""
+      SIMPLER_GRANTS_API_KEY: ""
     volumes:
       # The SQLite database, the snapshots and the fixture cache. Without this the
       # corpus is rebuilt from seed on every recreate and every local edit is lost.

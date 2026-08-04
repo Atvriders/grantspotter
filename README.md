@@ -294,12 +294,22 @@ exist to prevent.
 The image is built by GitHub Actions for `linux/amd64` and `linux/arm64` and published to
 `ghcr.io/atvriders/grantspotter:latest`. The repository and the package are public.
 
+There is one file and nothing to copy. Open `docker-compose.yml`, replace the two values marked
+`EDIT THIS`, and bring it up:
+
 ```bash
-cp .env.example .env
-# fill in SESSION_SECRET and CONTACT_URL — neither has a default
+# in docker-compose.yml, under environment:
+#   SESSION_SECRET: <the output of `openssl rand -hex 32`>
+#   CONTACT_URL:    <an http(s) page you control>
 docker compose pull
 docker compose up -d
 ```
+
+Both ship as placeholders containing `CHANGE_ME`, and **the server refuses to start while either
+is still there**, naming the one it found and what to do about it. That refusal is not politeness:
+this repository is public, so a placeholder session secret left in place would be a signing key
+everyone can read, and it is enforced by value in `packages/server/src/config.ts` rather than by
+the compose file, because the compose file is the thing being shipped.
 
 Then read the container log for the one-time admin bootstrap token. There is still no sign-up form
 for the public, but there **is** a first-run screen: open the app and, because no accounts exist yet,
@@ -320,8 +330,17 @@ A fresh token is printed on every restart until an account exists. Now open
 `http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and sign in with those credentials;
 every further account is created from **Admin → User accounts**.
 
-`HOST_PORT` is a variable because **3030** is a popular default and is frequently already claimed on
-a busy host. Change it in `.env`, never in `docker-compose.yml`.
+`HOST_PORT` is the one setting still interpolated rather than written out, because **3030** is a
+popular default and is frequently already claimed on a busy host. Change the left-hand number of the
+`ports:` mapping in `docker-compose.yml`, or set `HOST_PORT` in the environment
+(`HOST_PORT=8080 docker compose up -d`) if you would rather not touch a tracked file. It has a
+default, so it can never stop the stack from starting.
+
+If you are upgrading from a version of this repository that had you copy an example file to `.env`:
+that example file no longer exists. Compose still reads a `.env` beside the compose file, and
+`HOST_PORT` still comes from it — but a literal in `docker-compose.yml` beats it, so the
+`SESSION_SECRET` in your old `.env` is now ignored and the server will refuse to start until you
+paste it into `docker-compose.yml`.
 
 **CI note:** a freshly created or forked repository sometimes will not run its first push-triggered
 workflow. The build workflow includes `workflow_dispatch` for exactly that case — trigger it once by
@@ -331,10 +350,10 @@ hand from the Actions tab, and subsequent pushes behave normally.
 
 | Var | Required | Default | Notes |
 |---|---|---|---|
-| `HOST_PORT` | no | `3030` | compose host port only |
+| `HOST_PORT` | no | `3030` | compose host port only; the only interpolated value left |
 | `PORT` | no | `3030` | in-container listen port |
-| `SESSION_SECRET` | **yes** | **no default** | at least **32 characters**; the server refuses to start without it |
-| `CONTACT_URL` | **yes** | **no default** | an `http(s)` URL; goes in the crawler User-Agent |
+| `SESSION_SECRET` | **yes** | **no default** | at least **32 characters**; the server refuses to start without it, and refuses the shipped `CHANGE_ME` placeholder by value |
+| `CONTACT_URL` | **yes** | **no default** | an `http(s)` URL; goes in the crawler User-Agent; the shipped `CHANGE_ME` placeholder is refused by value |
 | `DATA_DIR` | no | `/data` | SQLite, snapshots, fixture cache |
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
@@ -344,7 +363,9 @@ hand from the Actions tab, and subsequent pushes behave normally.
 Both required variables fail loudly on startup, and that is deliberate:
 
 - **`SESSION_SECRET` has no default because a shipped default session secret is a shared secret,
-  which is not a secret.** Generate one with `openssl rand -hex 32`.
+  which is not a secret.** Generate one with `openssl rand -hex 32`. The value in
+  `docker-compose.yml` is a placeholder that the server rejects on sight — including if you paste
+  yours *beside* it rather than over it, which is the mistake a hurried operator actually makes.
 - **`CONTACT_URL` has no default because an anonymous crawler is one nobody can ask to stop.** It
   goes into the crawler's User-Agent. Most of the ~25 sources this polls are small, volunteer-run
   organisations — club sites, a foundation run by retirees, a scholarship page maintained by one
