@@ -485,3 +485,677 @@ describe('component layer — correspondence and reporting', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Tasks 10 and 11 — the two funders that are not in the index.
+//
+// Campus student government and NASA State Space Grant are, per this project's own research,
+// where a typical collegiate club's money actually comes from, and neither is aggregatable:
+// roughly 4,000 campuses on four different form platforms, and 52 independent consortium
+// calendars. They ship as guided workflows, which means the honesty bar moves. An overlay for a
+// funder in the index can quote that funder's page. These two cannot — there is no single page to
+// quote — so everything they say has to be either sourced to the one representative campus it
+// came from, or written as an instruction to go and read the applicant's own rule.
+//
+// `selectTemplates` imported here on purpose: `alwaysAvailable` is the only thing standing
+// between the SGA playbook and invisibility, and Task 1 found that a QUOTED `"true"` in the
+// frontmatter reads as `false` and hides the template with no error anywhere. Asserting the flag
+// is not enough; the assertion has to run the selection the app runs.
+// ---------------------------------------------------------------------------------------------
+import { loadConsortia } from './consortia.js';
+import { selectTemplates } from './load.js';
+
+/** The spelled-quantity half of the weld detector. Task 4's line carried no digit at all. */
+const WELD_COUNT_WORD =
+  /\b(?:a handful of|a couple of|couple|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|dozens?|several)\b/i;
+
+function weldOffenders(id: string, body: string): string[] {
+  const out: string[] = [];
+  for (const raw of body.split('\n')) {
+    if (!raw.includes('{{')) continue;
+    const prose = raw
+      .replace(/^\s*(?:[-*>]\s+|\d+\.\s+)+/, '')
+      .replace(/^\s*-\s*\[[ x]\]\s*/, '')
+      .replace(/^\*\*[^*]*\*\*/, '')
+      .replace(/\{\{[^}]*\}\}/g, '');
+    if (/\d/.test(prose)) out.push(`${id} — figure beside a live slot: ${raw.trim()}`);
+    const spelled = WELD_COUNT_WORD.exec(prose);
+    if (spelled) out.push(`${id} — "${spelled[0]}" beside a live slot: ${raw.trim()}`);
+  }
+  return out;
+}
+
+describe('funder layer — campus SGA playbook', () => {
+  const sga = all.find((t) => t.id === 'funder-campus-sga');
+
+  it('is always available and bound to no program id', () => {
+    expect(sga).toBeDefined();
+    expect(sga?.alwaysAvailable).toBe(true);
+    expect(sga?.programIds).toEqual([]);
+  });
+
+  it('leads with the capital-equipment trap and the reframe', () => {
+    expect(sga?.body).toMatch(/capital equipment/i);
+    expect(sga?.body).toMatch(/barred|prohibited|not fundable/i);
+    expect(sga?.body).toMatch(/programming/i);
+    expect(sga?.body).toMatch(/funded externally|fund the capital/i);
+  });
+
+  it('gives at least four concrete reframes a club can copy', () => {
+    const reframes = (sga?.body.match(/^\| /gm) ?? []).length;
+    expect(reframes).toBeGreaterThanOrEqual(6);
+    expect(sga?.body).toMatch(/licensing class/i);
+    expect(sga?.body).toMatch(/Field Day/);
+    expect(sga?.body).toMatch(/travel/i);
+  });
+
+  it('labels the FSU figures as one representative campus, never as universal', () => {
+    expect(sga?.body).toMatch(/Florida State|FSU/);
+    expect(sga?.body).toMatch(/representative|one campus|your campus will differ/i);
+    expect(sga?.body).toMatch(/\$3,000/);
+    expect(sga?.body).toMatch(/six weeks/i);
+  });
+
+  it('names the external routes for capital', () => {
+    expect(sga?.body).toMatch(/department|dean|alumni/i);
+    expect(sga?.slots).toContain('sga.fundingBody');
+    expect(sga?.slots).toContain('sga.attendanceEstimate');
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // The reason this playbook is dangerous, and the reason it is worth shipping, are the same
+  // fact: activity-fee rules are per-institution. "Your student government bars capital
+  // equipment" is a claim about a document this app has never read, on one of roughly 4,000
+  // campuses. Stated as fact it is the farweb.org failure in miniature — a plausible sentence
+  // nobody checked — and an applicant who believes it will not ask for the radio their own rules
+  // would in fact have funded.
+  //
+  // So the playbook teaches a METHOD: find your own allocation manual, find its unallowable-
+  // expense list, and quote it back in your own request. The assertions below are what keep it a
+  // method instead of an assertion.
+  // -------------------------------------------------------------------------------------------
+
+  it('is genuinely reachable — the selection the app runs actually returns it', () => {
+    // Not `expect(alwaysAvailable).toBe(true)` again: a quoted `"true"` in frontmatter once read
+    // as `false` and removed this template from the app with no error raised anywhere. The only
+    // assertion that catches that is the one that runs `selectTemplates`.
+    const noQuery = selectTemplates(all, {});
+    expect(noQuery.playbooks.map((t) => t.id)).toContain('funder-campus-sga');
+    // A club looking at one specific funder still sees it — it is not an alternative to the
+    // overlays, it is the money that arrives while the grant application is being written.
+    const withProgram = selectTemplates(all, { programId: 'nasa-space-grant', klass: 'ham_grant' });
+    expect(withProgram.playbooks.map((t) => t.id)).toContain('funder-campus-sga');
+    // And it is never mistaken for a funder overlay, which would bind it to a program it has none.
+    expect(noQuery.overlays.map((t) => t.id)).not.toContain('funder-campus-sga');
+  });
+
+  it('teaches the applicant to quote their own campus rule rather than asserting one', () => {
+    const body = sga?.body ?? '';
+    expect(body).toMatch(/unallowable/i);
+    expect(body).toMatch(/allocation manual|funding manual|policy/i);
+    // Quoting is the whole method. The applicant's own rule, in their own request, in the rule's
+    // own words — because the committee reading it recognises its own document.
+    expect(body).toMatch(/quote/i);
+    expect(body).toMatch(/word for word/i);
+  });
+
+  it('never states one campus rule as though it were the applicant’s', () => {
+    // A negative assertion over a body that does not exist passes for the wrong reason, and this
+    // is the one in the block it would be most expensive to lose quietly.
+    expect(sga?.body, 'funder-campus-sga').toBeTypeOf('string');
+    const body = sga?.body ?? '';
+    expect(body).not.toMatch(
+      /\byour (?:SGA|student government|campus|university)[^.\n]{0,60}\b(?:bars|prohibits|forbids|does not fund|will not fund|cannot fund)\b/i,
+    );
+    expect(body).not.toMatch(/\b(?:all|every) (?:campuses|student governments|universities|SGAs)\b/i);
+
+    // Every line that names a category rule has to carry the hedge or the instruction with it.
+    // A hedge in the paragraph above does not travel: a club officer copies the line.
+    const RULE_WORD = /\b(?:barred|bars|prohibit\w*|unallowable|not fundable|excluded?|ineligible)\b/i;
+    const HEDGE =
+      /\b(?:frequently|often|usually|commonly|typically|most|many|may|might|whether|if|your campus|your own|check|quote|read|find|list|ask|representative)\b/i;
+    const offenders: string[] = [];
+    for (const line of body.split('\n')) {
+      if (RULE_WORD.test(line) && !HEDGE.test(line)) offenders.push(line.trim());
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('confines every FSU figure to the section that labels them as FSU’s', () => {
+    // The figures are real and useful for calibration, and they belong to ONE campus. A dollar
+    // amount or a lead time loose in the general advice reads as the rule everywhere.
+    const RULE_FIGURE =
+      /\$\s?[\d,]+|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)[- ](?:day|week|month|year)s?\b/i;
+    const sections = (sga?.body ?? '').split(/\n(?=## )/);
+    const carrying = sections
+      .filter((s) => RULE_FIGURE.test(s))
+      .map((s) => (s.split('\n')[0] ?? '').trim());
+    expect(carrying).toEqual(['## One representative campus, for calibration']);
+    // And that section says whose figures they are, on the same screen as the numbers.
+    const representative = sections.find((s) => RULE_FIGURE.test(s)) ?? '';
+    expect(representative).toMatch(/Florida State|FSU/);
+    expect(representative).toMatch(/your campus will differ/i);
+  });
+
+  it('welds no invented quantity to a live slot', () => {
+    expect(sga?.body, 'funder-campus-sga').toBeTypeOf('string');
+    expect(weldOffenders('funder-campus-sga', sga?.body ?? '')).toEqual([]);
+  });
+
+  it('renders the request skeleton as gaps, and fills them when the applicant answers', () => {
+    const empty = fillTemplate(sga?.body ?? '', buildSlotContext({}));
+    expect(empty.unresolvedSlots).toEqual(sga?.slots);
+    for (const slot of ['sga.fundingBody', 'sga.eventDate', 'sga.attendanceEstimate']) {
+      expect(empty.markdown).toContain(`[TODO: ${slot}`);
+    }
+    // The skeleton is the part an applicant pastes into a form, so no figure of ours may render
+    // inside it — including FSU's, which belong upstairs beside the campus they came from. The
+    // markers are stripped first: a hint's example is an instruction to the writer, not a figure
+    // this club supplied.
+    const skeleton = (stripTodoMarkers(empty.markdown).split(/\n(?=## )/).find((s) =>
+      s.startsWith('## Draft skeleton'),
+    ) ?? '');
+    expect(skeleton.length).toBeGreaterThan(200);
+    expect(skeleton).not.toMatch(/\$\s?[\d,]+/);
+
+    const answered = fillTemplate(sga?.body ?? '', {
+      'sga.fundingBody': 'the RSO Allocation Committee',
+      'sga.eventDate': 'the first Saturday of the spring term',
+      'sga.attendanceEstimate': 'about the capacity of the room we booked',
+    });
+    expect(answered.markdown).toContain('the RSO Allocation Committee');
+    expect(answered.unresolvedSlots).not.toContain('sga.fundingBody');
+    expect(answered.markdown).not.toMatch(/\{\{/);
+  });
+
+  it('cites the campus whose figures it quotes', () => {
+    expect(sga?.sources.length).toBeGreaterThan(0);
+    expect(sga?.sources.some((s) => /fsu\.edu/.test(s.url))).toBe(true);
+    // The source label has to say the page is one campus's, because the figures beside it are.
+    expect(sga?.sources.some((s) => /representative/i.test(s.label))).toBe(true);
+  });
+});
+
+describe('funder layer — NASA State Space Grant', () => {
+  const sg = all.find((t) => t.id === 'funder-nasa-space-grant');
+
+  it('exists and binds to the space grant program', () => {
+    expect(sg).toBeDefined();
+    expect(sg?.programIds).toEqual(['nasa-space-grant']);
+  });
+
+  it('states that there is no national deadline and 52 independent calendars', () => {
+    expect(sg?.body).toMatch(/52/);
+    expect(sg?.body).toMatch(/no national deadline/i);
+    expect(sg?.slots).toContain('consortium.name');
+    expect(sg?.slots).toContain('consortium.url');
+  });
+
+  it('warns that the shipped consortium list is unverified', () => {
+    expect(sg?.body).toMatch(/unverified|not been (live-)?verified/i);
+    expect(sg?.sources.some((s) => /nasa\.gov/.test(s.url))).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // 52 consortia, 52 calendars, 52 sets of award types. Any rule this overlay states as
+  // "Space Grant's" belongs to at most one of them, and is shown to the applicants of the other
+  // 51 as though it were theirs. The overlay's job is to ROUTE — to get the applicant to their own
+  // consortium's page and tell them what to look for when they arrive.
+  // -------------------------------------------------------------------------------------------
+
+  it('names no consortium of its own — the picker does the routing', () => {
+    const body = sg?.body ?? '';
+    for (const c of loadConsortia()) {
+      expect(body, `names ${c.name} in prose`).not.toContain(c.name);
+      expect(body, `names ${c.leadInstitution} in prose`).not.toContain(c.leadInstitution);
+    }
+    // The applicant's own consortium arrives through the slot, so an unanswered draft says so.
+    expect(body).toContain('{{consortium.name}}');
+  });
+
+  it('asserts no deadline, no award amount and no eligibility rule as a consortium’s', () => {
+    expect(sg?.body, 'funder-nasa-space-grant').toBeTypeOf('string');
+    const body = sg?.body ?? '';
+    expect(body).not.toMatch(
+      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d/,
+    );
+    expect(body).not.toMatch(/\bdeadline (?:is|falls|of)\b/i);
+    // A dollar figure may appear only where it is labelled as an order of magnitude that no
+    // consortium published — the research's own $1k–$10k reading, not anybody's award table.
+    for (const line of body.split('\n')) {
+      if (!/\$/.test(line)) continue;
+      expect(line, `unlabelled figure: ${line.trim()}`).toMatch(
+        /indication of scale|no consortium published|not a published figure/i,
+      );
+    }
+  });
+
+  it('turns the matching requirement into a question instead of a rule', () => {
+    const body = sg?.body ?? '';
+    expect(body).toMatch(/match/i);
+    // "Space Grant is a matching program" is the Yaesu twelve-month obligation again: a plausible
+    // requirement in the applicant's hands that no page in front of us states.
+    expect(body).not.toMatch(/\bSpace Grant is a matching (?:program|programme)\b/i);
+    expect(body).not.toMatch(/\b(?:1:1|one-to-one|dollar-for-dollar) match\b/i);
+    const offenders: string[] = [];
+    for (const line of body.split('\n')) {
+      if (!/\bmatch(?:ing)?\b/i.test(line)) continue;
+      if (!/\b(?:ask|confirm|whether|check|find out|before)\b/i.test(line)) offenders.push(line.trim());
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('sends the applicant to NASA’s own directory rather than to a curated link', () => {
+    const body = sg?.body ?? '';
+    expect(body).toMatch(/director/i);
+    expect(body).toMatch(/nasa\.gov/);
+    // The consortium's own website is the applicant's to paste: 52 offline-curated URLs would be
+    // 52 chances to send somebody to an address that is no longer the consortium.
+    expect(sg?.slots).toContain('consortium.url');
+  });
+
+  it('welds no invented quantity to a live slot', () => {
+    expect(sg?.body, 'funder-nasa-space-grant').toBeTypeOf('string');
+    expect(weldOffenders('funder-nasa-space-grant', sg?.body ?? '')).toEqual([]);
+  });
+
+  it('renders as gaps for an applicant who has stated nothing', () => {
+    const filled = fillTemplate(sg?.body ?? '', buildSlotContext({}));
+    expect(filled.unresolvedSlots).toEqual(sg?.slots);
+    expect(filled.markdown).toContain('[TODO: consortium.name');
+    expect(stripTodoMarkers(filled.markdown)).not.toMatch(/\{\{/);
+  });
+
+  it('applies to the classes a Space Grant project actually falls in', () => {
+    expect(sg?.appliesTo).toEqual(['ham_grant', 'adjacent_stem']);
+    expect(sg?.funderId).toBe('nasa-space-grant');
+  });
+});
+
+/**
+ * ------------------------------------------------------------------------------------------
+ * FUNDER LAYER (Task 9) — ARISS, IEEE MTT-S Chapter Support, Yaesu DR-2X.
+ *
+ * Three programmes that are not cash grants, and the one place in this repository where the
+ * product's founding failure actually happened. A Yaesu "the repeater must remain on the air for
+ * 12 months" obligation was published as established fact for days. It came from a hand-written
+ * fixture, never from Yaesu: `twelve`, `12 month`, `on the air`, `on-air`, `obligat` and `remain`
+ * each appear ZERO times in the 145,639-byte capture of the funder's own page, and the test
+ * below re-derives that from the committed bytes rather than trusting this comment.
+ *
+ * So each overlay here states funder facts only where a captured page carries the words, and the
+ * pins below check both sides of every claim: the funder said it, and the overlay says it the
+ * same way. Where the capture is silent the overlay says so out loud — the two prices whose
+ * difference the page never explains, the application PDF this crawler never downloads, the
+ * scholarship figures the IEEE page does not print — because a declared gap is the only honest
+ * alternative to a plausible sentence.
+ * ------------------------------------------------------------------------------------------
+ */
+describe('funder layer — ARISS, IEEE MTT-S and Yaesu DR-2X', () => {
+  const byId = (id: string) => all.find((t) => t.id === id);
+  const OVERLAYS = ['funder-ariss', 'funder-ieee-mtts', 'funder-yaesu-dr2x'];
+
+  const YAESU_CAPTURE = '00-systemfusion-yaesu-com.html';
+
+  /**
+   * Markup out, entities and typographic characters folded to ASCII, whitespace collapsed —
+   * lossy in one direction only, so it never adds a word. A phrase that survives this on both
+   * sides really is the funder's own wording.
+   */
+  const fold = (raw: string): string =>
+    raw
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;|&#160;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&#8217;|&rsquo;|’/g, "'")
+      .replace(/&#8216;|&lsquo;|‘/g, "'")
+      .replace(/&#8220;|&#8221;|&ldquo;|&rdquo;|“|”/g, '"')
+      .replace(/&quot;/g, '"')
+      .replace(/&#8211;|&ndash;|–/g, '-')
+      .replace(/&#8212;|&mdash;|—/g, '--')
+      .replace(/\s+/g, ' ');
+
+  const capture = async (dir: string, file: string): Promise<string> => {
+    const { loadFixture } = await import('../../test/fixtures.js');
+    return fold(loadFixture(dir, file));
+  };
+
+  it('loads all three through the strict loader, bound to the canonical program ids', () => {
+    for (const id of OVERLAYS) {
+      const t = byId(id);
+      expect(t, id).toBeDefined();
+      expect(t?.layer, id).toBe('funder');
+      // An overlay that were `alwaysAvailable` would be a playbook and would show for every
+      // opportunity, funder facts and all.
+      expect(t?.alwaysAvailable, id).toBe(false);
+      expect(t?.sources.length, `${id} states funder facts with no sources`).toBeGreaterThan(0);
+      for (const slot of t?.slots ?? []) expect(isKnownSlot(slot), `${id}: ${slot}`).toBe(true);
+      const componentIds = new Set(components.map((c) => c.id));
+      for (const req of t?.requires ?? []) expect(componentIds.has(req), `${id} → ${req}`).toBe(true);
+    }
+    // A one-character difference here produces no error, no warning and zero overlays.
+    expect(byId('funder-ariss')?.programIds).toEqual(['ariss-iss-contact']);
+    expect(byId('funder-ieee-mtts')?.programIds).toEqual(['ieee-mtts-chapter-support']);
+    expect(byId('funder-yaesu-dr2x')?.programIds).toEqual(['yaesu-dr2x-repeater']);
+    expect(byId('funder-ariss')?.funderId).toBe('ariss-usa');
+    expect(byId('funder-ieee-mtts')?.funderId).toBe('ieee-mtts');
+    expect(byId('funder-yaesu-dr2x')?.funderId).toBe('yaesu-usa');
+  });
+
+  it('tells ARISS applicants the award is a contact and mentoring, not cash', () => {
+    const a = byId('funder-ariss');
+    expect(a?.body).toMatch(/no cash/i);
+    expect(a?.body).toMatch(/education plan/i);
+    // The page's audience sentence names schools and educational organizations. Reading a
+    // university INTO it is the same move as reading an obligation into a page that has none.
+    expect(a?.body).toMatch(/not explicitly named/i);
+    expect(a?.slots).toContain('project.beneficiaryCount');
+    expect(a?.slots).toContain('team.instructorName');
+  });
+
+  it('states nothing about ARISS money, because the page publishes no figure at all', async () => {
+    const page = await capture('ariss', '00-ariss-usa-org-proposal-overview.html');
+    // The claim "no cash" is checkable in exactly one way: no dollar figure anywhere in the
+    // capture. If ARISS ever publishes one, this fails and the overlay has to be rewritten.
+    expect(page).not.toMatch(/\$\s?\d/);
+    const body = byId('funder-ariss')?.body ?? '';
+    expect(body).not.toMatch(/\$\d/);
+    expect(body).toMatch(/publishes no dollar figure/i);
+  });
+
+  it('quotes ARISS in the funders own words', async () => {
+    const page = await capture('ariss', '00-ariss-usa-org-proposal-overview.html');
+    const body = fold(byId('funder-ariss')?.body ?? '');
+    for (const quote of [
+      'A scheduled ARISS contact is a voice-only communication via Amateur Radio between the ' +
+        'International Space Station (ISS) crew and classrooms and communities.',
+      'approximately 10 minutes in length',
+      'paired with an ARISS Technical Mentor',
+      'US schools and educational organizations may download the ARISS Proposal Form',
+      'These scheduled contact opportunities are offered to formal and informal education ' +
+        'institutions and organizations, individually or working together.',
+      'the ability to integrate space and communication concepts into multiple areas of the ' +
+        'curriculum for 4-6 months leading up to the contact',
+      'potential audience size (we are looking to engage an entire school or organization, NOT ' +
+        'just a single classroom)',
+      'community connections (ham radio groups or other community members who could be of ' +
+        'assistance)',
+      'organizations must demonstrate flexibility to accommodate changes in contact dates and times',
+      'Proposals are not accepted outside of the scheduled proposal windows.',
+      'Proposal window opened July 1 and closes on September 30 for contacts to be held from ' +
+        'January to June 2027.',
+      '4 to 6 weeks after the close of the proposal window',
+    ]) {
+      expect(page, `not in the ARISS capture: ${quote}`).toContain(quote);
+      expect(body, `not in funder-ariss: ${quote}`).toContain(quote);
+    }
+  });
+
+  it('states the IEEE MTT-S preconditions with BOTH member minimums, not just the lower one', () => {
+    const i = byId('funder-ieee-mtts');
+    // "at least 5 members" was carried in this repository as the MTT-S rule. The page says ten,
+    // with five as the Student Branch Chapter exception — quoting only the exception tells a
+    // joint or section chapter it qualifies when the funder says it does not.
+    expect(i?.body).toMatch(/Minimum of ten \(10\) members; five \(5\) members for Student Branch Chapters/);
+    expect(i?.body).toMatch(/vTools/);
+    expect(i?.body).toMatch(/Minimum of two \(2\) reported technical meetings/);
+    expect(i?.body).toMatch(/October 1/);
+    expect(i?.body).toMatch(/\$1,000/);
+    expect(i?.body).toMatch(/\$500/);
+    expect(i?.slots).toContain('chapter.memberCount');
+    expect(i?.slots).toContain('chapter.meetingCount');
+    expect(i?.slots).toContain('chapter.officerRosterUrl');
+  });
+
+  it('models the IEEE date as a deadline and says why', () => {
+    const body = byId('funder-ieee-mtts')?.body ?? '';
+    expect(body).toMatch(/deadline, not a window/i);
+    // A single date modelled as a one-day window reads `closed` on 364 days a year, and needs an
+    // opening date IEEE never printed.
+    expect(body).toMatch(/one-day window/);
+    expect(body).toMatch(/inventing an opening date/i);
+    // The page's own hedge is part of the fact. "may be asked" is not "will be rejected".
+    expect(body).toMatch(/discretion/i);
+  });
+
+  it('quotes IEEE MTT-S in the funders own words', async () => {
+    const page = await capture('ieee-mtts', '00-mtt-org-chapter-support.html');
+    const body = fold(byId('funder-ieee-mtts')?.body ?? '');
+    for (const quote of [
+      "must have fulfilled all the following requirements for an 'active' status to be eligible " +
+        'for any one of the below funding programs',
+      'Minimum of ten (10) members; five (5) members for Student Branch Chapters',
+      'Complete up-to-date Chapter Officer roster reported via',
+      'Minimum of two (2) reported technical meetings via',
+      'in the previous year, Chapters less than one-year-old are exempt from this requirement',
+      'Before a chapter applies for MTT-S financial support they should apply for support from ' +
+        'the IEEE Section to which that chapter reports',
+      '$1,000 per year for single-society MTT-S Chapters or $500 per year for Joint Chapters ' +
+        'which are associated with MTT-S',
+      'The fund provides $500 seed money per chapter',
+      'The event must be at least four (4) hours in length',
+      'An IEEE MTT-S membership booth must be present at the event',
+      'The MTT-S Regional Coordinator must endorse the proposed event',
+      'up to $2,250 per year to send a Chapter Officer',
+      'A sponsorship request usually requires a detailed description and mandatory post-event ' +
+        'reporting',
+      'All requests for MTT chapter funding must be received by October 1 or the chapter may be ' +
+        'asked to make its application in the following year.',
+    ]) {
+      expect(page, `not in the IEEE capture: ${quote}`).toContain(quote);
+      expect(body, `not in funder-ieee-mtts: ${quote}`).toContain(quote);
+    }
+    // The Jotform the funding request is actually made through, checked against the raw href.
+    const { loadFixture } = await import('../../test/fixtures.js');
+    expect(loadFixture('ieee-mtts', '00-mtt-org-chapter-support.html')).toContain(
+      'form.jotform.com/243523980737161',
+    );
+    expect(byId('funder-ieee-mtts')?.body).toContain('form.jotform.com/243523980737161');
+  });
+
+  it('prints no MTT-S scholarship or fellowship amount, because that page prints none', async () => {
+    const page = await capture('ieee-mtts', '00-mtt-org-chapter-support.html');
+    // Figures for MTT-S undergraduate scholarships and graduate fellowships were asked of this
+    // overlay. Neither appears on the page the overlay cites, so neither is stated.
+    for (const absent of ['$1,500', '$6,000']) {
+      expect(page, `unexpectedly present in the IEEE capture: ${absent}`).not.toContain(absent);
+      expect(byId('funder-ieee-mtts')?.body, absent).not.toContain(absent);
+    }
+    expect(byId('funder-ieee-mtts')?.body).toMatch(/does \*\*not\*\* publish is any scholarship or fellowship amount/);
+  });
+
+  it('states plainly that Yaesu is a price the club pays, not an award it receives', async () => {
+    const page = await capture('yaesu-dr2x', YAESU_CAPTURE);
+    const y = byId('funder-yaesu-dr2x');
+    expect(y?.body).toMatch(/discounted purchase/i);
+    expect(y?.body).toMatch(/not a grant/i);
+    for (const quote of [
+      // The capture writes the price inside a <span>, so the closing period lands one space away
+      // once the markup is folded out. The pin stops at the last figure rather than at a period
+      // that only exists on one side of the comparison.
+      'The new program price is either $1,450.00 or $1,860.00',
+      'Yaesu USA is please to offer this DR-2X Program offering to our loyal customers once ' +
+        'again through August 31st, 2026.',
+      'LIMITED TIME PROGRAM',
+    ]) {
+      expect(page, `not in the Yaesu capture: ${quote}`).toContain(quote);
+      expect(fold(y?.body ?? ''), `not in funder-yaesu-dr2x: ${quote}`).toContain(quote);
+    }
+    // The form filename is the only other place a date lives, and it is month-granular.
+    const { loadFixture } = await import('../../test/fixtures.js');
+    expect(loadFixture('yaesu-dr2x', YAESU_CAPTURE)).toContain('DR-2X_Jun-thru-Aug_2026-FILLABLE.pdf');
+    expect(y?.body).toContain('DR-2X_Jun-thru-Aug_2026-FILLABLE.pdf');
+    expect(y?.slots).toContain('repeater.site');
+    expect(y?.slots).toContain('repeater.coordinator');
+  });
+
+  /**
+   * THE CAUTIONARY TEST. Every string below is something this repository, its briefs, or its
+   * hand-written fixtures have asserted about the Yaesu programme, and every one of them is
+   * absent from the funder's real captured page. The first half re-derives that from the bytes;
+   * the second half pins that the overlay repeats none of them.
+   */
+  it('carries no Yaesu obligation, accessory or eligibility claim the capture never makes', async () => {
+    const { loadFixture } = await import('../../test/fixtures.js');
+    const raw = loadFixture('yaesu-dr2x', YAESU_CAPTURE).toLowerCase();
+    expect(raw.length).toBeGreaterThan(100_000);
+    for (const absent of [
+      '12 month',
+      '12-month',
+      'twelve',
+      'on the air',
+      'on-air',
+      'obligat',
+      'remain',
+      'lan-01a',
+      'network module',
+      'north america',
+      'discount',
+      'grant',
+      'retail',
+      'june 3',
+    ]) {
+      expect(raw, `unexpectedly present in the Yaesu capture: ${absent}`).not.toContain(absent);
+    }
+    const body = byId('funder-yaesu-dr2x')?.body ?? '';
+    expect(body).not.toMatch(/12 months|twelve months|on the air|on-air/i);
+    expect(body).not.toMatch(/LAN-01A|network module/i);
+    expect(body).not.toMatch(/must (?:remain|stay) (?:on the air|in service)/i);
+    expect(body).not.toMatch(/June 3/);
+    expect(body).not.toMatch(/North America/i);
+    // Silence is not enough: the overlay has to tell the applicant the terms are unread.
+    expect(body).toMatch(/states no ongoing obligation of any kind/);
+    expect(body).toMatch(/An obligation nobody published is not an obligation/);
+    expect(body).toMatch(/never downloads that PDF/);
+    // And it owns its own vocabulary rather than putting words in Yaesu's mouth.
+    expect(body).toMatch(/uses neither the word grant nor the word discount/);
+    expect(body).toMatch(/does not say what distinguishes them/);
+  });
+
+  it('renders every slot as a visible gap when the applicant profile is empty', () => {
+    for (const id of OVERLAYS) {
+      const t = byId(id);
+      // A loop over a template that does not exist passes every assertion inside it by
+      // iterating nothing — the failure mode this whole file exists to refuse.
+      expect(t, id).toBeDefined();
+      const filled = fillTemplate(t?.body ?? '', {});
+      expect([...filled.unresolvedSlots].sort(), id).toEqual([...(t?.slots ?? [])].sort());
+      for (const slot of t?.slots ?? []) {
+        expect(filled.markdown, `${id}: ${slot}`).toContain(todoFor(slot));
+      }
+      expect(filled.markdown, id).not.toMatch(/\{\{/);
+      // Outside the markers, nothing may have appeared that looks like this applicant's own
+      // details. A hint inside a marker is an instruction to the writer, not an assertion.
+      const prose = stripTodoMarkers(filled.markdown);
+      expect(prose, `${id} renders a callsign nobody supplied`).not.toMatch(/\b[A-Z]{1,2}\d[A-Z]{1,3}\b/);
+    }
+  });
+
+  /**
+   * The hybrid weld, in the layer where it does the most damage: a line mixing live slots with
+   * invented specifics renders complete and true-looking, carries no `[TODO: …]`, and so passes
+   * the export gate. A funder figure belongs in prose beside its quotation, never inside a model
+   * sentence the applicant will paste. Spelled quantities count — "Three of our members … a
+   * four-session class" carries no digit at all.
+   */
+  it('never welds a figure or a spelled quantity to a live slot', () => {
+    const COUNT_WORD =
+      /\b(?:a handful of|a couple of|couple|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|dozens?|several)\b/i;
+    const offenders: string[] = [];
+    for (const id of OVERLAYS) {
+      expect(byId(id), id).toBeDefined();
+      for (const raw of (byId(id)?.body ?? '').split('\n')) {
+        if (!raw.includes('{{')) continue;
+        const prose = raw
+          .replace(/^\s*(?:[-*>]\s+|\d+\.\s+)+/, '')
+          .replace(/^\s*-\s*\[[ x]\]\s*/, '')
+          .replace(/^\*\*[^*]*\*\*/, '')
+          .replace(/\{\{[^}]*\}\}/g, '');
+        if (/\be\.g\.\s/i.test(prose)) offenders.push(`${id} — "e.g." beside a live slot: ${raw.trim()}`);
+        if (/\d/.test(prose)) offenders.push(`${id} — a figure beside a live slot: ${raw.trim()}`);
+        const spelled = COUNT_WORD.exec(prose);
+        if (spelled) offenders.push(`${id} — "${spelled[0]}" beside a live slot: ${raw.trim()}`);
+      }
+      const body = byId(id)?.body ?? '';
+      // Slot misattribution: the right slot carrying the wrong fact.
+      expect(body, id).not.toMatch(/award(?:ed)?[^.\n]{0,40}\{\{project\.requestAmount\}\}/i);
+      expect(body, id).not.toMatch(/(?:deadline|due|submit[^.\n]{0,20})\{\{project\.endDate\}\}/i);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the IEEE member and meeting hints truthful where they render, inside a marker', async () => {
+    const { slotDef } = await import('./slots.js');
+    // These two hints are rendered verbatim inside `[TODO: <path> — <hint>]` in this overlay's
+    // own output, which makes them funder statements in the applicant's document. The member
+    // hint said "at least 5 chapter members" — the page says ten, with five for Student Branch
+    // Chapters — and the meeting hint said "this year" where the page says the previous year.
+    expect(slotDef('chapter.memberCount')?.hint).toBe(
+      'IEEE MTT-S requires at least 10 chapter members, or 5 for a Student Branch Chapter',
+    );
+    expect(slotDef('chapter.meetingCount')?.hint).toBe(
+      'technical meetings reported in vTools in the previous year; at least 2 are required',
+    );
+    for (const path of ['chapter.memberCount', 'chapter.meetingCount']) {
+      expect(todoFor(path), path).toContain(slotDef(path)?.hint ?? '');
+    }
+  });
+});
+
+/**
+ * These two overlays are the only ones in the corpus with no capture behind them, and the reason
+ * is structural rather than an omission: `funderCaptures.test.ts` pins every other overlay's
+ * requirements against committed bytes of the funder's own page, and there is no single page to
+ * capture for either of these. Student activity fee rules live on roughly 4,000 campus sites, and
+ * Space Grant's rules live on 52 consortium sites. One captured page would be one campus's or one
+ * consortium's, and quoting it as the programme's rule is the fabrication shape this repo has
+ * removed over and over.
+ *
+ * So the bar for these two is different: they may teach a method, quote a labelled example, or
+ * tell the applicant what to go and read — and they may not speak in the voice a funder uses to
+ * state its own requirements, because no funder said any of it to us.
+ */
+describe('funder layer — the two workflows that no capture can back', () => {
+  const GUIDED = ['funder-campus-sga', 'funder-nasa-space-grant'];
+
+  it('ships both as funder-layer overlays with a source the reader can open', () => {
+    for (const id of GUIDED) {
+      const t = all.find((x) => x.id === id);
+      expect(t, id).toBeDefined();
+      expect(t?.layer, id).toBe('funder');
+      expect(t?.sources.length, id).toBeGreaterThan(0);
+      for (const s of t?.sources ?? []) expect(s.url, `${id}: ${s.label}`).toMatch(/^https:\/\//);
+    }
+  });
+
+  it('states no requirement in a funder’s own imperative voice', () => {
+    const offenders: string[] = [];
+    const IMPERATIVE = [
+      /\b(?:you|applicants?|your club|the applicant|the club) must\b/i,
+      /\bthe funder requires\b/i,
+      /\bapplicants? (?:are|is) required to\b/i,
+      /\beligibility requires\b/i,
+    ];
+    for (const id of GUIDED) {
+      const body = all.find((x) => x.id === id)?.body ?? '';
+      expect(body, id).toBeTypeOf('string');
+      expect(body.length, id).toBeGreaterThan(400);
+      for (const line of body.split('\n')) {
+        for (const re of IMPERATIVE) if (re.test(line)) offenders.push(`${id}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('sends the applicant to a document of their own to read', () => {
+    // The one instruction both share, and the only honest one available: the rule that governs
+    // this applicant is written down somewhere they can reach, and neither of these pages is it.
+    for (const id of GUIDED) {
+      const body = all.find((x) => x.id === id)?.body ?? '';
+      expect(body, id).toMatch(/\b(?:your own|your campus|your consortium|your state)\b/i);
+      expect(body, id).toMatch(/\b(?:read|open|find|quote|confirm)\b/i);
+    }
+  });
+});
