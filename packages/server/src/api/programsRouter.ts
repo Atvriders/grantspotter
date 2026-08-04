@@ -258,6 +258,10 @@ export function createProgramsRouter(deps: RouterDeps): Router {
         nextOpensAt: h.nextOpensAt,
         nextClosesAt: h.nextClosesAt,
         nextIsEstimated: h.nextIsEstimated,
+        // The frame the two instants above are in. Without it the web layer
+        // cannot render the funder's calendar day and every zoned deadline
+        // prints one day late (migration 037).
+        nextTimezone: h.nextTimezone,
         watched: watched.has(h.program.id),
       }));
 

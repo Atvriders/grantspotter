@@ -38,6 +38,22 @@ export interface BrowseRow {
   nextOpensAt: string | null;
   nextClosesAt: string | null;
   nextIsEstimated: boolean;
+  /**
+   * IANA zone `nextOpensAt` / `nextClosesAt` are expressed in, or null when no
+   * zone was recorded. Pass it to `formatDate` — it is what makes the browse row
+   * render the funder's own calendar day.
+   *
+   * A deadline is the UTC instant of a LOCAL wall time: the ARRL's
+   * "Feb 1-28, 2027 window" is `2027-03-01T04:59:00.000Z`, which prints
+   * 2027-03-01 in UTC and 2027-02-28 in America/New_York. The UTC reading is
+   * one day LATE, and late is the dangerous direction — it tells an applicant
+   * they have a day they do not have. Until migration 037 this row carried no
+   * zone at all, which is why the fix could not be made at the component level.
+   *
+   * Null means the zone is unknown, never "use the server's". Render such an
+   * instant in UTC and label it; do not infer one.
+   */
+  nextTimezone: string | null;
   watched: boolean;
 }
 

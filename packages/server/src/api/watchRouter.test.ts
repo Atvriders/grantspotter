@@ -69,6 +69,9 @@ describe('watchlist API', () => {
     expect(get.body.rows).toHaveLength(1);
     expect(get.body.rows[0].program.id).toBe('arrl-foundation-scholarship');
     expect(get.body.rows[0].nextClosesAt).toBe('2026-12-30T17:00:00.000Z');
+    // The watchlist reads the SAME projection browse does, so it inherited the same
+    // no-timezone defect and is fixed by the same column (migration 037).
+    expect(get.body.rows[0].nextTimezone).toBe('America/New_York');
   });
 
   it('is idempotent — starring twice leaves one row', async () => {
@@ -178,6 +181,9 @@ describe('watchlist API', () => {
       expect(res.body.rows[0].program.id).toBe('ardc-grants');
       expect(res.body.rows[0].funderName).toBe('Amateur Radio Digital Communications');
       expect(res.body.rows[0].nextClosesAt).toBeNull();
+      // No projection row means no date AND no zone. The fallback path must not
+      // supply a frame for a deadline it does not have.
+      expect(res.body.rows[0].nextTimezone).toBeNull();
     });
 
     it('hides — but never deletes — a watch on a record that becomes do_not_publish', async () => {

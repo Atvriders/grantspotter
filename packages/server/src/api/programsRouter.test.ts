@@ -551,6 +551,10 @@ describe('GET /api/programs', () => {
     // `reindex.test.ts` pins on the projection row this is read from.
     expect(row.nextClosesAt).toBe('2026-09-02T06:59:00.000Z');
     expect(row.nextIsEstimated).toBe(true);
+    // ...and the zone that instant is a 23:59 wall time in. ARDC is in California, so the UTC
+    // day of this instant (Sep 2) is NOT the day ARDC published (Sep 1); the row carries the
+    // frame so the web layer can render the funder's day rather than the day after it.
+    expect(row.nextTimezone).toBe('America/Los_Angeles');
   });
 
   it('marks the rows this user has starred', async () => {

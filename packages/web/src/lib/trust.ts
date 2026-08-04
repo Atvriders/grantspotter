@@ -65,13 +65,22 @@ function dayFormatter(timeZone: string): Intl.DateTimeFormat {
  * applicant they have one more day than they do. Formatted in `America/New_York` it prints the
  * day the funder published.
  *
- * The default is UTC because it is deterministic and because the browse projection
- * (`program_search.next_closes_at`) carries no timezone column to pass. That is a known gap,
- * recorded for the reviewer — it is not a licence to omit the argument where a `Cycle` is in hand.
+ * THE BROWSE GAP IS CLOSED (migration 037). This comment used to record that the browse
+ * projection carried no timezone column, so browse and the watchlist had nothing to pass. They
+ * do now: `program_search.next_timezone` rides beside `next_closes_at`, and `BrowseRow` and
+ * `WatchRow` both carry it as `nextTimezone`. Pass `row.nextTimezone` — every surface that shows
+ * a deadline now has the zone in hand, and omitting it is a defect rather than a limitation.
+ *
+ * `null` and `undefined` both mean NO ZONE WAS RECORDED, and both render in UTC. That is the
+ * honest reading of an instant whose frame is unknown, and callers should label it as UTC rather
+ * than present it as the funder's day. What must never happen is substituting the server's or the
+ * browser's zone: that manufactures a calendar day out of a fact nobody observed. Accepting null
+ * directly is deliberate — `nextTimezone` is `string | null`, and a `?? undefined` dance at every
+ * call site is the kind of friction that ends with the argument being dropped again.
  */
 export function formatDate(
   iso: string | null | undefined,
-  timeZone: string = 'UTC',
+  timeZone: string | null | undefined = 'UTC',
 ): string {
   if (iso === null || iso === undefined || iso === '') return NO_DATE;
   // A date-only string is ALREADY a calendar day — it has no instant to re-zone. Sending it
@@ -80,5 +89,7 @@ export function formatDate(
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const parsed = Date.parse(iso);
   if (Number.isNaN(parsed)) return NO_DATE;
-  return dayFormatter(timeZone).format(new Date(parsed));
+  // An explicit null is the projection saying "no zone recorded", which is the same instruction
+  // as omitting the argument: render UTC. It is NOT an instruction to guess a local zone.
+  return dayFormatter(timeZone ?? 'UTC').format(new Date(parsed));
 }

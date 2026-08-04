@@ -1,0 +1,47 @@
+-- Plan 3: the originating timezone of the projected next cycle.
+--
+-- THE DEFECT THIS CLOSES. A deadline is stored as the UTC instant of a LOCAL wall
+-- time. `zonedWallTimeToUtcISO` with core's DEFAULT_CLOSE_TIME 23:59 turns the
+-- ARRL Amateur Radio Grants "Feb 1-28, 2027 window" (tz=America/New_York) into
+-- `2027-03-01T04:59:00.000Z`. Rendered in UTC that prints 2027-03-01 — it tells
+-- an applicant they have a day they do not have, which is the one direction this
+-- product must never round. Rendered in America/New_York it prints 2027-02-28,
+-- the day the funder published.
+--
+-- `cycles.timezone` has carried that zone since Plan 1, and `Cycle.timezone` is a
+-- required field on the record `expandCycles`/`observedCycles` return. The browse
+-- projection was the one hop that dropped it: 030-browse-projection.sql copied
+-- `next_opens_at`, `next_closes_at` and `next_is_estimated` off the winning cycle
+-- and left the frame those instants are expressed in behind. Browse is the
+-- primary listing surface and the watchlist reads the same projection, so the
+-- renderer had nothing to pass and `formatDate`'s doc comment recorded the gap.
+--
+-- ALTER TABLE, NOT A SECOND `CREATE TABLE program_search`. A second CREATE under
+-- the same name is matched by `IF NOT EXISTS` on the NAME alone, so it would be a
+-- silent no-op and this column would never exist — the trap 030's own header
+-- documents and `db/schemaConformance.test.ts` fails by name for. `migrate()`
+-- records every applied file in `schema_migrations`, so this statement runs
+-- exactly once per database and needs no `IF NOT EXISTS` of its own (SQLite has
+-- none for ADD COLUMN).
+--
+-- NULLABLE, AND NULL MEANS "NOT KNOWN" — NEVER "the server's zone".
+-- Two ways a row reads NULL here, and neither may be guessed at:
+--   1. There is no next cycle at all, so `next_closes_at` is NULL beside it.
+--   2. The row was projected by a build older than this migration and has not
+--      been rebuilt yet. Existing databases get NULL for every row the moment
+--      this file runs, until the next `reindexBrowse`.
+-- A reader renders an instant with no zone in UTC and labels it, which is honest
+-- about what is known. Substituting the server's local zone would manufacture a
+-- calendar day from a fact nobody observed, and this codebase has spent a great
+-- deal of effort removing values that were asserted rather than observed.
+--
+-- NO INDEX. This column is payload, never a predicate: nothing filters, sorts or
+-- joins on it — `browseQuery.ts` reads it only in `hydratePrograms`'s explicit
+-- `program_id IN (...)` fetch, which is already served by the PRIMARY KEY.
+-- Measured, not assumed: `EXPLAIN QUERY PLAN` on that exact statement reports
+-- `SEARCH ps USING INDEX sqlite_autoindex_program_search_1 (program_id=?)`.
+-- `program_id TEXT PRIMARY KEY` is not a rowid alias, so SQLite's own implicit
+-- unique index already serves the only read this column takes part in, and a
+-- second index would be measurably redundant. An index on an uncovered read is
+-- the redundancy three Plan 3 briefs have already shipped here.
+ALTER TABLE program_search ADD COLUMN next_timezone TEXT;

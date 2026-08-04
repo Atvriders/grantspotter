@@ -54,10 +54,15 @@ const REQUIRED: Record<string, string[]> = {
   // narrowing of the contract. Both shapes below are Plan 1's 001-init.sql.
   profiles: ['id', 'user_id', 'kind', 'data', 'updated_at'],
   watches: ['id', 'user_id', 'program_id', 'notify_changes', 'created_at'],
+  // `next_timezone` is migration 037's addition. `next_closes_at` is the UTC
+  // instant of a LOCAL wall time, so the two are a pair: an instant without its
+  // frame cannot be rendered as a calendar day, and rendering it in UTC prints
+  // the ARRL's 2027-02-28 window as 2027-03-01 — one day late. If this column
+  // is ever dropped, browse and the watchlist go straight back to that.
   program_search: [
     'program_id', 'funder_id', 'funder_name', 'name', 'klass', 'status',
     'instrument', 'amount_min', 'amount_max', 'deadline_kind',
-    'next_opens_at', 'next_closes_at', 'next_is_estimated',
+    'next_opens_at', 'next_closes_at', 'next_is_estimated', 'next_timezone',
     'last_verified_at', 'haystack',
   ],
   program_facets: ['program_id', 'facet_kind', 'facet_value'],

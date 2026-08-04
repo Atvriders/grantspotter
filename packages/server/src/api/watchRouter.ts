@@ -41,6 +41,13 @@ export interface WatchRow {
   nextOpensAt: string | null;
   nextClosesAt: string | null;
   nextIsEstimated: boolean;
+  /**
+   * IANA zone the two instants above are expressed in, or null when unknown.
+   * The watchlist reads the SAME projection browse does, so it inherited the
+   * same one-day-late defect and is fixed by the same column (migration 037).
+   * Null is "no zone recorded", never the server's — render UTC and say so.
+   */
+  nextTimezone: string | null;
 }
 
 export function createWatchRouter(deps: RouterDeps): Router {
@@ -86,19 +93,22 @@ export function createWatchRouter(deps: RouterDeps): Router {
           nextOpensAt: hit.nextOpensAt,
           nextClosesAt: hit.nextClosesAt,
           nextIsEstimated: hit.nextIsEstimated,
+          nextTimezone: hit.nextTimezone,
         });
         continue;
       }
       const program = programs.get(id);
       if (program === undefined || isDoNotPublish(program)) continue;
       // The projection is the ONLY place the next-cycle scalars exist, so a row
-      // it has not built yet reports no dates rather than a guessed one.
+      // it has not built yet reports no dates rather than a guessed one — and
+      // no zone either, for exactly the same reason.
       rows.push({
         program,
         funderName: funderNames.get(program.funderId) ?? '',
         nextOpensAt: null,
         nextClosesAt: null,
         nextIsEstimated: false,
+        nextTimezone: null,
       });
     }
 

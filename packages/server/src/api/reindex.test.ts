@@ -117,7 +117,7 @@ describe('reindexBrowse', () => {
     reindexBrowse(db, NOW);
     const row = db
       .prepare(
-        `SELECT deadline_kind, next_opens_at, next_closes_at, next_is_estimated
+        `SELECT deadline_kind, next_opens_at, next_closes_at, next_is_estimated, next_timezone
            FROM program_search WHERE program_id = ?`,
       )
       .get(chicagoFmScholarship.id) as {
@@ -125,12 +125,16 @@ describe('reindexBrowse', () => {
       next_opens_at: string | null;
       next_closes_at: string | null;
       next_is_estimated: number;
+      next_timezone: string | null;
     };
     expect(row).toEqual({
       deadline_kind: 'dormant',
       next_opens_at: null,
       next_closes_at: null,
       next_is_estimated: 0,
+      // No cycle means no frame to express one in. A default here would imply a
+      // deadline exists in some zone, which is the opposite of what is known.
+      next_timezone: null,
     });
   });
 
@@ -150,6 +154,46 @@ describe('reindexBrowse', () => {
     // 2026-08-02 is Sep 1, closing at 23:59 PDT.
     expect(row.next_closes_at).toBe('2026-09-02T06:59:00.000Z');
     expect(row.next_is_estimated).toBe(1);
+  });
+
+  /**
+   * THE PAIRING INVARIANT (migration 037): an instant and its frame travel together.
+   *
+   * `next_closes_at` is the UTC instant of a LOCAL wall time, so on its own it cannot be turned
+   * into a calendar day — ARDC's row above is `2026-09-02T06:59:00.000Z`, which is 1 September
+   * to the funder and 2 September in UTC. A dated row that lost its zone is therefore not a
+   * cosmetic gap: it is a row that will print a deadline one day LATE, handing an applicant a
+   * day that does not exist.
+   *
+   * Stated over EVERY projected row rather than over a named programme, because the failure this
+   * guards against is a new write path that populates the dates and forgets the zone — which is
+   * precisely how the column came to be missing in the first place. The exact rendered days are
+   * asserted in `deadlineRendering.test.ts`; this is the structural half.
+   */
+  it('never projects a dated row without the zone that dates it', () => {
+    reindexBrowse(db, NOW);
+    const rows = db
+      .prepare('SELECT program_id, next_closes_at, next_timezone FROM program_search')
+      .all() as Array<{
+        program_id: string;
+        next_closes_at: string | null;
+        next_timezone: string | null;
+      }>;
+
+    expect(rows.length).toBeGreaterThan(0);
+    const unframed = rows
+      .filter((r) => r.next_closes_at !== null && (r.next_timezone === null || r.next_timezone === ''))
+      .map((r) => r.program_id);
+    expect(unframed, 'a deadline with no timezone renders one day late').toEqual([]);
+
+    // ...and the converse, so the invariant cannot be satisfied by inventing zones for rows that
+    // hold no date at all.
+    const framedButUndated = rows
+      .filter((r) => r.next_closes_at === null && r.next_timezone !== null)
+      .map((r) => r.program_id);
+    expect(framedButUndated, 'a zone with no deadline asserts a cycle that does not exist').toEqual(
+      [],
+    );
   });
 
   it('keeps a window the funder actually published marked NOT estimated', () => {

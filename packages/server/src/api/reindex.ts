@@ -88,10 +88,10 @@ export function reindexBrowse(db: Database.Database, nowISO: string): number {
     `INSERT INTO program_search
        (program_id, funder_id, funder_name, name, klass, status, instrument,
         amount_min, amount_max, deadline_kind, next_opens_at, next_closes_at,
-        next_is_estimated, last_verified_at, haystack)
+        next_is_estimated, next_timezone, last_verified_at, haystack)
      VALUES (@program_id, @funder_id, @funder_name, @name, @klass, @status, @instrument,
              @amount_min, @amount_max, @deadline_kind, @next_opens_at, @next_closes_at,
-             @next_is_estimated, @last_verified_at, @haystack)`,
+             @next_is_estimated, @next_timezone, @last_verified_at, @haystack)`,
   );
   const insertFacet = db.prepare(
     'INSERT OR IGNORE INTO program_facets (program_id, facet_kind, facet_value) VALUES (?, ?, ?)',
@@ -120,6 +120,22 @@ export function reindexBrowse(db: Database.Database, nowISO: string): number {
         next_opens_at: next?.opensAt ?? null,
         next_closes_at: next?.closesAt ?? null,
         next_is_estimated: next?.isEstimated ? 1 : 0,
+        // The frame the two instants above are expressed in (migration 037).
+        //
+        // `next_closes_at` is the UTC instant of a LOCAL wall time, so without
+        // this column it cannot be rendered as a calendar day: the ARRL's
+        // "Feb 1-28, 2027 window" is stored `2027-03-01T04:59:00.000Z` and
+        // prints 2027-03-01 in UTC — one day LATE, which tells an applicant
+        // they have a day they do not have.
+        //
+        // `Cycle.timezone` is a required field and both producers always set
+        // it (`expandCycles` from the RECUR rule's validated `tz=`,
+        // `observedCycles` to 'UTC' — its documented day-precision frame, not a
+        // claim about where the funder is), so the empty-string branch is not a
+        // live path today. It is written as NULL rather than defaulted because
+        // the alternative to "not known" must never be a zone nobody observed:
+        // an absent frame is rendered in UTC and labelled by the reader.
+        next_timezone: next?.timezone !== undefined && next.timezone !== '' ? next.timezone : null,
         last_verified_at: program.trust.lastVerifiedAt,
         haystack: [
           program.name, funderName, program.summary,

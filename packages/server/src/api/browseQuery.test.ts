@@ -224,6 +224,9 @@ describe('hydratePrograms', () => {
     expect(hit?.program.name).toBe('QCWA Memorial Scholarship Fund');
     expect(hit?.funderName).toBe('Quarter Century Wireless Association');
     expect(hit?.nextClosesAt).toBe('2026-12-30T17:00:00.000Z');
+    // The frame that instant is a wall time in (migration 037). Without it the row cannot be
+    // rendered as a calendar day at all — see `deadlineRendering.test.ts` for the rendered days.
+    expect(hit?.nextTimezone).toBe('America/New_York');
     expect(hit?.program.trust.disputed).toBeUndefined();
   });
 

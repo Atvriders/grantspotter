@@ -137,6 +137,22 @@ export interface HydratedProgram {
   nextOpensAt: string | null;
   nextClosesAt: string | null;
   nextIsEstimated: boolean;
+  /**
+   * IANA zone the two instants above are expressed in, or null when it is not
+   * known (migration 037).
+   *
+   * NOT OPTIONAL WHERE A DEADLINE IS RENDERED. `nextClosesAt` is the UTC instant
+   * of a LOCAL wall time — the ARRL's "Feb 1-28, 2027 window" is stored
+   * `2027-03-01T04:59:00.000Z` — so formatting it without this zone prints
+   * 2027-03-01 where the funder published 2027-02-28. Late is the dangerous
+   * direction: it hands the applicant a day that does not exist.
+   *
+   * Null is "no zone was recorded", never "assume the server's". It arises when
+   * there is no next cycle at all (`nextClosesAt` is null beside it), and for
+   * rows projected before 037 that have not been rebuilt yet. A reader renders
+   * an unzoned instant in UTC and says so.
+   */
+  nextTimezone: string | null;
 }
 
 /**
@@ -159,7 +175,8 @@ export function hydratePrograms(
               ps.funder_name AS funder_name,
               ps.next_opens_at AS next_opens_at,
               ps.next_closes_at AS next_closes_at,
-              ps.next_is_estimated AS next_is_estimated
+              ps.next_is_estimated AS next_is_estimated,
+              ps.next_timezone AS next_timezone
          FROM program_search ps
         WHERE ps.program_id IN (${placeholders(ids.length)})`,
     )
@@ -169,6 +186,7 @@ export function hydratePrograms(
       next_opens_at: string | null;
       next_closes_at: string | null;
       next_is_estimated: number;
+      next_timezone: string | null;
     }>;
 
   const programs = createProgramRepo(db);
@@ -183,6 +201,10 @@ export function hydratePrograms(
       nextOpensAt: r.next_opens_at,
       nextClosesAt: r.next_closes_at,
       nextIsEstimated: r.next_is_estimated === 1,
+      // An empty string is normalized to null on the way out for the same
+      // reason 037 stores null: "" is not a zone, and letting it reach a
+      // formatter would fall back to UTC silently instead of visibly.
+      nextTimezone: r.next_timezone === null || r.next_timezone === '' ? null : r.next_timezone,
     });
   }
   return out;

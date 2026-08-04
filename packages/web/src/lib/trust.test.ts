@@ -76,9 +76,36 @@ describe('formatDate', () => {
   });
 
   it('defaults to UTC, which is one day LATE for a US 23:59 deadline — pass the timezone', () => {
-    // Pinned deliberately: this is the documented hazard, not an accident. A caller with no
-    // timezone in scope (the browse projection carries none) gets the UTC day.
+    // Pinned deliberately: this is the documented hazard, not an accident.
+    //
+    // The browse projection USED to be the caller with no timezone in scope. It no longer is:
+    // migration 037 added `program_search.next_timezone`, and `BrowseRow`/`WatchRow` carry it as
+    // `nextTimezone`, so every surface that shows a deadline now has the zone in hand. What is
+    // left here is the genuinely-unknown case, and it still renders UTC rather than guessing.
     expect(formatDate('2027-03-01T04:59:00.000Z')).toBe('2027-03-01');
+  });
+
+  /**
+   * `nextTimezone` is `string | null` — null meaning "no zone was recorded", which is a real
+   * state (a `program_search` row projected before migration 037 and not yet rebuilt holds a real
+   * instant and a null zone). Null is accepted directly so that `formatDate(row.nextClosesAt,
+   * row.nextTimezone)` is correct by construction: requiring `?? undefined` at every call site is
+   * the kind of friction that ends with the argument being dropped again, which is the defect
+   * this whole helper exists to prevent.
+   *
+   * Null renders UTC — the same day the no-argument call gives — because that is what is honestly
+   * known. It must NEVER fall back to the host's zone: that would manufacture a calendar day out
+   * of where the browser happens to be, which is not a fact about the funder at all.
+   */
+  it('treats a null timezone as "not known" and renders UTC, never the host zone', () => {
+    expect(formatDate('2027-03-01T04:59:00.000Z', null)).toBe('2027-03-01');
+    expect(formatDate('2027-03-01T04:59:00.000Z', undefined)).toBe('2027-03-01');
+    expect(formatDate('2027-03-01T04:59:00.000Z', null)).toBe(
+      formatDate('2027-03-01T04:59:00.000Z'),
+    );
+    // The suite host is America/Chicago; a host-zone fallback would print 2027-02-28 here and
+    // look deceptively "fixed".
+    expect(formatDate('2027-03-01T04:59:00.000Z', null)).not.toBe('2027-02-28');
   });
 
   it('is unaffected by the host timezone, so a test host cannot flip the day', () => {
