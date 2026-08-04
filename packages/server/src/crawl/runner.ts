@@ -15,6 +15,8 @@ import {
 } from '../db/repositories/ingestion.js';
 import { detectYieldDrop, diffPrograms, shouldSuppressVanished } from '../diff/index.js';
 import type { Fetcher } from '../fetcher/index.js';
+import { createProgramRepo } from '../db/repositories/programs.js';
+import { deadlineOwnerKey, deadlineOwnerProgramId } from '../normalize/deadline.js';
 import type { NormalizeContext } from '../normalize/index.js';
 import { normalizeRaw } from '../normalize/index.js';
 import { buildReviewItems, reprojectAllCycles } from '../review/index.js';
@@ -103,24 +105,106 @@ function adjacencyScores(raws: RawOpportunity[], next: Program[]): Map<string, n
 }
 
 /**
- * Carry-forward #3 (RESOLUTIONS R9). `DEADLINE_INHERITANCE` (normalize/deadline.ts) points
- * `arrl-scholarship-descriptions` and `qcwa` at the literal id `arrl-foundation-scholarships`,
- * and nothing enforces at runtime that a published program actually carries that id — if Plan 5's
- * seed record never gets there (or the `arrl-scholarship-program` source never reconciles onto
- * it), every "inherited" deadline these two sources emit silently points at nothing. This is a
- * WARNING, not a failure: the source's own records are still real and still worth reviewing even
- * when the program they inherit a deadline from is temporarily missing, so it must not set
- * `result.error` or block review-item creation.
+ * Carry-forward #3 (RESOLUTIONS R9), rewritten by the 2026-08-03 dangling-owner remediation.
+ *
+ * `DEADLINE_INHERITANCE` (normalize/deadline.ts) now names the OWNER'S SOURCE, and the owner's
+ * program id is derived from that source's stable key by `deadlineOwnerProgramId` — the same
+ * expression `normalizeRaw` uses for the owner's own id. This warning is what watches that
+ * derivation against reality, and it is the check that would have caught the original defect: the
+ * old code resolved `ctx.deadlineInheritsFrom` as if it were already a program id, so it warned
+ * about a literal that could never match anything, on every crawl, forever — and because it is
+ * only a warning, nothing failed and nobody looked.
+ *
+ * Two distinct conditions, reported distinctly:
+ *   - this file cannot say WHICH record of the owning source owns the cycle (no
+ *     `DEADLINE_OWNER_EXTERNAL_KEY` entry) — a table defect, and inheritance is not emitted at all;
+ *   - the owner is simply not published YET — the ordinary state of a fresh install before its
+ *     first approval, and self-healing: `review/index.ts` backfills every dependent the moment the
+ *     owner is approved.
+ *
+ * Still a WARNING and never a failure. The source's own records are real and worth reviewing even
+ * while the program they ride is missing, so this must not set `result.error` or block review-item
+ * creation.
  */
+/**
+ * The published program that owns this source's cycle, or undefined when this source inherits
+ * nothing, when no owner record is described, or when the owner has not been approved yet.
+ *
+ * Looked up by the owner's STABLE (sourceId, externalKey) — the same key `deadlineOwnerProgramId`
+ * derives the id from — rather than by the derived id, so this keeps working even if a record was
+ * published under an id minted before the source key existed.
+ */
+function publishedDeadlineOwner(deps: CrawlDeps, ctx: NormalizeContext): Program | undefined {
+  if (ctx.deadlineInheritsFrom === undefined) return undefined;
+  const key = deadlineOwnerKey(ctx.deadlineInheritsFrom);
+  if (key === undefined) return undefined;
+  return createProgramRepo(deps.db).findBySourceKey(key.sourceId, key.externalKey);
+}
+
+/**
+ * STATUS INHERITANCE (2026-08-03). A record that rides another programme's cycle inherits its
+ * STATE too, not just its dates.
+ *
+ * THE DEFECT THIS CLOSES. Deadline inheritance was implemented and status inheritance was not, so
+ * 110 of the 111 ARRL catalog scholarships badged `open` while the portal page they ride says,
+ * twice, "The 2026 Scholarship Cycle is now closed." The portal's own record computed `closed`
+ * correctly from that sentence; nothing carried it one hop. That is the same shape as the dangling
+ * owner reference fixed alongside it — a record inheriting one property from an owner while
+ * silently defaulting another — and it is the most damaging thing this product can say, because a
+ * wrongly-open scholarship costs a student the work of a whole application to a cycle that shut
+ * months ago.
+ *
+ * WHY HERE, IN THE CRAWL, AND NOT AT APPROVE TIME. `diffPrograms` compares `trust.status`
+ * DIRECTLY (it is excluded from `hashProgram`, so the diff has to read it by name), which means a
+ * stored status that the pipeline does not recompute identically raises a `status_changed` event
+ * every single night, forever. Whatever value is published must therefore be the value the crawl
+ * derives. This is that seam: the candidate a reviewer sees already carries the inherited status,
+ * and re-deriving it tomorrow from the same published owner yields the same value, so there is no
+ * churn. Resolving it in `approveReviewItem` instead would publish a status the reviewer never saw
+ * AND flood the inbox nightly.
+ *
+ * ONLY FILLS `unknown`, NEVER OVERWRITES. `normalize/deadline.ts` returns `unknown` for an
+ * inheriting record precisely because it cannot see the owner; anything else on the record is a
+ * finding somebody actually made — the Winscott scholarship's `dormant`, read out of its own "not
+ * currently active" sentence — and a record's own evidence outranks its owner's. An owner that is
+ * itself `unknown` is not a state worth propagating, so nothing is copied and the dependents stay
+ * honestly unknown. NO STATE IS EVER INVENTED here: every value written came off the owner's page.
+ */
+function applyInheritedStatus(
+  deps: CrawlDeps,
+  ctx: NormalizeContext,
+  candidates: Program[],
+): Program[] {
+  const owner = publishedDeadlineOwner(deps, ctx);
+  if (owner === undefined || owner.trust.status === 'unknown') return candidates;
+  return candidates.map((program) =>
+    program.deadline.source.kind === 'inherited' &&
+    program.deadline.source.fromProgramId === owner.id &&
+    program.trust.status === 'unknown'
+      ? { ...program, trust: { ...program.trust, status: owner.trust.status } }
+      : program,
+  );
+}
+
 function warnIfDeadlineTargetMissing(deps: CrawlDeps, module: SourceModule, ctx: NormalizeContext): void {
   if (ctx.deadlineInheritsFrom === undefined) return;
-  const target = deps.db.prepare('SELECT 1 FROM programs WHERE id = ?').get(ctx.deadlineInheritsFrom);
+  const ownerId = deadlineOwnerProgramId(ctx.deadlineInheritsFrom, ctx);
+  if (ownerId === undefined) {
+    console.warn(
+      `[crawl] "${module.id}" inherits its deadline from source "${ctx.deadlineInheritsFrom}", ` +
+        'but DEADLINE_OWNER_EXTERNAL_KEY (normalize/deadline.ts) does not say which record of ' +
+        'that source owns the cycle, so these records fall back to their own deadline instead of ' +
+        'inheriting one. Add the owning record’s externalKey there.',
+    );
+    return;
+  }
+  const target = deps.db.prepare('SELECT 1 FROM programs WHERE id = ?').get(ownerId);
   if (target !== undefined) return;
   console.warn(
-    `[crawl] "${module.id}" inherits its deadline from program id "${ctx.deadlineInheritsFrom}" ` +
-      '(DEADLINE_INHERITANCE, normalize/deadline.ts), but no published program carries that id ' +
-      'yet. Every "inherited" deadline this source emits tonight points at nothing until the ' +
-      'seeded record for its owning source carries a matching sourceKey — RESOLUTIONS R9.',
+    `[crawl] "${module.id}" inherits its deadline from source "${ctx.deadlineInheritsFrom}" ` +
+      `(program id "${ownerId}", derived from that source's key), but no published program ` +
+      'carries that id yet. Every "inherited" deadline this source emits tonight resolves to no ' +
+      'cycle until that owner is approved — at which point review/index.ts backfills them.',
   );
 }
 
@@ -205,7 +289,15 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
       // `deps.db` is what turns on RESOLUTIONS R9's seeded-id reconciliation.
       const ctx = contextForSource(module, now, deps.db);
       warnIfDeadlineTargetMissing(deps, module, ctx); // carry-forward #3
-      const next: Program[] = raws.map((raw) => normalizeRaw(raw, ctx));
+      // Status inheritance runs BEFORE the diff and before the review queue is built, so the
+      // candidate a reviewer reads is the candidate that gets published, and tomorrow's crawl
+      // re-derives the same value from the same published owner instead of raising a
+      // `status_changed` event every night. See `applyInheritedStatus`.
+      const next: Program[] = applyInheritedStatus(
+        deps,
+        ctx,
+        raws.map((raw) => normalizeRaw(raw, ctx)),
+      );
       const previous = listProgramsBySource(deps.db, sourceId);
       const diffed = diffPrograms(previous, next, sourceId, now);
       // carry-forward #1: a legitimately empty scrape (grants.austinhams.org, Aug-Apr) must not

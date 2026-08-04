@@ -348,12 +348,14 @@ describe('runSource on a follow-up source', () => {
   it('fetches the discovery request, then the follow-up request it produces', async () => {
     const { fetcher, fetched } = fixtureFetcher({
       'slug=grants': fixturePayload('ardc-grants', '00-discovery.json', 'https://www.ardc.net/wp-json/wp/v2/pages?slug=grants'),
-      'parent=4821': fixturePayload('ardc-grants', '01-children.json', 'https://www.ardc.net/wp-json/wp/v2/pages?parent=4821'),
+      'parent=1271': fixturePayload('ardc-grants', '01-children.json', 'https://www.ardc.net/wp-json/wp/v2/pages?parent=1271'),
     });
     const result = await runSource(deps(fetcher), 'ardc-grants');
     expect(fetched.some((u) => u.includes('slug=grants'))).toBe(true);
-    expect(fetched.some((u) => u.includes('parent=4821'))).toBe(true);
-    expect(result.parsedCount).toBe(3);
+    // 1271 is the parent id in the REAL discovery capture (fetched 2026-08-03). The fixture used
+    // to be hand-written and carried 4821, an id ardc.net has never served.
+    expect(fetched.some((u) => u.includes('parent=1271'))).toBe(true);
+    expect(result.parsedCount).toBe(8);
   });
 });
 
@@ -471,43 +473,149 @@ describe('runCrawl honours sources.enabled — RESOLUTIONS R20 (carry-forward #4
   });
 });
 
-describe('RESOLUTIONS R9 — DEADLINE_INHERITANCE reconciliation (carry-forward #3)', () => {
-  const map = {
-    '/scholarship-descriptions': fixturePayload(
-      'arrl-scholarship-descriptions',
-      'pathological.html',
-      'http://www.arrl.org/scholarship-descriptions',
-    ),
-  };
-
-  it(
-    'warns instead of failing silently when the seeded arrl-foundation-scholarships record ' +
-      'does not exist yet — "arrl-scholarship-descriptions" inherits its deadline from it',
-    async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      const { fetcher } = fixtureFetcher(map);
-      const result = await runSource(deps(fetcher), 'arrl-scholarship-descriptions');
-      // A missing reconciliation target must not fail the source: the 6 records it DOES own are
-      // still real and still worth reviewing.
-      expect(result.error).toBeUndefined();
-      expect(result.parsedCount).toBe(6);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain('arrl-foundation-scholarships');
-      warn.mockRestore();
-    },
+describe('the deadline owner is resolved from the REAL corpus, never from a written-down id', () => {
+  /*
+   * REMEDIATION (2026-08-03) — the dangling owner.
+   *
+   * `DEADLINE_INHERITANCE` held the literal `'arrl-foundation-scholarships'` and it was consumed
+   * as a PROGRAM id. No program has ever carried that id: `programIdFor` derives every id from
+   * (sourceId, externalKey), so the real record behind that page is
+   * `arrl-scholarship-program--scholarship-program--<hash>`. All 112 inheriting records pointed at
+   * nothing, 112 of 152 published programs had no deadline, and none of them reached the calendar.
+   *
+   * The defect survived 37 commits of remediation because every test of this path HAND-WROTE the
+   * owner id into its own setup — the block that used to live here seeded a program with
+   * `id: 'arrl-foundation-scholarships'` by hand and then asserted the crawler found it. So the
+   * rule for everything below is: NO PROGRAM ID IS WRITTEN DOWN ANYWHERE IN THE SETUP. The owner
+   * is produced by crawling its real captured page and approving it, exactly as a user would, and
+   * the dependents have to find it on their own.
+   */
+  const PORTAL = fixturePayload(
+    'arrl-scholarship-program',
+    '00-www-arrl-org-scholarship-program.html',
+    'http://www.arrl.org/scholarship-program',
   );
+  const CATALOG = fixturePayload(
+    'arrl-scholarship-descriptions',
+    '00-www-arrl-org-scholarship-descriptions.html',
+    'http://www.arrl.org/scholarship-descriptions',
+  );
+  const map = { '/scholarship-program': PORTAL, '/scholarship-descriptions': CATALOG };
 
-  it('does not warn once the canonical target program is published under a matching source key', async () => {
+  /** Crawls one source and approves everything it queued, as a reviewer would. */
+  async function crawlAndApprove(sourceId: string): Promise<Program[]> {
+    const { fetcher } = fixtureFetcher(map);
+    const result = await runSource(deps(fetcher), sourceId);
+    expect(result.error).toBeUndefined();
+    for (const item of listReviewItems(db, 'pending')) approveReviewItem(db, item.id, 'user-1', NOW);
+    return listProgramsBySource(db, sourceId);
+  }
+
+  const cycleRows = (): Array<Record<string, unknown>> =>
+    db
+      .prepare('SELECT id, program_id, closes_at, timezone, label, is_estimated FROM cycles ORDER BY id')
+      .all() as Array<Record<string, unknown>>;
+
+  it('publishes the ARRL portal as ONE record whose 2026 cycle its own page says is closed', async () => {
+    const [owner] = await crawlAndApprove('arrl-scholarship-program');
+    expect(listProgramsBySource(db, 'arrl-scholarship-program')).toHaveLength(1);
+    // Straight off the captured page, which prints "The 2026 Scholarship Cycle is now closed."
+    expect(owner.trust.status).toBe('closed');
+    expect(owner.deadline.kind).toBe('annual_window');
+  });
+
+  it('makes every catalog entry point at the id the owner was ACTUALLY published under', async () => {
+    const [owner] = await crawlAndApprove('arrl-scholarship-program');
+    const catalog = await crawlAndApprove('arrl-scholarship-descriptions');
+
+    expect(catalog.length).toBe(111);
+    const inherited = catalog.filter((p) => p.deadline.source.kind === 'inherited');
+    expect(inherited).toHaveLength(111);
+    for (const entry of inherited) {
+      const source = entry.deadline.source;
+      if (source.kind !== 'inherited') throw new Error('unreachable');
+      // The assertion the old suite could not make: the reference is checked against the id the
+      // database really holds, which nothing in this test chose.
+      expect(source.fromProgramId, entry.name).toBe(owner.id);
+    }
+  });
+
+  it('gives those entries a real deadline and real calendar rows — 0 before this fix', async () => {
+    await crawlAndApprove('arrl-scholarship-program');
+    const catalog = await crawlAndApprove('arrl-scholarship-descriptions');
+    const byProgram = new Set(
+      (db.prepare('SELECT DISTINCT program_id FROM cycles').all() as Array<{ program_id: string }>)
+        .map((r) => r.program_id),
+    );
+    // Every catalog entry that inherits now projects the owner's cycle under its own id. The
+    // Winscott scholarship is the one deliberate exception: its own page says it is not currently
+    // active, so it is `dormant` and carries no cycle.
+    const riding = catalog.filter((p) => p.trust.status !== 'dormant');
+    expect(riding.length).toBeGreaterThan(100);
+    for (const entry of riding) expect(byProgram.has(entry.id), entry.name).toBe(true);
+  });
+
+  it('carries the owner’s STATE across the same hop, not just its dates', async () => {
+    // THE SECOND DEFECT. Deadline inheritance was implemented and status inheritance was not, so
+    // 110 of these 111 badged `open` while the page they ride says the cycle is closed — the most
+    // expensive thing this product can tell a student. No status is written down here either: it
+    // comes off the real portal page, one hop, through the crawl.
+    await crawlAndApprove('arrl-scholarship-program');
+    const first = await crawlAndApprove('arrl-scholarship-descriptions');
+    // First crawl: the owner is published, so inheritance resolves immediately.
+    const closed = first.filter((p) => p.trust.status === 'closed');
+    expect(closed.length).toBe(110);
+    expect(first.filter((p) => p.trust.status === 'open')).toHaveLength(0);
+    // The one record whose OWN page overrides its owner: "This scholarship is not currently
+    // active." A record's own evidence outranks the cycle it rides.
+    const winscott = first.filter((p) => p.name.includes('Winscott'));
+    expect(winscott).toHaveLength(1);
+    expect(winscott[0].trust.status).toBe('dormant');
+  });
+
+  it('never invents a state: dependents crawled before the owner exists stay unknown', async () => {
+    // NOT `open`. An inheriting record whose owner is unpublished is a record whose state nobody
+    // has established, and `unknown` is the only honest answer — inventing `open` here is exactly
+    // the failure being remediated.
+    const catalog = await crawlAndApprove('arrl-scholarship-descriptions');
+    expect(catalog.filter((p) => p.trust.status === 'open')).toHaveLength(0);
+    expect(catalog.filter((p) => p.trust.status === 'unknown').length).toBe(110);
+  });
+
+  it('converges on IDENTICAL cycle rows whether the owner or the dependents are approved first', async () => {
+    // Approval order must not matter. Row-for-row identity, not merely equal counts: a count
+    // matches even when two orders produce different dates under different ids.
+    await crawlAndApprove('arrl-scholarship-program');
+    await crawlAndApprove('arrl-scholarship-descriptions');
+    const ownerFirst = cycleRows();
+
+    db = new Database(':memory:');
+    migrate(db);
+    ensureIngestionSchema(db);
+    await crawlAndApprove('arrl-scholarship-descriptions');
+    await crawlAndApprove('arrl-scholarship-program');
+    const dependentsFirst = cycleRows();
+
+    expect(dependentsFirst.length).toBeGreaterThan(100);
+    expect(dependentsFirst).toEqual(ownerFirst);
+  });
+
+  it('warns, without failing the source, while the owner is not published yet', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    seedFunder('arrl-foundation');
-    const target = makeProgram({
-      id: 'arrl-foundation-scholarships',
-      funderId: 'arrl-foundation',
-      name: 'ARRL Foundation Scholarship Program',
-      tags: ['source:arrl-scholarship-program', 'key:scholarship-program'],
-    });
-    upsertProgram(db, target, { sourceId: 'arrl-scholarship-program', externalKey: 'scholarship-program' });
+    const { fetcher } = fixtureFetcher(map);
+    const result = await runSource(deps(fetcher), 'arrl-scholarship-descriptions');
+    // A missing owner must not fail the source: its 111 records are real and worth reviewing.
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBe(111);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // The warning names the derived id, so an operator can grep the corpus for it.
+    expect(warn.mock.calls[0][0]).toContain('arrl-scholarship-program');
+    warn.mockRestore();
+  });
 
+  it('stops warning once the owner is published — nothing is written down to make it stop', async () => {
+    await crawlAndApprove('arrl-scholarship-program');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { fetcher } = fixtureFetcher(map);
     const result = await runSource(deps(fetcher), 'arrl-scholarship-descriptions');
     expect(result.error).toBeUndefined();
@@ -657,10 +765,10 @@ describe('cycles end-to-end: real ARDC/ARRL fixtures through crawl -> approve ->
       '00-discovery.json',
       'https://www.ardc.net/wp-json/wp/v2/pages?slug=grants',
     ),
-    'parent=4821': fixturePayload(
+    'parent=1271': fixturePayload(
       'ardc-grants',
       '01-children.json',
-      'https://www.ardc.net/wp-json/wp/v2/pages?parent=4821',
+      'https://www.ardc.net/wp-json/wp/v2/pages?parent=1271',
     ),
     '/amateur-radio-grants': fixturePayload(
       'arrl-amateur-radio-grants',
@@ -682,7 +790,7 @@ describe('cycles end-to-end: real ARDC/ARRL fixtures through crawl -> approve ->
     return served;
   }
 
-  it('lands real dated rows for all three RECUR programs, matching each funder\'s directive', async () => {
+  it('lands real dated rows for the RECUR programs that have a live record, and none for the one that does not', async () => {
     expect((db.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n).toBe(0);
 
     await crawlThreeSources();
@@ -692,22 +800,24 @@ describe('cycles end-to-end: real ARDC/ARRL fixtures through crawl -> approve ->
     const ardcGrants = listProgramsBySource(db, 'ardc-grants');
     const [arrlGrant] = listProgramsBySource(db, 'arrl-amateur-radio-grants');
     const [arrlScholarship] = listProgramsBySource(db, 'arrl-scholarship-program');
-    expect(ardcGrants.length).toBeGreaterThan(0);
     expect(arrlGrant).toBeDefined();
     expect(arrlScholarship).toBeDefined();
 
-    // ARDC — "RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01" — four
-    // fixed dates a year, close time defaults to 23:59 local. NOW is 2026-08-02, horizon is 18
-    // months, so this window catches the tail of 2026 and all of 2027.
-    const ardcCycles = cycles.listForProgram(ardcGrants[0].id);
-    expect(ardcCycles.map((c) => c.closesAt)).toEqual([
-      '2026-09-02T06:59:00.000Z', // Sep 1, 2026 23:59 PDT (UTC-7)
-      '2027-02-02T07:59:00.000Z', // Feb 1, 2027 23:59 PST (UTC-8)
-      '2027-04-02T06:59:00.000Z', // Apr 1, 2027 23:59 PDT
-      '2027-07-02T06:59:00.000Z', // Jul 1, 2027 23:59 PDT
-      '2027-09-02T06:59:00.000Z', // Sep 1, 2027 23:59 PDT
-    ]);
-    expect(ardcCycles.every((c) => c.isEstimated && c.programId === ardcGrants[0].id)).toBe(true);
+    // ARDC — CHANGED BY CLOSE-OUT REVIEW B8, and this is the finding, not a weakened assertion.
+    // The real /apply/grants/ children (captured 2026-08-03, parent id 1271) are eight YEAR
+    // ARCHIVES of grants already made — "Information on 2025 Charitable Gifts can be found
+    // below…" — so every record this source produces is recordType past_award, is suppressed by
+    // buildReviewItems, and is never approved into `programs` at all. It used to project 13
+    // future application deadlines onto "Grants awarded in 2025", through Sep 2029.
+    //
+    // RECURRENCE_BY_SOURCE['ardc-grants'] is therefore a directive with no live record to ride.
+    // The dates in it are REAL — https://www.ardc.net/apply/ says verbatim "The 2026 application
+    // deadlines are: February 1 April 1 July 1 September 1" — but that page is not a child of
+    // /apply/grants/ and nothing fetches it, so ARDC has no publishable opportunity record here.
+    expect(ardcGrants).toEqual([]);
+    expect(
+      (db.prepare('SELECT COUNT(*) AS n FROM cycles').get() as { n: number }).n,
+    ).toBeGreaterThan(0); // ...the ARRL two below, and nothing from ARDC.
 
     // ARRL Amateur Radio Grants — "RECUR n_fixed_windows tz=America/New_York
     // windows=02-01..02-28,06-01..06-30,10-01..10-31" — three windows a year, close 23:59 local.

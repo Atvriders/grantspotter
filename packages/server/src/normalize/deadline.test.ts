@@ -4,7 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
 import { ariss } from '../sources/tier-c-b.js';
 import { yaesuDr2x } from '../sources/yaesu-dr2x.js';
+import { SOURCES } from '../sources/registry.js';
+import { programIdFor } from '../sources/util/ids.js';
 import {
+  DEADLINE_INHERITANCE,
+  DEADLINE_OWNER_EXTERNAL_KEY,
+  deadlineOwnerKey,
+  deadlineOwnerProgramId,
   inferDeadline,
   inferInstrument,
   inferStatus,
@@ -22,9 +28,19 @@ const ctx = (over: Partial<NormalizeContext> = {}): NormalizeContext => ({
   tier: 'C',
   nowISO: NOW,
   verificationMethod: 'live_fetch',
-  mintId: () => 'test-id',
+  // The REAL minting function, not a stub. Every inheritance assertion below resolves the owner's
+  // id through this seam exactly as production does; a stub would let the tests agree with each
+  // other while disagreeing with the product, which is the shape of the defect being remediated.
+  mintId: programIdFor,
   ...over,
 });
+
+/**
+ * The owner's SOURCE id, read out of the table rather than typed as a literal. The dangling-owner
+ * defect survived 37 commits because every test of this path hand-wrote the identifier it was
+ * supposed to resolve; no test in this file names one.
+ */
+const ARRL_OWNER = DEADLINE_INHERITANCE['arrl-scholarship-descriptions'];
 
 const raw = (over: Partial<RawOpportunity> = {}): RawOpportunity => ({
   sourceId: 'arrl-scholarship-descriptions',
@@ -125,7 +141,7 @@ describe('inferStatus — the Winscott scholarship: text stating inactivity must
   });
 
   it('computes dormant, never open, for the literal "not currently active" text', () => {
-    const status = inferStatus(winscott, ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }));
+    const status = inferStatus(winscott, ctx({ deadlineInheritsFrom: ARRL_OWNER }));
     expect(status).toBe('dormant');
     expect(status).not.toBe('open');
   });
@@ -613,9 +629,14 @@ describe('inferDeadline — the RECUR calendar survives an observed window untou
 
 describe('inferDeadline — precedence between an observed date and inheritance', () => {
   it('keeps all 112 ARRL-catalog entries inheriting: none of them parses a date of its own', () => {
-    const spec = inferDeadline(raw(), ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }));
+    const c = ctx({ deadlineInheritsFrom: ARRL_OWNER });
+    const spec = inferDeadline(raw(), c);
     expect(spec.kind).toBe('inherited');
-    expect(spec.source).toEqual({ kind: 'inherited', fromProgramId: 'arrl-foundation-scholarships' });
+    // The owner id is DERIVED from the owner's stable source key, never written down here.
+    expect(spec.source).toEqual({
+      kind: 'inherited',
+      fromProgramId: deadlineOwnerProgramId(ARRL_OWNER, c),
+    });
   });
 
   it('lets a record that DID parse its own window own its deadline instead of riding another’s', () => {
@@ -624,7 +645,7 @@ describe('inferDeadline — precedence between an observed date and inheritance'
     // is exactly why it is pinned here rather than left true by accident.
     const spec = inferDeadline(
       raw({ rawFields: { opensAt: '2027-01-05', closesAt: '2027-02-05' } }),
-      ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+      ctx({ deadlineInheritsFrom: ARRL_OWNER }),
     );
     expect(spec.source).toEqual({ kind: 'self' });
     expect(spec.note).toContain('2027-01-05');
@@ -634,7 +655,7 @@ describe('inferDeadline — precedence between an observed date and inheritance'
   it('a window rejected as nonsensical falls straight back to inheritance', () => {
     const spec = inferDeadline(
       raw({ rawFields: { opensAt: '2027-02-05', closesAt: '2027-01-05' } }),
-      ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+      ctx({ deadlineInheritsFrom: ARRL_OWNER }),
     );
     expect(spec.kind).toBe('inherited');
   });
@@ -708,7 +729,7 @@ describe('the behaviours this change had to leave alone', () => {
     });
     expect(inferStatus(closedCycle, arrlCtx)).toBe('closed');
     // ...and an entry inheriting from it is still inherited, not re-dated.
-    expect(inferDeadline(raw(), ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' })).kind).toBe(
+    expect(inferDeadline(raw(), ctx({ deadlineInheritsFrom: ARRL_OWNER })).kind).toBe(
       'inherited',
     );
   });
@@ -717,7 +738,7 @@ describe('the behaviours this change had to leave alone', () => {
     expect(
       inferStatus(
         raw({ rawFields: { Other: 'This scholarship is not currently active.' }, rawText: 'Other: This scholarship is not currently active.' }),
-        ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+        ctx({ deadlineInheritsFrom: ARRL_OWNER }),
       ),
     ).toBe('dormant');
     expect(inferStatus(raw({ sourceId: 'ylrl', rawFields: {} }), ctx({ sourceId: 'ylrl' }))).toBe('unknown');
@@ -733,5 +754,148 @@ describe('the behaviours this change had to leave alone', () => {
     );
     expect(w6een).toBe('unknown');
     expect(w6een).not.toBe('dormant');
+  });
+});
+
+/* ============================================================================================
+ * REMEDIATION (2026-08-03) — the dangling deadline owner, and the status that never rode with it.
+ *
+ * Two defects, one root cause: a record inheriting one property from an owner while silently
+ * defaulting another. `DEADLINE_INHERITANCE` named a program id no program has ever carried, so
+ * 112 records pointed at nothing; and nothing carried the owner's STATE across the same hop, so
+ * 110 ARRL scholarships badged `open` while the portal they ride says the 2026 cycle is closed.
+ *
+ * Both hid behind tests that hand-wrote the very identifier the product was supposed to resolve.
+ * Nothing below writes one down.
+ * ============================================================================================ */
+
+describe('the inheritance reference resolves through something STABLE', () => {
+  it('names an owning SOURCE, never a program id — a literal cannot name a derived id', () => {
+    const registered = new Set(SOURCES.map((m) => m.id));
+    for (const [dependent, owner] of Object.entries(DEADLINE_INHERITANCE)) {
+      expect(registered.has(dependent), `${dependent} is not a registered source`).toBe(true);
+      expect(registered.has(owner), `${owner} is not a registered source`).toBe(true);
+      // Every program id carries the `--<slug>--<hash>` shape `programIdFor` mints. A value here
+      // that looked like one would be the original defect walking back in.
+      expect(owner).not.toContain('--');
+    }
+  });
+
+  it('describes which record of the owning source owns the cycle — the two tables cannot desync', () => {
+    for (const owner of Object.values(DEADLINE_INHERITANCE)) {
+      const key = deadlineOwnerKey(owner);
+      expect(key, `no DEADLINE_OWNER_EXTERNAL_KEY entry for "${owner}"`).toBeDefined();
+      expect(key?.sourceId).toBe(owner);
+      expect(DEADLINE_OWNER_EXTERNAL_KEY[owner]).toBe(key?.externalKey);
+    }
+  });
+
+  it('derives the owner id the same way the OWNER derives its own — that is the whole fix', () => {
+    // normalize/index.ts computes a record's own id as
+    //   ctx.existingIdFor?.(sourceId, externalKey) ?? ctx.mintId(sourceId, externalKey)
+    // and this must be the identical computation over the identical key, or the two sides name
+    // two different programs and the reference dangles exactly as it used to.
+    const key = deadlineOwnerKey(ARRL_OWNER);
+    expect(key).toBeDefined();
+    expect(deadlineOwnerProgramId(ARRL_OWNER, ctx())).toBe(
+      programIdFor(key!.sourceId, key!.externalKey),
+    );
+  });
+
+  it('prefers the id the owner was actually STORED under, when the corpus already holds it', () => {
+    // A seeded corpus can hold the owner under an id minted before its source key existed.
+    // `existingIdFor` is the reconciliation seam, and inheritance must follow it rather than
+    // insisting on the id it would have minted.
+    const stored = 'some-previously-seeded-owner-id';
+    const c = ctx({
+      deadlineInheritsFrom: ARRL_OWNER,
+      existingIdFor: (sourceId, externalKey) =>
+        sourceId === ARRL_OWNER && externalKey === DEADLINE_OWNER_EXTERNAL_KEY[ARRL_OWNER]
+          ? stored
+          : undefined,
+    });
+    expect(inferDeadline(raw(), c).source).toEqual({ kind: 'inherited', fromProgramId: stored });
+  });
+
+  it('emits no inheritance at all for an owner nobody has described, rather than a dangling id', () => {
+    const spec = inferDeadline(raw(), ctx({ deadlineInheritsFrom: 'a-source-with-no-owner-record' }));
+    expect(spec.source).toEqual({ kind: 'self' });
+    expect(spec.kind).not.toBe('inherited');
+  });
+});
+
+describe('inferStatus — a record that rides another cycle never claims to be open', () => {
+  it('computes unknown, not open, for an ordinary inheriting catalog entry', () => {
+    // THE DEFECT: 110 of 111 ARRL scholarships reached `open` through the terminal default while
+    // the portal page they ride says the 2026 cycle is closed. normalize/ cannot see the owner
+    // (spec §14), so `unknown` is what this file actually knows; crawl/runner.ts resolves it to
+    // the owner's real status. `open` was a claim nothing here could support.
+    const status = inferStatus(raw(), ctx({ deadlineInheritsFrom: ARRL_OWNER }));
+    expect(status).toBe('unknown');
+    expect(status).not.toBe('open');
+  });
+
+  it('still lets a record with no owner default to open — ordinary opportunities do not regress', () => {
+    expect(inferStatus(raw({ sourceId: 'ncdxf-grants' }), ctx({ sourceId: 'ncdxf-grants' }))).toBe('open');
+  });
+
+  it('lets the record’s OWN evidence outrank its owner: Winscott stays dormant', () => {
+    expect(
+      inferStatus(
+        raw({ rawText: 'Other: This scholarship is not currently active.' }),
+        ctx({ deadlineInheritsFrom: ARRL_OWNER }),
+      ),
+    ).toBe('dormant');
+  });
+});
+
+describe('inferStatus — a window kind must earn "open" against the stated schedule', () => {
+  it('computes closed when today falls outside every window the funder stated', () => {
+    // arrl-amateur-radio-grants states Feb 1-28, Jun 1-30 and Oct 1-31. NOW is August 2: the June
+    // window shut five weeks ago and October has not opened. It published as `open`.
+    const status = inferStatus(
+      raw({ sourceId: 'arrl-amateur-radio-grants', rawFields: {} }),
+      ctx({ sourceId: 'arrl-amateur-radio-grants' }),
+    );
+    expect(status).toBe('closed');
+    expect(status).not.toBe('open');
+  });
+
+  it('computes open inside a stated window', () => {
+    const inside = ctx({ sourceId: 'arrl-amateur-radio-grants', nowISO: '2026-06-15T12:00:00.000Z' });
+    expect(inferStatus(raw({ sourceId: 'arrl-amateur-radio-grants', rawFields: {} }), inside)).toBe('open');
+  });
+
+  it('computes unknown when the kind promises a window and nobody ever stated one', () => {
+    // Four real records sit here: arrl-etp-grants, austin-arc, ieee-mtts and
+    // ieee-student-branch-rebate. Each page prints its window in prose that nothing parses
+    // ("OCTOBER 1ST AND OCTOBER 31ST of 2025" — a window that ended before capture). `unknown`
+    // is honest; `open` was a guess, and NO DATE IS INVENTED to fill the gap.
+    for (const sourceId of ['arrl-etp-grants', 'austin-arc', 'ieee-mtts', 'ieee-student-branch-rebate']) {
+      const status = inferStatus(raw({ sourceId, rawFields: {} }), ctx({ sourceId }));
+      expect(status, sourceId).toBe('unknown');
+      expect(status, sourceId).not.toBe('open');
+    }
+  });
+
+  it('leaves ARDC alone: fixed DATES are not windows, and it takes proposals all year', () => {
+    // n_fixed_dates means "graded on these days", not "closed between them". Reading its four
+    // dates as windows would close a genuinely open programme for 361 days of the year.
+    expect(inferStatus(raw({ sourceId: 'ardc-grants', rawFields: {} }), ctx({ sourceId: 'ardc-grants' }))).toBe('open');
+  });
+
+  it('lets a date the FUNDER stated outrank the table, in the open direction too', () => {
+    // The precedence rule this codebase already established for deadlines, extended to status:
+    // a window a funder printed on its own page beats any per-source table of ours.
+    const stated = raw({
+      sourceId: 'arrl-amateur-radio-grants',
+      rawFields: { closesAt: '2026-09-09' }, // after NOW, and outside every table window
+    });
+    expect(inferStatus(stated, ctx({ sourceId: 'arrl-amateur-radio-grants' }))).toBe('open');
+  });
+
+  it('and in the closed direction, which is the direction that costs an applicant real work', () => {
+    const past = raw({ sourceId: 'arrl-amateur-radio-grants', rawFields: { closesAt: '2026-06-30' } });
+    expect(inferStatus(past, ctx({ sourceId: 'arrl-amateur-radio-grants' }))).toBe('closed');
   });
 });

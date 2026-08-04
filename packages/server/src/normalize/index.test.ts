@@ -172,22 +172,27 @@ describe('amounts', () => {
 });
 
 describe('deadline inheritance', () => {
-  it('points at the canonical program ids, not minted ones — RESOLUTIONS R9', () => {
-    expect(DEADLINE_INHERITANCE['arrl-scholarship-descriptions']).toBe(
-      'arrl-foundation-scholarships',
-    );
-    expect(DEADLINE_INHERITANCE.qcwa).toBe('arrl-foundation-scholarships');
-    for (const id of Object.values(DEADLINE_INHERITANCE)) {
-      expect(id).not.toContain('--'); // a minted id would carry the `--<hash>` suffix
+  it('points at the owning SOURCE, which is stable — a literal cannot name a derived id', () => {
+    // REMEDIATION (2026-08-03). This assertion used to demand the literal
+    // 'arrl-foundation-scholarships' in a field consumed as a PROGRAM id, and no program has ever
+    // carried that id: `programIdFor` derives every id from (sourceId, externalKey). All 112
+    // inheriting records pointed at nothing. The table names the owner's SOURCE now, and the
+    // program id is derived from that source's stable key at the point of use.
+    expect(DEADLINE_INHERITANCE['arrl-scholarship-descriptions']).toBe('arrl-scholarship-program');
+    expect(DEADLINE_INHERITANCE.qcwa).toBe('arrl-scholarship-program');
+    for (const owner of Object.values(DEADLINE_INHERITANCE)) {
+      expect(owner).not.toContain('--'); // a minted id would carry the `--<hash>` suffix
     }
   });
 
   it('makes every ARRL catalog entry inherit the one shared cycle', () => {
     const p = normalizeRaw(raw(), ctx());
     expect(p.deadline.kind).toBe('inherited');
+    // Derived from the owner's stable source key by the same `programIdFor` the owner's own
+    // record uses — not a literal, and not the source id either.
     expect(p.deadline.source).toEqual({
       kind: 'inherited',
-      fromProgramId: DEADLINE_INHERITANCE['arrl-scholarship-descriptions'],
+      fromProgramId: programIdFor('arrl-scholarship-program', 'scholarship-program'),
     });
   });
 
@@ -197,7 +202,10 @@ describe('deadline inheritance', () => {
       ctx({ sourceId: 'qcwa', funderId: 'qcwa', deadlineInheritsFrom: DEADLINE_INHERITANCE.qcwa }),
     );
     expect(p.deadline.kind).toBe('inherited');
-    expect(p.deadline.source).toEqual({ kind: 'inherited', fromProgramId: DEADLINE_INHERITANCE.qcwa });
+    expect(p.deadline.source).toEqual({
+      kind: 'inherited',
+      fromProgramId: programIdFor('arrl-scholarship-program', 'scholarship-program'),
+    });
   });
 
   it('gives a self-owned source kind self', () => {
@@ -264,7 +272,6 @@ describe('the RECUR micro-format is actually emitted — RESOLUTIONS R12', () =>
         sourceId: 'arrl-scholarship-program',
         funderId: 'arrl-foundation',
         deadlineInheritsFrom: undefined,
-        existingIdFor: () => 'arrl-foundation-scholarships',
       }),
     ),
   });
@@ -482,8 +489,22 @@ describe('status fix round 1 — a safety warning must never compute open', () =
   it('still defaults to open when no recordType is published at all', () => {
     // The common case for a normal live-crawled record: no recordType field whatsoever. Must
     // stay open, or every ordinary open opportunity in the corpus regresses to unknown.
-    const p = normalizeRaw(raw(), ctx());
+    //
+    // REMEDIATION (2026-08-03): this used to be asserted through `ctx()`, whose source INHERITS
+    // its deadline — so it was really asserting that a record riding another programme's cycle
+    // claims to be open on its own, which is the defect that badged 110 closed ARRL scholarships
+    // as open. A source that owns its own deadline is what "an ordinary open record" means.
+    const p = normalizeRaw(
+      raw({ sourceId: 'ncdxf-grants', externalKey: 'ncdxf-grant-program' }),
+      ctx({ sourceId: 'ncdxf-grants', funderId: 'ncdxf', klass: 'ham_grant', deadlineInheritsFrom: undefined }),
+    );
     expect(p.trust.status).toBe('open');
+  });
+
+  it('refuses to call a record that rides another programme’s cycle open', () => {
+    // The companion half of the assertion above, at the same seam: `unknown` is what normalize/
+    // knows about an inheriting record, because it cannot see the owner.
+    expect(normalizeRaw(raw(), ctx()).trust.status).toBe('unknown');
   });
 
   it('lets an explicit rawFields.status override win even over a distinct recordType-derived status', () => {
@@ -640,13 +661,24 @@ describe('disputed claims ship populated', () => {
 });
 
 describe('obligations and restrictions', () => {
-  it('applies ARDC’s open-source obligation and 20% indirect cap', () => {
+  /**
+   * CLOSE-OUT REVIEW B3, inverted on purpose. This used to assert ARDC's open-source obligation
+   * and 20% indirect cap on every ARDC record. Neither string exists in any ARDC capture:
+   * `indirect`, `CERN-OHL` and `GPL` appear in ZERO fixture bytes, and every `open-source` hit
+   * across the eight captured award tables is a grantee's project title.
+   *
+   * BOTH TERMS ARE REAL AND UNFETCHED — https://www.ardc.net/apply/grant-application-instructions/
+   * says "You may include up to 20% for indirect costs" and "projects that are not open source
+   * and open access are not eligible" — and when a source fetches that page they belong back in
+   * OBLIGATIONS_BY_SOURCE with the quote beside them. Until then the honest output is nothing.
+   */
+  it('asserts NO ARDC obligation, because no page this pipeline fetches states one', () => {
     const p = normalizeRaw(
       raw({ sourceId: 'ardc-grants' }),
       ctx({ sourceId: 'ardc-grants', funderId: 'ardc', klass: 'ham_grant', tier: 'A', deadlineInheritsFrom: undefined }),
     );
-    expect(p.obligations.licenseObligation).toMatch(/open-source/i);
-    expect(p.obligations.indirectCostCapPct).toBe(20);
+    expect(p.obligations.licenseObligation).toBeUndefined();
+    expect(p.obligations.indirectCostCapPct).toBeUndefined();
   });
 
   it('applies ARRL’s exclusions and co-funder preference', () => {
@@ -659,12 +691,28 @@ describe('obligations and restrictions', () => {
     expect(p.obligations.coFunderPreference).toBe(true);
   });
 
-  it('applies Yaesu’s 12-month on-air sustainment obligation', () => {
+  /**
+   * B3's headline. `OBLIGATIONS_BY_SOURCE['yaesu-dr2x']` hard-coded "The repeater must remain on
+   * the air for 12 months." onto every Yaesu record. The 145,639-byte real capture contains
+   * `twelve` 0 times, `12 month` 0 times, `on the air` 0 times and `remain` 0 times; the sentence
+   * lived only in three synthetic fixtures. The obligation is now whatever the PAGE said, parsed
+   * into rawFields.sustainment by the Yaesu module — and nothing at all when no page said it.
+   */
+  it('asserts no Yaesu sustainment obligation when the page states none', () => {
     const p = normalizeRaw(
       raw({ sourceId: 'yaesu-dr2x' }),
       ctx({ sourceId: 'yaesu-dr2x', funderId: 'yaesu-usa', klass: 'equipment_in_kind', deadlineInheritsFrom: undefined }),
     );
-    expect(p.obligations.sustainmentObligation).toMatch(/12 months|twelve months/i);
+    expect(p.obligations.sustainmentObligation).toBeUndefined();
+  });
+
+  it('publishes the funder’s own sentence when a page does state one', () => {
+    const sustainment = 'The repeater must remain on the air for twelve months.';
+    const p = normalizeRaw(
+      raw({ sourceId: 'yaesu-dr2x', rawFields: { sustainment } }),
+      ctx({ sourceId: 'yaesu-dr2x', funderId: 'yaesu-usa', klass: 'equipment_in_kind', deadlineInheritsFrom: undefined }),
+    );
+    expect(p.obligations.sustainmentObligation).toBe(sustainment);
   });
 
   it('applies YASME’s year-end reporting obligation from the Tier D record', () => {
@@ -690,21 +738,50 @@ describe('obligations and restrictions', () => {
     expect(p.obligations.costShareRequired).toBe(true);
   });
 
-  it('carries every §4.6 obligation field — all six are reachable through normalizeRaw', () => {
-    // spec §4.6: licenseObligation, indirectCostCapPct, costShareRequired, coFunderPreference,
-    // sustainmentObligation, reportingObligation. Seed records re-enter this same pipeline on
-    // "Verify now" (Plan 3 Task 10), so a field no source produces is a field silently dropped.
+  it('reads Grants.gov’s own costSharing flag, per record, over the table default', () => {
+    // fixtures/grants-gov-federal/05-…-fetchopportunity.json carries "costSharing":true for NTIA
+    // PWSCIF (opportunityId 363179) in the same synopsis object responseDate comes from. The
+    // product published `costShareRequired: false` — the disqualifying direction — because the
+    // string `costSharing` appeared nowhere in the codebase.
+    const yes = normalizeRaw(
+      raw({ sourceId: 'grants-gov-federal', rawFields: { costSharing: 'true' } }),
+      ctx({ sourceId: 'grants-gov-federal', funderId: 'federal', klass: 'adjacent_stem', deadlineInheritsFrom: undefined }),
+    );
+    expect(yes.obligations.costShareRequired).toBe(true);
+
+    const no = normalizeRaw(
+      raw({ sourceId: 'grants-gov-federal', rawFields: { costSharing: 'false' } }),
+      ctx({ sourceId: 'grants-gov-federal', funderId: 'federal', klass: 'adjacent_stem', deadlineInheritsFrom: undefined }),
+    );
+    expect(no.obligations.costShareRequired).toBe(false);
+  });
+
+  it('carries every §4.6 obligation field a page in this corpus actually states', () => {
+    // spec §4.6 models six: licenseObligation, indirectCostCapPct, costShareRequired,
+    // coFunderPreference, sustainmentObligation, reportingObligation. Seed records re-enter this
+    // same pipeline on "Verify now" (Plan 3 Task 10), so a field no source produces is a field
+    // silently dropped — which is why this test enumerates them.
+    //
+    // FOUR of the six are produced today. `licenseObligation` and `indirectCostCapPct` are NOT,
+    // and that is the honest state after close-out review B3: both were asserted for ARDC out of
+    // a table, and no page this pipeline fetches states either one. ARDC does state both on
+    // https://www.ardc.net/apply/grant-application-instructions/, which no source requests. When
+    // one does, they come back here — with the quote — and this list goes back to six.
     const produced = new Set<string>();
-    const cases: Array<[string, Partial<NormalizeContext>, string]> = [
-      ['ardc-grants', { funderId: 'ardc', klass: 'ham_grant', tier: 'A' }, 'grants'],
-      ['arrl-amateur-radio-grants', { funderId: 'arrl-foundation', klass: 'ham_grant' }, 'amateur-radio-grants'],
-      ['yaesu-dr2x', { funderId: 'yaesu-usa', klass: 'equipment_in_kind' }, 'dr2x-repeater'],
-      ['ncdxf-grants', { funderId: 'ncdxf', klass: 'ham_grant' }, 'ncdxf-dxpedition-grants'],
-      ['manual-tier-d', { funderId: 'yasme', klass: 'ham_grant', tier: 'D', verificationMethod: 'manual_curation' }, 'yasme-supporting-grants'],
+    const cases: Array<[string, Partial<NormalizeContext>, string, Record<string, string>]> = [
+      ['arrl-amateur-radio-grants', { funderId: 'arrl-foundation', klass: 'ham_grant' }, 'amateur-radio-grants', {}],
+      [
+        'yaesu-dr2x',
+        { funderId: 'yaesu-usa', klass: 'equipment_in_kind' },
+        'dr2x-repeater',
+        { sustainment: 'The repeater must remain on the air for twelve months.' },
+      ],
+      ['ncdxf-grants', { funderId: 'ncdxf', klass: 'ham_grant' }, 'ncdxf-dxpedition-grants', {}],
+      ['manual-tier-d', { funderId: 'yasme', klass: 'ham_grant', tier: 'D', verificationMethod: 'manual_curation' }, 'yasme-supporting-grants', {}],
     ];
-    for (const [sourceId, over, externalKey] of cases) {
+    for (const [sourceId, over, externalKey, rawFields] of cases) {
       const p = normalizeRaw(
-        raw({ sourceId, externalKey }),
+        raw({ sourceId, externalKey, rawFields }),
         ctx({ sourceId, deadlineInheritsFrom: undefined, ...over }),
       );
       for (const [field, value] of Object.entries(p.obligations)) {
@@ -714,8 +791,6 @@ describe('obligations and restrictions', () => {
     expect([...produced].sort()).toEqual([
       'coFunderPreference',
       'costShareRequired',
-      'indirectCostCapPct',
-      'licenseObligation',
       'reportingObligation',
       'sustainmentObligation',
     ]);
@@ -920,6 +995,45 @@ describe('the NCDXF grant intake is a web form, not only an emailed packet', () 
     expect(via('ardc-grants')).toBe('external_spa_portal');
     expect(via('arrl-etp-grants')).toBe('jotform_year_keyed');
     expect(via('manual-tier-d')).toBe('contact_person');
+  });
+});
+
+/**
+ * CLOSE-OUT REVIEW B2 — the apply button. 116 of 152 published records carried an applyUrl their
+ * own funder's page contradicts, because `applyUrl` read `formUrl ?? detailUrl ?? sourceUrl` and
+ * two sources write the route under the name `applyUrl`. The value was parsed, asserted by its
+ * own source test, and consumed by nothing: the write-only defect class, at the exact field a
+ * professional clicks once they have decided to apply.
+ */
+describe('applyUrl is what the funder’s page names, not the page we scraped', () => {
+  const applyUrlOf = (rawFields: Record<string, string>, sourceUrl?: string): string | undefined =>
+    normalizeRaw(
+      raw({ sourceId: 'qcwa', externalKey: 'qcwa-scholarship', rawFields, ...(sourceUrl ? { sourceUrl } : {}) }),
+      ctx({ sourceId: 'qcwa', funderId: 'qcwa', klass: 'ham_scholarship', deadlineInheritsFrom: undefined }),
+    ).applyUrl;
+
+  it('publishes QCWA’s stated route — the ARRL Foundation page its own sentence names', () => {
+    // fixtures/qcwa/…, verbatim: "Applications are available and completed online via the ARRL
+    // Foundation website: https://www.arrl.org/scholarship-descriptions". tier-c-a.ts parses it
+    // into rawFields.applyUrl and tier-c-a.test.ts asserts the parse; until this fix the record
+    // published https://www.qcwa.org/scholarship-program.htm — the page the reader was on.
+    expect(
+      applyUrlOf({ applyUrl: 'https://www.arrl.org/scholarship-descriptions' }, 'https://www.qcwa.org/scholarship-program.htm'),
+    ).toBe('https://www.arrl.org/scholarship-descriptions');
+  });
+
+  it('keeps formUrl and detailUrl working, and prefers the funder’s named route over both', () => {
+    expect(applyUrlOf({ formUrl: 'https://form.jotform.com/1' })).toBe('https://form.jotform.com/1');
+    expect(applyUrlOf({ detailUrl: 'https://example.org/detail' })).toBe('https://example.org/detail');
+    expect(
+      applyUrlOf({ applyUrl: 'https://funder.example/apply', formUrl: 'https://form.jotform.com/1' }),
+    ).toBe('https://funder.example/apply');
+  });
+
+  it('falls back to the source URL only when no page named a route', () => {
+    expect(applyUrlOf({}, 'https://www.qcwa.org/scholarship-program.htm')).toBe(
+      'https://www.qcwa.org/scholarship-program.htm',
+    );
   });
 });
 
@@ -1159,11 +1273,12 @@ describe('observed dates do not disturb the calendar', () => {
         rawFields: { status: 'closed', window: 'The 2026 Scholarship Cycle is now closed.' },
         rawText: 'The 2026 Scholarship Cycle is now closed.',
       }),
-      ctx({
-        sourceId: 'arrl-scholarship-program',
-        deadlineInheritsFrom: undefined,
-        existingIdFor: () => 'arrl-foundation-scholarships',
-      }),
+      // REMEDIATION (2026-08-03): this fixture used to pin the owner's id by hand
+      // (`existingIdFor: () => 'arrl-foundation-scholarships'`), which is precisely how the
+      // dangling-reference defect stayed invisible for 37 commits — the dependent and the owner
+      // agreed because the test made them agree. The owner now mints its id exactly as the crawl
+      // does, and the dependent has to find it on its own.
+      ctx({ sourceId: 'arrl-scholarship-program', deadlineInheritsFrom: undefined }),
     );
   const dependent = (): Program => normalizeRaw(raw(), ctx());
   const FROM = '2027-01-01T00:00:00.000Z';
@@ -1201,11 +1316,12 @@ describe('observed dates do not disturb the calendar', () => {
         name: 'ARRL Foundation Scholarship Program',
         rawFields: { opensAt: '2026-10-30', closesAt: '2026-12-30' },
       }),
-      ctx({
-        sourceId: 'arrl-scholarship-program',
-        deadlineInheritsFrom: undefined,
-        existingIdFor: () => 'arrl-foundation-scholarships',
-      }),
+      // REMEDIATION (2026-08-03): this fixture used to pin the owner's id by hand
+      // (`existingIdFor: () => 'arrl-foundation-scholarships'`), which is precisely how the
+      // dangling-reference defect stayed invisible for 37 commits — the dependent and the owner
+      // agreed because the test made them agree. The owner now mints its id exactly as the crawl
+      // does, and the dependent has to find it on its own.
+      ctx({ sourceId: 'arrl-scholarship-program', deadlineInheritsFrom: undefined }),
     );
     const plain = owner();
     expect(expandCycles(withObserved, [withObserved], FROM, TO)).toEqual(

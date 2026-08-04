@@ -5,24 +5,111 @@ import type {
   ProgramStatus,
   RawOpportunity,
 } from '@grantspotter/core';
-import { RECURRENCE_PREFIX } from '@grantspotter/core';
+import type { DateWindow, TimeOfDay } from '@grantspotter/core';
+import { RECURRENCE_PREFIX, parseRecurrence, zonedWallTimeToUtcISO } from '@grantspotter/core';
 import type { NormalizeContext } from './index.js';
 
 /**
- * sourceId -> the CANONICAL Program id whose cycle its records inherit (RESOLUTIONS R9: Plan 4's
- * id list is canonical and Plan 5's seed corpus owns identity, so these are literals, never
- * minted ids). All 111 ARRL catalog entries share ONE deadline, owned by the ARRL Foundation
- * Scholarship Program. QCWA's intake is that same ARRL portal, so QCWA's real deadline lives
- * inside the ARRL cycle too.
+ * sourceId -> the sourceId of the program whose cycle this source's records ride. All 111 ARRL
+ * catalog entries share ONE deadline, owned by the ARRL Foundation Scholarship Program; QCWA's
+ * intake is that same ARRL portal, so QCWA's real deadline lives inside the ARRL cycle too.
  *
- * This only resolves if the seeded `arrl-foundation-scholarships` record carries
- * `sourceKey: { sourceId: 'arrl-scholarship-program', externalKey: 'scholarship-program' }`,
- * which is what makes `ctx.existingIdFor` hand this crawler that id instead of minting one.
+ * REMEDIATION (2026-08-03) — THE DANGLING OWNER, and why the reference is a SOURCE id now.
+ *
+ * This table used to hold the literal `'arrl-foundation-scholarships'`, and `inferDeadline` wrote
+ * that straight into `DeadlineSource.fromProgramId`, where `resolveDeadlineOwner` (core) consumes
+ * it as a PROGRAM id. No program has ever carried that id and none ever could. `programIdFor`
+ * derives every id from the record's own source key — the real record behind that page is
+ * `arrl-scholarship-program--scholarship-program--7b29405e` — so a hand-written literal in this
+ * file cannot name one. The value was a SOURCE-shaped name sitting in a field that resolves
+ * PROGRAM ids, and it matched nothing, ever.
+ *
+ * MEASURED COST, on a full 27-source crawl of the committed fixtures approved into an empty
+ * database: 112 of 152 published programs — every ARRL catalog scholarship plus QCWA — carried
+ * `next_closes_at = NULL` in the browse projection and contributed zero rows to `cycles`, so the
+ * single most important deadline in the product was missing from the calendar entirely.
+ * `resolveDeadlineOwner` was not at fault: handed an owner it cannot find, it declines to invent a
+ * date, which is exactly right. The reference was at fault.
+ *
+ * WHY IT SURVIVED 37 COMMITS OF REMEDIATION: every test that exercised inheritance hand-wrote the
+ * owner id into its own fixture — as a `deadlineInheritsFrom` string, or as a seeded program row
+ * given that id by hand — so the lookup succeeded in every test and in no production run. A test
+ * that constructs the thing the product never creates proves only that the assertion matches the
+ * fixture. (Identical shape to the `funders` INSERT that both tests hand-wrote and nothing in the
+ * product ever created, which crashed the first approve on a fresh install.)
+ *
+ * WHAT MAKES THE NEW REFERENCE STABLE. A source id is a constant of this codebase: it keys the
+ * `SOURCES` registry, it is stored in `programs.source_id`, it rides every Program as a `source:`
+ * tag, and no edit a funder makes to a page can move it. A program id is deliberately NOT a
+ * constant — it is derived per record from (sourceId, externalKey), and derived identity is
+ * load-bearing for change detection, so nothing here tries to freeze one. This table names the
+ * owner's SOURCE; `deadlineOwnerProgramId` below derives the owner's program id from the owner's
+ * stable source key using the very same `ctx.existingIdFor ?? ctx.mintId` expression that
+ * `normalizeRaw` uses to decide that record's own id. Two computations of one id from one key.
  */
 export const DEADLINE_INHERITANCE: Readonly<Record<string, string>> = Object.freeze({
-  'arrl-scholarship-descriptions': 'arrl-foundation-scholarships',
-  qcwa: 'arrl-foundation-scholarships',
+  'arrl-scholarship-descriptions': 'arrl-scholarship-program',
+  qcwa: 'arrl-scholarship-program',
 });
+
+/**
+ * owner sourceId -> the externalKey its own source module emits for the ONE record that owns the
+ * cycle. `arrl-scholarship-program` parses exactly one record off http://www.arrl.org/scholarship-
+ * program, and this is the key it gives it.
+ *
+ * Kept as a second table rather than folded into the one above because `NormalizeContext`'s
+ * `deadlineInheritsFrom` is a `string` and `crawl/context.ts` reads `DEADLINE_INHERITANCE[m.id]`
+ * straight into it (spec §14 keeps normalize/ free of the registry, so the context carries plain
+ * values). The two cannot silently desync: `deadline.test.ts` asserts that every value above is a
+ * key here, that both are real registry source ids, and — from a real crawl of the real fixture,
+ * with no id written by hand anywhere — that this externalKey is the one the owner's source
+ * actually emits.
+ */
+export const DEADLINE_OWNER_EXTERNAL_KEY: Readonly<Record<string, string>> = Object.freeze({
+  'arrl-scholarship-program': 'scholarship-program',
+});
+
+/**
+ * The program id of the record that owns `ownerSourceId`'s cycle, or `undefined` when this file
+ * does not know which record of that source owns it.
+ *
+ * `ctx.existingIdFor?.(...) ?? ctx.mintId(...)` is byte-for-byte the expression `normalizeRaw`
+ * uses to decide a record's OWN id, and that is the whole mechanism: a dependent normalized on a
+ * fresh install where nothing is published yet mints exactly the id the owner will later be
+ * published under, and a dependent normalized against a database that already holds the owner
+ * reads back the id the owner was actually stored with. Approval order therefore cannot change the
+ * reference — which is what lets `review/index.ts` converge to identical cycle rows whether the
+ * owner or its dependents are approved first.
+ *
+ * `undefined` is never turned into a fabricated id. It makes `inferDeadline` fall back to this
+ * record's own source, which is the honest answer for a source whose owner nobody has described
+ * yet — a dangling `fromProgramId` is precisely the defect this function exists to end.
+ */
+/** The stable (sourceId, externalKey) of the record that owns `ownerSourceId`'s cycle. */
+export interface DeadlineOwnerKey {
+  readonly sourceId: string;
+  readonly externalKey: string;
+}
+
+/**
+ * The owner's STABLE SOURCE KEY — the thing this fix is built on. Everything that needs the owner
+ * (its program id here, its published row in `crawl/runner.ts`) goes through this one function, so
+ * there is exactly one place that says which record owns a cycle.
+ */
+export function deadlineOwnerKey(ownerSourceId: string): DeadlineOwnerKey | undefined {
+  const externalKey = DEADLINE_OWNER_EXTERNAL_KEY[ownerSourceId];
+  if (externalKey === undefined) return undefined;
+  return { sourceId: ownerSourceId, externalKey };
+}
+
+export function deadlineOwnerProgramId(
+  ownerSourceId: string,
+  ctx: NormalizeContext,
+): string | undefined {
+  const key = deadlineOwnerKey(ownerSourceId);
+  if (key === undefined) return undefined;
+  return ctx.existingIdFor?.(key.sourceId, key.externalKey) ?? ctx.mintId(key.sourceId, key.externalKey);
+}
 
 /**
  * sourceId -> the RECUR directive that goes in DeadlineSpec.note (CONTRACT §10.1, RESOLUTIONS
@@ -283,6 +370,39 @@ function resolveKindAndNote(
   return { kind: effective, note: `${noteFor(sourceId, effective)} ${describeObservedWindow(observed)}` };
 }
 
+/**
+ * The program id of the owner this record RIDES, or `undefined` when it owns its own deadline.
+ *
+ * ONE PREDICATE, TWO READERS, and that is the point. `inferDeadline` asks it to build the
+ * `inherited` DeadlineSource; `inferStatus` asks it because a record that rides someone else's
+ * cycle cannot assert that it is open (see the FIX ROUND 5 note there). The whole defect being
+ * remediated here is a record that inherited one property from an owner while silently defaulting
+ * another, so the two answers are computed from one expression rather than from two conditions
+ * that agree today.
+ *
+ * The three ways a record does NOT inherit, in precedence order:
+ *   - its source has no owner at all (`ctx.deadlineInheritsFrom` unset);
+ *   - it DECLARED its own kind through `rawFields.deadlineKind` — a per-record research finding,
+ *     which outranks a per-source table;
+ *   - it parsed a real window off its own funder's page, which outranks another programme's cycle
+ *     (the precedence rule stated at the top of the OBSERVED DATES block).
+ */
+function inheritedOwnerIdFor(
+  raw: RawOpportunity,
+  ctx: NormalizeContext,
+  observed: ObservedWindow | undefined,
+): string | undefined {
+  if (ctx.deadlineInheritsFrom === undefined) return undefined;
+  if (raw.rawFields.deadlineKind !== undefined) return undefined;
+  if (observed !== undefined) return undefined;
+  // DERIVES the owner's id from the owner's stable source key rather than reading a literal out of
+  // a table (see `deadlineOwnerProgramId`, and `DEADLINE_INHERITANCE`). An owner this file cannot
+  // describe yields undefined, and the record keeps its own deadline: a record with a deadline of
+  // its own is a smaller error than a record pointing at a program that does not exist, which is
+  // exactly the defect this remediation closes.
+  return deadlineOwnerProgramId(ctx.deadlineInheritsFrom, ctx);
+}
+
 export function inferDeadline(raw: RawOpportunity, ctx: NormalizeContext): DeadlineSpec {
   const observed = observedWindow(raw);
   const declared = raw.rawFields.deadlineKind as DeadlineKind | undefined;
@@ -290,15 +410,11 @@ export function inferDeadline(raw: RawOpportunity, ctx: NormalizeContext): Deadl
     const resolved = resolveKindAndNote(ctx.sourceId, declared, observed);
     return { kind: resolved.kind, source: { kind: 'self' }, note: resolved.note };
   }
-  // Inheritance is for a record with no date of its own. A record that parsed a real window off
-  // its own funder's page has one, and its own dates outrank another programme's cycle. No source
-  // that inherits parses dates today (`arrl-scholarship-descriptions` and `qcwa` write neither
-  // half), so all 112 inheriting candidates take this branch exactly as before — the guard is
-  // what makes the precedence rule true rather than merely true-by-accident.
-  if (ctx.deadlineInheritsFrom && observed === undefined) {
+  const ownerId = inheritedOwnerIdFor(raw, ctx, observed);
+  if (ownerId !== undefined) {
     return {
       kind: 'inherited',
-      source: { kind: 'inherited', fromProgramId: ctx.deadlineInheritsFrom },
+      source: { kind: 'inherited', fromProgramId: ownerId },
       note: NOTE_BY_KIND.inherited,
     };
   }
@@ -512,7 +628,156 @@ export function inferStatus(raw: RawOpportunity, ctx: NormalizeContext): Program
   const observed = observedWindow(raw);
   if (observed?.closesAt !== undefined && hasClosed(observed.closesAt, ctx.nowISO)) return 'closed';
 
+  // FIX ROUND 5 (2026-08-03) — THE TERMINAL DEFAULT, and why it is no longer the way most of the
+  // corpus reaches 'open'.
+  //
+  // Every rule above this line answers "what did somebody actually establish about this record?".
+  // `return 'open'` answers nothing: it is what a record gets for having no signal at all, and
+  // before this fix 126 of 152 published programs — 83% of the corpus — were called open by it.
+  // 'open' is a CLAIM ("you can apply for this right now"), and it is the one claim whose failure
+  // is paid for by the applicant, in the work of a whole application to a cycle that shut months
+  // ago. The three gates below are what that claim now has to get past.
+
+  // GATE 1 — a record that RIDES another programme's cycle. Whether it is accepting applications
+  // is a fact about the OWNER, and normalize/ cannot see the owner (spec §14: no registry, no
+  // database, no network). So 'open' here would not be an inference from anything; 'unknown' is
+  // what this file actually knows. `crawl/runner.ts` resolves it to the owner's real status the
+  // moment the owner is published — which is how all 111 ARRL catalog scholarships and QCWA come
+  // to read 'closed', off the portal page's own "The 2026 Scholarship Cycle is now closed."
+  // Deliberately AFTER `statesInactivity` above, so the Winscott scholarship — an inheriting
+  // record whose own text says it is not currently active — keeps its own 'dormant'. A record's
+  // own evidence outranks its owner's; its owner outranks the default.
+  if (inheritedOwnerIdFor(raw, ctx, observed) !== undefined) return 'unknown';
+
+  // GATE 2 / 3 — a WINDOW kind is a promise that this programme opens and closes on a schedule,
+  // so calling it open is a claim about TODAY that can only be made against that schedule.
+  //
+  // A DATE THE FUNDER STATED STILL BEATS EVERY TABLE, in both directions. `hasClosed` above is the
+  // closed direction; this is the open one. A funder that printed "closes 2026-09-09" has told us
+  // it is accepting applications until then, and no per-source table of ours may contradict that
+  // page — the same precedence the OBSERVED DATES block at the top of this file establishes for
+  // `inferDeadline`, extended to status.
+  if (observed?.closesAt !== undefined) return 'open';
+
+  const effectiveKind = raw.rawFields.deadlineKind ?? KIND_BY_SOURCE[ctx.sourceId] ?? 'unpublished';
+  if (WINDOW_KINDS.has(effectiveKind as DeadlineKind)) {
+    // The note is resolved through the SAME function `inferDeadline` uses, so the schedule this
+    // reads can never be a different schedule from the one the record publishes and the calendar
+    // projects.
+    const { note } = resolveKindAndNote(ctx.sourceId, effectiveKind as DeadlineKind, observed);
+    const schedule = recurrenceOf(note);
+    // GATE 2 — the kind asserts a window and nobody ever stated what it is. Four real records sit
+    // here today (arrl-etp-grants, austin-arc, ieee-mtts, ieee-student-branch-rebate): each one's
+    // page DOES print a window, in prose, into `rawFields.window` / `rawFields.deadline`, and
+    // nothing parses it — "OCTOBER 1ST AND OCTOBER 31ST of 2025", a window that ended before this
+    // corpus was captured, published as an open opportunity. Until a source turns those sentences
+    // into dates, 'unknown' is the honest badge and 'open' is a guess dressed as a finding. No date
+    // is invented here to fill the gap; that is the one thing this file must never do.
+    if (schedule === undefined) return 'unknown';
+    // GATE 3 — the schedule IS known, so ask it. Outside every stated window means applications
+    // are not being accepted today, whatever the tables say.
+    if (!isInsideStatedWindow(schedule, ctx.nowISO)) return 'closed';
+  }
+
   return 'open';
+}
+
+/**
+ * The two kinds that promise "this programme opens and closes on a published schedule".
+ *
+ * `n_fixed_dates` is deliberately NOT here: ARDC accepts proposals continuously and merely GRADES
+ * them on Feb 1 / Apr 1 / Jul 1 / Sep 1, so there is no interval outside which you cannot apply,
+ * and reading its four dates as four windows would close a genuinely open programme for 361 days
+ * of the year. `quarterly_rewritten` is not here either — ARISS states one dated window at a time
+ * on its own page, which the OBSERVED path above already reads and which the `isEstimated: false`
+ * contract forbids projecting into a rule.
+ */
+const WINDOW_KINDS: ReadonlySet<DeadlineKind> = new Set<DeadlineKind>([
+  'annual_window',
+  'n_fixed_windows',
+]);
+
+/** A stated schedule, or `undefined` when the note carries none (or carries a broken one). */
+type StatedSchedule =
+  | { windows: DateWindow[]; timezone: string; openTime: TimeOfDay; closeTime: TimeOfDay }
+  | undefined;
+
+/**
+ * The windows a `RECUR` directive states, or `undefined`.
+ *
+ * A directive that fails to parse yields `undefined` — the same answer as no directive at all, and
+ * for the same reason: a schedule we could not read is a schedule we do not know. It must never
+ * become an exception that fails a whole source's crawl, and it must never be silently treated as
+ * "no restriction", which is how a malformed table entry would otherwise republish a closed
+ * programme as open.
+ */
+function recurrenceOf(note: string): StatedSchedule {
+  let parsed;
+  try {
+    parsed = parseRecurrence(note);
+  } catch {
+    return undefined;
+  }
+  if (parsed.kind === 'annual_window') {
+    return {
+      windows: [parsed.window],
+      timezone: parsed.timezone,
+      openTime: parsed.openTime,
+      closeTime: parsed.closeTime,
+    };
+  }
+  if (parsed.kind === 'n_fixed_windows') {
+    return {
+      windows: parsed.windows,
+      timezone: parsed.timezone,
+      openTime: parsed.openTime,
+      closeTime: parsed.closeTime,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * True when `nowISO` falls inside one of the stated windows.
+ *
+ * Evaluated as real instants in the window's OWN timezone, through core's `zonedWallTimeToUtcISO`
+ * — the same conversion `expandCycles` uses to place a cycle on the calendar — so the badge and
+ * the calendar can never disagree about whether a window is running.
+ *
+ * Three consecutive years are tested because a `MM-DD..MM-DD` window carries no year: a window
+ * whose close month-day precedes its open (Austin ARC's captured Aug-to-Apr shape, had it been
+ * stated as a directive) WRAPS into the next year, and a window near a year boundary can be live
+ * while `nowISO` sits on the other side of December 31.
+ */
+function isInsideStatedWindow(schedule: NonNullable<StatedSchedule>, nowISO: string): boolean {
+  const now = Date.parse(nowISO);
+  // Never close a programme on the strength of a clock we could not read.
+  if (Number.isNaN(now)) return true;
+  // The year is read off the ISO string rather than through a Date instance: normalize/ may not
+  // construct one (purity.test.ts), and `ctx.nowISO` is the injected clock, always `YYYY-...`.
+  const year = Number(nowISO.slice(0, 4));
+  if (!Number.isInteger(year)) return true;
+  for (const window of schedule.windows) {
+    const wraps =
+      window.close.month < window.open.month ||
+      (window.close.month === window.open.month && window.close.day < window.open.day);
+    for (const y of [year - 1, year, year + 1]) {
+      const opens = Date.parse(
+        zonedWallTimeToUtcISO(
+          y, window.open.month, window.open.day,
+          schedule.openTime.hour, schedule.openTime.minute, 0, schedule.timezone,
+        ),
+      );
+      const closes = Date.parse(
+        zonedWallTimeToUtcISO(
+          wraps ? y + 1 : y, window.close.month, window.close.day,
+          schedule.closeTime.hour, schedule.closeTime.minute, 0, schedule.timezone,
+        ),
+      );
+      if (!Number.isNaN(opens) && !Number.isNaN(closes) && opens <= now && now <= closes) return true;
+    }
+  }
+  return false;
 }
 
 /**
