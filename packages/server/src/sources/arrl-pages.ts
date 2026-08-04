@@ -1,5 +1,16 @@
 import type { RawOpportunity, SourceModule } from '@grantspotter/core';
+import { withProseWindowDates } from './tier-c-b.js';
 import { type SinglePageConfig, makeSinglePageSource } from './util/singlePage.js';
+
+/**
+ * The ETP window sentence, named so the config's `fieldPatterns.window` and the
+ * `withProseWindowDates` wrapper below read ONE pattern — the reviewable field and the published
+ * dates must come from the same sentence or they can drift apart silently.
+ *
+ * Ordinal suffixes and "AND" as a separator both appear on the live page ("OCTOBER 1ST AND OCTOBER
+ * 31ST"), alongside the plainer dash form used elsewhere on the site.
+ */
+const ETP_WINDOW = /(Oct(?:ober)?\.?\s*1(?:st)?\s*(?:[-–]|and)\s*(?:Oct(?:ober)?\.?\s*)?31(?:st)?[^.]*\.)/i;
 
 /**
  * Two recipient-line grammars have been observed on the live Club Grant page across years:
@@ -127,10 +138,7 @@ const CONFIGS: SinglePageConfig[] = [
     name: 'ARRL ETP Grants (School Station and Progress)',
     externalKey: 'etp-grants',
     fieldPatterns: {
-      // Ordinal suffixes and "AND" as a separator both appear on the live page ("OCTOBER 1ST
-      // AND OCTOBER 31ST"), alongside the plainer dash form used elsewhere on the site.
-      window:
-        /(Oct(?:ober)?\.?\s*1(?:st)?\s*(?:[-–]|and)\s*(?:Oct(?:ober)?\.?\s*)?31(?:st)?[^.]*\.)/i,
+      window: ETP_WINDOW,
       jotformId: /jotform\.com\/(?:form\/)?(\d{8,})/i,
       // The live page never says "available to teachers" as one contiguous phrase (that wording
       // is only in the synthetic fixture); its actual applicant-eligibility sentence is "Grant
@@ -144,7 +152,12 @@ const CONFIGS: SinglePageConfig[] = [
       'file a signed antenna-approval form. Cash amount is genuinely unpublished — keep ' +
       'amountRaw verbatim and leave amountMin/amountMax undefined. The URL is year-agnostic ' +
       'but the Jotform id and the attached xlsx/pdf change underneath, so the Jotform id is ' +
-      'captured as a change signal. Page text still said "of 2025" on 2026-08-02 — stale.',
+      'captured as a change signal. Page text still said "of 2025" on 2026-08-02 — stale. THAT ' +
+      'STALENESS IS NOW PUBLISHED RATHER THAN HIDDEN: the sentence states its own year, so the ' +
+      'window resolves to 2025-10-01..2025-10-31 and the record reads `closed`. It is the only ' +
+      'one of the four prose windows in the corpus that names a year, and the honest reading of a ' +
+      'page frozen on last year\'s cycle is that last year\'s cycle is over — not that a new one ' +
+      'is open. The record still ships so the programme stays findable and its terms readable.',
   },
   {
     id: 'arrl-foundation-special-funds',
@@ -237,7 +250,7 @@ const [amateur, club, etp, special, program, summary] = CONFIGS.map(makeSinglePa
 
 export const arrlAmateurRadioGrants = amateur;
 export const arrlClubGrant = club;
-export const arrlEtpGrants = etp;
+export const arrlEtpGrants = withProseWindowDates(etp, ETP_WINDOW);
 export const arrlFoundationSpecialFunds = special;
 export const arrlScholarshipProgram = program;
 export const arrlSummaryOfScholarshipRequirements = withCrosscheckTag(summary);

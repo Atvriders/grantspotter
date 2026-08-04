@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
+import { type NormalizeContext, normalizeRaw } from '../normalize/index.js';
+import { programIdFor } from './util/ids.js';
 import {
   arrlAmateurRadioGrants,
   arrlClubGrant,
@@ -209,6 +211,53 @@ describe('arrl-etp-grants (REAL fixture)', () => {
     expect(raws[0].rawFields.applicant).toBe(
       'Grant applicants must be a current ARRL member to be eligible to apply.',
     );
+  });
+
+  /**
+   * THE ONE PROSE WINDOW IN THE CORPUS THAT NAMES ITS OWN YEAR.
+   *
+   * Verbatim, from the flattened capture (twice — the page repeats it above and below the steps):
+   *
+   *   "APPLICATIONS WILL ONLY BE ACCEPTED FOR REVIEW BETWEEN OCTOBER 1ST AND OCTOBER 31ST of 2025."
+   *
+   * Shouting caps, ordinal suffixes on both days, "AND" doing the work of a dash, and the year
+   * arriving as "of 2025" past the second ordinal. `parseDateRange` reads none of that: it needs a
+   * plain "Month D" pair and a year it can attach, so this sentence resolved to nothing and the
+   * record — whose KIND_BY_SOURCE entry PROMISES an annual window — published with no dates at all.
+   */
+  it('resolves the ALL-CAPS ordinal window into the exact dates the page states', () => {
+    expect(raws[0].rawFields.opensAt).toBe('2025-10-01');
+    expect(raws[0].rawFields.closesAt).toBe('2025-10-31');
+  });
+
+  /**
+   * AND THE POINT OF RESOLVING IT: a window that ended nine months before this capture reads
+   * `closed`, not `open`. ARRL froze this page on its 2025 cycle; the honest rendering of a page
+   * that says "of 2025" is that the 2025 cycle is over, and `inferStatus` reaches that from the
+   * funder's own close date rather than from any table of ours.
+   */
+  it('publishes closed, off the funder"s own close date, at the fixed now of 2026-08-02', () => {
+    const ctx: NormalizeContext = {
+      sourceId: 'arrl-etp-grants',
+      funderId: 'arrl',
+      klass: 'equipment_in_kind',
+      tier: 'C',
+      nowISO: '2026-08-02T00:00:00.000Z',
+      verificationMethod: 'live_fetch',
+      mintId: programIdFor,
+    };
+    const program = normalizeRaw(raws[0], ctx);
+    expect(program.trust.status).toBe('closed');
+    // The dates travel WITH the record, in the DeadlineSpec note, which is the channel
+    // core/deadline.ts's `parseObservedWindow` reads them back out of.
+    expect(program.deadline.note).toContain(
+      'Application window published by the funder: opens 2025-10-01, closes 2025-10-31.',
+    );
+    // The kind still says annual_window — an observed window states one cycle and never becomes a
+    // yearly rule, so nothing here may make it project a 2026 or 2027 ETP deadline ARRL has not
+    // announced.
+    expect(program.deadline.kind).toBe('annual_window');
+    expect(program.deadline.note).not.toMatch(/RECUR/);
   });
 });
 

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
+import { type NormalizeContext, normalizeRaw } from '../normalize/index.js';
 import { extractGender } from '../normalize/axes/index.js';
 import { TIER_C_A_SOURCES, austinArc, qcwa, sara, ylrl } from './tier-c-a.js';
+import { parseProseWindow } from './tier-c-b.js';
+import { programIdFor } from './util/ids.js';
 
 // The committed REAL captures under fixtures/<id>/00-*.html — pages actually pulled from the
 // funders' own sites on 2026-08-03 through the production fetcher, as opposed to the synthetic
@@ -351,6 +354,62 @@ describe('austin-arc (REAL fixture)', () => {
   it('publishes no amount, because the live page contains no dollar figure at all', () => {
     expect(raws[0].rawFields.amount).toBeUndefined();
     expect(raws[0].rawText).not.toMatch(/\$/);
+  });
+
+  /**
+   * THE WINDOW IS READ, AND DELIBERATELY NOT RESOLVED.
+   *
+   * Verbatim, from the flattened capture, in all three places the club states it:
+   *
+   *   L79 "Applications open May 1 and close July 31 each year."
+   *   L87 "Submit your application online through our grants portal between May 1 and July 31."
+   *   L92 "Applications are accepted each year from May 1 through July 31 via our grants portal."
+   *
+   * Not one of them names a year, and neither does anything else on the page — see the next test.
+   * "each year" is the club stating an ANNUAL RULE, and the channel for a rule is a RECUR
+   * `annual_window window=05-01..07-31` directive, which carries no year by construction.
+   * `rawFields.opensAt`/`closesAt` mean something else: ONE dated window that is never repeated.
+   * Writing 2026 into that channel would put a date on the calendar under the club's name that the
+   * club has never printed, so the month-days are read and the record publishes no date.
+   */
+  it('reads 05-01..07-31 off the page and refuses to invent the year it never states', () => {
+    const window = parseProseWindow(raws[0].rawFields.window!);
+    expect(window).toEqual({ opensOn: '05-01', closesOn: '07-31', yearUnstated: true });
+    expect(raws[0].rawFields.opensAt).toBeUndefined();
+    expect(raws[0].rawFields.closesAt).toBeUndefined();
+  });
+
+  /**
+   * THE EVIDENCE FOR THE REFUSAL, taken off the capture rather than asserted. The page's ONLY
+   * four-digit number is its footer copyright, "© 2026 Austin Amateur Radio Club. All rights
+   * reserved." A site copyright is not a deadline, and a parser that reached for the nearest year
+   * on the page would have turned that one into a July 2026 close date.
+   */
+  it('has no year anywhere on the page except the footer copyright', () => {
+    const years = raws[0].rawText.match(/\b(?:19|20)\d{2}\b/g) ?? [];
+    expect(years).toEqual(['2026']);
+    expect(raws[0].rawText).toMatch(/© 2026 Austin Amateur Radio Club/);
+  });
+
+  /**
+   * The consequence, stated as a test so it cannot silently change: with no resolvable window and
+   * no RECUR directive for this source, `inferStatus`'s window gate has no schedule to ask, and
+   * `unknown` — not `open` — is what the record publishes. That is a worse answer than `closed`
+   * (the capture was taken three days after the window shut) and a much better one than `open`.
+   */
+  it('stays unknown rather than open, because nothing here can date the window', () => {
+    const ctx: NormalizeContext = {
+      sourceId: 'austin-arc',
+      funderId: 'austin-arc',
+      klass: 'ham_scholarship',
+      tier: 'C',
+      nowISO: '2026-08-02T00:00:00.000Z',
+      verificationMethod: 'live_fetch',
+      mintId: programIdFor,
+    };
+    const program = normalizeRaw(raws[0], ctx);
+    expect(program.trust.status).toBe('unknown');
+    expect(program.deadline.note).not.toContain('published by the funder');
   });
 });
 

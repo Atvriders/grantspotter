@@ -1,5 +1,16 @@
 import type { RawOpportunity, SourceModule } from '@grantspotter/core';
+import { withProseWindowDates } from './tier-c-b.js';
 import { type SinglePageConfig, makeSinglePageSource } from './util/singlePage.js';
+
+/**
+ * Austin ARC's window sentence, named so the config's `fieldPatterns.window` and the
+ * `withProseWindowDates` wrapper below read ONE pattern.
+ *
+ * Whole sentence, not a bare date pair: the live page's first statement of the window is
+ * "Applications open May 1 and close July 31 each year", which an earlier `May 1 … Jul 31` fragment
+ * pattern rendered as the unreadable "May 1 and close July 31".
+ */
+const AUSTIN_WINDOW = /(Applications?[^.]*May\s*1[^.]*Jul(?:y)?\s*31[^.]*\.)/i;
 
 interface YlrlAward {
   /** Stable externalKey — NOT derived from page text. */
@@ -294,10 +305,7 @@ const CONFIGS: SinglePageConfig[] = [
     name: 'Austin ARC Club Scholarships',
     externalKey: 'austin-arc-scholarships',
     fieldPatterns: {
-      // Whole sentence, not a bare date pair: the live page's first statement of the window is
-      // "Applications open May 1 and close July 31 each year", which the old
-      // `May 1 … Jul 31` fragment pattern rendered as the unreadable "May 1 and close July 31".
-      window: /(Applications?[^.]*May\s*1[^.]*Jul(?:y)?\s*31[^.]*\.)/i,
+      window: AUSTIN_WINDOW,
       counties: /((?:Travis|Williamson|Hays|Bastrop|Caldwell|Burnet|Blanco)[^.]*\.)/i,
       audience: /(Students pursuing[^.]*\.|Applicants must reside[^.]*\.)/i,
       // Unquoted href attribute on the live page (`href=https://grants.austinhams.org`), so the
@@ -314,7 +322,15 @@ const CONFIGS: SinglePageConfig[] = [
       'austinhams.org/scholarships/, is static and keeps describing the window year-round: the ' +
       '2026-08-03 capture, taken three days AFTER the window closed, still yields one record. ' +
       'Window is May 1 - Jul 31 ("Applications open May 1 and close July 31 each year"); search ' +
-      'engines still show a stale "March 25, 2026" that contradicts the live page. Central ' +
+      'engines still show a stale "March 25, 2026" that contradicts the live page. THE WINDOW ' +
+      'STATES NO YEAR, and the page has none to give: its only four-digit number is the footer\'s ' +
+      '"© 2026 Austin Amateur Radio Club", and a site copyright is not a deadline. All three of ' +
+      'the page\'s phrasings are yearless ("open May 1 and close July 31 each year", "between May ' +
+      '1 and July 31", "each year from May 1 through July 31"), so `parseProseWindow` reads ' +
+      '05-01..07-31 and refuses to resolve it; no opensAt/closesAt is published. "each year" is ' +
+      'the club stating an ANNUAL RULE, and a rule with no year belongs in a RECUR annual_window ' +
+      'directive, not in the dated-window channel, which means ONE window that is never repeated. ' +
+      'Central ' +
       'Texas, seven named counties, listed on the live page with an Oxford comma ("Travis, ' +
       'Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson counties"). NO AMOUNT IS ' +
       'PUBLISHED — there is not a single dollar figure on the page. The self-hosted portal ' +
@@ -369,6 +385,8 @@ const [qcwaModule, ylrlModule, austinModule, saraModule] = CONFIGS.map(makeSingl
 
 export const qcwa = qcwaModule;
 export const ylrl = ylrlModule;
-export const austinArc = austinModule;
+// Wrapped on the same path as arrl-etp-grants and the two IEEE records, and — like the IEEE two —
+// currently publishing nothing, because the page states no year (see the notes above).
+export const austinArc = withProseWindowDates(austinModule, AUSTIN_WINDOW);
 export const sara = saraModule;
 export const TIER_C_A_SOURCES: SourceModule[] = [qcwa, ylrl, austinArc, sara];
