@@ -38,6 +38,12 @@ let allCycles: Cycle[];
  */
 let planted: Cycle[];
 let suppressedVisible = false;
+/**
+ * The subscriber's watchlist, mutable because the defect this file now pins is a COMPOSED one:
+ * starring a programme used to rewrite a calendar that was already subscribed to. A fixture that
+ * can only be empty cannot express "and then the user starred something".
+ */
+let watching: string[] = [];
 
 let server: Server;
 let base: string;
@@ -53,9 +59,9 @@ function source(): ExportDataSource {
     listFunders: () => corpus.funders,
     listCycles: (): Cycle[] => (suppressedVisible ? [...allCycles, ...planted] : [...allCycles]),
     getProfile: () => undefined,
-    // Empty on purpose: an empty watchlist means "the whole corpus" on the feed, which is the
-    // widest — and therefore the most dangerous — shape the gate has to hold for.
-    listWatchedProgramIds: () => [],
+    // Empty by default, because the widest shape is the most dangerous one for the gate to hold
+    // for: with nothing starred the plain feed carries all 150 publishable records.
+    listWatchedProgramIds: () => [...watching],
     getUserIdForTokenHash: (hash) => (hashes.get('u-1') === hash ? 'u-1' : undefined),
     upsertToken: (userId, hash) => {
       hashes.set(userId, hash);
@@ -148,6 +154,83 @@ describe('the real corpus, through the export routes', () => {
   });
 });
 
+/**
+ * THE COMPOSED DEFECT, AT CORPUS SCALE.
+ *
+ * Star and feed were each correct alone, which is why every suite above passed while the product
+ * was broken. Composed, they were not: `/calendar/<token>.ics` served the whole corpus while the
+ * watchlist was empty and only the watched programmes as soon as it was not, from a URL that never
+ * changed. Measured here on this corpus before the fix: **243 VEVENTs, then 5, from the same
+ * unchanged URL, after starring one programme** — and 5 only because the programme starred below is
+ * the widest record in the corpus. The distribution of events per publishable programme is
+ * {5:1, 4:1, 2:114, 1:6, 0:28}, so the typical star left 2 (which is Task 22's measured figure) and
+ * six of them left 1. That is 238 to 242 deadlines vanishing out of a subscriber's phone overnight
+ * with nothing on screen to explain it — the worst failure a deadline tool can have, because it is
+ * both silent and remote.
+ *
+ * The rule now: a feed URL's meaning is fixed by the URL, never by the watchlist behind it.
+ */
+describe('starring a programme cannot rewrite a calendar already subscribed to', () => {
+  const veventCount = (ics: string): number => ics.split('BEGIN:VEVENT').length - 1;
+
+  /** Unfolded first: RFC 5545 breaks a long property line, and an id can land across the break. */
+  const eventsNaming = (ics: string, programId: string): number =>
+    ics.replace(/\r\n /g, '').split(`X-GRANTSPOTTER-PROGRAM-ID:${programId}\r\n`).length - 1;
+
+  /**
+   * The publishable programme with the most projected windows in this corpus (5 of the 243), so
+   * "the watchlist feed narrowed to exactly this programme" is a claim with more than one event
+   * behind it, and so the two counts either side of the star are not both small numbers.
+   */
+  const STARRED = 'ardc-grants--apply--b04e6201';
+
+  it('serves the identical bytes from the plain URL before and after a programme is starred', async () => {
+    const before = await body(`/calendar/${token}.ics`, false);
+    watching = [STARRED];
+    let after: string;
+    try {
+      after = await body(`/calendar/${token}.ics`, false);
+    } finally {
+      watching = [];
+    }
+
+    expect(veventCount(before)).toBe(243);
+    // Not "roughly the same": nothing about the corpus, the clock or the token changed, so the
+    // only honest assertion is that the file did not change either.
+    expect(veventCount(after)).toBe(243);
+    expect(after).toBe(before);
+  });
+
+  it('serves the starred programme ONLY from the opt-in URL, and an empty calendar from it while nothing is starred', async () => {
+    // An empty watchlist on the opt-in URL means an empty calendar, NOT a silent fallback to the
+    // whole corpus. The size of the watchlist may never decide what a URL means.
+    const nothingStarred = await body(`/calendar/${token}.ics?watched=1`, false);
+    expect(veventCount(nothingStarred)).toBe(0);
+
+    watching = [STARRED];
+    let oneStarred: string;
+    try {
+      oneStarred = await body(`/calendar/${token}.ics?watched=1`, false);
+    } finally {
+      watching = [];
+    }
+
+    const plain = await body(`/calendar/${token}.ics`, false);
+    const expected = eventsNaming(plain, STARRED);
+    expect(expected).toBeGreaterThan(1);
+    expect(veventCount(oneStarred)).toBe(expected);
+    expect(eventsNaming(oneStarred, STARRED)).toBe(expected);
+  });
+
+  /** The two subscriptions must be tellable apart in a client that shows both at once. */
+  it('names the two feeds differently, so a client showing both can label them', async () => {
+    expect(await body(`/calendar/${token}.ics`, false)).toContain('X-WR-CALNAME:GrantSpotter deadlines');
+    expect(await body(`/calendar/${token}.ics?watched=1`, false)).toContain(
+      'X-WR-CALNAME:GrantSpotter watchlist',
+    );
+  });
+});
+
 describe('no route leaks a suppressed record, at corpus scale', () => {
   const PATHS = [
     '/api/exports/opportunities.csv',
@@ -173,9 +256,29 @@ describe('no route leaks a suppressed record, at corpus scale', () => {
     expect(mixed).toBe(clean);
   }, 180_000);
 
+  /**
+   * THE NEW VARIANT'S OWN HAZARD. `?watched=1` is the one feed whose contents a user chooses, and
+   * a watchlist can name a record that was publishable when it was starred and `do_not_publish`
+   * afterwards — the star outlives the reclassification. "The subscriber asked for it" is not a
+   * reason to publish it, so the gate runs BEFORE the watch filter and this proves the order.
+   */
+  it('publishes nothing from the opt-in feed when every starred record is a suppressed one', async () => {
+    watching = corpus.suppressedPrograms.map((p) => p.id);
+    let text: string;
+    try {
+      text = await body(`/calendar/${token}.ics?watched=1`, true);
+    } finally {
+      watching = [];
+    }
+    expect(text.split('BEGIN:VEVENT').length - 1).toBe(0);
+    expect(corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id)).toEqual([]);
+    expect(text).not.toContain(DO_NOT_PUBLISH_TAG);
+    expect(text).not.toContain(':planted');
+  }, 180_000);
+
   it('writes no suppressed id, name or tag into any of the bytes', async () => {
     const publishableNames = new Set(corpus.programs.map((p) => p.name));
-    for (const path of [...PATHS, `/calendar/${token}.ics`]) {
+    for (const path of [...PATHS, `/calendar/${token}.ics`, `/calendar/${token}.ics?watched=1`]) {
       const text = await body(path, true);
       expect(
         corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id),

@@ -71,12 +71,30 @@ const SUPPRESSED_CYCLE: Cycle = makeCycle({
 });
 
 const FUNDERS: Funder[] = [makeFunder()];
-const CYCLES: Cycle[] = [makeCycle()];
+/**
+ * TWO windows, on two different programmes. One is not enough to test the feed with: with a single
+ * cycle, "every publishable deadline" and "only the one programme I starred" are the same file, and
+ * the defect this suite now pins — a feed that silently narrows — is invisible in it.
+ */
+const CYCLES: Cycle[] = [
+  makeCycle(),
+  makeCycle({
+    id: 'arrl-club-grant-2027-03',
+    programId: 'arrl-club-grant',
+    closesAt: '2027-03-15',
+    label: 'Mar 2027 deadline',
+  }),
+];
 const PROFILE: Profile = { kind: 'student', callsign: 'W8UM', licenseClass: 'GENERAL' };
 
 interface Fake extends ExportDataSource {
   /** When true, `listPrograms`/`listCycles` also hand back the suppressed record and its cycle. */
   suppressedVisible: boolean;
+  /**
+   * What this user has starred, mutable so a test can star something BETWEEN two fetches of one
+   * unchanged URL. A fixed watchlist cannot express the composed defect at all.
+   */
+  watching: string[];
 }
 
 const openDbs: Database.Database[] = [];
@@ -103,6 +121,7 @@ function fakeDataSource(): Fake {
 
   return {
     suppressedVisible: false,
+    watching: ['ardc-grants'],
     listPrograms(): Program[] {
       return this.suppressedVisible ? [...PROGRAMS, SUPPRESSED] : [...PROGRAMS];
     },
@@ -111,7 +130,9 @@ function fakeDataSource(): Fake {
       return this.suppressedVisible ? [...CYCLES, SUPPRESSED_CYCLE] : [...CYCLES];
     },
     getProfile: () => PROFILE,
-    listWatchedProgramIds: () => ['ardc-grants'],
+    listWatchedProgramIds(): string[] {
+      return [...this.watching];
+    },
     getUserIdForTokenHash: (hash) => {
       for (const [userId, rec] of tokens) if (rec.hash === hash && !rec.revoked) return userId;
       return undefined;
@@ -340,6 +361,105 @@ describe('ICS', () => {
 });
 
 /**
+ * WHAT A FEED URL MEANS, AND WHEN THAT IS DECIDED.
+ *
+ * Star and feed were each correct alone — every test above this one passed while the product was
+ * broken — and the defect only existed in their composition. `/calendar/<token>.ics` used to serve
+ * everything while the watchlist was empty and only the watched programmes as soon as it was not,
+ * from a URL that never changed and with nothing on any screen to say so. Against the real corpus
+ * that was 243 VEVENTs before starring one programme and 5 after (`exportsCorpus.test.ts`).
+ *
+ * The rule these tests hold to: a feed URL's meaning is fixed by the URL and by nothing else. The
+ * plain URL is every publishable deadline, for an empty watchlist and a full one alike; `?watched=1`
+ * is the watchlist, for an empty watchlist and a full one alike. Neither branches on its size.
+ */
+describe('a feed URL means one thing, chosen when it is subscribed to', () => {
+  const events = (ics: string): number => ics.split('BEGIN:VEVENT').length - 1;
+
+  const mint = async (): Promise<string> =>
+    ((await (await fetch(`${base}/api/exports/ics-token`, { method: 'POST' })).json()) as {
+      token: string;
+    }).token;
+
+  const feed = async (token: string, query = ''): Promise<string> => {
+    const res = await fetch(`${base}/calendar/${token}.ics${query}`);
+    expect(res.status).toBe(200);
+    return await res.text();
+  };
+
+  const withWatchlist = async <T>(ids: string[], body: () => Promise<T>): Promise<T> => {
+    const previous = data.watching;
+    data.watching = ids;
+    try {
+      return await body();
+    } finally {
+      data.watching = previous;
+    }
+  };
+
+  /** THE REGRESSION. Subscribe, count, star, fetch the SAME url, and the file must not have moved. */
+  it('serves the identical file from the plain URL before and after a programme is starred', async () => {
+    const token = await mint();
+    const before = await withWatchlist([], () => feed(token));
+    const after = await withWatchlist(['ardc-grants'], () => feed(token));
+
+    expect(events(before)).toBe(2);
+    expect(events(after)).toBe(2);
+    // Byte-identical, not merely "still two events": nothing about the corpus, the clock or the
+    // token changed between the two fetches, so nothing about the file may have changed either.
+    expect(after).toBe(before);
+  });
+
+  it('serves every publishable deadline from the plain URL whatever the watchlist says', async () => {
+    const token = await mint();
+    for (const ids of [[], ['ardc-grants'], ['ardc-grants', 'arrl-club-grant']]) {
+      const ics = await withWatchlist(ids, () => feed(token));
+      expect(events(ics), JSON.stringify(ids)).toBe(2);
+      expect(ics, JSON.stringify(ids)).toContain('X-GRANTSPOTTER-PROGRAM-ID:ardc-grants');
+      expect(ics, JSON.stringify(ids)).toContain('X-GRANTSPOTTER-PROGRAM-ID:arrl-club-grant');
+    }
+  });
+
+  it('serves the watchlist and only the watchlist from ?watched=1', async () => {
+    const token = await mint();
+    const ics = await withWatchlist(['ardc-grants'], () => feed(token, '?watched=1'));
+    expect(events(ics)).toBe(1);
+    expect(ics).toContain('X-GRANTSPOTTER-PROGRAM-ID:ardc-grants');
+    expect(ics).not.toContain('X-GRANTSPOTTER-PROGRAM-ID:arrl-club-grant');
+  });
+
+  /**
+   * The half that used to be a special case. An empty watchlist on the opt-in URL is an empty
+   * calendar — the subscriber asked for "only what I star" and stars nothing — and NOT a silent
+   * widening to the whole corpus. A feed whose scope depends on the size of a list is a feed whose
+   * meaning changes without anyone choosing it, which is the defect, not the kindness.
+   */
+  it('serves an empty calendar from ?watched=1 while nothing is starred, rather than everything', async () => {
+    const token = await mint();
+    const ics = await withWatchlist([], () => feed(token, '?watched=1'));
+    expect(events(ics)).toBe(0);
+    expect(ics.startsWith('BEGIN:VCALENDAR')).toBe(true);
+    expect(ics.trimEnd().endsWith('END:VCALENDAR')).toBe(true);
+  });
+
+  /** Two subscriptions in one client have to be tellable apart by the only label a client shows. */
+  it('names the two feeds for what they contain', async () => {
+    const token = await mint();
+    expect(await feed(token)).toContain('X-WR-CALNAME:GrantSpotter deadlines');
+    expect(await feed(token, '?watched=1')).toContain('X-WR-CALNAME:GrantSpotter watchlist');
+  });
+
+  /** Anything that is not the opt-in spelling is the plain feed. There is no third meaning. */
+  it('treats an unrecognised watched= value as the plain feed', async () => {
+    const token = await mint();
+    for (const query of ['?watched=0', '?watched=true', '?watched=', '?watchlist=1']) {
+      const ics = await withWatchlist(['ardc-grants'], () => feed(token, query));
+      expect(events(ics), query).toBe(2);
+    }
+  });
+});
+
+/**
  * THE FEED IS A PUBLIC URL, so it is the one route in this file an unauthenticated stranger can
  * reach in a loop. The limiter charges the attempt BEFORE the lookup and never refunds it, which
  * is Plan 3 Task 10's precedent: a limiter that only counts failures is a limiter an attacker
@@ -418,6 +538,7 @@ describe('no suppressed record can leave through a route', () => {
       '/api/exports/eligibility.html',
       '/api/exports/deadlines.ics',
       `/calendar/${created.token}.ics`,
+      `/calendar/${created.token}.ics?watched=1`,
     ]) {
       const clean = await (await fetch(`${base}${path}`)).text();
       const mixed = await withSuppressed(path);
@@ -437,11 +558,40 @@ describe('no suppressed record can leave through a route', () => {
       '/api/exports/deadlines.ics',
       '/api/exports/deadlines.ics?watched=1',
       `/calendar/${created.token}.ics`,
+      `/calendar/${created.token}.ics?watched=1`,
     ]) {
       const body = await withSuppressed(path);
       expect(body, path).not.toContain(SUPPRESSED.id);
       expect(body, path).not.toContain(SUPPRESSED.name);
       expect(body, path).not.toContain(DO_NOT_PUBLISH_TAG);
+    }
+  });
+
+  /**
+   * A star outlives a reclassification: a record can be publishable when it is starred and
+   * `do_not_publish` afterwards, and the watchlist row stays. "The subscriber asked for it" is not
+   * a reason to publish it, so the gate runs BEFORE the watch filter on both watched surfaces.
+   */
+  it('publishes nothing when the thing the user starred is the suppressed record', async () => {
+    const created = (await (
+      await fetch(`${base}/api/exports/ics-token`, { method: 'POST' })
+    ).json()) as { token: string };
+    const previous = data.watching;
+    data.watching = [SUPPRESSED.id];
+    data.suppressedVisible = true;
+    try {
+      for (const path of [
+        '/api/exports/deadlines.ics?watched=1',
+        `/calendar/${created.token}.ics?watched=1`,
+      ]) {
+        const body = await (await fetch(`${base}${path}`)).text();
+        expect(body.split('BEGIN:VEVENT').length - 1, path).toBe(0);
+        expect(body, path).not.toContain(SUPPRESSED.id);
+        expect(body, path).not.toContain(DO_NOT_PUBLISH_TAG);
+      }
+    } finally {
+      data.suppressedVisible = false;
+      data.watching = previous;
     }
   });
 

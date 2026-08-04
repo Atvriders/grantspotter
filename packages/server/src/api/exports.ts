@@ -85,6 +85,95 @@ function cyclesByProgram(deps: ExportDeps, nowISO: string): Map<string, Cycle[]>
   return map;
 }
 
+/**
+ * WHICH CALENDAR A URL MEANS — decided by the URL, and by nothing else.
+ *
+ * Both calendar surfaces spell the choice identically: the plain URL is every publishable deadline,
+ * `?watched=1` is the watchlist. That used to be true of the one-off download and FALSE of the
+ * subscribable feed, which carried no query at all and inferred its scope from the SIZE of the
+ * watchlist — everything while it was empty, only the watched programmes as soon as it was not.
+ * Measured on the real corpus: 243 VEVENTs, then 5, from the same unchanged URL, after starring one
+ * programme (`exportsCorpus.test.ts`). A subscriber who starred their first opportunity watched 238
+ * deadlines leave a calendar they had already installed, remotely, overnight, with nothing on any
+ * screen to explain it. A feed's meaning must be chosen by the person subscribing, at the moment
+ * they subscribe, and then hold.
+ *
+ * THE PLAIN URL IS THE DEFAULT BECAUSE OF WHO NEVER COMES BACK. Someone who subscribes and then
+ * forgets this product exists gets, from a corpus-wide default, a calendar with more in it than
+ * they need: noise, which is visible and which they can act on. From a watchlist-scoped default
+ * they would get an empty calendar that says nothing at all — which reads as "there are no
+ * deadlines", a claim this product cannot make and would not be making on purpose. Over-inclusion
+ * fails loudly and recoverably; under-inclusion fails invisibly, and a funding round that closed
+ * does not reopen.
+ */
+interface CalendarScope {
+  watchedOnly: boolean;
+  /** What a client puts in its sidebar; both subscriptions may sit in one. */
+  name: string;
+}
+
+function calendarScope(req: Request, canReadWatchlist: boolean): CalendarScope {
+  // Only the one opt-in spelling. Everything else — absent, `0`, `true`, a typo — is the plain
+  // feed, so an unrecognised query can never quietly narrow a calendar somebody depends on.
+  const watchedOnly = canReadWatchlist && req.query.watched === '1';
+  return { watchedOnly, name: watchedOnly ? 'GrantSpotter watchlist' : 'GrantSpotter deadlines' };
+}
+
+/**
+ * The programme map a calendar is built from.
+ *
+ * `exportablePrograms` FIRST, and unconditionally — before the watch filter, not after it. The CSV
+ * and XLSX routes reach the gate through `applyExportFilter`; the calendar routes have no such
+ * filter, which is precisely what Task 3's report flagged. `buildIcsCalendar` gates again and
+ * `cycleToVevent` gates a third time, and `createSqliteExportDataSource.listPrograms` gates before
+ * any of them — four layers for one boundary is not paranoia here, it is the count of times this
+ * boundary has leaked.
+ *
+ * The order matters on its own account now that a subscriber can ask for their watchlist: a star
+ * outlives a reclassification, so a watchlist can name a record that has since become
+ * `do_not_publish`. "The subscriber asked for it" is not a reason to publish it.
+ *
+ * `undefined` means every publishable programme. A SET means exactly that set — including the empty
+ * set, which means an empty calendar. Nothing here reads the size of the watchlist.
+ */
+function calendarPrograms(deps: ExportDeps, watched?: ReadonlySet<string>): Map<string, Program> {
+  const publishable = exportablePrograms(deps.data.listPrograms());
+  const chosen = watched === undefined ? publishable : publishable.filter((p) => watched.has(p.id));
+  return new Map(chosen.map((p) => [p.id, p]));
+}
+
+function calendarFor(
+  deps: ExportDeps,
+  programsById: ReadonlyMap<string, Program>,
+  calendarName: string,
+  nowISO: string,
+): string {
+  const { from, to } = windowAround(nowISO);
+  const cycles = deps.data.listCycles(from, to).filter((c) => programsById.has(c.programId));
+  return buildIcsCalendar({ calendarName, cycles, programsById, nowISO });
+}
+
+/**
+ * The one place a calendar is assembled, for both the download and the feed. They used to assemble
+ * their own, which is how they came to disagree about what a watchlist means in the first place.
+ *
+ * `nowISO` is passed in rather than read again from `deps.now()`: the download stamps the same
+ * instant into its filename, and one request that straddled midnight would otherwise ship a file
+ * dated one day and computed on another.
+ */
+function renderCalendar(
+  deps: ExportDeps,
+  req: Request,
+  userId: string | undefined,
+  nowISO: string,
+): string {
+  const scope = calendarScope(req, userId !== undefined);
+  const watched = scope.watchedOnly
+    ? new Set(deps.data.listWatchedProgramIds(userId as string))
+    : undefined;
+  return calendarFor(deps, calendarPrograms(deps, watched), scope.name, nowISO);
+}
+
 function attach(res: Response, filename: string, contentType: string): void {
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -245,47 +334,10 @@ export function createExportsRouter(deps: ExportDeps): Router {
     res.send(renderEligibilityReportHtml(report));
   });
 
-  /**
-   * The programme map a calendar is built from.
-   *
-   * `exportablePrograms` FIRST, and unconditionally. The CSV and XLSX routes above reach the gate
-   * through `applyExportFilter`; the two calendar routes have no such filter, which is precisely
-   * what Task 3's report flagged. `buildIcsCalendar` gates again and `cycleToVevent` gates a third
-   * time, and `createSqliteExportDataSource.listPrograms` gates before any of them — four layers
-   * for one boundary is not paranoia here, it is the count of times this boundary has leaked.
-   */
-  const calendarPrograms = (watched?: ReadonlySet<string>): Map<string, Program> => {
-    const publishable = exportablePrograms(deps.data.listPrograms());
-    const chosen =
-      watched === undefined ? publishable : publishable.filter((p) => watched.has(p.id));
-    return new Map(chosen.map((p) => [p.id, p]));
-  };
-
-  const calendarFor = (
-    programsById: ReadonlyMap<string, Program>,
-    calendarName: string,
-    nowISO: string,
-  ): string => {
-    const { from, to } = windowAround(nowISO);
-    const cycles = deps.data.listCycles(from, to).filter((c) => programsById.has(c.programId));
-    return buildIcsCalendar({ calendarName, cycles, programsById, nowISO });
-  };
-
   router.get('/exports/deadlines.ics', deps.requireAuth, (req, res) => {
     const now = deps.now();
-    const userId = deps.userIdOf(req);
-    const watchedOnly = req.query.watched === '1' && userId !== undefined;
-    const watched = watchedOnly
-      ? new Set(deps.data.listWatchedProgramIds(userId as string))
-      : undefined;
     attach(res, `grantspotter-deadlines-${stamp(now)}.ics`, 'text/calendar; charset=utf-8');
-    res.send(
-      calendarFor(
-        calendarPrograms(watched),
-        watchedOnly ? 'GrantSpotter watchlist' : 'GrantSpotter deadlines',
-        now,
-      ),
-    );
+    res.send(renderCalendar(deps, req, deps.userIdOf(req), now));
   });
 
   /**
@@ -520,20 +572,13 @@ export function createCalendarFeedRouter(deps: ExportDeps, limits?: FeedLimits):
     }
     byToken.recordFailure(hash);
 
-    const now = deps.now();
-    // THE GATE, again. See `calendarPrograms` above: this is the least recoverable surface in the
-    // product, and the one route here with no session behind it.
-    const publishable = exportablePrograms(deps.data.listPrograms());
-    const watched = new Set(deps.data.listWatchedProgramIds(userId));
-    // An empty watchlist means "everything", not "nothing": a user who subscribes before starring
-    // anything must get a calendar, not an empty one they will assume is broken.
-    const chosen = watched.size > 0 ? publishable.filter((p) => watched.has(p.id)) : publishable;
-    const programsById = new Map(chosen.map((p) => [p.id, p]));
-    const { from, to } = windowAround(now);
-    const cycles = deps.data.listCycles(from, to).filter((c) => programsById.has(c.programId));
-
+    // THE SAME ASSEMBLY AS THE DOWNLOAD, deliberately, through the same function. This handler used
+    // to build its own programme map, its own cycle list and its own scope rule, and that is how it
+    // came to disagree with `/exports/deadlines.ics` about what a watchlist means. The gate runs
+    // inside `calendarPrograms`: this is the least recoverable surface in the product, and the one
+    // route here with no session behind it.
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.send(buildIcsCalendar({ calendarName: 'GrantSpotter', cycles, programsById, nowISO: now }));
+    res.send(renderCalendar(deps, req, userId, deps.now()));
   });
 
   return router;
