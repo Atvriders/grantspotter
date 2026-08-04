@@ -44,7 +44,9 @@ export interface NormalizeContext {
  * `AiPolicy`, which requires `quote` + `url`), so the quote lives in the comment beside the
  * entry and the capture it came from is named.
  *
- * REMOVED 2026-08-03, close-out review B3 — four assertions no capture supports:
+ * REMOVED 2026-08-03, close-out review B3 — four assertions no capture supports. TWO OF THE FOUR
+ * CAME BACK the same day, once a source actually fetched ARDC's application pages; they are now in
+ * OBLIGATIONS_BY_RECORD below, with their quotes. The other two stay removed:
  *
  *   yaesu-dr2x  sustainmentObligation "The repeater must remain on the air for 12 months."
  *     `twelve`, `12 month`, `on the air`, `remain` and `obligation` all appear ZERO times in the
@@ -54,17 +56,6 @@ export interface NormalizeContext {
  *     sustainmentObligation is absent from the live record rather than asserted" — false of the
  *     shipped record. It is now read from `rawFields.sustainment` instead (below), which the
  *     Yaesu parser writes when, and only when, a page really does carry the sentence.
- *
- *   ardc-grants  licenseObligation (GPL/MIT/BSD/CERN-OHL/Creative Commons) and
- *   ardc-grants / ardc-award-tables  indirectCostCapPct: 20
- *     `indirect`, `CERN-OHL` and `GPL` appear in zero ARDC fixture bytes; every `open-source`
- *     hit in the eight captured award tables is a GRANTEE'S PROJECT NAME ("Open-Source Software
- *     Framework for Teaching…"), not a term. BOTH FACTS ARE REAL AND SIMPLY UNFETCHED — ARDC
- *     states them on https://www.ardc.net/apply/grant-application-instructions/ ("You may
- *     include up to 20% for indirect costs…"; "projects that are not open source and open access
- *     are not eligible"), which no source in this pipeline requests. The enumerated licence list
- *     is not on that page either. When a source fetches it, they belong back here WITH the
- *     quote; asserting them from a page we never read is how a wrong term ships.
  *
  *   arrl-club-grant  coFunderPreference: true
  *     Copied from its sibling. `sole funder`, `preference`, `matching` and `co-fund` appear zero
@@ -96,6 +87,12 @@ const OBLIGATIONS_BY_SOURCE: Readonly<Record<string, Partial<Obligations>>> = Ob
  *   same JSON object `parseOpportunityDetail` already reads `responseDate` out of, while the
  *   product published `costShareRequired: false`. A cost-share requirement discovered late is
  *   a wasted application.
+ *
+ *   ALL THREE STATES COME OUT OF THIS ONE FUNCTION, which is why the `else if` is spelled out
+ *   rather than written `found.costShareRequired = costSharing === 'true'`: `'true'` is the
+ *   funder saying required, `'false'` is the funder saying not required — a real answer worth
+ *   publishing — and ANY OTHER VALUE, missing key included, leaves the key unset so the record
+ *   reads as unstated. A hit whose detail leg never ran must not answer the question.
  */
 function obligationsFromRawFields(raw: RawOpportunity): Partial<Obligations> {
   const found: Partial<Obligations> = {};
@@ -130,6 +127,46 @@ function obligationsFromRawFields(raw: RawOpportunity): Partial<Obligations> {
 const OBLIGATIONS_BY_RECORD: Readonly<Record<string, Partial<Obligations>>> = Object.freeze({
   [sourceKeyOf('manual-tier-d', 'yasme-supporting-grants')]: {
     reportingObligation: 'Year-end activity report to the YASME Foundation board.',
+  },
+
+  /**
+   * RESTORED 2026-08-03, and only because the bytes finally exist. B3 removed both of these as
+   * assertions about pages nothing fetched, and its removal note ended "The enumerated licence
+   * list is not on that page either" — THAT NOTE IS NOW WRONG IN BOTH DIRECTIONS. `ardc-grants.ts`
+   * now requests https://www.ardc.net/apply/ and .../apply/grant-application-instructions/ as
+   * first-phase requests (HTTP 200 both, committed as fixtures/ardc-grants/02-apply.html, 69,778
+   * bytes, and 03-apply-instructions.html, 85,018 bytes), and the licence list is on the FIRST of
+   * those two, not the instructions page the note was talking about. Grepped, not remembered:
+   * `freely available` 2 hits in 02, `indirect` 5 hits in 03, `open access` 2 hits in each.
+   *
+   * KEYED PER RECORD, not per source, deliberately. `ardc-grants` also emits eight year-archive
+   * children (`past_award`, `do_not_publish`) that are histories of money already handed out; the
+   * 2026 application terms are not their terms. `'apply'` is the externalKey of the one record
+   * these two pages produced, and ardc-grants.ts pins it as "stable and independent of the CMS".
+   *
+   * NOT SET HERE: `costShareRequired`. The instructions page's only cost-share sentence is
+   * CONDITIONAL — "If your organization's indirect cost rate is more than 20%, we ask that you
+   * cost-share any indirect amount over 20%" — so `true` over-states it for an organisation at or
+   * under 20% and `false` contradicts the page for one above it. Unstated is the honest third
+   * answer, and the reason this field became optional.
+   */
+  [sourceKeyOf('ardc-grants', 'apply')]: {
+    // fixtures/ardc-grants/02-apply.html @46128, section "Open Access Requirement", verbatim
+    // apart from the page's three <li> line breaks rendered here as "; ".
+    licenseObligation:
+      'Because ARDC works with and for the public, we require that the work of the projects we ' +
+      'fund be freely available to everyone who can benefit and to everyone who can contribute. ' +
+      'Thus, all technology, documentation, and other materials produced using ARDC funds must ' +
+      'be made freely available to the public, ideally using one of the below open source ' +
+      'licenses: Software: GPL licenses (esp. AGPLv3), MIT, BSD, LGPL; Hardware: CERN Open ' +
+      'Hardware License; Media, writing, images etc.: Free Culture subset of the Creative ' +
+      'Commons licenses, particularly CC-BY-SA, as well as CC-BY and CC0.',
+    // fixtures/ardc-grants/03-apply-instructions.html @50638, list item "Indirect
+    // costs/contingency", verbatim: "You may include up to 20% for indirect costs, such as
+    // phone, internet, rent, accountants, software, bank fees, human resources, lawyers, small
+    // supplies, contingency for unexpected project costs, and anything else that can be hard to
+    // itemize."
+    indirectCostCapPct: 20,
   },
 });
 
@@ -529,9 +566,19 @@ export function normalizeRaw(raw: RawOpportunity, ctx: NormalizeContext): Progra
   // source key before minting a new one, or every night's crawl duplicates every seeded record.
   const id = ctx.existingIdFor?.(ctx.sourceId, raw.externalKey) ?? ctx.mintId(ctx.sourceId, raw.externalKey);
   const recordKey = sourceKeyOf(ctx.sourceId, raw.externalKey);
+  /**
+   * NO DEFAULTS. This object used to open with `costShareRequired: false, coFunderPreference:
+   * false`, and those two literals were the whole defect: a page that never mentions cost sharing
+   * produced a record that positively told the reader no cost share is required. 144 of the 150
+   * publishable records carried that claim and no funder had made it — the same shape as
+   * `licenseMin` defaulting to `'NONE'` past a matcher that skips the check at `NONE`.
+   *
+   * Both fields are now optional (CONTRACT §3, §10 amendment 7) and ABSENT MEANS UNSTATED. A
+   * spread of `undefined`-valued keys would defeat that — `{...{a: undefined}}` still creates the
+   * key — but nothing here ever writes one: the tables below are hand-written and omit rather than
+   * blank, and `obligationsFromRawFields` only assigns on a value it recognised.
+   */
   const obligations: Obligations = {
-    costShareRequired: false,
-    coFunderPreference: false,
     ...OBLIGATIONS_BY_SOURCE[ctx.sourceId],
     ...OBLIGATIONS_BY_RECORD[recordKey],
     // Last, because the funder's own published value outranks any table in this file.

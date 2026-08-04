@@ -259,8 +259,11 @@ export const aiPolicySchema = z.object({
 export const obligationsSchema = z.object({
   licenseObligation: z.string().optional(),
   indirectCostCapPct: z.number().optional(),
-  costShareRequired: z.boolean(),
-  coFunderPreference: z.boolean(),
+  // Optional, and ABSENT MEANS UNSTATED — see the Obligations doc-comment in types.ts. A record
+  // that carries neither key is a record no funder told us about cost sharing, which zod must
+  // accept; making them required is what forced normalize/ to invent `false`.
+  costShareRequired: z.boolean().optional(),
+  coFunderPreference: z.boolean().optional(),
   sustainmentObligation: z.string().optional(),
   reportingObligation: z.string().optional(),
 });

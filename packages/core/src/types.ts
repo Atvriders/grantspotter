@@ -207,11 +207,54 @@ export interface AiPolicy {
   url?: string;
 }
 
+/**
+ * What a funder said about a yes/no obligation, WITH the case where they said nothing.
+ *
+ * `'unstated'` is not a soft `'no'`. It means no page this pipeline fetched addressed the
+ * question, so the reader must go and check — which is a different instruction to the applicant
+ * than "the funder has told us this is not required".
+ */
+export type ObligationState = 'yes' | 'no' | 'unstated';
+
+/**
+ * The ONLY sanctioned way to read a tri-state obligation flag. Renderers and matchers call this
+ * instead of testing the boolean, because `if (o.costShareRequired)` and
+ * `o.costShareRequired ? … : 'not required'` both collapse `undefined` into "no" — the exact
+ * defect this tri-state exists to prevent — and neither reads as wrong at the call site.
+ *
+ * A `switch` on the returned union is exhaustiveness-checked by tsc, so a consumer that forgets
+ * the unstated arm fails to compile rather than shipping a false negative.
+ */
+export function obligationState(value: boolean | undefined): ObligationState {
+  if (value === undefined) return 'unstated';
+  return value ? 'yes' : 'no';
+}
+
+/**
+ * CONTRACT §3 + §10 amendment 7. `costShareRequired` and `coFunderPreference` are OPTIONAL, and
+ * their absence means UNSTATED — no fetched page addressed it.
+ *
+ * They used to be non-optional booleans defaulted to `false` in `normalize/index.ts`, which made
+ * every record whose page never mentions cost sharing publish the positive claim "this funder
+ * does not require cost sharing". 144 of 150 published records carried that claim, and not one
+ * funder had made it. It is the same silence-as-assertion shape as `licenseMin` defaulting to
+ * `'NONE'` (71 of 111 entries, and the matcher SKIPS the licence check at `NONE`), `partTimeOK`
+ * defaulting to `false` (104 of 112 candidates barred a part-time adult learner) and
+ * `ENTITIES_BY_SOURCE[…] ?? []` (an unlisted source accepted nobody).
+ *
+ * It surfaced on a real capture: Grants.gov's NTIA PWSCIF detail JSON carries `"costSharing":true`
+ * while the product published `false`. A cost-share requirement found late is what makes an award
+ * unusable to a club with no matching funds — a blank prompts a check, a false negative does not.
+ *
+ * Read them with {@link obligationState}, never as a bare boolean.
+ */
 export interface Obligations {
   licenseObligation?: string;
   indirectCostCapPct?: number;
-  costShareRequired: boolean;
-  coFunderPreference: boolean;
+  /** `true` required · `false` the funder said it is not required · absent unstated. */
+  costShareRequired?: boolean;
+  /** `true` preferred · `false` the funder said it is not · absent unstated. */
+  coFunderPreference?: boolean;
   sustainmentObligation?: string;
   reportingObligation?: string;
 }

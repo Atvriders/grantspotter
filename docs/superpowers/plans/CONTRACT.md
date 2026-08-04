@@ -524,3 +524,19 @@ Recorded after the spec-coverage and type-consistency audits. See
    (`programSchema`, …), and `buildUserAgent` is defined once, in `server/src/config.ts`.
 6. **`packages/web`'s scaffold and typed API client belong to Plan 1 Task 18.** Plan 3 modifies
    those files; it never re-creates them.
+7. **`Obligations.costShareRequired` and `Obligations.coFunderPreference` are OPTIONAL, and their
+   absence means UNSTATED.** §3 declared both as non-optional `boolean`, so `normalize/index.ts`
+   had to open every record with `costShareRequired: false, coFunderPreference: false` — and 148
+   of the 150 publishable records therefore published the positive claim *"this funder does not
+   require cost sharing"*, which no funder had made. Three states are now distinguished and must
+   be kept distinct by every consumer: `true` (the funder requires it), `false` (the funder said
+   it is **not** required — a real answer, worth publishing), and **absent** (no page we fetched
+   addressed it). **Absent must never render as "not required" anywhere downstream**, in Plan 3's
+   detail view or anywhere else: a blank prompts an applicant to check, and a false negative does
+   not. Read them through `obligationState(value): 'yes' | 'no' | 'unstated'` (exported from
+   `@grantspotter/core`), never as a bare boolean — `x ? … : 'not required'` collapses the third
+   state and does not look wrong at the call site. This is the same silence-as-assertion class as
+   `licenseMin` defaulting to `'NONE'` past a matcher that skips the licence check at `NONE`,
+   `partTimeOK` defaulting to `false`, and `ENTITIES_BY_SOURCE[…] ?? []` meaning "accepts nobody";
+   it surfaced because Grants.gov's NTIA PWSCIF capture carries `"costSharing":true` while the
+   product published `false`.

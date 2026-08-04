@@ -2,9 +2,13 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OrgProfile, Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
-import { expandCycles, hashProgram, matchProgram, parseRecurrence } from '@grantspotter/core';
+import { expandCycles, hashProgram, matchProgram, obligationState, parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
-import { fixturePayload } from '../../test/fixtures.js';
+// The corpus profiler's own loader, imported rather than reimplemented so the corpus-wide count
+// below cannot drift from `npm run profile-corpus`. scripts/ is inside the root tsconfig include
+// and is a vitest project of its own, so this crosses no boundary that is not already crossed.
+import { loadCorpus } from '../../../../scripts/profile-corpus.js';
+import { fixturePayload, loadFixture } from '../../test/fixtures.js';
 import { grantsGovFederal } from '../sources/grants-gov-federal.js';
 import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
 import { SOURCES } from '../sources/registry.js';
@@ -531,7 +535,7 @@ describe('status fix round 1 — a safety warning must never compute open', () =
       tierD({ externalKey: 'ncdxf-youth-grant', name: 'NCDXF Youth Grant', rawFields: { recordType: 'manual', deadlineKind: 'unpublished' } }),
       tierDCtx({ funderId: 'ncdxf' }),
     );
-    expect(p.obligations.costShareRequired).toBe(false);
+    expect(p.obligations.costShareRequired).toBeUndefined();
   });
 });
 
@@ -661,24 +665,76 @@ describe('disputed claims ship populated', () => {
 });
 
 describe('obligations and restrictions', () => {
+  const ardcCtx = () =>
+    ctx({ sourceId: 'ardc-grants', funderId: 'ardc', klass: 'ham_grant', tier: 'A', deadlineInheritsFrom: undefined });
+
   /**
-   * CLOSE-OUT REVIEW B3, inverted on purpose. This used to assert ARDC's open-source obligation
-   * and 20% indirect cap on every ARDC record. Neither string exists in any ARDC capture:
-   * `indirect`, `CERN-OHL` and `GPL` appear in ZERO fixture bytes, and every `open-source` hit
-   * across the eight captured award tables is a grantee's project title.
+   * CLOSE-OUT REVIEW B3, and then its reversal — BOTH pinned against the real bytes.
    *
-   * BOTH TERMS ARE REAL AND UNFETCHED — https://www.ardc.net/apply/grant-application-instructions/
-   * says "You may include up to 20% for indirect costs" and "projects that are not open source
-   * and open access are not eligible" — and when a source fetches that page they belong back in
-   * OBLIGATIONS_BY_SOURCE with the quote beside them. Until then the honest output is nothing.
+   * B3 removed ARDC's open-access obligation and 20% indirect cap because `indirect`, `CERN-OHL`
+   * and `GPL` appeared in zero ARDC fixture bytes and every `open-source` hit across the eight
+   * captured award tables was a grantee's project title. Its removal note said the enumerated
+   * licence list "is not on that page either". That note is now out of date in both directions:
+   * `ardc-grants.ts` requests https://www.ardc.net/apply/ and
+   * .../apply/grant-application-instructions/, both came back 200, both are committed, and the
+   * licence list is on the FIRST of the two.
+   *
+   * The `assertsFromRealArdcBytes` test below re-greps the committed fixtures on every run rather
+   * than trusting this comment — which is the discipline the Yaesu "12-month on-air obligation"
+   * cost us, having been repeated as established fact while appearing zero times in its capture.
    */
-  it('asserts NO ARDC obligation, because no page this pipeline fetches states one', () => {
-    const p = normalizeRaw(
-      raw({ sourceId: 'ardc-grants' }),
-      ctx({ sourceId: 'ardc-grants', funderId: 'ardc', klass: 'ham_grant', tier: 'A', deadlineInheritsFrom: undefined }),
+  it('publishes ARDC’s open-access requirement and 20% indirect cap on the record whose pages state them', () => {
+    const p = normalizeRaw(raw({ sourceId: 'ardc-grants', externalKey: 'apply' }), ardcCtx());
+    expect(p.obligations.licenseObligation).toMatch(
+      /all technology, documentation, and other materials produced using ARDC funds must be made freely available to the public/i,
     );
+    expect(p.obligations.licenseObligation).toMatch(/CERN Open Hardware License/);
+    expect(p.obligations.indirectCostCapPct).toBe(20);
+  });
+
+  it('does NOT put the 2026 application terms on ARDC’s past-award year archives', () => {
+    // `ardc-grants` also emits eight `past_award` children — histories of money already handed
+    // out. The terms live on /apply/, which produced the `apply` record and nothing else, so the
+    // entry is keyed per record. A source-level entry would backdate today's licence terms onto
+    // grants awarded years ago.
+    const p = normalizeRaw(raw({ sourceId: 'ardc-grants', externalKey: '2021-grants' }), ardcCtx());
     expect(p.obligations.licenseObligation).toBeUndefined();
     expect(p.obligations.indirectCostCapPct).toBeUndefined();
+  });
+
+  it('leaves ARDC’s cost share UNSTATED, because its only cost-share sentence is conditional', () => {
+    // fixtures/ardc-grants/03-apply-instructions.html says "If your organization's indirect cost
+    // rate is more than 20%, we ask that you cost-share any indirect amount over 20%". `true`
+    // over-states that for an organisation at or under 20%; `false` contradicts the page for one
+    // above it. This is precisely the case the third state exists for.
+    const p = normalizeRaw(raw({ sourceId: 'ardc-grants', externalKey: 'apply' }), ardcCtx());
+    expect(p.obligations.costShareRequired).toBeUndefined();
+    expect('costShareRequired' in p.obligations).toBe(false);
+  });
+
+  it('finds both ARDC obligations in the committed capture, verbatim, byte for byte', async () => {
+    // GREP, DON'T REMEMBER. This is the test the Yaesu sustainment obligation would have failed
+    // for months: it asserts the sentence is IN THE FIXTURE, not merely in our table, so the two
+    // cannot drift and a re-capture that drops the term breaks the build instead of shipping a
+    // stale obligation.
+    const root = path.join(fileURLToPath(new URL('../../../../fixtures/ardc-grants/', import.meta.url)));
+    const applyPage = await readFile(path.join(root, '02-apply.html'), 'utf8');
+    const instructions = await readFile(path.join(root, '03-apply-instructions.html'), 'utf8');
+    const flat = (html: string): string => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+
+    expect(flat(applyPage)).toContain(
+      'all technology, documentation, and other materials produced using ARDC funds must be made freely available to the public',
+    );
+    expect(flat(instructions)).toContain('You may include up to 20% for indirect costs');
+
+    // ...and the page each one is NOT on, so a future capture cannot quietly swap them.
+    expect(instructions).not.toContain('freely available');
+    expect(applyPage.toLowerCase()).not.toContain('indirect');
+
+    const p = normalizeRaw(raw({ sourceId: 'ardc-grants', externalKey: 'apply' }), ardcCtx());
+    expect(flat(applyPage)).toContain(
+      p.obligations.licenseObligation!.split(' licenses: Software')[0].replace(/\s+/g, ' '),
+    );
   });
 
   it('applies ARRL’s exclusions and co-funder preference', () => {
@@ -754,6 +810,26 @@ describe('obligations and restrictions', () => {
       ctx({ sourceId: 'grants-gov-federal', funderId: 'federal', klass: 'adjacent_stem', deadlineInheritsFrom: undefined }),
     );
     expect(no.obligations.costShareRequired).toBe(false);
+
+    // ...and the THIRD state, which is the one this whole change is about: a hit whose detail leg
+    // never ran carries no costSharing key at all, and must therefore answer nothing.
+    const silent = normalizeRaw(
+      raw({ sourceId: 'grants-gov-federal', rawFields: {} }),
+      ctx({ sourceId: 'grants-gov-federal', funderId: 'federal', klass: 'adjacent_stem', deadlineInheritsFrom: undefined }),
+    );
+    expect(silent.obligations.costShareRequired).toBeUndefined();
+    expect('costShareRequired' in silent.obligations).toBe(false);
+    expect(obligationState(silent.obligations.costShareRequired)).toBe('unstated');
+  });
+
+  it('finds NTIA’s "costSharing":true in the committed capture itself, not only in a hand-made rawField', () => {
+    // The bug that started this whole change, pinned at the BYTES: fixtures/grants-gov-federal/
+    // 05-…-fetchopportunity.json (opportunityId 363179, NTIA PWSCIF) says true while the product
+    // published false. A re-capture that drops the flag now fails here instead of silently
+    // reverting the record to "no cost share required". The end-to-end half is asserted in the
+    // NTIA PWSCIF describe further down, on the record the production parser actually builds.
+    const body = loadFixture('grants-gov-federal', '05-api-grants-gov-v1-api-fetchopportunity.json');
+    expect(body).toMatch(/"costSharing"\s*:\s*true/);
   });
 
   it('carries every §4.6 obligation field a page in this corpus actually states', () => {
@@ -762,13 +838,13 @@ describe('obligations and restrictions', () => {
     // same pipeline on "Verify now" (Plan 3 Task 10), so a field no source produces is a field
     // silently dropped — which is why this test enumerates them.
     //
-    // FOUR of the six are produced today. `licenseObligation` and `indirectCostCapPct` are NOT,
-    // and that is the honest state after close-out review B3: both were asserted for ARDC out of
-    // a table, and no page this pipeline fetches states either one. ARDC does state both on
-    // https://www.ardc.net/apply/grant-application-instructions/, which no source requests. When
-    // one does, they come back here — with the quote — and this list goes back to six.
+    // ALL SIX are produced again as of 2026-08-03. Close-out review B3 correctly cut this list to
+    // four when it found ARDC's `licenseObligation` and `indirectCostCapPct` asserted from a page
+    // nothing fetched; `ardc-grants.ts` now fetches BOTH ARDC application pages (HTTP 200,
+    // committed), so the two came back with their quotes and this list is six again.
     const produced = new Set<string>();
     const cases: Array<[string, Partial<NormalizeContext>, string, Record<string, string>]> = [
+      ['ardc-grants', { funderId: 'ardc', klass: 'ham_grant', tier: 'A' }, 'apply', {}],
       ['arrl-amateur-radio-grants', { funderId: 'arrl-foundation', klass: 'ham_grant' }, 'amateur-radio-grants', {}],
       [
         'yaesu-dr2x',
@@ -791,9 +867,55 @@ describe('obligations and restrictions', () => {
     expect([...produced].sort()).toEqual([
       'coFunderPreference',
       'costShareRequired',
+      'indirectCostCapPct',
+      'licenseObligation',
       'reportingObligation',
       'sustainmentObligation',
     ]);
+  });
+
+  /**
+   * THE HEADLINE COUNT, measured over the whole real corpus rather than argued.
+   *
+   * With `costShareRequired: false, coFunderPreference: false` as the opening literals of every
+   * record, EVERY publishable program published "this funder does not require cost sharing" and
+   * "this funder has no co-funder preference" — 150 of 150 records, 144 of which had no funder
+   * statement of any kind behind either claim. This test rebuilds the same corpus the profiler
+   * uses and asserts that silence now reads as silence.
+   */
+  it('publishes no cost-share or co-funder answer for a record whose funder gave none', async () => {
+    // `loadCorpus` is the profiler's own builder — the same 150 publishable records
+    // `npm run profile-corpus` reports, with `isDoNotPublish` and the adjacency gate already
+    // applied. Reimplementing the fixture pairing here would let this count drift from the tool
+    // every acceptance figure in this plan is measured with.
+    const { programs } = await loadCorpus();
+    expect(programs.length).toBeGreaterThan(100);
+
+    const stated = (key: 'costShareRequired' | 'coFunderPreference') =>
+      programs.filter((p) => p.obligations[key] !== undefined);
+    const unstated = (key: 'costShareRequired' | 'coFunderPreference') =>
+      programs.filter((p) => obligationState(p.obligations[key]) === 'unstated');
+
+    // Nothing is lost: the records a funder DID answer for still answer.
+    const costStated = stated('costShareRequired');
+    expect(costStated.length).toBeGreaterThan(0);
+    for (const p of costStated) {
+      expect(typeof p.obligations.costShareRequired).toBe('boolean');
+    }
+    const coStated = stated('coFunderPreference');
+    expect(coStated.length).toBeGreaterThan(0);
+
+    // ...and every other record now says nothing rather than saying no.
+    expect(unstated('costShareRequired').length).toBe(programs.length - costStated.length);
+    expect(unstated('coFunderPreference').length).toBe(programs.length - coStated.length);
+    expect(unstated('costShareRequired').length).toBeGreaterThan(100);
+
+    // The key is ABSENT, not present-and-undefined: `{...{a: undefined}}` would create it, and it
+    // would then serialise into the API response and the SQLite JSON column as an explicit null.
+    for (const p of unstated('costShareRequired')) {
+      expect('costShareRequired' in p.obligations).toBe(false);
+      expect(JSON.stringify(p.obligations)).not.toContain('costShareRequired');
+    }
   });
 });
 
@@ -831,9 +953,14 @@ describe('the resulting Program is complete', () => {
     expect(Array.isArray(p.constraints)).toBe(true);
     expect(Array.isArray(p.fundingRestrictions)).toBe(true);
     expect(Array.isArray(p.tags)).toBe(true);
-    expect(typeof p.obligations.costShareRequired).toBe('boolean');
-    expect(typeof p.obligations.coFunderPreference).toBe('boolean');
     expect(typeof p.rawOtherText).toBe('string');
+    // `obligations.costShareRequired` and `.coFunderPreference` used to be asserted `'boolean'`
+    // HERE, in the completeness test — which is exactly how the defect was kept alive: a
+    // completeness check cannot tell a field that is populated from a field that is invented, and
+    // this one demanded the invention. They are optional now, and this record's funder said
+    // nothing, so the correct output is nothing.
+    expect(p.obligations.costShareRequired).toBeUndefined();
+    expect(p.obligations.coFunderPreference).toBeUndefined();
   });
 
   it('never emits a summary that is a full text dump', () => {
@@ -1219,6 +1346,16 @@ describe('the one genuinely open federal call reaches an applicant (NTIA PWSCIF)
     expect(matchProgram(org('university'), pwscif, NOW).kind).not.toBe('ineligible');
     expect(matchProgram(org('school_lea'), pwscif, NOW).kind).not.toBe('ineligible');
     expect(matchProgram(org('club_501c3'), pwscif, NOW).kind).not.toBe('ineligible');
+  });
+
+  it('publishes NTIA’s own cost-share requirement, end to end from the capture', () => {
+    // `"costSharing":true` sits in the same JSON object `parseOpportunityDetail` reads
+    // `responseDate` out of. The product used to publish `costShareRequired: false` here — the
+    // disqualifying direction, on the single federal opportunity in the corpus a real applicant
+    // can reach. This asserts the value the PRODUCTION parser produces, not a synthetic rawField.
+    expect(raws[0].rawFields.costSharing).toBe('true');
+    expect(pwscif.obligations.costShareRequired).toBe(true);
+    expect(obligationState(pwscif.obligations.costShareRequired)).toBe('yes');
   });
 
   it('publishes the funder’s own window, not a table sentence', () => {
