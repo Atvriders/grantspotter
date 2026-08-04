@@ -23,6 +23,13 @@
 // with teeth and is deliberately not configurable. A second copy here would be a second thing to
 // forget, which is precisely how the suppression boundary in this repo leaked four times.
 import { redactBlockedLinks } from '../api/notify.js';
+// THE GAP MARKER'S SHAPE, imported from the module that writes it. `prose/facts.ts` has to
+// restate it (`prose/` may not import `templates/`) and pins the two against each other in a
+// test; this module is under no such rule, so it takes the definition itself and the shape of a
+// gap cannot drift between the writer, the export gate that counts them and the renderer that
+// has to make them visible. It is a FACTORY for the same reason it is one there: a shared /g
+// regex carries `lastIndex` between callers.
+import { TODO_MARKER_SCAN } from '../templates/fill.js';
 
 export type DraftBlock =
   | { kind: 'p'; text: string }
@@ -92,10 +99,9 @@ const QUOTE_LINE = /^\s*>\s?(.*)$/;
 const TABLE_LINE = /^\s*\|/;
 const TABLE_RULE_CELL = /^:?-+:?$/;
 
-/** The gap marker, restated from `templates/fill.ts`'s `TODO_MARKER_SCAN` (server may not import
- * across that boundary in the direction that would matter here). Fresh per call: a shared /g
- * regex carries `lastIndex` between callers. */
-export const TODO_SCAN = (): RegExp => /\[TODO:[^\]]*\]/g;
+/** The gap marker `templates/fill.ts` writes, re-exported so a renderer need not know where it
+ * came from. Fresh regex per call. */
+export const TODO_SCAN = TODO_MARKER_SCAN;
 
 /** One piece of a line: ordinary prose, or a gap that must be rendered loudly. */
 export interface DraftRun {
