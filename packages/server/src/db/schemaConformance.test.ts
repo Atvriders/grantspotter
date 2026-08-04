@@ -171,17 +171,34 @@ describe('migration ownership (RESOLUTIONS R19)', () => {
   // IF NOT EXISTS" while doing so, so the raw-text form fails on a comment that
   // is arguing FOR the rule it is being failed by. Comments are stripped first,
   // exactly as the duplicate-name check above already does.
+  // NARROWED 2026-08-04 (controller ruling). This used to also assert
+  // `toMatch(/CREATE INDEX/)` on both files — "these migrations exist to add an
+  // index, so one must be here". That generalised from 033, where the index IS
+  // the file's only reason to exist, to 032, where it demonstrably is not:
+  // every access path against `profiles` is prefixed by user_id, and Plan 1's
+  // UNIQUE (user_id, kind) already indexes all of them (EXPLAIN QUERY PLAN gives
+  // the identical access path with 032's index dropped). Task 4 measured that,
+  // emptied the file, went red here, and correctly restored the index rather
+  // than rewriting another task's committed invariant from inside its own task.
+  //
+  // The right fix is to narrow the assertion, not to keep a redundant index
+  // alive to satisfy a test. 033's index is not left unguarded: it has its own
+  // specific test below, which names `idx_watches_user_created` and states the
+  // read it covers — strictly better than a generic "contains CREATE INDEX".
+  //
+  // What remains here is the invariant that actually matters: a CREATE TABLE in
+  // one of these files sorts after 001-init.sql, so it silently no-ops, and its
+  // divergent FK-less shape would read as the schema while never existing.
   it.each([
     ['032-profiles.sql'],
     ['033-watches.sql'],
-  ])('%s adds indexes only — it never re-creates a Plan 1 table', (file) => {
+  ])('%s never re-creates a Plan 1 table', (file) => {
     const raw = readFileSync(
       fileURLToPath(new URL(`./migrations/${file}`, import.meta.url)),
       'utf8',
     );
     const sql = raw.replace(/--[^\n]*/g, '');
     expect(sql).not.toMatch(/CREATE\s+TABLE/i);
-    expect(sql).toMatch(/CREATE\s+(UNIQUE\s+)?INDEX/i);
   });
 
   it('keeps Plan 1’s cascade on watches, which is what makes the fixtures need parents', () => {
