@@ -103,6 +103,28 @@ const CREATES: Array<[DegreeLevel, RegExp]> = [
 const UNDERGRAD_INCLUDES_ASSOC = /\bundergraduates?\b/i;
 
 /**
+ * A trade/art/professional school named as its OWN disjunct — "or a fully accredited trade, art
+ * or professional school" — rather than as one item folded into a year-qualified list ("college,
+ * university, or trade school" / "2- or 4-year college, university, or trade school"). The
+ * grammatical tell is the repeated indefinite article: "or A ... school" opens a brand-new noun
+ * phrase, so nothing upstream of it (a "2- or 4-year"/"undergraduate, graduate or post-graduate"
+ * enumeration) reaches across "or a" to qualify it. A flat list item never gets that article
+ * ("...college, university, or trade school" has no "a" before "trade"), which is exactly what
+ * keeps this from firing on the corpus's ~14 OTHER "trade school" mentions — all of them fold
+ * trade school into a year-bound list and correctly stay at whatever level that list names.
+ *
+ * The CWops Scholarship, verbatim Institution field: "Fully accredited educational institution of
+ * higher learning, 2- or 4-year, undergraduate, graduate or post-graduate, or a fully accredited
+ * trade, art or professional school." The degree-level enumeration modifies "institution of
+ * higher learning" only; the trade/art/professional branch names a school type with no
+ * degree-level restriction of its own, and a certificate is the ordinary credential such a school
+ * awards. Reading it as GRAD-and-below-only excluded certificate/vocational applicants even
+ * though the funder's own text plainly admits them — corrected 2026-08-03.
+ */
+const TRADE_SCHOOL_DISJUNCT =
+  /\bor\s+an?\s+[^;.]{0,60}?\b(?:trade|vocational|art|professional)\b[^;.]{0,30}?\bschools?\b/i;
+
+/**
  * WIDENING tokens — institution tiers the funder enumerated. They may only ADD to a list that is
  * already non-empty, never create one, so no entry ever gains a bar it did not have: "An
  * accredited 2- or 4-year college, university or trade school. Graduate studies permitted."
@@ -112,6 +134,7 @@ const UNDERGRAD_INCLUDES_ASSOC = /\bundergraduates?\b/i;
 const WIDENS: Array<[DegreeLevel, RegExp]> = [
   ['ASSOC', new RegExp(String.raw`\b${YEARS_2}\b|\bcommunity colleges?\b`, 'i')],
   ['BACH', new RegExp(String.raw`\b${YEARS_4}\b`, 'i')],
+  ['CERT', TRADE_SCHOOL_DISJUNCT],
 ];
 
 /**
@@ -194,9 +217,11 @@ function spec(text: string): Extract<Constraint['spec'], { axis: 'institution' }
   return {
     axis: 'institution',
     degreeLevels: degreeLevels(splitClauses(text)),
-    // "trade" is deliberately excluded from CERT above — it drives tradeSchoolOK, not a
-    // certificate-level requirement; a trade school accepted alongside two/four-year/graduate
-    // programs isn't itself a certificate-level requirement.
+    // "trade" is deliberately excluded from CREATES above — it drives tradeSchoolOK, not a
+    // certificate-level requirement; a trade school folded into a year-bound list alongside
+    // two/four-year/graduate programs isn't itself a certificate-level requirement. The one
+    // narrower exception — an UNQUALIFIED trade/art/professional-school disjunct, which names no
+    // degree level of its own — is handled separately by TRADE_SCHOOL_DISJUNCT in WIDENS above.
     tradeSchoolOK: /\b(?:trade|vocational|technical schools?)\b/i.test(text),
     partTimeOK: partTimePermitted(text),
     accreditationRequired: /\baccredit/i.test(text),

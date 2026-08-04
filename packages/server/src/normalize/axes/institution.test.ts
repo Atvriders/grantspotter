@@ -122,11 +122,6 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     ['An accredited 2-or 4- year college, university, or trade school. Graduate studies accepted.', ['ASSOC', 'BACH', 'GRAD']],
     ['An accredited 2- or 4-year college, university or trade school. Graduate studies permitted.', ['ASSOC', 'BACH', 'GRAD']],
     [
-      'Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, ' +
-        'graduate or post-graduate, or a fully accredited trade, art or professional school',
-      ['ASSOC', 'BACH', 'GRAD'],
-    ],
-    [
       'Any fully accredited 4-year US college or university or graduate school thereof, and have a ' +
         'GPA of 3.0 or higher out of a 4.0 scale',
       ['BACH', 'GRAD'],
@@ -158,6 +153,51 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     ['An accredited 2- or 4-year college, university, or trade school within the United States'],
   ])('does not read an institution tier as a degree-level bar: %s', (text) => {
     expect(levels({ Institution: text })).toEqual([]);
+  });
+
+  /**
+   * RULING (2026-08-03): the CWops Scholarship's Institution field, verbatim, is
+   *
+   *   "Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate,
+   *   graduate or post-graduate, or a fully accredited trade, art or professional school"
+   *
+   * A prior round read this as a single enumeration and produced ["ASSOC", "BACH", "GRAD"],
+   * excluding certificate/vocational applicants. That is wrong: "or a fully accredited trade,
+   * art or professional school" is a DISJUNCT, not a continuation of the degree-level list — the
+   * "2- or 4-year, undergraduate, graduate or post-graduate" enumeration modifies "institution of
+   * higher learning" only. The trade/art/professional branch names a school type with no
+   * degree-level restriction of its own, and a certificate is the ordinary credential such a
+   * school awards, so excluding certificate students contradicts what the funder plainly wrote.
+   * This is now a regression test for the corrected reading, asserting the full spec (not just
+   * degreeLevels) so the trade/accreditation/part-time fields stay pinned too.
+   */
+  it('reads the CWops Scholarship: the trade/art/professional-school branch admits certificate study', () => {
+    expect(
+      first({
+        Institution:
+          'Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, ' +
+          'graduate or post-graduate, or a fully accredited trade, art or professional school',
+      }),
+    ).toMatchObject({
+      degreeLevels: ['CERT', 'ASSOC', 'BACH', 'GRAD'],
+      tradeSchoolOK: true,
+      partTimeOK: true,
+      accreditationRequired: true,
+    });
+  });
+
+  /**
+   * The true negative for the same pattern: the ECARS Scholarship's Institution field, verbatim,
+   * is "Full-time studies at a two-year trade school or 4-year undergraduate institution" — here
+   * the trade school IS qualified, by "two-year" attached directly to it, so it names an
+   * ASSOCIATE-equivalent programme rather than an unqualified school type. This is a genuine
+   * degree-programme restriction and must still exclude certificate study; only an UNQUALIFIED
+   * trade/art/professional disjunct (no year attached, introduced by "or a ...") widens to CERT.
+   */
+  it('does not widen to CERT when the trade-school branch is itself degree-qualified (ECARS, real negative)', () => {
+    expect(
+      levels({ Institution: 'Full-time studies at a two-year trade school or 4-year undergraduate institution' }),
+    ).toEqual(['ASSOC', 'BACH']);
   });
 
   it('reads "N-year degree/program" — a statement about the applicant\'s own course — as a level', () => {
