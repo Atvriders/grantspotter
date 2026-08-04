@@ -112,28 +112,63 @@ export interface PreferenceScope {
   ungoverned: string[];
 }
 
+/**
+ * The spans a preference is judged over: every clause, cut again at ";" (see the interface doc).
+ * Shared so `statesFallback` asks its question of exactly the same spans `preferenceScope` does —
+ * a private second segmentation here is how the two answers would drift apart.
+ */
+function segmentsOf(text: string): string[] {
+  return splitClauses(text).flatMap((clause) => clause.split(';'));
+}
+
 export function preferenceScope(text: string): PreferenceScope {
   const governed: string[] = [];
   const ungoverned: string[] = [];
-  for (const clause of splitClauses(text)) {
-    for (const segment of clause.split(';')) {
-      PREFERENCE_SCAN.lastIndex = 0;
-      const marker = PREFERENCE_SCAN.exec(segment);
-      if (marker === null) {
-        ungoverned.push(segment);
-        continue;
-      }
-      const before = segment.slice(0, marker.index);
-      if (before.trim() !== '' && !HINGE_BEFORE.test(before)) {
-        // Predicate position: the preference is what this segment says, start to finish.
-        governed.push(segment);
-        continue;
-      }
-      ungoverned.push(before);
-      governed.push(segment.slice(marker.index));
+  for (const segment of segmentsOf(text)) {
+    PREFERENCE_SCAN.lastIndex = 0;
+    const marker = PREFERENCE_SCAN.exec(segment);
+    if (marker === null) {
+      ungoverned.push(segment);
+      continue;
     }
+    const before = segment.slice(0, marker.index);
+    if (before.trim() !== '' && !HINGE_BEFORE.test(before)) {
+      // Predicate position: the preference is what this segment says, start to finish.
+      governed.push(segment);
+      continue;
+    }
+    ungoverned.push(before);
+    governed.push(segment.slice(marker.index));
   }
   return { governed, ungoverned };
+}
+
+/**
+ * Does the funder state, IN ITS OWN WORDS, that the criterion beside this one does not exclude?
+ *
+ * A span that OPENS with a fallback condition — "if no suitable applicant identified, applicants
+ * from all regions will be considered" (CTRI/Chris Seeber KA1GEU), "If no qualified appilcant,
+ * award given regardless of the field of study" (North Fulton, funder's typo and all) — is the
+ * funder widening its own eligibility. Reading it as a restriction inverts the sentence: CTRI's
+ * region was published as a hard bar on every applicant outside six states, by an award whose
+ * page says region excludes nobody.
+ *
+ * This is `CASCADE`'s rule applied to the family `CASCADE` cannot spell. `CASCADE` matches one
+ * exact wording, "if no (other) qualified applicant", anywhere in the text; this matches the
+ * whole family, but only where a span BEGINS with it, which is what keeps "…various radio
+ * contests are not supported unless the support can be justified…" (NCDXF, a restriction with
+ * "unless" in the middle) from being read as a widening.
+ *
+ * WHY IT IS CHECKED BEFORE THE PREFERENCE-WORD GATE. `isPreferenceText` used to open with
+ * `if (!PREFERENCE.test(text)) return false`, so a funder had to use the WORD "preference" before
+ * any of this ran at all — which made `CASCADE` and `FALLBACK_CONDITION` unreachable for every
+ * fallback stated without it, and North Fulton proves the mechanism inside a single record: its
+ * Region field says "…If no qualified applicant, PREFERENCE will be awarded…" and comes out soft,
+ * its Field of Study field says "…If no qualified appilcant, award given regardless…" — the same
+ * semantics, no preference word — and came out hard.
+ */
+function statesFallback(text: string): boolean {
+  return segmentsOf(text).some((s) => FALLBACK_CONDITION.test(s.replace(/^[\W_]+/, '')));
 }
 
 /** Does this span, on its own, state something the funder requires? */
@@ -189,14 +224,30 @@ export function requirementText(text: string): string {
  * read as connective tissue, not as a requirement.
  */
 export function isPreferenceText(text: string): boolean {
+  // A stated fallback answers the question on its own, whatever else the text says and whether or
+  // not the word "preference" appears — see `statesFallback`. This ordering IS the fix: while the
+  // preference-word gate came first, neither `CASCADE` nor `FALLBACK_CONDITION` could run unless
+  // the funder had already used a preference word, and a funder who widens eligibility without
+  // one ("if no suitable applicant identified, applicants from all regions will be considered")
+  // had that sentence published as a bar.
+  if (CASCADE.test(text) || statesFallback(text)) return true;
   if (!PREFERENCE.test(text)) return false;
-  if (CASCADE.test(text)) return true;
   return !preferenceScope(text).ungoverned.some(statesRequirement);
 }
 
-/** 0 = primary preference; 1 = the explicit "if no qualified applicant is identified" fallback. */
+/**
+ * 0 = primary preference; 1 = the explicit "…if no qualified applicant is identified…" fallback.
+ *
+ * Same predicate as the softening decision above, deliberately: a constraint that is soft BECAUSE
+ * the funder stated a fallback is the fallback tier, and publishing it at rank 0 would rank it
+ * level with a plain "preference given to residents of X" that carries no such sentence. The
+ * earlier note here — that widening this would "move data that is already pinned" — held while
+ * `FALLBACK_CONDITION` decided nothing a user sees; now that it decides hard vs soft, the two
+ * answers have to come from one rule or a constraint could be soft-because-of-a-cascade and
+ * ranked as if there were none.
+ */
 export function cascadeRank(text: string): number {
-  return CASCADE.test(text) ? 1 : 0;
+  return CASCADE.test(text) || statesFallback(text) ? 1 : 0;
 }
 
 /**

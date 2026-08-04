@@ -18,8 +18,16 @@
 // fieldOfStudy.test.ts and clause-split.test.ts exist.
 import type { RawOpportunity } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
+import { extractFieldOfStudy } from './fieldOfStudy.js';
 import { extractGeography } from './geography.js';
-import { isPreferenceText, makeConstraint, preferenceScope, requirementText } from './preference.js';
+import { extractLicense } from './license.js';
+import {
+  cascadeRank,
+  isPreferenceText,
+  makeConstraint,
+  preferenceScope,
+  requirementText,
+} from './preference.js';
 
 const raw = (fields: Record<string, string>): RawOpportunity => ({
   sourceId: 'arrl-scholarship-descriptions',
@@ -191,5 +199,165 @@ describe('and does NOT turn a stated preference into a bar', () => {
         0,
       ).hard,
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- the fallback family
+
+/**
+ * A FUNDER WIDENING ITS OWN ELIGIBILITY, PUBLISHED AS A BAR.
+ *
+ * `isPreferenceText` used to open `if (!PREFERENCE.test(text)) return false`, so the two things
+ * beside it that recognise a stated fallback — `CASCADE` and `FALLBACK_CONDITION` — could not run
+ * at all unless the funder had already used the WORD "preference". Every fallback stated without
+ * one was published as a hard requirement, which is the exact inverse of what the sentence says.
+ *
+ * Each `it` below is red under the old ordering. They are written so that restoring the gate — or
+ * dropping either pattern back into unreachable code — turns this file red rather than leaving it
+ * green over logic nothing executes.
+ */
+describe('a stated fallback is the funder saying the criterion excludes nobody', () => {
+  it('CTRI: "if no suitable applicant identified" is not a bar on six states', () => {
+    // Verbatim, fixtures/arrl-scholarship-descriptions, The CTRI/Chris Seeber, KA1GEU, Memorial
+    // Scholarship. It hit ALL FIVE individual profiles: every applicant outside New England was
+    // excluded from an award whose funder says region excludes nobody. Note there is no
+    // preference word anywhere in it, and `CASCADE`'s one spelling ("qualified applicant") does
+    // not match "suitable applicant" either — it takes both halves of the fix to see this.
+    const text =
+      'ARRL New England Division (Connecticut, Rhode Island, Vermont, Maine, New Hampshire); if ' +
+      'no suitable applicant identified, applicants from all regions will be considered';
+    expect(/\b(?:preference|preferred|prefers?|priority)\b/i.test(text)).toBe(false);
+    expect(isPreferenceText(text)).toBe(true);
+    expect(cascadeRank(text)).toBe(1);
+    const geo = extractGeography(raw({ Region: text }));
+    expect(geo).toHaveLength(1);
+    expect(geo[0].hard).toBe(false);
+    expect(geo[0].fallbackRank).toBe(1);
+    // The widening does not erase the funder's stated region: it is still published, softly, so
+    // a New England applicant still ranks as preferred.
+    expect(geo[0].spec).toMatchObject({ geo: { type: 'arrl_division', values: ['New England'] } });
+  });
+
+  it('North Fulton: the same record states both halves, and they now agree', () => {
+    // The proof that the preference WORD, not the semantics, was deciding. Both fields state a
+    // criterion and then waive it; only one of them says "preference", and only that one came out
+    // soft. (The funder's typo, "appilcant", is verbatim and is why `CASCADE` misses this one.)
+    const region =
+      'Residence in GA. If no qualified applicant, preference will be awarded to an applicant ' +
+      'from the ARRL Southeastern Division (Alabama, Florida, Georgia, Puerto Rico and the US ' +
+      'Virgin Islands)';
+    const field =
+      'Engineering or Computer Science. If no qualified appilcant, award given regardless of the ' +
+      'field of study.';
+    expect(isPreferenceText(region)).toBe(true);
+    expect(isPreferenceText(field)).toBe(true);
+    const fos = extractFieldOfStudy(raw({ 'Field of Study': field }));
+    expect(fos).toHaveLength(1);
+    expect(fos[0].hard).toBe(false);
+    expect(fos[0].fallbackRank).toBe(1);
+    expect(fos[0].spec).toMatchObject({ fields: ['Engineering', 'Computer Science'] });
+  });
+
+  it('reads the whole fallback family, not one spelling of it', () => {
+    // Real Region/Field values. None carries a preference word before its fallback; all four were
+    // hard bars, and two of them ("if no qualified applicant is identified") match `CASCADE`
+    // exactly — proof that the gate, not the pattern, was what made them unreachable.
+    for (const text of [
+      'Residence or student of 4-year university or college in Oklahoma. If no qualified ' +
+        'applicant is identified,resident or student of 4-year college or university in the ARRL ' +
+        'West Gulf Division (Texas and Oklahoma).',
+      'Residence in WI. If none identified, residence in the ARRL Central Division (IL, IN, WI)',
+      'ARRL New England Division; if no suitable applicant identified, applicants from all ' +
+        'regions will be considered',
+      'Engineering or Computer Science. If no qualified appilcant, award given regardless of the ' +
+        'field of study.',
+    ]) {
+      expect(isPreferenceText(text), text).toBe(true);
+      expect(cascadeRank(text), text).toBe(1);
+    }
+  });
+
+  it('keeps the canonical Louisiana cascade soft, with its fallback rank', () => {
+    // The shape that was already right, re-pinned: the fix must not move it.
+    const text =
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant ' +
+      'is identified, the scholarship may be awarded to an applicant from the Delta Division ' +
+      '(Arkansas, Louisiana, Mississippi, Tennessee).';
+    expect(isPreferenceText(text)).toBe(true);
+    expect(cascadeRank(text)).toBe(1);
+    const geo = extractGeography(raw({ Region: text }));
+    expect(geo[0].hard).toBe(false);
+    expect(geo[0].fallbackRank).toBe(1);
+  });
+});
+
+/**
+ * THE OPPOSITE FAILURE, which is the one that cannot be undone by the applicant.
+ *
+ * Softening is how a real requirement disappears: `matcher.ts` never excludes on a soft
+ * constraint. A previous round had to RESTORE seven constraints that a too-eager preference rule
+ * had made soft, Holt's licence floor among them — and Holt is one of only two programs the
+ * unlicensed high-school profile could reach, on a desk whose whole subject is amateur radio.
+ * A widening of the fallback family walks straight back into that, so these are the guard rail.
+ */
+describe('and does not soften a requirement that merely contains a condition', () => {
+  it('leaves the three restored licence floors hard, from their real captured fields', () => {
+    const cases: ReadonlyArray<[string, string, string, number | undefined]> = [
+      [
+        'Michael/Mary Holt',
+        'Any active Amateur Radio License Class for two years, preference for General Class',
+        'TECH',
+        24,
+      ],
+      [
+        'NEAR-Fest',
+        'First Preference given to Extra Class, Second Preference given to General Class, Third ' +
+          'Preference Given to Technician Class. Applicants must have held an amateur radio ' +
+          'license for a minimum of one year prior to date of application.',
+        'TECH',
+        12,
+      ],
+      [
+        'Carole J. Streeter, KB9JBR',
+        'Any class of active Amateur Radio license with preference for basic Morse code capability',
+        'TECH',
+        undefined,
+      ],
+    ];
+    for (const [who, text, licenseMin, heldMonthsMin] of cases) {
+      const cs = extractLicense(raw({ 'License Requirement': text }));
+      expect(cs, who).toHaveLength(1);
+      expect(cs[0].hard, who).toBe(true);
+      expect(cs[0].spec, who).toMatchObject(
+        heldMonthsMin === undefined
+          ? { axis: 'license', licenseMin }
+          : { axis: 'license', licenseMin, heldMonthsMin },
+      );
+    }
+  });
+
+  it('does not read a mid-sentence "unless" as a widening', () => {
+    // NCDXF, verbatim: a RESTRICTION on what the fund pays for, with "unless" in the middle of
+    // it. `FALLBACK_CONDITION` is anchored at the start of a span precisely so this cannot be
+    // mistaken for the funder opening the award up.
+    const text =
+      'Expeditions to unusual locations as defined by the Islands on the Air (IOTA) program, Grid ' +
+      'Square awards and various radio contests are not supported unless the support can be ' +
+      'justified.';
+    expect(isPreferenceText(text)).toBe(false);
+    expect(cascadeRank(text)).toBe(0);
+  });
+
+  it('still treats a plain requirement as a requirement', () => {
+    for (const text of [
+      'Applicant must hold a General class license.',
+      'Any accredited institution.',
+      'Applicant must be female.',
+      'Applicants must be residents of the ARRL Central Division (IL, IN, WI).',
+      'Applicant must be a US citizen; open only to graduating high school seniors.',
+    ]) {
+      expect(isPreferenceText(text), text).toBe(false);
+      expect(cascadeRank(text), text).toBe(0);
+    }
   });
 });

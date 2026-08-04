@@ -43,8 +43,67 @@ const ANY_ACTIVITY = new RegExp(
   'i',
 );
 
+/**
+ * SITE CHROME IS NOT ELIGIBILITY TEXT.
+ *
+ * `candidateTexts` falls back to `raw.rawText`, and for a source that files no `Other` /
+ * `eligibility` field that is THE WHOLE FLATTENED PAGE — masthead, navigation column, mega-footer
+ * and all. `spec.activityKinds` is an allow-list the matcher enforces, so any kind matched off a
+ * menu link becomes a HARD BAR. Eight programs carried one:
+ *
+ *   YLRL Scholarships          `contesting` + `proofRequired` off "Contests/Certificates ·
+ *                              Contests · Contest Submission" in the site menu. YLRL's awards are
+ *                              for licensed FEMALE hams and its own bullets say nothing about
+ *                              contesting, so the corpus was hiding a women-only ham scholarship
+ *                              from licensed women because of a nav link.
+ *   Austin ARC                 `field_day` off the menu item "Events Calendar · Field Day".
+ *   the five ARRL org pages    ALL SIX kinds off "Clubs · Contests · Licensing Classes · On The
+ *                              Air · Public Service" — the arrl.org global nav and mega-footer.
+ *   IEEE Student Branch Rebate `contesting` off ieee.org chrome.
+ *
+ * The rule, and why it is safe in an axis where narrowing an allow-list EXCLUDES people: a
+ * navigation menu is a RUN of link labels, and a link label is not a sentence — it carries no "."
+ * and it is not a "Label: value" field either. A funder's requirement is one or the other
+ * everywhere in this corpus (the ARRL catalogue's flattened "Other: …" record, YLRL's "· Applicant
+ * must …" bullets, every prose page). So a maximal run of `CHROME_RUN_MIN` or more consecutive
+ * lines carrying neither is menu, not eligibility, and is dropped before any kind is matched.
+ *
+ * The RUN is what makes it safe. A short field value that happens to look like a label
+ * ("Region: Any", "Must be a member of ARRL") stands alone or among labelled lines, so it is never
+ * inside a run and is never dropped; it takes four consecutive label-shaped lines — which only a
+ * menu produces — to remove anything. "?" and "!" deliberately do NOT count as sentence marks:
+ * arrl.org's footer says "Having Trouble?" and "Newly licensed?", which are links.
+ *
+ * The licence detector was hardened against exactly this chrome already
+ * (`licenseFloorContract.test.ts`, "does not fire on the site navigation that shares its
+ * vocabulary"); this is the same surface, on the axis that was left unguarded. It lives here
+ * rather than in `clauses.ts` because it is a judgement about what counts as ELIGIBILITY text,
+ * which is the axis's question, not the splitter's.
+ */
+const CHROME_RUN_MIN = 4;
+
+function isChromeLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed === '') return true;
+  return !trimmed.includes('.') && !trimmed.includes(':');
+}
+
+export function withoutSiteChrome(text: string): string {
+  const lines = text.split('\n');
+  const keep = lines.map(() => true);
+  let runStart = 0;
+  for (let i = 0; i <= lines.length; i += 1) {
+    if (i < lines.length && isChromeLine(lines[i])) continue;
+    if (i - runStart >= CHROME_RUN_MIN) for (let j = runStart; j < i; j += 1) keep[j] = false;
+    runStart = i + 1;
+  }
+  return lines.filter((_, i) => keep[i]).join('\n');
+}
+
 export function extractHamActivity(raw: RawOpportunity): Constraint[] {
-  const candidates = candidateTexts([raw.rawFields.Other, raw.rawFields.eligibility], raw.rawText);
+  const candidates = candidateTexts([raw.rawFields.Other, raw.rawFields.eligibility], raw.rawText)
+    .map(withoutSiteChrome)
+    .filter((t) => t.trim() !== '');
   const text = candidates.join('\n');
   const activityKinds = KIND_PATTERNS.filter(([, re]) => re.test(text)).map(([kind]) => kind);
   const cw = CW_WPM.exec(text);
