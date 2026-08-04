@@ -330,7 +330,14 @@ export function applicationFactSources(db: Db, app: ApplicationRow): FactSource[
   const merged = new Map<string, FactSource>();
   for (const input of inputs) {
     for (const source of factSourcesFromKnowledge(describeSlotKnowledge(input), renderSlotValue)) {
-      merged.set(`${source.slot} ${source.origin} ${source.value}`, source);
+      // THE SEPARATOR IS WRITTEN AS AN ESCAPE, never as a raw NUL byte in the source. A literal
+      // NUL is a perfectly good map-key separator at runtime and it compiles, but it makes this
+      // WHOLE FILE binary to grep: `grep -q "export function assertExportReady" …` — Task 20's
+      // own verification gate — reported NO MATCH against a file that plainly contains it, and
+      // so would any audit sweep of this file for a leaked host, a key or a phantom claim. A
+      // silence that reads as a clean result is the failure this repository exists to hunt.
+      // The escape is the identical string.
+      merged.set(`${source.slot}\u0000${source.origin}\u0000${source.value}`, source);
     }
   }
   return [...merged.values()].sort(

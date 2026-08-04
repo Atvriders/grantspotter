@@ -260,7 +260,14 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
           ) : null}
         </aside>
 
-        <main className="draft-editor">
+        {/*
+          A `div`, NOT a `main`. `AppShell` already renders `<main id="main">` around every route
+          and the skip link points at it; a second `main` nested inside one is invalid HTML and
+          leaves "Skip to main content" and landmark navigation pointing at two different things.
+          No component test could see it — `Applications.test.tsx` renders this route without the
+          shell — and `e2e/writing.spec.ts` caught it in a browser the first time one ran.
+        */}
+        <div className="draft-editor">
           {current ? (
             <>
               <h2>Draft</h2>
@@ -342,7 +349,7 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
           ) : (
             <p className="muted">Start a new draft or open an existing one.</p>
           )}
-        </main>
+        </div>
       </div>
     </div>
   );

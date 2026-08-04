@@ -118,6 +118,14 @@ const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
       'through the built SPA against the built server, using @playwright/test\'s `page` fixture. ' +
       'It is run by `npm run test:e2e`, never by `npm test`.',
   ],
+  [
+    'e2e/writing.spec.ts',
+    'Playwright, not vitest, for the same reason as e2e/api.spec.ts and e2e/flow.spec.ts: it uses ' +
+      "@playwright/test's `request` and `page` fixtures against the server `playwright.config.ts`'s " +
+      '`webServer` builds and boots. Its HTTP half drives the writing routers today; its browser ' +
+      'half skips with a reason until the SPA fallback is mounted. `npm run test:e2e` runs it, ' +
+      'never `npm test`.',
+  ],
 ]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */
