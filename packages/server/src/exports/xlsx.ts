@@ -25,6 +25,7 @@
  * genuinely numeric fields become numbers, so they sum.
  */
 import ExcelJS from 'exceljs';
+import { unzipSync, zipSync } from 'fflate';
 import type { Cycle, Funder, Program } from '@grantspotter/core';
 import {
   buildExportRows,
@@ -82,6 +83,47 @@ const PROVENANCE_COLUMNS = [
  * is on both sheets, is.
  */
 const FIXED_TIMESTAMP = new Date(0);
+
+/**
+ * THE FIXED TIMESTAMP ABOVE WAS NOT ENOUGH, AND THE PROOF IT UNDERWRITES WAS PASSING ON LUCK.
+ *
+ * `docProps/core.xml` was pinned; the ZIP CONTAINER was not. exceljs 4.4.0 wraps JSZip, and
+ * `ZipWriter.append` calls `zip.file(name, data)` with no `date`, so JSZip stamps every entry with
+ * `new Date()` as it writes. DOS timestamps have two-second granularity, so two back-to-back builds
+ * on an idle machine land in one tick and the bytes match — which is why the byte-identity
+ * suppression proof survived this long without ever being true. Load the machine and it fails.
+ *
+ * WHY THIS IS A LOCAL-TIME STRING AND NOT A `Date`. fflate packs the DOS stamp with `getHours()`,
+ * `getDate()` and friends, all of which are LOCAL. `new Date(Date.UTC(1980, 0, 2))` — what zip.ts
+ * uses for the packet — therefore yields different bytes in New York, Tokyo and UTC, so the
+ * workbook would be reproducible on one machine but not between two. A date-time string with no
+ * offset is parsed as local time, which pins the local getters to the same wall clock everywhere.
+ *
+ * WHY 2 JANUARY 1980 and not the epoch: DOS timestamps begin in 1980, and fflate 0.8.3 throws
+ * "date not in range 1980-2099" below that. The 2nd, not the 1st, so no timezone can push it under.
+ * Like FIXED_TIMESTAMP this is not a claim about when anything was verified; `lastVerifiedAt` is.
+ */
+export const XLSX_ARCHIVE_MTIME = '1980-01-02T00:00:00';
+
+/**
+ * Rebuild the package fflate's way, at a fixed mtime. Chosen over patching the DOS fields in the
+ * bytes exceljs produced, because a patcher has to find the headers first, and `PK\x03\x04` occurs
+ * inside deflated payloads: it would either mis-parse or need the full central-directory walk this
+ * avoids. It is also the same move `zip.ts` already makes for the application packet.
+ *
+ * Entry order is preserved as stored — `[Content_Types].xml` leads an OPC package — because
+ * `unzipSync` yields insertion order and none of these names are integer-like. The empty directory
+ * entries JSZip emits are re-stored rather than deflated; a deflated zero-byte directory is two
+ * bytes of nothing that some strict OPC readers have historically disliked.
+ */
+function withFixedArchiveTimestamps(book: Uint8Array): Buffer {
+  const entries = unzipSync(book);
+  const files: Record<string, [Uint8Array, { level: 0 | 6 }]> = {};
+  for (const [name, bytes] of Object.entries(entries)) {
+    files[name] = [bytes, { level: bytes.length === 0 ? 0 : 6 }];
+  }
+  return Buffer.from(zipSync(files, { mtime: XLSX_ARCHIVE_MTIME }));
+}
 
 function styleHeader(sheet: ExcelJS.Worksheet, columnCount: number): void {
   sheet.getRow(1).font = { bold: true };
@@ -163,5 +205,5 @@ export async function programsToXlsx(
   opportunitiesSheet(wb, rows);
   provenanceSheet(wb, rows);
 
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  return withFixedArchiveTimestamps(new Uint8Array(await wb.xlsx.writeBuffer()));
 }
