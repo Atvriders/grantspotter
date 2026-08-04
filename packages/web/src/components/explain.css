@@ -1,0 +1,151 @@
+/* The two surfaces that turn a verdict into something a person can check.
+   Every colour is a semantic token from tokens.css, whose contrast invariant
+   already asserts these foreground/background pairs at AA in both themes. */
+
+.explain {
+  padding: var(--s-4);
+  background: var(--surface-2);
+  border-left: 3px solid var(--no);
+}
+
+.explain h3 {
+  font-size: var(--fs-300);
+  margin-bottom: var(--s-2);
+}
+
+.explain-lede {
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  margin-bottom: var(--s-3);
+  max-width: 68ch;
+}
+
+.explain ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.explain li {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: var(--s-3);
+  align-items: start;
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.explain li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.explain-axis {
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+}
+
+.explain-kind {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: var(--fs-100);
+  font-weight: 700;
+  color: var(--no);
+}
+
+.explain-kind.soft {
+  color: var(--pref);
+}
+
+/* Verbatim source text is quoted, monospaced and never paraphrased. The
+   ingestion layer produced confidently wrong constraints for a long time; the
+   reason a verdict can be trusted now is that the sentence it came from is
+   right here to be read. */
+.explain-raw {
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  line-height: var(--lh-loose);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+}
+
+.explain-detail {
+  margin-top: var(--s-2);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/* The ladder: what the unknown verdicts are waiting on. NOT a promise that
+   answering resolves them — see UnknownFields.tsx. */
+.unknown-ladder {
+  padding: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+.unknown-ladder h3 {
+  font-size: var(--fs-300);
+  margin-bottom: var(--s-2);
+}
+
+.unknown-ladder .unknown-lede {
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  margin-bottom: var(--s-3);
+  max-width: 68ch;
+}
+
+.unknown-ladder ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.unknown-ladder li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.unknown-ladder li:last-child {
+  border-bottom: none;
+}
+
+.unknown-ladder .waiting {
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.unknown-ladder .help {
+  display: block;
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  max-width: 68ch;
+}
+
+@media (max-width: 720px) {
+  .explain li,
+  .unknown-ladder li {
+    grid-template-columns: 1fr;
+  }
+
+  .unknown-ladder .waiting {
+    white-space: normal;
+  }
+}
