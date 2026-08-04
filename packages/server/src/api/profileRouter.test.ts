@@ -412,4 +412,73 @@ describe('profiles API, beyond the brief', () => {
       expect((await request(app).get('/api/me')).body.completenessFor).toBe('student');
     });
   });
+
+  /**
+   * Until now, a user holding both profiles could only ever see the priority
+   * (student) meter from GET /api/profiles — the PUT reply was the only
+   * response that ever named the other one, so an org-only interest could
+   * only be measured by saving it. `?profile=` is spelled to match the query
+   * param `GET /api/programs` already reads (`req.query.profile`, gated by
+   * `isProfileKind`) — one spelling for "which profile did you mean", not two.
+   */
+  describe('GET /api/profiles accepts ?profile= to see the non-priority meter', () => {
+    async function seedBoth(app: import('express').Express): Promise<void> {
+      await request(app)
+        .put('/api/profiles/organization')
+        .send({ kind: 'organization', entity: 'club_501c3', orgName: 'Example University ARC' });
+      await request(app).put('/api/profiles/student').send({ kind: 'student', callsign: 'K5UTD' });
+    }
+
+    it('reports the priority profile by default, and the other one when asked, for a dual-profile user', async () => {
+      const app = buildApp(db);
+      await seedBoth(app);
+
+      const byDefault = await request(app).get('/api/profiles');
+      expect(byDefault.status).toBe(200);
+      expect(byDefault.body.completenessFor).toBe('student');
+      expect(byDefault.body.completeness.score).toBe(60);
+      // Held, but not the one the meter speaks for — a client can say so.
+      expect(byDefault.body.organization).not.toBeNull();
+
+      const preferred = await request(app).get('/api/profiles?profile=organization');
+      expect(preferred.status).toBe(200);
+      expect(preferred.body.completenessFor).toBe('organization');
+      expect(preferred.body.completeness.score).toBe(80);
+      // Still held, still returned, just not what this report was measured against.
+      expect(preferred.body.student).not.toBeNull();
+    });
+
+    it('does not fabricate a profile the user does not hold', async () => {
+      const app = buildApp(db);
+      await request(app).put('/api/profiles/student').send({ kind: 'student', callsign: 'K5UTD' });
+
+      const res = await request(app).get('/api/profiles?profile=organization');
+      expect(res.status).toBe(200);
+      expect(res.body.completenessFor).toBeNull();
+      expect(res.body.organization).toBeNull();
+      expect(res.body.completeness).toEqual({
+        total: 5,
+        unknownCount: 5,
+        score: 0,
+        fields: [],
+      });
+    });
+
+    it('rejects an unknown profile kind in the query as validation_failed / 422, not a silent fallback', async () => {
+      const res = await request(buildApp(db)).get('/api/profiles?profile=robot');
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('validation_failed');
+      expect(typeof res.body.requestId).toBe('string');
+    });
+
+    it('leaves the no-preference response exactly as before', async () => {
+      const app = buildApp(db);
+      await seedBoth(app);
+      const res = await request(app).get('/api/profiles');
+      expect(res.body.completenessFor).toBe('student');
+      expect(res.body.completeness.score).toBe(60);
+      expect(res.body.student).not.toBeNull();
+      expect(res.body.organization).not.toBeNull();
+    });
+  });
 });

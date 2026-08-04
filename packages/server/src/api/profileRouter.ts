@@ -20,14 +20,40 @@ function loadCorpus(db: RouterDeps['db']): Program[] {
 export function createProfileRouter(deps: RouterDeps): Router {
   const router = Router();
 
-  router.get('/', deps.requireAuth, (req, res) => {
+  router.get('/', deps.requireAuth, (req, res, next) => {
     const user = deps.currentUser(req);
     const profiles = loadAllProfiles(deps.db, user.id);
+
+    // `?profile=` is the same spelling `GET /api/programs` already reads
+    // (`req.query.profile`, gated by `isProfileKind`) — one name for "which
+    // profile did you mean", not a second one invented here. Unlike that
+    // route, an unrecognised value is refused rather than silently treated as
+    // "no preference": this endpoint is what a user reads directly after
+    // switching tabs on the profile page, so a typo'd or stale query value
+    // should say so, not quietly fall back to a profile they didn't ask for.
+    const rawPrefer = req.query.profile;
+    if (rawPrefer !== undefined && !isProfileKind(rawPrefer)) {
+      next(
+        new AppError(
+          'validation_failed',
+          `Unknown profile kind "${String(rawPrefer)}" in "profile". Expected "student" or "organization".`,
+        ),
+      );
+      return;
+    }
+    const prefer = isProfileKind(rawPrefer) ? rawPrefer : undefined;
+
     // Re-read rather than pick from `profiles` above, so "which profile does the
     // meter speak for?" has exactly one definition in this codebase — the one in
     // profileStore. A second copy of that preference order here is how the
     // browse page and the profile page end up disagreeing about the same user.
-    const active = loadActiveProfile(deps.db, user.id);
+    //
+    // A named preference is not a hint that falls back (see `loadActiveProfile`'s
+    // own doc comment): preferring a profile the caller does not hold answers
+    // `null`, exactly as the no-preference path already does when nothing is
+    // held at all. There is no second "did they mean it" branch here to fabricate
+    // one.
+    const active = loadActiveProfile(deps.db, user.id, prefer);
     const corpus = loadCorpus(deps.db);
     res.json({
       student: profiles.student,
