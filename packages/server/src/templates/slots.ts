@@ -78,8 +78,16 @@ export const SLOT_VOCABULARY: readonly SlotDef[] = [
   { path: 'funder.deadlineNote', label: 'Published deadline note', hint: 'the deadline exactly as the funder published it', source: 'program' },
 
   // ---- IEEE chapter facts ----
-  { path: 'chapter.memberCount', label: 'Chapter member count', hint: 'IEEE MTT-S requires at least 5 chapter members', source: 'user' },
-  { path: 'chapter.meetingCount', label: 'Meetings reported', hint: 'meetings reported in vTools this year; at least 2 are required', source: 'user' },
+  //
+  // These two hints state a FUNDER REQUIREMENT, and `todoFor` renders a hint verbatim inside
+  // `[TODO: <path> — <hint>]` in the applicant's own document, so a wrong one is a fabricated
+  // requirement with a marker around it. Both were wrong against the captured page
+  // (fixtures/ieee-mtts/00-mtt-org-chapter-support.html), which says "Minimum of ten (10)
+  // members; five (5) members for Student Branch Chapters" — not five for everyone — and
+  // "Minimum of two (2) reported technical meetings via vTools Events in the previous year",
+  // not this year. `funder-ieee-mtts` quotes both sentences; these hints now agree with it.
+  { path: 'chapter.memberCount', label: 'Chapter member count', hint: 'IEEE MTT-S requires at least 10 chapter members, or 5 for a Student Branch Chapter', source: 'user' },
+  { path: 'chapter.meetingCount', label: 'Meetings reported', hint: 'technical meetings reported in vTools in the previous year; at least 2 are required', source: 'user' },
   { path: 'chapter.officerRosterUrl', label: 'vTools officer roster', hint: 'the vTools URL showing your current officer roster', source: 'user' },
 
   // ---- NASA Space Grant ----
