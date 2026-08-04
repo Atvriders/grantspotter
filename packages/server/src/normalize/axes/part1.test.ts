@@ -325,12 +325,17 @@ describe('extractInstitution', () => {
     expect(spec.accreditationRequired).toBe(true);
   });
 
-  it('defaults part-time to false and accreditation to false when unstated', () => {
+  // Corrected: this used to assert `partTimeOK === false` when the funder said nothing about
+  // enrolment intensity, which matcher.ts reads as a hard full-time requirement. A corpus profile
+  // measured it barring a part-time adult learner from 104 of 112 individual-facing candidates.
+  // Silence is absence of a restriction, not a prohibition — see institution.test.ts for the full
+  // set. `accreditationRequired` already defaulted in the permissive direction and is unchanged.
+  it('does not bar part-time, and does not require accreditation, when they are unstated', () => {
     const spec = extractInstitution(raw({ Institution: 'Any institution' }))[0].spec as {
       partTimeOK: boolean;
       accreditationRequired: boolean;
     };
-    expect(spec.partTimeOK).toBe(false);
+    expect(spec.partTimeOK).toBe(true);
     expect(spec.accreditationRequired).toBe(false);
   });
 
