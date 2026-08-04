@@ -28,7 +28,7 @@ import { qcwa, sara, ylrl } from '../../sources/tier-c-a.js';
 import { extractLicense } from './license.js';
 
 /** Drives the axis exactly as the ARRL catalog does: one `License Requirement` value. */
-const specOf = (licenseRequirement: string): Record<string, unknown> => {
+const constraintOf = (licenseRequirement: string): Constraint => {
   const raw: RawOpportunity = {
     sourceId: 'arrl-scholarship-descriptions',
     externalKey: 'k',
@@ -39,8 +39,11 @@ const specOf = (licenseRequirement: string): Record<string, unknown> => {
   };
   const constraints = extractLicense(raw);
   expect(constraints).toHaveLength(1);
-  return constraints[0].spec as unknown as Record<string, unknown>;
+  return constraints[0];
 };
+
+const specOf = (licenseRequirement: string): Record<string, unknown> =>
+  constraintOf(licenseRequirement).spec as unknown as Record<string, unknown>;
 
 const minOf = (licenseRequirement: string): unknown => specOf(licenseRequirement).licenseMin;
 
@@ -208,12 +211,23 @@ describe('class floors read off the real ARRL catalog values', () => {
     expect(minOf('Applicant must be a licensed radio amateur.')).toBe('TECH');
   });
 
-  // The narrow CLASS_AGNOSTIC guard must not flatten this one: "any class" is the hard floor and
-  // General is a stated PREFERENCE, so the spec keeps GENERAL and the constraint is soft.
-  it('keeps the General-class preference on the one entry that states one', () => {
+  // THE FLOOR IS WHAT THE FUNDER REQUIRES, NOT WHAT IT PREFERS (Michael/Mary Holt, K8MJH/KC8OIP).
+  // This assertion used to read `toBe('GENERAL')`, on the reasoning that keeping the preferred
+  // class in the spec preserved the funder's preference. It did the opposite: the whole
+  // constraint was soft, so the preference was published as the ONLY licence statement and the
+  // requirement — an active licence of ANY class, held two years — was enforced nowhere. Holt was
+  // one of only two programs the unlicensed high-school profile could reach.
+  //
+  // `extractLicense` now reads the class off `requirementText`, i.e. the field minus its
+  // preference clauses: "Any active Amateur Radio License Class for two years" names no class and
+  // so falls through to TECH, which is the floor the funder stated. The General-class preference
+  // is still in `rawText` and still on the page; it is a preference, and preferences do not
+  // exclude. The two years survive because they are stated in the same requirement half.
+  it('takes the REQUIRED class as the floor when a preference names a higher one', () => {
     const text = 'Any active Amateur Radio License Class for two years, preference for General Class';
-    expect(minOf(text)).toBe('GENERAL');
+    expect(minOf(text)).toBe('TECH');
     expect(specOf(text).heldMonthsMin).toBe(24);
+    expect(constraintOf(text).hard).toBe(true);
   });
 
   it('treats Novice as the legacy equivalent of the Technician floor', () => {

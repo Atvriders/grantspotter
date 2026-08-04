@@ -84,14 +84,21 @@ describe('extractGpa — unbounded rawText fallback no longer flips hard (sweep 
     expect(c[0].rawText).not.toMatch(/Institution|License Requirement|Award Amount/);
   });
 
-  // Same shape, but the semicolon-joined clause genuinely IS about GPA (repeats the word), which
-  // must still merge and come out soft — this is fix round 1's IRARC case, re-asserted here as a
-  // sibling to Cordle so the two opposite outcomes are pinned down side by side.
-  it('still merges a semicolon-joined clause that continues talking about GPA (IRARC, unchanged)', () => {
+  // Same shape, but the semicolon-joined clause genuinely IS about GPA (repeats the word), so it
+  // must still MERGE — this is fix round 1's IRARC case, re-asserted here as a sibling to Cordle
+  // so the two opposite merge outcomes are pinned down side by side.
+  //
+  // The hardness assertion changed from false to true when preference.ts learned to scope a
+  // preference to the clause that carries it. "Minimum 2.5 GPA on a 4.0 scale" is a floor the
+  // funder stated in the word "Minimum"; "preference given to need and higher GPA" is a
+  // preference ABOVE that floor. Softening the whole field deleted the floor and left the award
+  // with no GPA requirement at all. The merge is still what is being tested here — the extracted
+  // clause spans the semicolon — and `min: 2.5` still comes off the required half.
+  it('still merges a semicolon-joined clause that continues talking about GPA (IRARC)', () => {
     const c = extractGpa(
       raw({ Other: 'Minimum 2.5 GPA on a 4.0 scale; preference given to need and higher GPA' }),
     );
-    expect(c[0].hard).toBe(false);
+    expect(c[0].hard).toBe(true);
     expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 2.5 });
   });
 });

@@ -1,4 +1,5 @@
 import type { Constraint, ConstraintSpec } from '@grantspotter/core';
+import { splitClauses } from './clauses.js';
 
 /**
  * Biased toward detecting a preference, not away from it: a false negative here converts a
@@ -9,11 +10,188 @@ import type { Constraint, ConstraintSpec } from '@grantspotter/core';
  */
 const PREFERENCE =
   /\b(?:preferences?|preferred|preferential(?:ly)?|prefers?|preferably|priority|favou?r(?:ed|s|ing)?|considered first|first consideration|is given to|encouraged)\b/i;
+/** Same pattern, scanning: `exec` returns the LEFTMOST match, which is where a preference's scope opens. */
+const PREFERENCE_SCAN = new RegExp(PREFERENCE.source, 'gi');
 const CASCADE = /\bif no (?:other )?qualified applicant/i;
 
-/** Nearly every axis appears in both requirement and preference form. Soft never excludes. */
+/**
+ * "…if no qualified applicant is identified…", "…if no suitable applicant found…", "…if there is
+ * no applicant from the preferred areas…". A span that opens with one of these does not state a
+ * requirement: it states what happens when the preferred pool is empty, which is the funder
+ * saying out loud that the preceding criterion is NOT a bar.
+ *
+ * Wider than `CASCADE` on purpose, and used only here. `CASCADE` decides the PUBLISHED
+ * `fallbackRank` value, so widening it would move data that is already pinned; this one only
+ * decides whether a span counts as a requirement, where the safe direction is to recognise more
+ * fallbacks, not fewer.
+ */
+const FALLBACK_CONDITION =
+  /^(?:and\s+|but\s+|then\s+)*(?:if|should|unless|when)\s+(?:there\s+(?:is|are)\s+)?(?:no|none|not)\b/i;
+
+/**
+ * How many words a span must carry before it counts as a statement of its own. Below this the
+ * span is the connective tissue a preference hangs off — "First" (NEAR-Fest's "First Preference
+ * given to Extra Class"), "1)", "Second", "and". Three is not tuned to one entry: this corpus
+ * produces the SAME set of hard/soft outcomes for any threshold from 2 to 4, so nothing here
+ * balances on the exact number.
+ */
+const MIN_REQUIREMENT_WORDS = 3;
+
+/**
+ * Punctuation and function words that ATTACH a preference to what precedes it rather than being
+ * part of the requirement — "Any class of active Amateur Radio license WITH preference for basic
+ * Morse code capability" (Carole Streeter). Stripped off the tail of an ungoverned span before it
+ * is judged, so the span is weighed on the funder's actual requirement and not on the hinge.
+ */
+const TRAILING_HINGE = /(?:[\s,;:.(–—-]|\b(?:a|an|the|with|and|or|of|for|in|to|by|as|any|but)\b)+$/i;
+
+/**
+ * WHERE A PREFERENCE'S SCOPE OPENS. English states a preference in two positions and they scope
+ * in OPPOSITE directions:
+ *
+ *   PREDICATE — "Applicants with two letters of recommendation are preferred", "Applicants from
+ *   Louisiana will be given priority", "Regional preferences are considered in the review". Every
+ *   content word sits in FRONT of the marker and the clause still states one thing: a preference.
+ *   Scoping forward from the marker here would leave "Applicants with two letters of
+ *   recommendation" behind and publish it as a requirement — a bar the funder never stated.
+ *
+ *   HINGED — "…for two years, preference for General Class" (Holt), "…Amateur Radio license with
+ *   preference for basic Morse code capability" (Streeter), "Minimum 2.5 GPA on a 4.0 scale;
+ *   preference given to need and higher GPA" (IRARC). A comma, colon, "with", "and" or an article
+ *   hands the preference off from a statement that is already complete, and the preference scopes
+ *   forward over the remainder.
+ *
+ * So a marker scopes forward only when a hinge introduces it; otherwise it governs its whole
+ * segment. This is what keeps the fix from over-hardening the far more common predicate form,
+ * which is most of the preference language in this corpus.
+ *
+ * "(" is deliberately NOT a hinge. A parenthesis after a phrase ANNOTATES that phrase — "ARRL
+ * South Texas Section (first preference); The State of Texas (second preference); ARRL West Gulf
+ * Division (third preference)" (Robert A. Rodriguez K5AUW) is a ranked preference list, and
+ * treating "(" as a hand-off would read each ranked area as a requirement and publish the third
+ * preference as a bar.
+ */
+const HINGE_BEFORE = /(?:[,:–—-]|\b(?:with|and|or|but|a|an|the)\b)\s*$/i;
+
+/**
+ * Belt and braces on the same asymmetry: a span that ends in a bare copula once its hinge is
+ * stripped is a sentence whose missing predicate IS the preference ("…recommendation are"), never
+ * a requirement. Only ever softens, so it cannot erase a floor.
+ */
+const COPULA_TAIL = /\b(?:is|are|was|were|am|be|been|being|remains?|seems?)$/i;
+
+/**
+ * A sentence split into the part a preference GOVERNS and the part it does not.
+ *
+ * The scope of "…preference for General Class" is the preference marker and everything after it
+ * inside the same clause — never the text in front of it, and never a neighbouring clause. That
+ * boundary is the whole point: three ARRL entries state a requirement and a preference in one
+ * captured field, and softening the field wholesale deleted the requirement half.
+ *
+ *   Holt      "Any active Amateur Radio License Class for two years, | preference for General Class"
+ *   Streeter  "Any class of active Amateur Radio license with | preference for basic Morse code…"
+ *   NEAR-Fest "First | Preference given to Extra Class, …Technician Class." ‖
+ *             "Applicants must have held an amateur radio license for a minimum of one year…"
+ *
+ * Clause boundaries come from `clauses.ts` rather than a private splitter, so this shares the
+ * decimal/abbreviation safety ("3.0", "U.S.", "St. Louis") every other axis already relies on —
+ * `splitClauses` is what keeps NEAR-Fest's second sentence a clause of its own instead of a
+ * fragment cut at "date of application."
+ *
+ * Each clause is then cut again at ";". `splitClauses` deliberately does NOT split there, because
+ * one requirement is often stated across a semicolon and truncating it loses half. A preference's
+ * SCOPE is a different question, and it does not cross one: "Preference given to applicants
+ * residing in Illinois; Applicant must be a resident of the ARRL Central Division" (Francis
+ * Walton) states a preference and then a requirement, and the semicolon is the only thing marking
+ * the boundary.
+ */
+export interface PreferenceScope {
+  /** What the preferences cover: a hinged marker's span onward, or a whole predicate segment. */
+  governed: string[];
+  /** Everything else: the text before a hinged marker, and every segment carrying no marker. */
+  ungoverned: string[];
+}
+
+export function preferenceScope(text: string): PreferenceScope {
+  const governed: string[] = [];
+  const ungoverned: string[] = [];
+  for (const clause of splitClauses(text)) {
+    for (const segment of clause.split(';')) {
+      PREFERENCE_SCAN.lastIndex = 0;
+      const marker = PREFERENCE_SCAN.exec(segment);
+      if (marker === null) {
+        ungoverned.push(segment);
+        continue;
+      }
+      const before = segment.slice(0, marker.index);
+      if (before.trim() !== '' && !HINGE_BEFORE.test(before)) {
+        // Predicate position: the preference is what this segment says, start to finish.
+        governed.push(segment);
+        continue;
+      }
+      ungoverned.push(before);
+      governed.push(segment.slice(marker.index));
+    }
+  }
+  return { governed, ungoverned };
+}
+
+/** Does this span, on its own, state something the funder requires? */
+function statesRequirement(span: string): boolean {
+  const trimmed = span.replace(/^[\W_]+/, '').replace(TRAILING_HINGE, '').trim();
+  if (trimmed === '') return false;
+  if (FALLBACK_CONDITION.test(trimmed)) return false;
+  if (COPULA_TAIL.test(trimmed)) return false;
+  const words = trimmed.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w));
+  return words.length >= MIN_REQUIREMENT_WORDS;
+}
+
+/**
+ * The funder's own words for what is REQUIRED, with the preference clauses removed — empty when
+ * the text is nothing but preference prose.
+ *
+ * Exported for the axes whose spec VALUES are read out of the same field. Reading them off the
+ * whole field publishes the preference as the requirement: Holt's "Any active Amateur Radio
+ * License Class for two years, preference for General Class" yielded `licenseMin: GENERAL`, which
+ * is the preferred class, not the required one (the funder accepts any class held two years).
+ */
+export function requirementText(text: string): string {
+  return preferenceScope(text)
+    .ungoverned.filter(statesRequirement)
+    // The hinge belongs to the preference, not to the requirement: "…active Amateur Radio license
+    // WITH" is not a phrase any extractor should be handed.
+    .map((span) => span.replace(TRAILING_HINGE, '').trim())
+    .join(' ')
+    .trim();
+}
+
+/**
+ * Is this text ENTIRELY preference prose — i.e. does the preference govern the whole statement?
+ *
+ * Soft never excludes, so this answer decides whether a funder's requirement is enforced at all.
+ * It used to be `PREFERENCE.test(text)`: one preference word anywhere softened the whole sentence.
+ * Three ARRL entries state a requirement AND a preference in one captured field, and all three
+ * lost the requirement half that way — Holt most consequentially, because it is one of only two
+ * programs the unlicensed high-school profile could reach, on a desk whose entire subject is
+ * amateur radio.
+ *
+ * The rule now: preference language softens what it governs (see `preferenceScope`). If anything
+ * outside that scope states a requirement of its own, the text is not preference prose.
+ *
+ * TWO THINGS DELIBERATELY STAY SOFT, because the funder has said so:
+ *  - an explicit cascade ("…if no qualified applicant is identified, the scholarship may be
+ *    awarded to…") — the funder has stated in its own words that the primary criterion does not
+ *    exclude anyone, so no part of that sentence is a bar however it is punctuated. This is the
+ *    same statement `cascadeRank` publishes as `fallbackRank: 1`;
+ *  - a fallback condition inside the ungoverned span, by the same reasoning at clause level.
+ *
+ * Still biased toward softening at the margin: a span shorter than `MIN_REQUIREMENT_WORDS` is
+ * read as connective tissue, not as a requirement.
+ */
 export function isPreferenceText(text: string): boolean {
-  return PREFERENCE.test(text);
+  if (!PREFERENCE.test(text)) return false;
+  if (CASCADE.test(text)) return true;
+  return !preferenceScope(text).ungoverned.some(statesRequirement);
 }
 
 /** 0 = primary preference; 1 = the explicit "if no qualified applicant is identified" fallback. */
@@ -35,13 +213,72 @@ export function stableSuffix(input: string): string {
   return hash.toString(16).padStart(8, '0');
 }
 
+/** Every string the spec states as a VALUE. `axis` is the spec's own name, never funder wording. */
+function specValues(spec: ConstraintSpec): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown, key: string): void => {
+    if (key === 'axis') return;
+    if (typeof node === 'string') {
+      if (node.trim() !== '') out.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, key);
+      return;
+    }
+    if (node !== null && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) walk(v, k);
+    }
+  };
+  walk(spec, '');
+  return out;
+}
+
+function mentions(text: string, value: string): boolean {
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'i').test(text);
+}
+
+/**
+ * A HARD constraint must never carry a value the funder stated only as a PREFERENCE.
+ *
+ * `isPreferenceText` answers whether a requirement survives in the text; it cannot answer whether
+ * the spec beside it DESCRIBES that requirement. Several extractors read their values off the
+ * whole captured field, so when the preference names the narrower value it is the preference that
+ * ends up in the spec:
+ *
+ *   "Resident of Florida, with preference given to residents of Central Florida (Orange, Seminole,
+ *    Osceola, Lake, Volusia, Brevard and Polk Counties)"  →  geo county[Orange, Seminole, …]
+ *
+ * Florida residency is required and seven counties are preferred. Hardening THAT spec would bar
+ * every Floridian outside those seven counties — publishing the preference as the bar, which is
+ * the opposite error to the one this module was just fixed for and no better. So when every value
+ * the spec spells out comes from the preference clause and none of it from the requirement, the
+ * constraint stays soft; the real fix is for that axis to read its values from `requirementText`,
+ * as `license.ts` now does.
+ *
+ * Absence of evidence is not evidence here: a spec whose values appear nowhere in the text
+ * (`licenseMin: TECH` is a fallthrough, not a quotation) is not preference-derived, and hardening
+ * it is the requirement-preserving direction.
+ */
+function specStatedOnlyAsPreference(text: string, spec: ConstraintSpec): boolean {
+  const scope = preferenceScope(text);
+  if (scope.governed.length === 0) return false;
+  const governed = scope.governed.join(' ');
+  const ungoverned = scope.ungoverned.join(' ');
+  const values = specValues(spec);
+  return (
+    values.some((v) => mentions(governed, v)) && !values.some((v) => mentions(ungoverned, v))
+  );
+}
+
 export function makeConstraint(
   axis: string,
   rawText: string,
   spec: ConstraintSpec,
   index: number,
 ): Constraint {
-  const soft = isPreferenceText(rawText);
+  const soft = isPreferenceText(rawText) || specStatedOnlyAsPreference(rawText, spec);
   return {
     id: `${axis}-${index}-${stableSuffix(`${axis}|${rawText}`)}`,
     hard: !soft,

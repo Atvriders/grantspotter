@@ -1,5 +1,5 @@
 import type { Constraint, LicenseClass, RawOpportunity } from '@grantspotter/core';
-import { makeConstraint } from './preference.js';
+import { makeConstraint, requirementText } from './preference.js';
 
 const WORD_MONTHS: Record<string, number> = { one: 12, two: 24, three: 36, four: 48, five: 60 };
 
@@ -88,7 +88,17 @@ function heldMonthsFrom(text: string): number | undefined {
 export function extractLicense(raw: RawOpportunity): Constraint[] {
   const text = raw.rawFields['License Requirement'] ?? raw.rawFields.license;
   if (!text || text.trim() === '') return [];
-  const heldMonthsMin = heldMonthsFrom(text);
+  // THE FLOOR IS WHAT THE FUNDER REQUIRES, NOT WHAT IT PREFERS. Three catalog entries state both
+  // in one field, and reading the class off the whole field publishes the preferred class as the
+  // bar: Holt's "Any active Amateur Radio License Class for two years, preference for General
+  // Class" yielded licenseMin GENERAL, excluding the Technician-of-two-years the funder plainly
+  // accepts. `requirementText` returns the field minus its preference clauses ("Any active
+  // Amateur Radio License Class for two years"), which names no class and so falls through to
+  // TECH — the entry-level floor, which is the answer — while `heldMonthsMin` still reads the two
+  // years from the same half. It is empty only when the field is nothing but preference prose,
+  // where the whole field is the best evidence there is.
+  const stated = requirementText(text) || text;
+  const heldMonthsMin = heldMonthsFrom(stated);
   const foreignLicenseOK =
     /\b(worldwide|foreign|international|US licensure (?:is )?not required|any country)\b/i.test(text) ||
     undefined;
@@ -98,7 +108,7 @@ export function extractLicense(raw: RawOpportunity): Constraint[] {
       text,
       {
         axis: 'license',
-        licenseMin: licenseMinFrom(text),
+        licenseMin: licenseMinFrom(stated),
         ...(heldMonthsMin !== undefined ? { heldMonthsMin } : {}),
         ...(foreignLicenseOK ? { foreignLicenseOK } : {}),
       },

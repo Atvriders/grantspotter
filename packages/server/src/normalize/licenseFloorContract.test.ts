@@ -237,37 +237,25 @@ const NO_FLOOR_BY_DESIGN: ReadonlyMap<string, string> = new Map([
  * rather than rediscovered. An entry moving out of this map is progress; an entry moving into it
  * is a decision somebody has to defend.
  *
- * All three are the SAME second-order defect, and it is not in this change's blast radius: the
- * fix is in normalize/axes/preference.ts or normalize/axes/license.ts — splitting a sentence that
- * states a requirement AND a preference so the requirement half stays hard — and it would move
- * both figures the current remediation contract pins (the ARRL catalog's licence distribution,
- * and the two programs the unlicensed high-school profile can see, one of which is Holt). Doing it
- * blind, in a change about a different source, is how the next wrong award gets published.
+ * EMPTY AS OF THE PREFERENCE-SCOPE FIX. It held three entries — Holt, NEAR-Fest and Carole
+ * Streeter — which were one defect three times: `isPreferenceText` softened a WHOLE captured
+ * field whenever preference language appeared anywhere in it, so a field stating a requirement
+ * AND a preference lost the requirement half, and `matcher.ts` never excludes on a soft
+ * constraint. `normalize/axes/preference.ts` now scopes the softening to the clause carrying the
+ * preference, and `extractLicense` reads the class off `requirementText` so the FLOOR is what the
+ * funder requires rather than what it prefers. All three now publish a hard floor and are pinned
+ * by name in "the three the allow-list used to hold" below.
+ *
+ * Holt is why this mattered rather than being tidy. It was one of the two programs the unlicensed
+ * high-school profile could reach, and that figure of 2 was being read as evidence that licence
+ * enforcement worked. It was the opposite: Holt requires an active amateur licence held for two
+ * years, and the profile was showing it to an applicant with no licence at all. The figure is now
+ * 1 — SARA's $200 radio-astronomy grant, which genuinely requires no licence.
+ *
+ * Kept as an empty map rather than deleted: it is the shape of the next finding of this kind, and
+ * the sentence above it is the record of what belongs in it.
  */
-const NO_FLOOR_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([
-  [
-    'arrl-scholarship-descriptions::The Michael Holt, K8MJH, and Mary Holt, KC8OIP, Scholarship',
-    'DEFECT (requirement and preference in one sentence). "Any active Amateur Radio License Class ' +
-      'for two years, preference for General Class" parses to the right spec — licenseMin GENERAL, ' +
-      'heldMonthsMin 24 — but isPreferenceText fires on "preference" and softens the WHOLE ' +
-      'constraint, so matcher.ts never excludes on it and an unlicensed applicant is shown this ' +
-      'award as eligible. The hard half ("Any active Amateur Radio License Class for two years") ' +
-      'is a requirement the funder stated plainly.',
-  ],
-  [
-    'arrl-scholarship-descriptions::The New England Amateur Radio Festival (NEAR-Fest) Memorial Scholarship',
-    'DEFECT, same shape. "First Preference given to Extra Class … Third Preference Given to ' +
-      'Technician Class. Applicants MUST HAVE HELD an amateur radio license for a minimum of one ' +
-      'year prior to date of application." Two sentences, one hard and one soft, captured as one ' +
-      'field and softened wholesale by the leading preferences.',
-  ],
-  [
-    'arrl-scholarship-descriptions::The Carole J. Streeter, KB9JBR, Scholarship',
-    'DEFECT, same shape. "Any class of active Amateur Radio license with preference for basic ' +
-      'Morse code capability" — an unconditional licence requirement carrying a preference on a ' +
-      'DIFFERENT axis (Morse capability), which softens the licence constraint it is attached to.',
-  ],
-]);
+const NO_FLOOR_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([]);
 
 const ALLOWED = new Set([...NO_FLOOR_BY_DESIGN.keys(), ...NO_FLOOR_KNOWN_DEFECTS.keys()]);
 
@@ -351,6 +339,139 @@ describe('the instance this audit was written for', () => {
     expect(licence).toHaveLength(1);
     expect(licence[0].rawText).toBe('There is no restriction as to class of license.');
     expect(licence[0].spec).toEqual({ axis: 'license', licenseMin: 'TECH' });
+  });
+});
+
+// ---------------------------------------------------------------- the three the allow-list held
+
+/**
+ * ONE DEFECT, THREE TIMES: a captured field that states a requirement AND a preference, softened
+ * whole. `NO_FLOOR_KNOWN_DEFECTS` carried these three for exactly this reason and is now empty.
+ *
+ * Each assertion below is the funder's own captured wording turned into a number, so a future
+ * change to `preference.ts` that re-widens the softening fails here by name rather than by moving
+ * an aggregate somebody has to go and re-derive. Both halves are pinned deliberately: the
+ * requirement that must be HARD, and the preference that must stay SOFT. A fix that hardened
+ * everything would pass a floors-only test while converting every stated preference into a bar.
+ */
+function constraintsOn(program: Program, axis: string): Program['constraints'] {
+  return program.constraints.filter((c) => c.spec.axis === axis);
+}
+
+async function programNamed(key: string): Promise<Program> {
+  const { programs } = await corpus();
+  const found = programs.find((p) => keyOf(p) === key);
+  if (found === undefined) throw new Error(`${key} is missing from the corpus`);
+  return found;
+}
+
+describe('requirement-and-preference in one field: the requirement half survives', () => {
+  it('Holt — "Any active Amateur Radio License Class for two years, preference for General Class"', async () => {
+    const holt = await programNamed(
+      'arrl-scholarship-descriptions::The Michael Holt, K8MJH, and Mary Holt, KC8OIP, Scholarship',
+    );
+    const licence = constraintsOn(holt, 'license');
+    expect(licence).toHaveLength(1);
+    expect(licence[0].rawText).toBe(
+      'Any active Amateur Radio License Class for two years, preference for General Class',
+    );
+    // HARD, and the floor is the REQUIRED class, not the preferred one. "Any active Amateur Radio
+    // License Class for two years" names no class, so the floor is the entry-level TECH; General
+    // is a preference and preferences do not exclude. Publishing GENERAL here would bar the
+    // Technician-of-two-years this funder plainly accepts — the opposite error, equally wrong.
+    expect(licence[0].hard).toBe(true);
+    expect(licence[0].spec).toEqual({ axis: 'license', licenseMin: 'TECH', heldMonthsMin: 24 });
+    expect(licenceFloorOf(holt)).toBe('TECH');
+    // …and the Engineering PREFERENCE on the other axis of the same record stays soft. This is
+    // the pair that makes the fix a scoping fix rather than a hardening one.
+    const field = constraintsOn(holt, 'field_of_study');
+    expect(field).toHaveLength(1);
+    expect(field[0].rawText).toBe('Preference for an Engineering discipline');
+    expect(field[0].hard).toBe(false);
+  });
+
+  it('NEAR-Fest — a preference cascade and a "must have held" sentence in one field', async () => {
+    const nearFest = await programNamed(
+      'arrl-scholarship-descriptions::The New England Amateur Radio Festival (NEAR-Fest) Memorial Scholarship',
+    );
+    const licence = constraintsOn(nearFest, 'license');
+    expect(licence).toHaveLength(1);
+    expect(licence[0].rawText).toBe(
+      'First Preference given to Extra Class, Second Preference given to General Class, Third ' +
+        'Preference Given to Technician Class. Applicants must have held an amateur radio license ' +
+        'for a minimum of one year prior to date of application.',
+    );
+    // The ranking is genuinely a preference; "Applicants must have held…" is genuinely a
+    // requirement, and it is a whole sentence of its own — which is why the softening must stop
+    // at the sentence boundary. TECH is the lowest class the cascade names, i.e. the floor, and
+    // the year of tenure comes from the required sentence.
+    expect(licence[0].hard).toBe(true);
+    expect(licence[0].spec).toEqual({ axis: 'license', licenseMin: 'TECH', heldMonthsMin: 12 });
+    expect(licenceFloorOf(nearFest)).toBe('TECH');
+  });
+
+  it('Carole Streeter — a licence requirement carrying a preference on a DIFFERENT axis', async () => {
+    const streeter = await programNamed(
+      'arrl-scholarship-descriptions::The Carole J. Streeter, KB9JBR, Scholarship',
+    );
+    const licence = constraintsOn(streeter, 'license');
+    expect(licence).toHaveLength(1);
+    expect(licence[0].rawText).toBe(
+      'Any class of active Amateur Radio license with preference for basic Morse code capability',
+    );
+    // "Any class of active Amateur Radio license" is unconditional. The Morse preference is about
+    // an operating skill, not a licence class, and softened a licence requirement it only happens
+    // to share a field with.
+    expect(licence[0].hard).toBe(true);
+    expect(licence[0].spec).toEqual({ axis: 'license', licenseMin: 'TECH' });
+    expect(licenceFloorOf(streeter)).toBe('TECH');
+  });
+
+  it('the Louisiana cascade is still SOFT — a preference is not a bar', async () => {
+    // Walter Gallinghouse, K5DSL. The funder says in its own words that a non-Louisiana applicant
+    // can win this, so nothing in the sentence is a requirement however it is punctuated. This is
+    // the over-hardening direction, and it is the one a scoping fix is most likely to break.
+    const gallinghouse = await programNamed(
+      'arrl-scholarship-descriptions::The Walter Gallinghouse, K5DSL, Scholarship',
+    );
+    const geo = constraintsOn(gallinghouse, 'geography');
+    expect(geo).toHaveLength(1);
+    expect(geo[0].rawText).toBe(
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
+        'identified, the scholarship may be awarded to an applicant from the Delta Division ' +
+        '(Arkansas, Louisiana, Mississippi, Tennessee).',
+    );
+    expect(geo[0].hard).toBe(false);
+    expect(geo[0].fallbackRank).toBe(1);
+  });
+
+  it('no ARRL catalog award is open to an unlicensed applicant except the one that says so', async () => {
+    // RULE B by NAME rather than by membership. Holt sat in this list until now, which is what
+    // made the `hs-unlicensed` profiler figure read 2 (Holt and SARA) and be cited as evidence
+    // that licence enforcement worked — while Holt's own requirement was the thing being erased.
+    // It is 1 now, and SARA's $200 radio-astronomy grants are receive-only and state no licence
+    // rule anywhere, so that is a correct answer rather than a regression.
+    //
+    // Pinned exactly, not as a count: RULE B above only asks whether each entry is on the
+    // allow-list, so an entry SILENTLY JOINING the allow-listed set would still pass it.
+    const { programs } = await corpus();
+    const openToUnlicensed = programs
+      .filter((p) => p.applicantEntities.includes('individual'))
+      .filter((p) => licenceFloorOf(p) === undefined)
+      .map(keyOf)
+      .sort();
+    expect(openToUnlicensed).toEqual([
+      // The one ARRL catalog entry whose stated License Requirement is the bare word "None".
+      'arrl-scholarship-descriptions::The North Fulton Amateur Radio League Scholarship',
+      'arrl-scholarship-program::scholarship-program',
+      'austin-arc::austin-arc-scholarships',
+      'ncdxf-grants::ncdxf-grant-program',
+      'sara::sara-student-teacher-grants',
+      'yaesu-dr2x::yaesu-dr2x-repeater-program',
+    ]);
+    // Every reason for the six above is in NO_FLOOR_BY_DESIGN; none of them is a catalog award
+    // that states a licence rule and fails to impose it.
+    expect(openToUnlicensed.every((k) => NO_FLOOR_BY_DESIGN.has(k))).toBe(true);
   });
 });
 

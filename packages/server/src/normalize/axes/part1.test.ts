@@ -386,11 +386,17 @@ describe('extractGpa — real corpus regression (Task 17 fix round 1)', () => {
   // { min: 4, hard: true }: an unreachable hard 4.0 floor built from the "on a 4.0 scale"
   // qualifier, not the actual 2.5 requirement, and blind to the preference language that should
   // have made it soft.
+  // `hard` was re-pinned from false to true when preference.ts learned to scope a preference to
+  // the clause carrying it: "Minimum 2.5 GPA on a 4.0 scale" is a floor the funder stated in the
+  // word "Minimum", and the preference that follows the semicolon is a preference ABOVE it.
+  // Softening the whole field left the award with no GPA requirement at all. What this test was
+  // written for — the decimal point in "2.5" is not a sentence boundary, and `min` is 2.5 rather
+  // than the 4.0 of the "on a 4.0 scale" qualifier — is unchanged.
   it('reads the 2.5 GPA / "on a 4.0 scale" / semicolon-joined preference clause correctly (line 1230)', () => {
     const c = extractGpa(
       raw({ Other: 'Minimum 2.5 GPA on a 4.0 scale; preference given to need and higher GPA' }),
     );
-    expect(c[0].hard).toBe(false);
+    expect(c[0].hard).toBe(true);
     expect(c[0].spec).toMatchObject({ axis: 'gpa', min: 2.5 });
     expect(c[0].rawText).toBe('Minimum 2.5 GPA on a 4.0 scale; preference given to need and higher GPA');
   });
