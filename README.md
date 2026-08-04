@@ -392,3 +392,50 @@ copyrightable; long verbatim descriptions are a different matter, so there are n
 Every record links back to its source and re-verifies through the normal pipeline.
 
 Code is MIT licensed. See [`LICENSE`](LICENSE).
+
+## How this was built
+
+GrantSpotter was written by **Claude Opus 5** (Anthropic), working from a spec and five
+implementation plans in [`docs/superpowers/`](docs/superpowers/), directed by a human owner who set
+the goals and the constraints and reviewed the result. Most of the work was carried out by parallel
+subagents holding disjoint sets of files, with a separate adversarial reviewer for each change whose
+instructions were to *refute* it rather than confirm it.
+
+Measured over the whole build — one session, from the first sentence of the brief to the published
+image:
+
+| | |
+|---|---|
+| Wall clock | 38 h 42 m (2026-08-02 to 2026-08-04) |
+| Commits | 230 |
+| Assistant turns | 34,353 |
+| Subagent transcripts | 290 |
+| **Tokens written (output)** | **17,787,418** |
+| Tokens processed, total | 4,913,894,439 |
+| — of which prompt-cache reads | 4,766,093,732 (97.0%) |
+| Tests at completion | 4,270 unit and integration, 35 end-to-end |
+
+**Read those two token figures carefully, because one of them flatters.** The 17.8 million output
+tokens are what was actually composed: code, tests, comments, commit messages, reports. The 4.91
+billion is everything the model read *and re-read* — 97% of it is prompt-cache reads, the same
+context handed back on each of 34,353 turns. Quoting the larger number alone would suggest roughly
+275 times more writing than happened. This file argues elsewhere that a projected date must not be
+dressed up as a published one; the same rule applies to a statistic about the project itself.
+
+Both figures come from the session transcripts under `~/.claude/projects/`, summing
+`message.usage` over the main loop and all 290 subagent files, counting each record's top-level
+fields once and ignoring the `iterations` array that repeats them.
+
+Unlike the corpus counts this README deliberately does **not** quote, these numbers describe a
+finished event rather than live data, so they cannot drift: nothing that happens to the corpus, the
+clock or the deployment can make them untrue.
+
+What that effort mostly went on is worth knowing, because it is not the feature list. The recurring
+work was finding places where a green test or a confident sentence was pointing at something untrue:
+a suppression boundary that leaked seven separate times, each from one read path using its own
+filter instead of the shared gate; a byte-identity proof that passed only because two runs landed
+inside the same two-second timestamp tick; three redundant gates that made a fourth one's failure
+invisible to every response-level test; a `npm run typecheck` that worked for a year only because
+every checkout had a stale build directory; and a README assertion that *required* a false
+statistic to stay on this page. Those are recorded where they happened, in the comments and commit
+messages, on the theory that the reason a line exists is worth more than the line.
