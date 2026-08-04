@@ -7,6 +7,7 @@ import { assertNotBlocked, normalizeHost } from './blocklist.js';
 import { HostQueue } from './hostQueue.js';
 import {
   type RobotsRules,
+  ROBOTS_MAX_REDIRECTS,
   RobotsDisallowedError,
   isPathAllowed,
   robotsFromResponse,
@@ -133,15 +134,35 @@ function parseRetryAfter(value: string | null): number | undefined {
 
 export function createFetcher(opts: FetchOptions): Fetcher {
   /*
-   * THE WIRE BOUNDARY. Every User-Agent this codebase sends leaves through this function, so this
-   * is where "the value on the wire was validated" stops being a convention and becomes a fact.
+   * THE POLLING BOUNDARY. Every request this software makes TO A SITE IT POLLS is made by a
+   * fetcher, so this is where "the User-Agent on the wire was validated" stops being a convention
+   * and becomes a fact about polling.
    *
    * `buildUserAgent` runs `assertUsableContactUrl`, so an unusable contactUrl throws here — before
    * a transport exists, let alone a request. The equality then closes the other half: a
    * hand-assembled User-Agent that never went through the single UA factory (RESOLUTIONS R10) is
    * refused even if it looks right. Both halves are what the two scripts in `scripts/` needed and
-   * did not have; neither can be skipped by a future entry point, because a fetcher is the only
-   * thing here that can make a request.
+   * did not have.
+   *
+   * WHAT THIS IS NOT, because the sentence above used to be broader and was FALSE AS WRITTEN. It
+   * said "every User-Agent this codebase sends leaves through this function", and two files
+   * already contradicted it: `realClient` in the `ai/` tree constructs the Anthropic SDK, which
+   * makes its own HTTPS request to api.anthropic.com, and `e2e/shippedSeed.ts` calls
+   * `globalThis.fetch` against the server the harness itself just started. Neither is a defect —
+   * an SDK call to a paid API the operator holds a key for is not a poll of a volunteer-run
+   * funder's site, and driving our own test server through the crawler's politeness machinery
+   * would test the machinery rather than the server — but a structural guarantee that two files in
+   * the same repository already break is a claim, and this codebase's whole history is the removal
+   * of claims like it.
+   *
+   * (The module is named by path in the contract test rather than here. The assist's own test
+   * enforces "never on a read path" by scanning every file under `src/` for its import path as
+   * TEXT, comments included, so writing that path in this comment would fail a guard that has
+   * nothing to do with this one.)
+   *
+   * The narrowed claim is checked rather than asserted:
+   * `test/contactUrlEntryPointContract.test.ts` fixes the list of files that reach the network
+   * without a fetcher at exactly those two, and fails when a third appears.
    */
   const expectedUserAgent = buildUserAgent(opts.contactUrl);
   if (opts.userAgent !== expectedUserAgent) {
@@ -200,25 +221,66 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     });
   }
 
+  /**
+   * Read one origin's robots.txt, following redirects.
+   *
+   * `rawGet` sends `redirect: 'manual'` — every request this fetcher makes does, so that the
+   * blocklist can be re-asserted on each hop rather than trusting `fetch` to land somewhere
+   * acceptable. That is right for pages and it was silently wrong here: nothing followed the
+   * redirect, the 3xx fell through `robotsFromResponse` to its allow-all branch, and a site whose
+   * `/robots.txt` 301s (apex to `www`, http to https — the default behaviour of most hosting a
+   * small nonprofit uses) was crawled as though it had published no rules at all.
+   *
+   * The rules that come back apply to the origin we ASKED, wherever the chain ends: RFC 9309
+   * §2.3.1.2, which requires following at least five redirects, explicitly across authorities.
+   * A chain that does not resolve within ROBOTS_MAX_REDIRECTS hops, or that we decline to follow,
+   * is handed to `robotsFromResponse` as a 3xx, which backs off for this run — see the
+   * enumeration there for why that is not the same choice the RFC makes.
+   */
+  async function readRobots(origin: string): Promise<RobotsRules> {
+    const stamp = (): string => new Date(now()).toISOString();
+    let url = `${origin}/robots.txt`;
+    assertNotBlocked(url);
+    for (let hop = 0; ; hop += 1) {
+      let response: Response;
+      let body = '';
+      try {
+        response = await rawGet(url, 'html');
+        if (response.status === 200) body = await response.text();
+      } catch {
+        // A network error reading robots.txt is not a licence to crawl freely, but it is also
+        // not a permanent ban: treat it as "no rules for this run" and let backoff handle the
+        // real request. ncdxf.org, which 403s robots.txt, is covered by robotsFromResponse.
+        return robotsFromResponse(404, '', AGENT_TOKEN, stamp());
+      }
+      if (response.status < 300 || response.status >= 400) {
+        return robotsFromResponse(response.status, body, AGENT_TOKEN, stamp());
+      }
+      const location = response.headers.get('location');
+      if (location === null || hop >= ROBOTS_MAX_REDIRECTS) {
+        return robotsFromResponse(response.status, '', AGENT_TOKEN, stamp());
+      }
+      let next: string;
+      try {
+        next = new URL(location, url).toString();
+        // Re-asserted on every hop, exactly as `fetchOne` does: a robots.txt that redirects into
+        // the farweb.org -> batualam.org takeover chain must not be fetched either.
+        assertNotBlocked(next);
+      } catch {
+        // An unparseable `Location`, a non-http scheme, or a blocked host. We did not read this
+        // site's rules, so we do not get to act as if they permit us.
+        return robotsFromResponse(response.status, '', AGENT_TOKEN, stamp());
+      }
+      url = next;
+    }
+  }
+
   async function robotsFor(origin: string): Promise<RobotsRules> {
     const cached = robotsCache.get(origin);
     // Cached for the run, never for the life of the process. `now()` is injected, so this is the
     // same clock the host queue and the payload timestamps use.
     if (cached && now() - cached.readAtMs < robotsTtlMs) return cached.rules;
-    const promise = (async () => {
-      const url = `${origin}/robots.txt`;
-      assertNotBlocked(url);
-      try {
-        const response = await rawGet(url, 'html');
-        const body = response.status === 200 ? await response.text() : '';
-        return robotsFromResponse(response.status, body, AGENT_TOKEN, new Date(now()).toISOString());
-      } catch {
-        // A network error reading robots.txt is not a licence to crawl freely, but it is also
-        // not a permanent ban: treat it as "no rules for this run" and let backoff handle the
-        // real request. ncdxf.org, which 403s robots.txt, is covered by robotsFromResponse.
-        return robotsFromResponse(404, '', AGENT_TOKEN, new Date(now()).toISOString());
-      }
-    })();
+    const promise = readRobots(origin);
     robotsCache.set(origin, { readAtMs: now(), rules: promise });
     return promise;
   }

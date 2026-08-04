@@ -1,3 +1,5 @@
+import { canonicalHostname } from '../net/hosts.js';
+
 /**
  * Hard domain blocklist. Enforced inside the fetcher (see ./index.ts), never at a call site,
  * and deliberately not configurable: there is no environment variable, no constructor option,
@@ -58,10 +60,16 @@ export class UnsupportedSchemeError extends Error {
   }
 }
 
-/** Lowercased hostname with userinfo, port and any trailing root dot removed. */
+/**
+ * Lowercased hostname with userinfo, port and every trailing root dot removed.
+ *
+ * The third copy of `.replace(/\.$/, '')` in this repository, and the one with teeth: it decides
+ * whether a URL is on the hard blocklist, so `https://farweb.org../` reached the
+ * `farweb.org -> batualam.org` takeover check as `farweb.org.` and matched nothing. It now shares
+ * `canonicalHostname` with the two CONTACT_URL rules — one spelling of "what a hostname is".
+ */
 export function normalizeHost(url: string): string {
-  const parsed = new URL(url);
-  return parsed.hostname.toLowerCase().replace(/\.$/, '');
+  return canonicalHostname(new URL(url).hostname);
 }
 
 /**

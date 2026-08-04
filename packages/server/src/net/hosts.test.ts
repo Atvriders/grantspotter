@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PRIVATE_IPV4_PROSE_PATTERNS, PRIVATE_IPV4_RANGES, unreachableContactHost } from './hosts.js';
+import {
+  PRIVATE_IPV4_PROSE_PATTERNS,
+  PRIVATE_IPV4_RANGES,
+  canonicalHostname,
+  unreachableContactHost,
+} from './hosts.js';
 
 /**
  * Two consumers, one list — and the proof that merging them changed nothing for the older one.
@@ -104,5 +109,73 @@ describe('unreachableContactHost', () => {
     expect(unreachableContactHost('gs.LOCAL.')).not.toBeNull();
     expect(unreachableContactHost('127.0.0.1.')).not.toBeNull();
     expect(unreachableContactHost('W9XYZ-Radio-Club.org.')).toBeNull();
+  });
+
+  it('is not fooled by MORE THAN ONE trailing dot', () => {
+    // `.replace(/\.$/, '')` — one dot, once — was written inline in two places, and
+    // `https://gs.local../x` walked past both: `new URL` keeps `gs.local..` as the hostname, one
+    // dot came off, and `gs.local.` is neither `gs.local` nor a name ending in `.local`.
+    expect(unreachableContactHost('gs.local..')).not.toBeNull();
+    expect(unreachableContactHost('127.0.0.1...')).not.toBeNull();
+    expect(canonicalHostname('W9XYZ-Radio-Club.ORG..')).toBe('w9xyz-radio-club.org');
+    expect(canonicalHostname('[::FFFF:7F00:1]')).toBe('[::ffff:7f00:1]');
+  });
+
+  it('refuses a name with an empty label, which resolves for nobody', () => {
+    for (const host of ['example..org', '.w9xyz-radio-club.org', 'a..b..c']) {
+      expect(unreachableContactHost(host), host).toMatch(/empty DNS label/);
+    }
+  });
+});
+
+/**
+ * IPv4 HIDING INSIDE IPv6.
+ *
+ * The code this pins compared SPELLINGS: it regexed `::ffff:<quad>` and `::ffff:<hex>:<hex>`, so
+ * it refused `http://[::ffff:127.0.0.1]` — and accepted `http://[64:ff9b::7f00:1]` and
+ * `http://[::ffff:0:127.0.0.1]`, which are the same 127.0.0.1 written two other ways that
+ * `new URL` parses without complaint. Spellings are unbounded; there are only ever sixteen bytes.
+ */
+describe('an IPv4 address embedded in an IPv6 one', () => {
+  it('is found however the address is spelled', () => {
+    const cases: Record<string, RegExp> = {
+      '[::ffff:127.0.0.1]': /IPv4-mapped/,
+      '[::ffff:7f00:1]': /IPv4-mapped/,
+      '[::ffff:0:127.0.0.1]': /IPv4-translated/, // RFC 2765, and `new URL` hands us the hextets
+      '[::ffff:0:7f00:1]': /IPv4-translated/,
+      '[64:ff9b::7f00:1]': /RFC 6052/, // NAT64 well-known prefix
+      '[64:ff9b::127.0.0.1]': /RFC 6052/,
+      '[64:ff9b:1::192.168.1.5]': /RFC 8215/, // NAT64 local-use prefix
+      '[::127.0.0.1]': /IPv4-compatible/, // deprecated, still parses, still loopback
+      '[2002:7f00:1::1]': /6to4/, // the tunnel endpoint that must answer is 127.0.0.1
+      '[2002:c0a8:105::1]': /6to4/, // …or 192.168.1.5
+    };
+    for (const [host, why] of Object.entries(cases)) {
+      const reason = unreachableContactHost(host);
+      expect(reason, host).not.toBeNull();
+      expect(reason as string, host).toMatch(why);
+      expect(reason as string, host).toMatch(/127\.0\.0\.1|192\.168\.1\.5/);
+    }
+  });
+
+  it('leaves an embedded PUBLIC address alone', () => {
+    // The rule is "can a stranger reach this", not "is this an unusual address".
+    for (const host of ['[::ffff:104.16.1.1]', '[64:ff9b::8.8.8.8]', '[2002:5db8:d822::1]']) {
+      expect(unreachableContactHost(host), host).toBeNull();
+    }
+  });
+
+  it('leaves Teredo alone, on purpose', () => {
+    // A Teredo address (2001:0::/32, RFC 4380) embeds the CLIENT's IPv4, and a Teredo client is
+    // behind NAT with an RFC 1918 address BY DESIGN while the IPv6 address itself is globally
+    // reachable. Refusing one for its embedded address would refuse an address that works — the
+    // opposite of every family above, where the embedded IPv4 is what has to answer.
+    expect(unreachableContactHost('[2001:0:4136:e378:8000:63bf:3fff:fdd2]')).toBeNull();
+  });
+
+  it('refuses a bracketed value it cannot read as an address at all', () => {
+    expect(unreachableContactHost('[not-an-address]')).toMatch(/not readable as an IPv6 address/);
+    expect(unreachableContactHost('[1:2:3::4::5]')).toMatch(/not readable as an IPv6 address/);
+    expect(unreachableContactHost('[1:2:3:4:5:6:7]')).toMatch(/not readable as an IPv6 address/);
   });
 });

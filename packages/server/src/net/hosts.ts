@@ -87,33 +87,157 @@ const DOCUMENTATION_IPV4 = new RegExp(`^(?:${DOCUMENTATION_IPV4_RANGES.join('|')
  */
 const PRIVATE_USE_SUFFIXES: readonly string[] = ['localhost', 'local', 'internal', 'home.arpa'];
 
-/** The two hextets of an IPv4-mapped IPv6 address, as WHATWG URL normalizes it, in dotted form. */
-function mappedIpv4(addr: string): string | null {
-  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
-  if (dotted) return dotted[1] as string;
-  // `new URL('http://[::ffff:127.0.0.1]/').hostname` is `[::ffff:7f00:1]`: the parser rewrites the
-  // dotted quad into hextets, so the literal an operator typed is not the literal we are handed.
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(addr);
-  if (!hex) return null;
-  const high = Number.parseInt(hex[1] as string, 16);
-  const low = Number.parseInt(hex[2] as string, 16);
-  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+/**
+ * A hostname reduced to the one form every rule in this repository compares against: lower-cased,
+ * with the DNS root's trailing dot removed — ALL of it, however many dots were typed.
+ *
+ * Both consumers used to write `.replace(/\.$/, '')` inline, one dot, once, and
+ * `https://example.org../x` walked past both of them: `new URL` hands back the hostname
+ * `example.org..`, one dot came off, and `example.org.` is neither equal to `example.org` nor a
+ * name ending in `.example.org`. A resolver treats every trailing dot as the same root; so does
+ * this. Written once, here, because writing it a third time is how it went wrong twice.
+ *
+ * An IPv6 literal keeps its brackets and is otherwise untouched: the brackets are part of the host
+ * in a URL, and a dot inside one belongs to an embedded IPv4 address, not to a label.
+ */
+export function canonicalHostname(hostname: string): string {
+  const host = hostname.toLowerCase();
+  return host.startsWith('[') ? host : host.replace(/\.+$/, '');
 }
 
+/**
+ * A bracketed IPv6 literal expanded to its sixteen bytes, or null if it is not readable as one.
+ *
+ * WHY BYTES AND NOT TEXT. The code this replaces compared SPELLINGS: it regexed `::ffff:<quad>`
+ * and `::ffff:<hex>:<hex>`, so it refused `http://[::ffff:127.0.0.1]` and accepted
+ * `http://[64:ff9b::7f00:1]` and `http://[::ffff:0:127.0.0.1]` — the same 127.0.0.1, written two
+ * other ways that `new URL` parses without complaint. Spellings are unbounded and keep arriving;
+ * there are only ever sixteen bytes. Parse once, then ask questions about the bytes.
+ *
+ * Handles `::` compression and a trailing dotted quad, which is all a URL hostname can contain
+ * (WHATWG rejects zone identifiers, so there is no `%eth0` to strip).
+ */
+function ipv6Bytes(literal: string): Uint8Array | null {
+  if (!literal.startsWith('[') || !literal.endsWith(']')) return null;
+  let text = literal.slice(1, -1).toLowerCase();
+
+  // A trailing dotted quad is just another way of writing the last two hextets. Rewrite it into
+  // them so there is one code path below rather than two.
+  const quad = /(?:^|:)((?:\d{1,3}\.){3}\d{1,3})$/.exec(text);
+  if (quad !== null) {
+    const octets = (quad[1] as string).split('.').map((part) => Number.parseInt(part, 10));
+    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const high = (((octets[0] as number) << 8) | (octets[1] as number)).toString(16);
+    const low = (((octets[2] as number) << 8) | (octets[3] as number)).toString(16);
+    text = `${text.slice(0, text.length - (quad[1] as string).length)}${high}:${low}`;
+  }
+
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] === '' ? [] : (halves[0] as string).split(':');
+  const tailText = halves.length === 2 ? (halves[1] as string) : '';
+  const tail = tailText === '' ? [] : tailText.split(':');
+  const written = head.length + tail.length;
+  // Without `::` every hextet must be written; with it, at least one must be elided.
+  if (halves.length === 1 ? written !== 8 : written > 7) return null;
+  const hextets = [...head, ...(new Array<string>(8 - written).fill('0')), ...tail];
+
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 8; i += 1) {
+    const piece = hextets[i] as string;
+    if (!/^[0-9a-f]{1,4}$/.test(piece)) return null;
+    const value = Number.parseInt(piece, 16);
+    bytes[i * 2] = value >> 8;
+    bytes[i * 2 + 1] = value & 0xff;
+  }
+  return bytes;
+}
+
+function hasPrefix(bytes: Uint8Array, prefix: readonly number[]): boolean {
+  return prefix.every((byte, i) => bytes[i] === byte);
+}
+
+function dottedQuadAt(bytes: Uint8Array, offset: number): string {
+  return [0, 1, 2, 3].map((i) => bytes[offset + i]).join('.');
+}
+
+/**
+ * The ways an IPv4 address can be carried inside an IPv6 one, where the IPv4 address it carries
+ * still says whether a stranger can reach it.
+ *
+ * `what` is read after "the IPv4 address <addr> inside ".
+ *
+ * TEREDO (`2001:0::/32`, RFC 4380) IS DELIBERATELY ABSENT, and the reason is the rule this whole
+ * file applies rather than an oversight: a Teredo address embeds the CLIENT's IPv4, and a Teredo
+ * client is behind NAT with an RFC 1918 address BY DESIGN, while the IPv6 address itself is
+ * globally reachable. Refusing one because the address inside it is private would refuse an
+ * address that works. Every family below is the opposite case — the embedded IPv4 is the address
+ * that must actually answer.
+ */
+interface Ipv4Embedding {
+  what: string;
+  matches(bytes: Uint8Array): boolean;
+  ipv4(bytes: Uint8Array): string;
+}
+
+const IPV4_EMBEDDINGS: readonly Ipv4Embedding[] = [
+  {
+    what: 'an IPv4-mapped address (RFC 4291, `::ffff:0:0/96`)',
+    matches: (b) => hasPrefix(b, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]),
+    ipv4: (b) => dottedQuadAt(b, 12),
+  },
+  {
+    what: 'an IPv4-translated address (RFC 2765, `::ffff:0:0:0/96`)',
+    matches: (b) => hasPrefix(b, [0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0]),
+    ipv4: (b) => dottedQuadAt(b, 12),
+  },
+  {
+    what: 'an IPv4-compatible address (RFC 4291, `::/96`)',
+    matches: (b) => hasPrefix(b, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ipv4: (b) => dottedQuadAt(b, 12),
+  },
+  {
+    what: "NAT64's well-known prefix (RFC 6052, `64:ff9b::/96`)",
+    matches: (b) => hasPrefix(b, [0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ipv4: (b) => dottedQuadAt(b, 12),
+  },
+  {
+    what: "NAT64's local-use prefix (RFC 8215, `64:ff9b:1::/48`)",
+    matches: (b) => hasPrefix(b, [0, 0x64, 0xff, 0x9b, 0, 1, 0, 0, 0, 0, 0, 0]),
+    ipv4: (b) => dottedQuadAt(b, 12),
+  },
+  {
+    // Deprecated by RFC 7526, and the embedded address IS the tunnel endpoint that has to answer.
+    what: 'a 6to4 address (RFC 3056, `2002::/16`)',
+    matches: (b) => hasPrefix(b, [0x20, 0x02]),
+    ipv4: (b) => dottedQuadAt(b, 2),
+  },
+];
+
 function unreachableIpv6(literal: string): string | null {
-  const addr = literal.slice(1, -1).toLowerCase(); // strip the [ ] the URL parser keeps
-  if (addr === '::') return 'the unspecified address `::`';
-  if (addr === '::1') return 'the IPv6 loopback address `::1`';
-  if (addr.startsWith('2001:db8:') || addr === '2001:db8::') {
+  const bytes = ipv6Bytes(literal);
+  if (bytes === null) {
+    // `new URL` only produces a bracketed hostname it managed to parse, so reaching this means the
+    // value was hand-assembled. Refusing beats guessing at what it was meant to be.
+    return `\`${literal}\`, which is not readable as an IPv6 address`;
+  }
+  if (bytes.every((byte) => byte === 0)) return 'the unspecified address `::`';
+  if (bytes.every((byte, i) => byte === (i === 15 ? 1 : 0))) {
+    return 'the IPv6 loopback address `::1`';
+  }
+  if (hasPrefix(bytes, [0x20, 0x01, 0x0d, 0xb8])) {
     return 'an address in 2001:db8::/32, which RFC 3849 reserves for documentation';
   }
-  const mapped = mappedIpv4(addr);
-  if (mapped !== null && UNREACHABLE_IPV4.test(mapped)) {
-    return `the IPv4-mapped address ${mapped}, which is loopback or private space`;
-  }
-  const firstHextet = Number.parseInt(addr.split(':')[0] || '0', 16);
+  const firstHextet = ((bytes[0] as number) << 8) | (bytes[1] as number);
   if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return 'an IPv6 link-local address';
   if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return 'an IPv6 unique-local address';
+  for (const embedding of IPV4_EMBEDDINGS) {
+    if (!embedding.matches(bytes)) continue;
+    const address = embedding.ipv4(bytes);
+    if (UNREACHABLE_IPV4.test(address)) {
+      return `the IPv4 address ${address} inside ${embedding.what}, which is loopback, private or reserved space`;
+    }
+  }
   return null;
 }
 
@@ -129,9 +253,14 @@ function unreachableIpv6(literal: string): string | null {
  * The returned string is a noun phrase, meant to be read after "CONTACT_URL points at ".
  */
 export function unreachableContactHost(hostname: string): string | null {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
+  const host = canonicalHostname(hostname);
   if (host === '') return 'no host at all';
   if (host.startsWith('[')) return unreachableIpv6(host);
+  if (host.split('.').some((label) => label === '')) {
+    // Survives the trailing-dot strip above, so this is an empty label somewhere else:
+    // `example..org`, `.example.org`. RFC 1035 §2.3.1 makes those unresolvable, always.
+    return `\`${host}\`, which contains an empty DNS label and cannot resolve for anybody`;
+  }
   if (UNREACHABLE_IPV4.test(host)) {
     if (/^127\./.test(host)) return `the loopback address ${host}, which is the polled site's own machine`;
     if (/^0\./.test(host)) return `${host}, in 0.0.0.0/8, which is not an address anything answers on`;

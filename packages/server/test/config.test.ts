@@ -214,6 +214,29 @@ describe('loadConfig', () => {
       }
     });
 
+    it('is not walked past by a second trailing dot', () => {
+      // `reservedContactName` and `unreachableContactHost` each carried their own
+      // `.replace(/\.$/, '')` — one dot, once — and `https://example.org../x` passed BOTH:
+      // `new URL` keeps the hostname as `example.org..`, one dot came off, and `example.org.` is
+      // neither `example.org` nor a name ending in `.example.org`. They now share
+      // `canonicalHostname` in net/hosts.ts.
+      for (const url of [
+        'https://example.org./x',
+        'https://example.org../x',
+        'https://example.org.../x',
+        'https://my-club.invalid../contact',
+      ]) {
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), url).toThrow(
+          /reserved for documentation/,
+        );
+      }
+      expect(reservedContactName('example.org..')).toBe('example.org');
+      // A real club domain is still a real club domain with the root dot written out.
+      expect(loadConfig({ ...VALID, CONTACT_URL: 'https://w9xyz-radio-club.org./x' }).contactUrl).toBe(
+        'https://w9xyz-radio-club.org./x',
+      );
+    });
+
     it('hands out no address of its own to paste back in', () => {
       // The message that names a usable-looking example is the defect, not the wording.
       let message = '';
@@ -489,6 +512,26 @@ describe('loadConfig', () => {
       };
       for (const [why, url] of Object.entries(unreachable)) {
         expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), why).toThrow(ConfigError);
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), why).toThrow(
+          /cannot be reached from the public internet/,
+        );
+      }
+    });
+
+    it('finds loopback and LAN addresses hidden inside an IPv6 literal', () => {
+      // Refusing `http://[::ffff:127.0.0.1]/` while accepting these was the state of things until
+      // 2026-08-04, because the check compared SPELLINGS. Every one of these is 127.0.0.1 or
+      // 192.168.1.5, and `new URL` parses all of them.
+      const hidden: Record<string, string> = {
+        'NAT64 well-known prefix, RFC 6052': 'http://[64:ff9b::7f00:1]/about',
+        'NAT64, written with the dotted quad': 'http://[64:ff9b::127.0.0.1]/about',
+        'NAT64 local-use prefix, RFC 8215': 'http://[64:ff9b:1::192.168.1.5]/about',
+        'IPv4-translated, RFC 2765': 'http://[::ffff:0:127.0.0.1]/about',
+        'IPv4-compatible, RFC 4291': 'http://[::127.0.0.1]/about',
+        '6to4 around loopback, RFC 3056': 'http://[2002:7f00:1::1]/about',
+        '6to4 around a LAN address': 'http://[2002:c0a8:105::1]/about',
+      };
+      for (const [why, url] of Object.entries(hidden)) {
         expect(() => loadConfig({ ...VALID, CONTACT_URL: url }), why).toThrow(
           /cannot be reached from the public internet/,
         );

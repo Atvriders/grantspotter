@@ -1,4 +1,4 @@
-import { unreachableContactHost } from './net/hosts.js';
+import { canonicalHostname, unreachableContactHost } from './net/hosts.js';
 
 export type NodeEnv = 'development' | 'test' | 'production';
 
@@ -97,8 +97,10 @@ export const FORMER_PLACEHOLDER_CONTACT_URL =
  * points at the SAME tracker — the project's, not the operator's. A site owner who wants one
  * particular instance to stop polling them reaches the maintainers of the software, who do not run
  * that instance and cannot stop it. The remedy that works regardless of who is running what is
- * `robots.txt`: every instance honours it, matched on the `GrantSpotter` token
- * (`fetcher/index.ts` AGENT_TOKEN), so `User-agent: GrantSpotter` + `Disallow: /` stops all of
+ * `robots.txt`: every instance honours it, matched case-insensitively on the `GrantSpotter` token
+ * (`fetcher/index.ts` AGENT_TOKEN), with or without a version or suffix after it — so the string
+ * a site owner reads in their log stops us as readily as the bare token, which was NOT true until
+ * 2026-08-04. `User-agent: GrantSpotter` + `Disallow: /` stops all of
  * them, taking effect on the next nightly crawl — `runCrawl` drops the fetcher's robots cache at
  * the start of every run, and the cache expires on its own after ROBOTS_CACHE_TTL_MS in any case,
  * so no deployment holds a stale copy for longer than a day. That is what the issue template
@@ -144,7 +146,10 @@ export const RESERVED_CONTACT_TLDS = ['invalid', 'test', 'example'] as const;
  */
 export function reservedContactName(hostname: string): string | null {
   // A trailing dot is a legal absolute name and `example.org.` is the same host as `example.org`.
-  const host = hostname.toLowerCase().replace(/\.$/, '');
+  // `canonicalHostname` rather than a `.replace(/\.$/, '')` written here: this rule and
+  // `unreachableContactHost` each had their own copy of that expression, each one dot deep, and
+  // `https://example.org../x` passed both — see net/hosts.ts.
+  const host = canonicalHostname(hostname);
   for (const name of RESERVED_CONTACT_HOSTS) {
     if (host === name || host.endsWith(`.${name}`)) return name;
   }

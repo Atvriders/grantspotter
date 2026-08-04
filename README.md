@@ -137,7 +137,11 @@ re-verifies quarterly.
 - Per-host serialisation. Never parallel within a host.
 - `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org. The agent token is
   `GrantSpotter`, so any site can stop any deployment of this with `User-agent: GrantSpotter` and
-  `Disallow: /`.
+  `Disallow: /`. The token is matched case-insensitively and a version or suffix after it is
+  accepted, so `grantspotter`, `GrantSpotter/0.1.0` — the form that appears in a log — and
+  `grantspotter-bot` all match; `grantspotterbot`, a different name that merely starts the same
+  way, does not. Every group whose agent matches applies, not just the first one, and a
+  `robots.txt` that redirects is followed.
 - A User-Agent that says what this is and how to reach a human, in words rather than by the `+URL`
   convention alone. A deployment that has not set `CONTACT_URL` sends, on every request:
 
@@ -411,7 +415,8 @@ One variable fails loudly on startup, and one carries a caveat rather than a req
   that keeps it points at the *same* tracker — this project's, not yours. A site owner who wants
   *your* instance in particular to stop polling them will reach maintainers who do not run it and
   cannot stop it. There is one remedy that works no matter who is running what, and it is
-  `robots.txt`: every instance honours it, matched on the `GrantSpotter` token, so
+  `robots.txt`: every instance honours it, matched case-insensitively on the `GrantSpotter` token
+  (with or without a `/version` or `-suffix` after it), so
   `User-agent: GrantSpotter` + `Disallow: /` stops all of them, and it takes effect on the next
   nightly crawl — each run re-reads every site's `robots.txt` before it fetches anything, and a
   cached copy expires after six hours regardless, so no instance acts on rules more than a day

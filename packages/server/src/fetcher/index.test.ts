@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigError, buildUserAgent } from '../config.js';
 import { BlockedHostError } from './blocklist.js';
-import { RobotsDisallowedError } from './robots.js';
+import { ROBOTS_MAX_REDIRECTS, RobotsDisallowedError } from './robots.js';
 import { ROBOTS_CACHE_TTL_MS, backoffMs, createFetcher } from './index.js';
 
 /**
@@ -229,6 +229,93 @@ describe('createFetcher politeness', () => {
     // forgetRobots must still re-read at least daily, and CRAWL_CRON is nightly.
     expect(ROBOTS_CACHE_TTL_MS).toBeLessThan(24 * 60 * 60 * 1000);
     expect(ROBOTS_CACHE_TTL_MS).toBeGreaterThan(60 * 60 * 1000);
+  });
+
+  /**
+   * A REDIRECTED robots.txt IS RULES, NOT PERMISSION.
+   *
+   * `rawGet` sends `redirect: 'manual'` so the blocklist can be re-asserted on every hop. That is
+   * right for pages, and it was silently wrong here until 2026-08-04: nothing followed the
+   * redirect, the 3xx reached `robotsFromResponse`, which had no 3xx branch, and the site was
+   * crawled as though it published no rules. Apex-to-`www` and http-to-https redirects on
+   * `/robots.txt` are the default behaviour of most hosting a volunteer-run club uses, so this is
+   * the ordinary case, not an exotic one.
+   */
+  describe('robots.txt redirects (RFC 9309 §2.3.1.2)', () => {
+    it('follows a 301 and obeys the rules at the far end', async () => {
+      const { transport, calls } = router({
+        'https://w9xyz-club.org/robots.txt': () =>
+          res('', { status: 301, headers: { location: 'https://www.w9xyz-club.org/robots.txt' } }),
+        'https://www.w9xyz-club.org/robots.txt': () => res('User-agent: GrantSpotter\nDisallow: /\n'),
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+      // The page was never requested, and both hops were.
+      expect(calls).toEqual([
+        'https://w9xyz-club.org/robots.txt',
+        'https://www.w9xyz-club.org/robots.txt',
+      ]);
+    });
+
+    it('applies rules fetched across a redirect to the origin we asked, not the one that answered', async () => {
+      const { transport } = router({
+        'http://w9xyz-club.org/robots.txt': () =>
+          res('', { status: 308, headers: { location: 'https://w9xyz-club.org/robots.txt' } }),
+        'https://w9xyz-club.org/robots.txt': () => res('User-agent: *\nDisallow: /members\n'),
+        'http://w9xyz-club.org/grants': () => res('<p>grants</p>'),
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      const payload = await f.fetch({
+        url: 'http://w9xyz-club.org/grants',
+        method: 'GET',
+        accept: 'html',
+      });
+      expect(payload.status).toBe(200);
+      await expect(
+        f.fetch({ url: 'http://w9xyz-club.org/members', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+    });
+
+    it('backs off rather than crawling when the chain never resolves', async () => {
+      // A loop. RFC 9309 would let us assume "no robots.txt" after five hops; we take the reading
+      // that polls less, because we did not read the site's rules and so cannot claim they permit
+      // us. It costs one run: the next crawl re-reads.
+      const { transport, calls } = router({
+        'https://w9xyz-club.org/robots.txt': () =>
+          res('', { status: 302, headers: { location: 'https://w9xyz-club.org/robots.txt' } }),
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+      expect(calls).toHaveLength(ROBOTS_MAX_REDIRECTS + 1);
+    });
+
+    it('backs off on a 3xx with no Location to follow', async () => {
+      const { transport } = router({
+        'https://w9xyz-club.org/robots.txt': () => res('', { status: 302 }),
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+    });
+
+    it('will not follow a robots.txt redirect into the blocklist', async () => {
+      // farweb.org -> batualam.org is a live takeover, and a robots.txt hop is a route to it that
+      // `fetchOne`'s per-hop check never saw. We decline the hop and back off for the run.
+      const { transport, calls } = router({
+        'https://w9xyz-club.org/robots.txt': () =>
+          res('', { status: 301, headers: { location: 'https://batualam.org/robots.txt' } }),
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+      expect(calls).toEqual(['https://w9xyz-club.org/robots.txt']);
+    });
   });
 
   it('refuses a path robots.txt disallows', async () => {

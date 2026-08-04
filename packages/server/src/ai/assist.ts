@@ -184,6 +184,17 @@ export function parsePreScoreResponse(text: string): number | undefined {
   return Math.min(1, Math.max(0, value));
 }
 
+/**
+ * ONE OF THE TWO PLACES THAT REACH THE NETWORK WITHOUT A FETCHER, declared as such in
+ * `test/contactUrlEntryPointContract.test.ts` (DIRECT_NETWORK) and legitimate: the SDK talks to
+ * api.anthropic.com, a paid API the operator holds a key for, not to one of the ~25 volunteer-run
+ * sites this software polls. robots.txt, per-host serialisation and a contact URL in the
+ * User-Agent are rules about polling strangers, and none of them has anything to say here.
+ *
+ * The distinction is worth writing down because `createFetcher`'s comment used to claim every
+ * outbound request in this codebase went through it, and this line was one of the two that made
+ * that false.
+ */
 function realClient(apiKey: string): AiClient {
   const anthropic = new Anthropic({ apiKey });
   return {

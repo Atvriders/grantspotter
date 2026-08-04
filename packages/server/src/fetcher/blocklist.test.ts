@@ -43,6 +43,7 @@ describe('normalizeHost', () => {
   it('lowercases, strips the port, strips a trailing dot, and drops userinfo', () => {
     expect(normalizeHost('https://FarWeb.ORG:8443/apply?x=1')).toBe('farweb.org');
     expect(normalizeHost('http://farweb.org./')).toBe('farweb.org');
+    expect(normalizeHost('http://farweb.org.../')).toBe('farweb.org');
     expect(normalizeHost('https://user:pass@farweb.org/x')).toBe('farweb.org');
   });
 });
@@ -79,6 +80,12 @@ describe('assertNotBlocked', () => {
       'HTTPS://FARWEB.ORG/',
       'https://farweb.org:8443/',
       'https://farweb.org./',
+      // TWO trailing dots, which is where the inline `.replace(/\.$/, '')` stopped: it left
+      // `farweb.org.`, which matched neither `farweb.org` nor `.farweb.org`, and the hard
+      // blocklist — the one that is "deliberately not configurable" — let the takeover domain
+      // through. `normalizeHost` shares `canonicalHostname` with the CONTACT_URL rules now.
+      'https://farweb.org../',
+      'https://BatuAlam.ORG.../',
       'https://someone:secret@farweb.org/',
       'https://GrantWatch.com/grants',
       'https://www.instrumentl.com/grants/amateur-radio-digital-communications-grants',

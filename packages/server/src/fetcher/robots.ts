@@ -1,8 +1,9 @@
 export interface RobotsRules {
-  /** Allow patterns from the winning user-agent group, in file order. */
+  /** Allow patterns from EVERY matching user-agent group, in file order. */
   allows: string[];
-  /** Disallow patterns from the winning user-agent group, in file order. */
+  /** Disallow patterns from EVERY matching user-agent group, in file order. */
   disallows: string[];
+  /** The LONGEST Crawl-delay any matching group asked for. See `parseRobots`. */
   crawlDelaySec?: number;
   status: number;
   fetchedAt: string;
@@ -34,6 +35,45 @@ interface Group {
 function stripComment(line: string): string {
   const hash = line.indexOf('#');
   return (hash === -1 ? line : line.slice(0, hash)).trim();
+}
+
+/**
+ * Does one `User-agent:` value in a robots.txt name US?
+ *
+ * Both arguments arrive lower-cased — `parseRobots` folds the file's values as it reads them and
+ * folds our token once — because RFC 9309 §2.2.1 defines the product token as case-insensitive,
+ * and the README and the issue template now say so where a site owner can read it.
+ *
+ * THIS USED TO BE `token.includes(value)`, i.e. the value in the FILE had to be a substring of the
+ * string `grantspotter`, and it was wrong in both directions at once:
+ *
+ *   FALSE NEGATIVE, and this is the one that mattered. `User-agent: GrantSpotter/0.1.0` did not
+ *   match, because `grantspotter` does not contain `grantspotter/0.1.0`. That is the token exactly
+ *   as this crawler prints it in the log line the issue template quotes TWELVE LINES ABOVE the
+ *   paragraph telling a site owner to put it in robots.txt. A person who copied what they were
+ *   shown was not stopped, was told they would be, and got no signal either way — the polling just
+ *   continued. Measured before the fix, against the real parser:
+ *
+ *     User-agent: GrantSpotter/0.1.0 / Disallow: /   ->  isPathAllowed(rules, '/grants') === true
+ *
+ *   FALSE POSITIVE. `User-agent: grant` DID match, because `grantspotter` contains `grant`. Rules
+ *   written for somebody else's crawler — a Crawl-delay, a Disallow — were obeyed as if they were
+ *   addressed to us.
+ *
+ * The rule now: the value IS the token, or it is the token followed by a character that is not a
+ * letter or a digit. That accepts every form a person types after reading a log line —
+ * `GrantSpotter`, `GrantSpotter/0.1.0`, `grantspotter-bot`, `GrantSpotter_crawler` — and refuses
+ * `grantspotterbot`, a different product whose name merely begins with ours. (`*` is not handled
+ * here; it is the fallback group, and `parseRobots` only reaches it when nothing named us.)
+ *
+ * Where the two directions of error trade off, this leans towards obeying, deliberately: a
+ * separator we failed to anticipate costs us one source for one night, and a rule we failed to
+ * honour costs a volunteer-run site the only remedy this project promises it.
+ */
+function namesUs(agentValue: string, token: string): boolean {
+  if (!agentValue.startsWith(token)) return false;
+  if (agentValue.length === token.length) return true;
+  return !/[a-z0-9]/.test(agentValue.charAt(token.length));
 }
 
 export function parseRobots(
@@ -82,21 +122,67 @@ export function parseRobots(
     }
   }
 
+  /*
+   * EVERY matching group, not the first one.
+   *
+   * RFC 9309 §2.2.1: "If more than one group matches, the matching groups' rules MUST be merged
+   * into one group." This was `groups.find(...)`, which took the first and dropped the rest.
+   * Measured before the fix, on a file that says the same thing twice:
+   *
+   *     User-agent: GrantSpotter      User-agent: GrantSpotter
+   *     Crawl-delay: 30               Disallow: /
+   *
+   *   -> crawlDelaySec 30, disallows [], isPathAllowed('/grants') === true
+   *
+   * We waited thirty seconds and then fetched a page the file had just forbidden. Splitting rules
+   * across two groups with the same agent is a completely ordinary way to write a robots.txt — a
+   * generic block plus a later, hand-added one — and the shape of the failure is the worst
+   * available: it looks like the file is being obeyed, because half of it is.
+   *
+   * A named group still beats the wildcard outright (RFC 9309 §2.2.1 again: the most specific
+   * match applies, and `*` is the least specific), so a site that writes rules for us is not also
+   * held to the rules it wrote for everybody.
+   */
   const token = agentToken.toLowerCase();
-  const named = groups.find((g) => g.agents.some((a) => a !== '*' && token.includes(a)));
-  const wildcard = groups.find((g) => g.agents.includes('*'));
-  const winner = named ?? wildcard;
+  const named = groups.filter((g) => g.agents.some((a) => namesUs(a, token)));
+  const matching = named.length > 0 ? named : groups.filter((g) => g.agents.includes('*'));
+
+  const delays = matching
+    .map((g) => g.crawlDelaySec)
+    .filter((delay): delay is number => delay !== undefined);
 
   return {
-    allows: winner ? [...winner.allows] : [],
-    disallows: winner ? [...winner.disallows] : [],
-    crawlDelaySec: winner?.crawlDelaySec,
+    allows: matching.flatMap((g) => g.allows),
+    disallows: matching.flatMap((g) => g.disallows),
+    // The LONGEST delay any matching group asked for. Two groups naming different intervals is a
+    // file that contradicts itself, and when a site owner's intent is ambiguous the reading to
+    // take is the one that polls less.
+    crawlDelaySec: delays.length > 0 ? Math.max(...delays) : undefined,
     status,
     fetchedAt,
   };
 }
 
 /**
+ * EVERY status class, which is the point. The list below is exhaustive over 1xx–5xx, and it is
+ * written that way because the previous version of this comment enumerated 200 / 4xx / 429 / 5xx,
+ * never mentioned 3xx, and the code matched the comment: a redirect fell through to the final
+ * `return` and became ALLOW-ALL. A 301 on `/robots.txt` — apex to `www`, or http to https, which
+ * is what a small nonprofit's hosting does by default — was read as "this site publishes no rules,
+ * crawl it". A crawler that treats a redirect as permission is precisely the failure this
+ * product's politeness story exists to avoid, and the gap survived because an enumeration with a
+ * hole in it reads like an enumeration.
+ *
+ * 200 — parse it.
+ *
+ * 3xx — the caller (`createFetcher`'s `readRobots`) follows up to ROBOTS_MAX_REDIRECTS hops and
+ * calls this with whatever the chain ends at, so a 3xx arriving HERE means the chain did not end:
+ * too many hops, no `Location`, a `Location` that will not parse, or one pointing at a host the
+ * blocklist refuses. In every one of those we did not read the site's rules, so we do not get to
+ * assume they permit us: back off for this run. RFC 9309 §2.3.1.2 would instead assume "no
+ * robots.txt" after five redirects; this deviates from it in the direction of polling less, and
+ * the cost is bounded — one run, then the next crawl re-reads.
+ *
  * 4xx other than 429 means "no rules are published" — crawl freely. ncdxf.org 403s its own
  * robots.txt, and treating that as disallow-all would silently drop the source forever.
  * 429 and 5xx mean the server is unhappy: back off and treat it as disallow-all until the
@@ -121,8 +207,22 @@ export function robotsFromResponse(
   if (status === 429 || status >= 500) {
     return { allows: [], disallows: ['/'], status, fetchedAt };
   }
+  if (status >= 300 && status < 400) {
+    return { allows: [], disallows: ['/'], status, fetchedAt };
+  }
   return { allows: [], disallows: [], status, fetchedAt };
 }
+
+/**
+ * How many redirects a `robots.txt` is followed through. RFC 9309 §2.3.1.2 requires at least five,
+ * "even across authorities" — the rules that come back apply to the origin we asked, not to
+ * whatever origin answered.
+ *
+ * Not configurable, unlike `FetchOptions.maxRedirects`, which governs ordinary page fetches: this
+ * one is a floor an RFC sets on being polite, and an operator turning it down would be turning
+ * down the site owner's ability to be heard.
+ */
+export const ROBOTS_MAX_REDIRECTS = 5;
 
 function patternToRegExp(pattern: string): RegExp {
   let anchored = false;

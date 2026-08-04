@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,23 +31,41 @@ import { describe, expect, it } from 'vitest';
  * enumerates the places a contact URL can enter the process, and fails when a new one appears
  * without going through `resolveContactUrl` / `loadConfig`.
  *
- * WHAT IT READS. Every non-test `.ts` under the four trees that can run: the server source, the
- * scripts, the e2e harness and the repo-root config. It looks for three things:
+ * WHAT IT READS. Every non-test source file under the four trees that can run: the server source,
+ * the scripts, the e2e harness and the repo-root config. It looks for four things:
  *
- *   1. reading CONTACT_URL out of an environment,
+ *   1. naming CONTACT_URL other than to set it,
  *   2. calling `buildUserAgent(`,
  *   3. calling `createFetcher(`,
+ *   4. opening a socket without going through a fetcher,
  *
- * any of which means "this file decides what identifies the crawler". A file doing any of them
- * must be in ENTRY_POINTS below, and every ENTRY_POINT must import the shared resolver and must
- * not re-implement the default itself. The list is short on purpose: adding to it is a decision
- * somebody makes in a review, not something that happens by writing four lines in a hurry.
+ * any of which means "this file decides what identifies the crawler, or talks to the network
+ * without one". A file doing 1–3 must be in ENTRY_POINTS below, a file doing 4 must be in
+ * DIRECT_NETWORK, and every ENTRY_POINT must import the shared resolver and must not re-implement
+ * the default itself. Both lists are short on purpose: adding to one is a decision somebody makes
+ * in a review, not something that happens by writing four lines in a hurry.
  *
- * NOT A LINT RULE ON STYLE. Each pattern below describes a way to get an unvalidated value onto
- * the wire, and the runtime guards close the same door from the other side: `buildUserAgent`
- * validates whatever it is handed, and `createFetcher` refuses a User-Agent that `buildUserAgent`
- * did not produce from the `contactUrl` beside it. This test is what notices the NEXT entry point;
- * those are what stop it from doing damage in the meantime.
+ * THIS FILE WAS ITSELF WALKED PAST, THREE WAYS, on 2026-08-04. Each hole was demonstrated with a
+ * scratch offender that the test as it then stood reported as clean:
+ *
+ *   1. `const { CONTACT_URL } = process.env` — a destructuring read matched no pattern here,
+ *      because the pattern insisted on `process.env.` or `env['…']` immediately before the name.
+ *   2. `scripts/poll-c.mjs` — the walk collected `/\.tsx?$/` and nothing else, so a `.mjs` that
+ *      built a fetcher was not a file as far as this test was concerned. `scripts/` already
+ *      contains one `.mjs`, so this was not hypothetical.
+ *   3. `packages/server/src/v2.0/poll.ts` — the walk decided file-versus-directory by asking
+ *      whether the NAME CONTAINED A DOT, so any directory with a dot in it (`v2.0`, `api.v2`,
+ *      `data.old`) was treated as a file, failed the extension test, and was never descended into.
+ *
+ * All three are closed below, and each is worth naming rather than silently fixing: a guard that
+ * can be walked past is not a guard, and the failure mode of a scanner is that it goes quiet.
+ *
+ * WHAT IT STILL CANNOT SEE, said plainly: a computed read — `process.env[nameFromSomewhere]`.
+ * There is no static pattern for that. What covers it instead is the runtime half —
+ * `buildUserAgent` validates whatever it is handed and `createFetcher` refuses a User-Agent that
+ * `buildUserAgent` did not produce from the `contactUrl` beside it — so a value obtained that way
+ * still cannot reach the wire unvalidated. This test is what notices the NEXT entry point; those
+ * are what stop it from doing damage in the meantime.
  */
 
 const REPO_ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..');
@@ -69,31 +88,97 @@ const ENTRY_POINTS = [
 const THE_PREDICATE = 'packages/server/src/config.ts';
 
 /**
- * The fetcher is exempt from the `buildUserAgent` rule and from nothing else. It calls it to
- * REFUSE a User-Agent it did not produce (see `createFetcher`), which is the opposite of the
- * defect this file guards.
+ * The fetcher is exempt from the `buildUserAgent` rule, and from the direct-network rule below,
+ * and from nothing else. It calls `buildUserAgent` to REFUSE a User-Agent it did not produce (see
+ * `createFetcher`), which is the opposite of the defect this file guards, and it is the one place
+ * that is SUPPOSED to hold `globalThis.fetch`.
  */
 const THE_WIRE_BOUNDARY = 'packages/server/src/fetcher/index.ts';
 
-/** `process.env.CONTACT_URL`, `env.CONTACT_URL`, `env['CONTACT_URL']` — reads, not writes. */
-const ENV_READ = /(?:process\.env|\benv)\s*(?:\.\s*CONTACT_URL\b|\[\s*['"]CONTACT_URL['"]\s*\])/;
+/**
+ * The files allowed to open a socket without a fetcher, and why each one is not a poll of a
+ * funder's site — which is the only thing `createFetcher` was ever the boundary for.
+ *
+ * `packages/server/src/ai/assist.ts` constructs the Anthropic SDK client, which makes its own
+ * HTTPS request to api.anthropic.com. That is a paid API this operator holds a key for, not one
+ * of the ~25 volunteer-run sites; robots.txt, per-host serialisation and a contact URL in the
+ * User-Agent are rules about polling strangers and mean nothing here.
+ *
+ * `e2e/shippedSeed.ts` calls `fetch` against `127.0.0.1:<port>`, which is the server this same
+ * harness just started. Routing our own test server's health check through the crawler's politeness
+ * machinery would test the machinery, not the server.
+ *
+ * Anything else that wants to talk to the network is polling somebody, and goes through a fetcher.
+ */
+const DIRECT_NETWORK = ['packages/server/src/ai/assist.ts', 'e2e/shippedSeed.ts'];
+
+/**
+ * Any mention of the variable that is not WRITING it.
+ *
+ * Deliberately broader than "reads it off `process.env`", which is what it used to be: that shape
+ * missed `const { CONTACT_URL } = process.env` outright, and would equally have missed
+ * `const e = process.env; e.CONTACT_URL`. Every way of getting at the value mentions its name, so
+ * the name is what this matches, and the exception is the one shape that is not a read at all:
+ * `CONTACT_URL:` or `CONTACT_URL =` followed by something other than `=`, i.e. SETTING it, which
+ * is how a harness configures a server it is about to start (`playwright.config.ts`, a spawned
+ * child's env). `CONTACT_URL ===` is a comparison, so it stays an offence.
+ *
+ * `DEFAULT_CONTACT_URL` and `FORMER_PLACEHOLDER_CONTACT_URL` do not match: `\b` finds no boundary
+ * between `_` and `C`, both being word characters.
+ *
+ * The second alternative exists because `CONTACT_URL:` is not always a write. In
+ * `const { CONTACT_URL: url } = env` it is a RENAMING DESTRUCTURE — a read wearing the punctuation
+ * of a write — and the first alternative excused it. What tells the two apart is the `=` after the
+ * closing brace: an object literal is not followed by one, an assignment target always is.
+ */
+const NAMES_THE_VARIABLE = new RegExp(
+  [
+    String.raw`\bCONTACT_URL\b(?!\s*[:=][^=])`,
+    String.raw`\{[^{}]*\bCONTACT_URL\b[^{}]*\}\s*=[^=]`,
+  ].join('|'),
+);
 const BUILDS_A_USER_AGENT = /\bbuildUserAgent\s*\(/;
 const MAKES_A_FETCHER = /\bcreateFetcher\s*\(/;
 
+/**
+ * Ways to reach the network with no fetcher in the way. Applied line by line, so that a TypeScript
+ * method SIGNATURE — `fetch(req: FetchRequest): Promise<FetchedPayload>;`, which is how the
+ * `Fetcher` interface and its several test doubles declare themselves — is not mistaken for a call.
+ */
+const OPENS_A_SOCKET: readonly RegExp[] = [
+  /\bglobalThis\s*\.\s*fetch\b/,
+  /(?<![.\w$])fetch\s*\(/,
+  /\bnew\s+Anthropic\s*\(/,
+  /\bfrom\s+['"](?:node:)?https?['"]/,
+  /\brequire\s*\(\s*['"](?:node:)?https?['"]\s*\)/,
+];
+/** `fetch(x: T): R` declares; `fetch(x)` calls. Also skips `import type … from 'node:http'`. */
+const NOT_A_CALL = [/(?<![.\w$])fetch\s*\([^)]*\)\s*:/, /\bimport\s+type\b/];
+
+/**
+ * Every extension Node will execute, not only `.tsx?`. `scripts/` already contains a `.mjs`, and
+ * a `scripts/poll-c.mjs` that built a fetcher was invisible to this file until 2026-08-04.
+ */
+const RUNNABLE = /\.(?:[cm]?[jt]sx?)$/;
+const IS_A_TEST = /\.test\.(?:[cm]?[jt]sx?)$/;
+
 async function walk(dir: string, out: string[] = []): Promise<string[]> {
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = await readdir(dir);
+    // withFileTypes, not a guess from the name. Deciding file-versus-directory by "does the name
+    // contain a dot" made `packages/server/src/v2.0/` a file that failed the extension test, so
+    // nothing under it was ever scanned.
+    entries = await readdir(dir, { withFileTypes: true });
   } catch {
     return out; // tree absent in a partial checkout
   }
   for (const entry of entries) {
-    if (entry === 'node_modules' || entry === 'dist' || entry === '.tmp') continue;
-    const full = path.join(dir, entry);
-    if (entry.includes('.')) {
-      if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(full);
-    } else {
+    if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.tmp') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
       await walk(full, out);
+    } else if (RUNNABLE.test(entry.name) && !IS_A_TEST.test(entry.name)) {
+      out.push(full);
     }
   }
   return out;
@@ -139,19 +224,41 @@ describe('every path that can name this crawler goes through one predicate', () 
     // file replaces ("the scripts check it too", written in a comment) stayed true-looking.
     const files = await scannedFiles();
     expect(files.length).toBeGreaterThan(80);
-    for (const entry of ENTRY_POINTS) {
+    for (const entry of [...ENTRY_POINTS, ...DIRECT_NETWORK, THE_PREDICATE]) {
       expect(files.map((f) => f.rel)).toContain(entry);
     }
-    expect(files.map((f) => f.rel)).toContain(THE_PREDICATE);
+    // The walk descends into a directory whose name contains a dot, and collects every extension
+    // Node runs. Both were holes; each is pinned by a file that only the fix can see.
+    expect(files.map((f) => f.rel)).toContain('scripts/make-extract-fixture.mjs');
+    expect(files.some((f) => /\.mjs$/.test(f.rel))).toBe(true);
   });
 
-  it('lets nobody but a declared entry point read CONTACT_URL from an environment', async () => {
+  it('lets nobody but a declared entry point name CONTACT_URL', async () => {
     const offenders = (await scannedFiles())
-      .filter((f) => f.rel !== THE_PREDICATE && ENV_READ.test(f.source))
+      .filter((f) => f.rel !== THE_PREDICATE && NAMES_THE_VARIABLE.test(f.source))
       .map((f) => f.rel);
     // Note what is NOT an offence: SETTING it (`CONTACT_URL: '…'` in playwright.config.ts or a
     // spawned child's env) is how a harness configures a server, and the server then validates it.
     expect(offenders).toEqual([]);
+  });
+
+  it('catches the three shapes that walked past this file', () => {
+    // Pinned as data rather than only as behaviour, so that a later "simplification" of the
+    // patterns above has to come past the exact strings that defeated their predecessors.
+    expect(NAMES_THE_VARIABLE.test('const { CONTACT_URL } = process.env;')).toBe(true);
+    expect(NAMES_THE_VARIABLE.test('const { CONTACT_URL: url } = env;')).toBe(true);
+    expect(NAMES_THE_VARIABLE.test('const e = process.env;\nconst u = e.CONTACT_URL;')).toBe(true);
+    expect(NAMES_THE_VARIABLE.test("if (process.env.CONTACT_URL === '') return;")).toBe(true);
+    // …and does not fire on setting it, or on the two constants whose names end in it.
+    expect(NAMES_THE_VARIABLE.test("env: { CONTACT_URL: 'https://w9xyz.org/x' }")).toBe(false);
+    expect(NAMES_THE_VARIABLE.test("process.env.CONTACT_URL = 'https://w9xyz.org/x';")).toBe(false);
+    expect(NAMES_THE_VARIABLE.test('return DEFAULT_CONTACT_URL;')).toBe(false);
+    expect(NAMES_THE_VARIABLE.test('FORMER_PLACEHOLDER_CONTACT_URL,')).toBe(false);
+    // A `.mjs` is a file, and `v2.0` is a directory.
+    expect(RUNNABLE.test('poll-c.mjs')).toBe(true);
+    expect(RUNNABLE.test('poll.cjs')).toBe(true);
+    expect(RUNNABLE.test('v2.0')).toBe(false);
+    expect(IS_A_TEST.test('robots.test.mjs')).toBe(true);
   });
 
   it('lets nobody but a declared entry point mint a User-Agent or build a fetcher', async () => {
@@ -172,8 +279,50 @@ describe('every path that can name this crawler goes through one predicate', () 
       expect(source, entry).toMatch(/\b(resolveContactUrl|loadConfig)\s*\(/);
       // …and does not read the variable itself, or re-implement the default beside it. Both
       // spellings below are the exact shape of the code this file exists to prevent returning.
-      expect(source, entry).not.toMatch(ENV_READ);
+      expect(source, entry).not.toMatch(NAMES_THE_VARIABLE);
       expect(source, entry).not.toMatch(/(?:\?\?|\|\|)\s*DEFAULT_CONTACT_URL/);
+    }
+  });
+
+  /**
+   * WHAT `createFetcher` IS AND IS NOT THE BOUNDARY FOR — checked, not asserted in a comment.
+   *
+   * Its own doc comment used to say "THE WIRE BOUNDARY. Every User-Agent this codebase sends
+   * leaves through this function", and two files made that false as written: `ai/assist.ts`
+   * constructs the Anthropic SDK, which does its own HTTPS, and `e2e/shippedSeed.ts` calls
+   * `globalThis.fetch` against the harness's own server. Neither is a defect — see DIRECT_NETWORK
+   * for why each is legitimate — but a structural guarantee that two files already break is a
+   * claim, not a guarantee, and this project has spent its whole history deleting exactly that.
+   *
+   * So the claim was narrowed to the thing that is actually true and worth having (every poll of a
+   * third party goes through a fetcher), and this test is what keeps it true: the set of files
+   * that reach the network directly is FIXED. A third one is a decision, made here, in review.
+   */
+  it('keeps the list of files that reach the network without a fetcher closed', async () => {
+    const allowed = new Set([...DIRECT_NETWORK, THE_WIRE_BOUNDARY]);
+    const offenders: string[] = [];
+    for (const file of await scannedFiles()) {
+      if (allowed.has(file.rel)) continue;
+      const hit = file.source
+        .split('\n')
+        .filter((line) => !NOT_A_CALL.some((exempt) => exempt.test(line)))
+        .some((line) => OPENS_A_SOCKET.some((pattern) => pattern.test(line)));
+      if (hit) offenders.push(file.rel);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('finds the direct-network files it exempts, so the exemption is not vacuous', async () => {
+    // If a pattern above stops matching, the test before this one goes quiet and passes forever.
+    // These two files are the only things standing between that and a real guard.
+    const files = await scannedFiles();
+    for (const rel of [...DIRECT_NETWORK, THE_WIRE_BOUNDARY]) {
+      const source = files.find((f) => f.rel === rel)?.source ?? '';
+      const hit = source
+        .split('\n')
+        .filter((line) => !NOT_A_CALL.some((exempt) => exempt.test(line)))
+        .some((line) => OPENS_A_SOCKET.some((pattern) => pattern.test(line)));
+      expect(hit, rel).toBe(true);
     }
   });
 
