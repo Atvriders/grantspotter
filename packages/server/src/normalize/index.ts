@@ -37,19 +37,77 @@ export interface NormalizeContext {
   existingIdFor?: (sourceId: string, externalKey: string) => string | undefined;
 }
 
+/**
+ * Obligations we assert for every record of a source. EVERY ENTRY HERE IS AN ASSERTION ABOUT A
+ * FUNDER'S TERMS MADE FROM A TABLE IN OUR CODE, so the bar is the same as for a parsed field:
+ * a sentence on a page we actually fetched. `Obligations` has no provenance field (unlike
+ * `AiPolicy`, which requires `quote` + `url`), so the quote lives in the comment beside the
+ * entry and the capture it came from is named.
+ *
+ * REMOVED 2026-08-03, close-out review B3 — four assertions no capture supports:
+ *
+ *   yaesu-dr2x  sustainmentObligation "The repeater must remain on the air for 12 months."
+ *     `twelve`, `12 month`, `on the air`, `remain` and `obligation` all appear ZERO times in the
+ *     145,639-byte real capture (fixtures/yaesu-dr2x/00-systemfusion-yaesu-com.html). The
+ *     sentence existed only in three synthetic fixtures an implementer wrote, while the module's
+ *     own notes said the obligation "is NOT stated anywhere on the landing page … so
+ *     sustainmentObligation is absent from the live record rather than asserted" — false of the
+ *     shipped record. It is now read from `rawFields.sustainment` instead (below), which the
+ *     Yaesu parser writes when, and only when, a page really does carry the sentence.
+ *
+ *   ardc-grants  licenseObligation (GPL/MIT/BSD/CERN-OHL/Creative Commons) and
+ *   ardc-grants / ardc-award-tables  indirectCostCapPct: 20
+ *     `indirect`, `CERN-OHL` and `GPL` appear in zero ARDC fixture bytes; every `open-source`
+ *     hit in the eight captured award tables is a GRANTEE'S PROJECT NAME ("Open-Source Software
+ *     Framework for Teaching…"), not a term. BOTH FACTS ARE REAL AND SIMPLY UNFETCHED — ARDC
+ *     states them on https://www.ardc.net/apply/grant-application-instructions/ ("You may
+ *     include up to 20% for indirect costs…"; "projects that are not open source and open access
+ *     are not eligible"), which no source in this pipeline requests. The enumerated licence list
+ *     is not on that page either. When a source fetches it, they belong back here WITH the
+ *     quote; asserting them from a page we never read is how a wrong term ships.
+ *
+ *   arrl-club-grant  coFunderPreference: true
+ *     Copied from its sibling. `sole funder`, `preference`, `matching` and `co-fund` appear zero
+ *     times in fixtures/arrl-club-grant/00-www-arrl-org-club-grant-program.html. The sentence
+ *     belongs to arrl-amateur-radio-grants, which keeps the entry below.
+ */
 const OBLIGATIONS_BY_SOURCE: Readonly<Record<string, Partial<Obligations>>> = Object.freeze({
-  'ardc-grants': {
-    licenseObligation:
-      'All output must be open-source or open-access (GPL, MIT, BSD, CERN-OHL, Creative Commons).',
-    indirectCostCapPct: 20,
-  },
-  'ardc-award-tables': { indirectCostCapPct: 20 },
+  // fixtures/arrl-amateur-radio-grants/00-www-arrl-org-amateur-radio-grants.html, verbatim: "The
+  // ARRL Foundation does not wish to be the sole funder of a proposal and gives preference to
+  // groups that provide evidence of other successful fundraising conducted prior to applying."
   'arrl-amateur-radio-grants': { coFunderPreference: true },
-  'arrl-club-grant': { coFunderPreference: true },
-  'yaesu-dr2x': { sustainmentObligation: 'The repeater must remain on the air for 12 months.' },
-  // NCDXF expects the applicant to have a personal stake in the DXpedition it part-funds.
+  // fixtures/ncdxf-grants/00-www-ncdxf-org-pages-grant-app-html.html, verbatim: "A basic
+  // philosophy of the NCDXF is that expedition participants themselves should have a significant
+  // financial stake in their expedition and that the expedition should be likely to proceed even
+  // without financial support from the NCDXF."
   'ncdxf-grants': { costShareRequired: true },
 });
+
+/**
+ * Obligations the FUNDER's own page stated and a parser captured, per record. These outrank the
+ * table above: a sentence on the page beats our research about the source.
+ *
+ * `sustainment` — the Yaesu parser's `/([^.]*(?:twelve months|12 months)[^.]*\.)/` over the
+ *   flattened page. Absent from the live capture, present in the synthetic ones, which is
+ *   exactly the behaviour wanted: where a page says it, we publish the funder's own sentence;
+ *   where no page says it, the record carries no obligation at all.
+ * `costSharing` — Grants.gov's own boolean on the opportunity detail. NTIA PWSCIF's capture
+ *   (fixtures/grants-gov-federal/05-…-fetchopportunity.json) carries `"costSharing":true` in the
+ *   same JSON object `parseOpportunityDetail` already reads `responseDate` out of, while the
+ *   product published `costShareRequired: false`. A cost-share requirement discovered late is
+ *   a wasted application.
+ */
+function obligationsFromRawFields(raw: RawOpportunity): Partial<Obligations> {
+  const found: Partial<Obligations> = {};
+  const sustainment = raw.rawFields.sustainment;
+  if (sustainment !== undefined && sustainment.trim() !== '') {
+    found.sustainmentObligation = sustainment.trim();
+  }
+  const costSharing = raw.rawFields.costSharing;
+  if (costSharing === 'true') found.costShareRequired = true;
+  else if (costSharing === 'false') found.costShareRequired = false;
+  return found;
+}
 
 /**
  * Per-record obligations, keyed by sourceKeyOf(sourceId, externalKey). `manual-tier-d` carries
@@ -317,6 +375,29 @@ function applicantEntitiesFor(raw: RawOpportunity, ctx: NormalizeContext): Appli
   );
 }
 
+/**
+ * Where this program says to apply, in the order of how directly the funder said it.
+ *
+ * `applyUrl` FIRST, and it is the whole of close-out review B2. `sources/tier-c-a.ts` parses
+ * QCWA's own sentence — "Applications are available and completed online via the ARRL Foundation
+ * website: https://www.arrl.org/scholarship-descriptions" — into `rawFields.applyUrl`, its test
+ * asserts the capture, and until now NOTHING READ IT: the record published qcwa.org instead, the
+ * page the reader was already on. `arrl-scholarship-descriptions` now writes the same key from
+ * the "Go Now" href it had been deleting, which moves 89 more records off the catalogue page and
+ * onto the application form.
+ *
+ * `?? raw.sourceUrl` is the honest last resort, not an answer: it means no page named a route,
+ * and it is indistinguishable in the output from one that did. That is worth fixing at the type
+ * level (`applyUrl?: string` is optional in CONTRACT §3 — a record could carry no apply URL and
+ * let Plan 3 render "no application link published" instead of a link that goes nowhere useful),
+ * but changing it is a `packages/core` decision and every consumer's, not this file's alone.
+ */
+function applyUrlFor(raw: RawOpportunity): string {
+  return (
+    raw.rawFields.applyUrl ?? raw.rawFields.formUrl ?? raw.rawFields.detailUrl ?? raw.sourceUrl
+  );
+}
+
 function firstOf(fields: Record<string, string>, keys: string[]): string {
   for (const key of keys) {
     const value = fields[key];
@@ -328,7 +409,13 @@ function firstOf(fields: Record<string, string>, keys: string[]): string {
 function buildSummary(raw: RawOpportunity): string {
   // Our own short excerpt, never a full text dump. Facts are not copyrightable; long verbatim
   // descriptions are a different matter.
-  const source = firstOf(raw.rawFields, ['summary', 'audience', 'eligibility', '__preamble']) || raw.rawText;
+  // `excerpt` — the WordPress REST API's own summary field on an ARDC page — was listed in
+  // rawFieldsContract.test.ts as a write-only DEFECT for want of exactly this reader. It sits
+  // after the parsed fields and before the raw-text dump: the funder's own one-line summary is
+  // better than a flattened page, and worse than a field a parser understood.
+  const source =
+    firstOf(raw.rawFields, ['summary', 'audience', 'eligibility', 'excerpt', '__preamble']) ||
+    raw.rawText;
   const oneLine = source.replace(/\s+/g, ' ').trim();
   return oneLine.length <= 400 ? oneLine : `${oneLine.slice(0, 397)}...`;
 }
@@ -447,6 +534,8 @@ export function normalizeRaw(raw: RawOpportunity, ctx: NormalizeContext): Progra
     coFunderPreference: false,
     ...OBLIGATIONS_BY_SOURCE[ctx.sourceId],
     ...OBLIGATIONS_BY_RECORD[recordKey],
+    // Last, because the funder's own published value outranks any table in this file.
+    ...obligationsFromRawFields(raw),
   };
 
   const program: Program = {
@@ -459,7 +548,7 @@ export function normalizeRaw(raw: RawOpportunity, ctx: NormalizeContext): Progra
     amount: buildAmount(raw, ctx),
     deadline: inferDeadline(raw, ctx),
     applyVia: APPLY_VIA_BY_SOURCE[ctx.sourceId] ?? 'page_form',
-    applyUrl: raw.rawFields.formUrl ?? raw.rawFields.detailUrl ?? raw.sourceUrl,
+    applyUrl: applyUrlFor(raw),
     applyContact: raw.rawFields.applyNote,
     constraints: extractConstraints(raw),
     fundingRestrictions: RESTRICTIONS_BY_SOURCE[ctx.sourceId] ?? [],

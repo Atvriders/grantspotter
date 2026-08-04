@@ -4,6 +4,7 @@ import {
   ARRL_SCHOLARSHIP_LABELS,
   arrlScholarshipDescriptions,
   findAlternatePrefixCollisions,
+  findAlternatesWithoutColon,
   parseScholarshipCatalog,
 } from './arrl-scholarship-descriptions.js';
 
@@ -56,6 +57,72 @@ describe('the no-alternate-is-a-prefix-of-another invariant', () => {
     expect(findAlternatePrefixCollisions({ A: ['Region:'], B: ['Institution:'] })).toEqual([]);
     expect(findAlternatePrefixCollisions({ A: ['Foo:'], B: ['Bar:'] })).toEqual([]);
   });
+});
+
+/**
+ * THE GAP THE PREFIX CHECK ABOVE DOES NOT COVER, with its confirmed reproduction.
+ *
+ * A reviewer added `Recipient: ['Recipient']` to ARRL_SCHOLARSHIP_LABELS. Every test in this file
+ * stayed green — 33 of 33 — while the real captured page's YASME record gained a fabricated field
+ * sliced out of the middle of a sentence:
+ *
+ *   "Recipient": "is to provide YASME a brief report of his/her Amateur Radio activities…"
+ *
+ * and `Other` silently lost its tail. No two alternates collided: the alternate collided with the
+ * FUNDER'S PROSE ("…the recipient is to provide YASME a brief report…"), which no comparison
+ * between alternates can ever see. util/text.ts makes the trailing colon optional and matches at
+ * the start of any line, so a BARE alternate matches ordinary prose; a colon-terminated one
+ * cannot. 111 of the corpus's records come off this page, so an invented field here is 111
+ * chances to publish a requirement the funder never wrote.
+ */
+describe('the every-alternate-ends-in-a-colon invariant', () => {
+  it('holds for the real ARRL_SCHOLARSHIP_LABELS table shipped in this file', () => {
+    expect(findAlternatesWithoutColon(ARRL_SCHOLARSHIP_LABELS)).toEqual([]);
+  });
+
+  it('flags the exact entry the reviewer used to break the parser, by name', () => {
+    const broken: Record<string, string[]> = { ...ARRL_SCHOLARSHIP_LABELS, Recipient: ['Recipient'] };
+    expect(findAlternatesWithoutColon(broken)).toEqual(['Recipient: "Recipient"']);
+  });
+
+  it('flags a bare alternate added to an EXISTING key, which the prefix check cannot see', () => {
+    // "Sponsor" is a proper prefix of nothing in the table and collides with no other alternate,
+    // so findAlternatePrefixCollisions returns [] — and it would still match the live page's
+    // "Sponsor must be an active QCWA member" prose at the start of a line.
+    const broken: Record<string, string[]> = {
+      ...ARRL_SCHOLARSHIP_LABELS,
+      Other: [...ARRL_SCHOLARSHIP_LABELS.Other, 'Sponsor'],
+    };
+    expect(findAlternatePrefixCollisions(broken)).toEqual([]);
+    expect(findAlternatesWithoutColon(broken)).toEqual(['Other: "Sponsor"']);
+  });
+
+  it('accepts a colon-terminated alternate, however ordinary the word', () => {
+    expect(findAlternatesWithoutColon({ Recipient: ['Recipient:'], Other: ['Other:'] })).toEqual([]);
+  });
+
+  /**
+   * The end-to-end half: the two checks together are what make the reproduction impossible, and
+   * this asserts the DAMAGE, not just the table. Against the real capture, the bare alternate
+   * invents a `Recipient` field on the YASME record and truncates `Other`; the colon-terminated
+   * form does neither.
+   */
+  it.skipIf(!hasFixture(SOURCE_ID, LIVE))(
+    'proves the damage on the real page: a bare alternate invents a field, a colon-terminated one does not',
+    () => {
+      const html = loadFixture(SOURCE_ID, LIVE);
+      const yasmeFrom = (labels: Record<string, string[]>) =>
+        parseScholarshipCatalog(html, URL, labels).entries.find((e) => /YASME/i.test(e.name));
+
+      const bare = yasmeFrom({ ...ARRL_SCHOLARSHIP_LABELS, Recipient: ['Recipient'] });
+      expect(bare?.rawFields.Recipient).toMatch(/^is to provide YASME a brief report/);
+      expect(bare?.rawFields.Other).not.toMatch(/brief report/);
+
+      const withColon = yasmeFrom({ ...ARRL_SCHOLARSHIP_LABELS, Recipient: ['Recipient:'] });
+      expect(withColon?.rawFields.Recipient).toBeUndefined();
+      expect(withColon?.rawFields.Other).toMatch(/brief report/);
+    },
+  );
 });
 
 describe('parseScholarshipCatalog against the pathological fixture', () => {
@@ -152,6 +219,21 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
     expect(qcwa?.rawText).not.toContain('Go Now');
   });
 
+  // ...and keeps the one thing on that anchor that is not chrome: where to apply. A relative
+  // href resolves against the page it was found on, so it lands as the same absolute URL the 87
+  // spelled-out anchors carry.
+  it('keeps the CTA href as the application URL, absolute even when the page writes it relative', () => {
+    const entries = parseScholarshipCatalog(
+      '<div class="tabArea f-widget f-accordion"><h3 class="tab">A - D</h3><ul class="accordion">' +
+        '<li><p class="title">The Relative Href Scholarship</p><div class="content">' +
+        '<p>Award Amount: $1,000</p><p><a href="/scholarship-application">Go Now</a></p>' +
+        '</div></li></ul></div>',
+      URL,
+    ).entries;
+    expect(entries[0]?.rawFields.applyUrl).toBe('http://www.arrl.org/scholarship-application');
+    expect(entries[0]?.rawText).not.toContain('Go Now');
+  });
+
   // Fix round 1, finding 3 (IMPORTANT): util/text.ts makes the colon after a label optional and
   // matches at the start of any line, not only after a real "Label:" — so the bare 'Amount' and
   // 'License' alternates used to also match ordinary prose that merely started a line with that
@@ -222,6 +304,9 @@ describe('parseScholarshipCatalog against the pathological fixture', () => {
       'Award Amount': '$3,000',
       'Number of Awards': '19',
       Other: 'Applicant must be sponsored by an active QCWA member.',
+      // The "Go Now" CTA's href, kept while its text is stripped. This fixture reproduces the
+      // live markup byte-for-byte, CTA included, so the entry carries an application URL.
+      applyUrl: 'http://www.arrl.org/scholarship-application',
     });
   });
 
@@ -382,5 +467,33 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
       Object.values(e.rawFields).some((v) => /go\s*now/i.test(v)),
     );
     expect(polluted.map((e) => e.name)).toEqual([]);
+  });
+
+  /**
+   * CLOSE-OUT REVIEW B2. Stripping the CTA's TEXT was right; discarding its HREF was not. The
+   * capture carries `href="http://www.arrl.org/scholarship-application"` 87 times and
+   * `href="/scholarship-application"` 3 times — 89 of them inside an entry's own accordion body,
+   * the 90th in the sidebar callout. All 111 records used to publish
+   * `applyUrl: http://www.arrl.org/scholarship-descriptions`, the catalogue page the reader was
+   * already looking at, because normalize/ had nothing else to fall back to.
+   */
+  it('keeps the application href off the CTA it strips, for the 89 entries that carry one', () => {
+    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const withApply = entries.filter((e) => e.rawFields.applyUrl !== undefined);
+    expect(withApply).toHaveLength(89);
+    for (const e of withApply) {
+      expect(e.rawFields.applyUrl, e.name).toBe('http://www.arrl.org/scholarship-application');
+    }
+  });
+
+  // The other 22 entries state no route of their own. The page's sidebar does — "Scholarship
+  // Application … Complete your application now!" — but attributing a page-level callout to an
+  // entry that does not carry it is an inference, not a reading, so those keep the catalogue URL
+  // and the record says so by omission.
+  it('writes no applyUrl for an entry whose own body names no route', () => {
+    const { entries } = parseScholarshipCatalog(loadFixture(SOURCE_ID, LIVE), URL);
+    const without = entries.filter((e) => e.rawFields.applyUrl === undefined);
+    expect(without).toHaveLength(entries.length - 89);
+    expect(without.map((e) => e.name)).toContain('The Louisiana Memorial Scholarship');
   });
 });

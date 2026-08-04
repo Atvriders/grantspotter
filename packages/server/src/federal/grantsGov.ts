@@ -47,6 +47,14 @@ export interface GrantsGovDetail {
   responseDate?: string;
   postingDate?: string;
   lastUpdatedDate?: string;
+  /**
+   * The funder's own answer to "does this NOFO require cost sharing?", as a boolean in the same
+   * `synopsis` object `responseDate` comes from. NTIA PWSCIF's committed capture carries
+   * `"costSharing":true`; the product published `costShareRequired: false` because nothing in
+   * the codebase mentioned the field. `undefined` when the JSON omits it — that is silence, not
+   * a "no".
+   */
+  costSharing?: boolean;
   description: string;
 }
 
@@ -154,6 +162,7 @@ export function parseOpportunityDetail(json: string): GrantsGovDetail | undefine
     applicantTypes,
     description: flattenHtml(String(synopsis.synopsisDesc ?? '')),
   };
+  if (typeof synopsis.costSharing === 'boolean') detail.costSharing = synopsis.costSharing;
   if (typeof synopsis.responseDate === 'string') detail.responseDate = synopsis.responseDate;
   if (typeof synopsis.postingDate === 'string') detail.postingDate = synopsis.postingDate;
   if (typeof synopsis.lastUpdatedDate === 'string')
@@ -177,6 +186,9 @@ export function toRawOpportunity(hit: GrantsGovHit, detail?: GrantsGovDetail): R
       rawFields.applicantTypes = detail.applicantTypes.join('; ');
     if (detail.lastUpdatedDate) rawFields.lastUpdatedDate = detail.lastUpdatedDate;
     if (detail.responseDate) rawFields.responseDate = detail.responseDate;
+    // Read by normalize/index.ts's obligationsFromRawFields. Only written when the funder
+    // actually published the flag, so an omitted field stays silent instead of becoming "no".
+    if (detail.costSharing !== undefined) rawFields.costSharing = String(detail.costSharing);
     // Only write amountRaw when there is a real figure. "none" must not become "$0".
     const floor = detail.awardFloor;
     const ceiling = detail.awardCeiling;

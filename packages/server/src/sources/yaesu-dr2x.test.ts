@@ -113,7 +113,12 @@ describe('yaesuDr2x', () => {
       expect(program.amount.instrument).toBe('discounted_purchase');
       expect(program.amount.amountMin).toBe(1450);
       expect(program.amount.amountMax).toBe(1860);
-      expect(program.obligations.sustainmentObligation).toMatch(/12 months/i);
+      // The funder's OWN sentence, off this fixture's page — not the literal that used to be
+      // hard-coded in OBLIGATIONS_BY_SOURCE and asserted on every Yaesu record, including the
+      // live one whose real capture never states it (close-out review B3).
+      expect(program.obligations.sustainmentObligation).toBe(
+        'The repeater must remain\non the air for twelve months.',
+      );
     });
   });
 

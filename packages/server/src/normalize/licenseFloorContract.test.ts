@@ -535,7 +535,10 @@ describe('the licence detector actually sees the class', () => {
 
   it('reads a corpus that is actually populated, and finds licence floors in it', async () => {
     const { programs } = await corpus();
-    expect(programs.length).toBeGreaterThan(150);
+    // Was >150. The publishable corpus is 149 since close-out review B8: ardc-grants' three
+    // records were "2025 Grants"/"2026 Grants"/a funded project — pages of grants already made,
+    // now recordType past_award and suppressed like every other award history.
+    expect(programs.length).toBeGreaterThan(140);
     const withFloor = programs.filter((p) => licenceFloorOf(p) !== undefined);
     // The ARRL catalog alone contributes over a hundred; a corpus that stopped parsing, or a
     // predicate that stopped recognising the axis, would collapse this to nothing.

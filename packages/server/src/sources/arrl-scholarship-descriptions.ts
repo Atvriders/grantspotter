@@ -4,7 +4,13 @@ import { pickPayload } from './util/payload.js';
 import { flattenHtml, normalizeText, splitByLabels } from './util/text.js';
 
 const SOURCE_ID = 'arrl-scholarship-descriptions';
-const URL = 'http://www.arrl.org/scholarship-descriptions';
+/**
+ * Renamed from `URL` on 2026-08-03. A module-level `const URL` SHADOWS the global URL
+ * constructor for the whole file, so `new URL(href, sourceUrl)` in `absoluteApplyUrl` below
+ * threw "URL is not a constructor" and the catch silently returned undefined — the apply href
+ * was parsed, resolved to nothing, and every record fell back to the catalogue page again.
+ */
+const CATALOG_URL = 'http://www.arrl.org/scholarship-descriptions';
 
 /**
  * Canonical label -> alternates seen on the page. Whitespace typos ("R egion",
@@ -60,8 +66,6 @@ export const ARRL_SCHOLARSHIP_LABELS: Record<string, string[]> = {
   Other: ['Other Requirements:', 'Additional Requirements:', 'Other:'],
 };
 
-const FIELD_KEYS = Object.keys(ARRL_SCHOLARSHIP_LABELS);
-
 /**
  * Structural invariant: no alternate anywhere in the table (across every key — a cross-key
  * collision is exactly as dangerous as a same-key one, since util/text.ts builds ONE combined
@@ -90,8 +94,66 @@ export function findAlternatePrefixCollisions(
   return collisions;
 }
 
-/** The site-wide "Go Now" call-to-action always links here, in absolute or relative form. */
+/**
+ * THE INVARIANT THAT ACTUALLY BINDS. `findAlternatePrefixCollisions` above compares alternates to
+ * each other, which is a closed question about this table; it says nothing about the OPEN one —
+ * whether an alternate can match running prose on the funder's page.
+ *
+ * A reviewer proved the gap by adding one entry, `Recipient: ['Recipient']`, and the whole suite
+ * stayed green while the real capture's YASME record grew a fabricated field cut mid-sentence:
+ *
+ *   "Recipient": "is to provide YASME a brief report of his/her Amateur Radio activities…"
+ *
+ * — sliced out of the middle of the funder's sentence "...the recipient is to provide YASME a
+ * brief report...", with `Other` silently losing its tail. No pair of alternates collided; the
+ * alternate collided with the PAGE. `util/text.ts` makes the colon optional after a matched
+ * alternate and matches at the start of any line, so a bare word matches ordinary prose that
+ * merely opens a line with it, and there is no prefix relation anywhere for the check above to
+ * see. That is a CROSS-KEY, prose-collision defect, and it is unbounded: no list of alternate
+ * pairs can rule it out, because the other half of the collision lives on arrl.org.
+ *
+ * Requiring the trailing colon closes it by construction. The page writes real labels as
+ * "Other:", "Region:", "Award Amount:" — with the colon — and prose never opens a line with
+ * "Recipient:". This is the property the table's own doc comment claims ("EVERY alternate below
+ * carries a trailing literal colon"), which until now nothing checked: a claim in a comment is
+ * not an invariant.
+ *
+ * Returns every offender so a failure names the entry to fix, not just "false".
+ */
+export function findAlternatesWithoutColon(labels: Record<string, string[]>): string[] {
+  return Object.entries(labels)
+    .flatMap(([key, alternates]) => alternates.map((alternate) => ({ key, alternate })))
+    .filter(({ alternate }) => !alternate.endsWith(':'))
+    .map(({ key, alternate }) => `${key}: ${JSON.stringify(alternate)}`);
+}
+
+/**
+ * The site-wide "Go Now" call-to-action always links here, in absolute or relative form.
+ *
+ * IT IS THE APPLICATION URL, AND IT USED TO BE THROWN AWAY. The real capture carries
+ * `href="http://www.arrl.org/scholarship-application"` 87 times and `href="/scholarship-application"`
+ * 3 times — 89 of the 111 real entries carry one inside their own accordion body, and the 90th
+ * occurrence is the sidebar callout "Scholarship Application … Complete your application now!".
+ * The anchor's TEXT is chrome and is still removed (see the `each` below); its HREF is the one
+ * thing on the page that says where to apply, and `normalize/index.ts` publishes it as
+ * `Program.applyUrl` — the URL Plan 3 renders as the apply button. Discarding it left all 111
+ * records pointing at the catalogue page a reader was already looking at.
+ */
 const APPLICATION_LINK_PATTERN = /scholarship-application/i;
+
+/**
+ * The href resolved against the page it was found on, so a relative `/scholarship-application`
+ * becomes the same absolute URL as the 87 anchors that spell it out. Returns undefined rather
+ * than a half-formed URL if either side is unparseable — an apply button that 404s is worse than
+ * a fallback to the catalogue.
+ */
+function absoluteApplyUrl(href: string, sourceUrl: string): string | undefined {
+  try {
+    return new URL(href, sourceUrl).toString();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * A real award figure ($1,000) or a recognisable date/year is corroborating evidence that an
@@ -119,7 +181,16 @@ export interface ScholarshipParseResult {
  * silently repairs. Keying a field off a `<strong>`, an `<li>` position or a bullet character
  * would break on at least one of those three shapes.
  */
-export function parseScholarshipCatalog(html: string, sourceUrl: string): ScholarshipParseResult {
+export function parseScholarshipCatalog(
+  html: string,
+  sourceUrl: string,
+  // A SEAM, not a knob: the shipped table is the default and every caller uses it. It exists so
+  // the label invariants can be proven against the REAL capture — parsing this page with a
+  // deliberately broken table and asserting the damage — without mutating the exported constant
+  // that the rest of the process shares.
+  labels: Record<string, string[]> = ARRL_SCHOLARSHIP_LABELS,
+): ScholarshipParseResult {
+  const fieldKeys = Object.keys(labels);
   const $ = cheerio.load(html);
   const entries: RawOpportunity[] = [];
   let stubCount = 0;
@@ -144,23 +215,31 @@ export function parseScholarshipCatalog(html: string, sourceUrl: string): Schola
       // it, so a naive flatten appends "\nGo Now" to whichever field happens to be last. Key on
       // the href, not the visible text, so a future copy change ("Apply Now") cannot reopen
       // this: the CTA always links to /scholarship-application (absolute or relative).
+      let applyUrl: string | undefined;
       $content.find('a').each((___, a) => {
         const href = $(a).attr('href') ?? '';
-        if (APPLICATION_LINK_PATTERN.test(href)) $(a).remove();
+        if (!APPLICATION_LINK_PATTERN.test(href)) return;
+        applyUrl ??= absoluteApplyUrl(href, sourceUrl);
+        $(a).remove();
       });
       const bodyHtml = $content.html() ?? '';
       const rawText = flattenHtml(bodyHtml);
-      const split = splitByLabels(rawText, ARRL_SCHOLARSHIP_LABELS);
+      const split = splitByLabels(rawText, labels);
 
       const rawFields: Record<string, string> = {};
-      for (const key of FIELD_KEYS) {
+      for (const key of fieldKeys) {
         const value = split[key];
         if (value !== undefined && value !== '') rawFields[key] = value;
       }
       const preamble = split.__preamble;
       if (preamble !== undefined && preamble !== '') rawFields.__preamble = preamble;
+      // Written by name, never through the computed subscript above, so that
+      // rawFieldsContract.test.ts's scanner can see it — a key written through a subscript is
+      // invisible to the written-but-never-read invariant, which is exactly how QCWA's own
+      // parsed applyUrl went unread for a whole plan.
+      if (applyUrl !== undefined) rawFields.applyUrl = applyUrl;
 
-      const recognisedFieldCount = FIELD_KEYS.filter((key) => rawFields[key] !== undefined).length;
+      const recognisedFieldCount = fieldKeys.filter((key) => rawFields[key] !== undefined).length;
       // 3 of the 114 li on the live page are stubs: an untitled li, an li whose body is
       // effectively empty (nbsp-only / "TBA"), and — observed only on the live page, not
       // reproducible from the brief's synthetic fixture alone — three "Scholarships" li's
@@ -214,14 +293,18 @@ export const arrlScholarshipDescriptions: SourceModule = {
   label: 'ARRL Foundation Scholarship catalog',
   tier: 'C',
   klass: 'ham_scholarship',
-  requests: [{ url: URL, method: 'GET', accept: 'html' }],
+  requests: [{ url: CATALOG_URL, method: 'GET', accept: 'html' }],
   expectedMinRecords: 100,
   notes:
     'Highest-yield source in the product: ~75% of the corpus. 114 li minus 3 stubs = 111 real ' +
     'entries across 4 accordions; a 5th "EXPLORE ARRL" accordion is chrome and is excluded. ' +
     'Parsed by label regex over flattened text because body markup is inconsistent, includes ' +
     'invalid HTML (<ul> inside <p>), \\xa0, and typos ("R egion", "License   Requirement", ' +
-    '"Number of Scholarshps"). All 111 share ONE deadline, applied by normalize/ via deadline ' +
+    '"Number of Scholarshps"). The "Go Now" CTA beside 89 of the 111 entries links to ' +
+    'http://www.arrl.org/scholarship-application: its TEXT is chrome and is stripped, its HREF ' +
+    'is the application URL and is kept as rawFields.applyUrl. The other 22 entries state no ' +
+    'route of their own and keep the catalogue URL rather than borrowing the sidebar’s. ' +
+    'All 111 share ONE deadline, applied by normalize/ via deadline ' +
     'inheritance (not here). arrl.org sends Cache-Control: nocache with no ETag and no ' +
     'Last-Modified, and its sitemap <lastmod> is frozen at 2010 — change detection must hash ' +
     'parsed entries, never headers or raw HTML.',
