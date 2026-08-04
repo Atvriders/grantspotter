@@ -320,20 +320,141 @@ function isFieldWideningMarker(value: string): boolean {
   return analyzeFieldPhrase(value).words.every((word) => WIDENING_DESCRIPTOR_WORDS.has(word));
 }
 
+// ---------------------------------------------------------------------------
+// OPEN LISTS — the funder who says their own list is not exhaustive
+//
+// `RELATEDNESS_WORDS` above handles exactly one idiom, "or a related field",
+// and handles it by reading `spec.fields` — because that idiom survives
+// extraction as a field alternative of its own ("related fields"). It is not
+// the only way a funder opens a list, and the other ways leave no trace in
+// `fields[]` at all: they are QUALIFIERS ON the list, not members of it.
+//
+//   MARCO   "Field of study must be leading to a career in the healing arts,
+//            INCLUDING, BUT NOT NECESSARILY leading to Medicine, Dentistry,
+//            Veterinary Medicine, Nursing, Pharmacy, EMT, or Radiology technician."
+//   York    "…leading to a career in the healing arts, INCLUDING BUT NOT LIMITED
+//            TO a career in Medicine, Nursing, Dentistry, Pharmacy, EMT, or Radiology"
+//
+// The extractor is right to lift only the eight and seven field names it can
+// see; synthesising a phantom "or a related field" alternative so this file
+// would notice would fabricate wording neither funder wrote, which is the same
+// defect class as the 26 invented field values a sibling fix removed. So the
+// signal is read where the funder actually put it: `Constraint.rawText`, the
+// verbatim sentence, threaded into this axis by `matchProgram`. That keeps the
+// widening attached to its own evidence, and needs no change to `ConstraintSpec`
+// (CONTRACT §3 freezes it).
+//
+// Measured blast radius: of the 65 distinct `field_of_study` constraints the
+// committed fixtures produce, exactly three carry an open-list marker — MARCO,
+// York, and Kupferschmid ("Applied sciences, technology, engineering, and
+// mathematics, including but not limited to astronomy, …"). All three said it
+// themselves. Every other list in the corpus stays closed, and an
+// engineering-only award still excludes a music major.
+//
+// DIRECTION OF ERROR, as everywhere in this file — but note this rule is not a
+// general loosening. It fires only on the funder's own words, and it never
+// touches `excludedFields`: an award that says "any field except Liberal Arts"
+// still bars a liberal-arts student, whatever else its sentence says.
+// ---------------------------------------------------------------------------
+
+/**
+ * Nouns a widening idiom lands on: "or a related FIELD", "and related
+ * DISCIPLINES". Written out rather than reusing `FIELD_NOISE_WORDS` because
+ * that set is about scoring a phrase, and this is about recognising a shape.
+ */
+const FIELD_NOUN_PATTERN =
+  'fields?|disciplines?|areas?|subjects?|majors?|minors?|studies|study|programs?|courses?|careers?';
+
+const RELATEDNESS_PATTERN = [...RELATEDNESS_WORDS].join('|');
+const WIDENING_DESCRIPTOR_PATTERN = [...WIDENING_DESCRIPTOR_WORDS].join('|');
+
+/**
+ * The phrasings volunteers actually write, run against `normText`ed rawText so
+ * that punctuation cannot hide any of them: "including, but not necessarily"
+ * and "including but not limited to" flatten to the same token sequence, and
+ * "e.g." flattens to "e g".
+ *
+ * Two rules earn their narrowness:
+ *
+ *   - Bare "including" is NOT here. Only "including but not …" is. "Engineering
+ *     degrees, including electrical and computer" reads as a list with examples
+ *     of itself, not as an invitation to a music major, and treating every
+ *     "including" as an opening is exactly the blanket permissiveness this axis
+ *     must not become.
+ *   - The relatedness pattern deliberately mirrors `isFieldWideningMarker`: the
+ *     relatedness word may be followed only by a WIDENING_DESCRIPTOR word before
+ *     the noun. So "or related fields" and "or a related technical field" open
+ *     the list, while "or SIMILAR SCIENTIFIC field" (Chuck Bierman, K7ZJ) does
+ *     not — "scientific" names a real bound, and the corpus record that carries
+ *     that phrasing must keep behaving exactly as it does today.
+ *
+ * "and other" is likewise absent, and only the plural "and/or/among others" is
+ * matched, so "Engineering or other 4-year technical degree" stays a technical
+ * requirement rather than becoming an open list.
+ */
+const OPEN_LIST_MARKERS: RegExp[] = [
+  /\bnot (?:necessarily |strictly |solely |exclusively )?(?:limited|restricted|confined) to\b/,
+  /\bincluding but not\b/,
+  /\bnot (?:an? )?exhaustive\b/,
+  /\bwithout limitation\b/,
+  /\bsuch as\b/,
+  /\bfor example\b/,
+  /\bfor instance\b/,
+  /\be g\b/,
+  /\b(?:among|and|or) others\b/,
+  /\betc\b/,
+  /\band the like\b/,
+  /\band more\b/,
+  new RegExp(
+    `\\b(?:or|and) (?:any |a |an |other |closely |otherwise )*(?:${RELATEDNESS_PATTERN})` +
+      ` (?:(?:${WIDENING_DESCRIPTOR_PATTERN}) )*(?:${FIELD_NOUN_PATTERN})\\b`,
+  ),
+];
+
+/**
+ * Where the eligible list stops and the barred list starts. Anything after it
+ * describes what is EXCLUDED, and examples of an exclusion ("except health
+ * sciences, such as nursing") must never be read as an invitation. Exclusion is
+ * the strict direction; only the text in front of this boundary can open a list.
+ */
+const EXCLUSION_INTRO =
+  /\b(?:except|excepting|excluding|exclusive of|other than|apart |aside |besides|not eligible|ineligible|does not include|do not include|with the exception)\b/;
+
+/**
+ * True when the funder's own sentence says their list of eligible fields is
+ * illustrative rather than complete.
+ */
+function fieldListIsOpen(rawText: string): boolean {
+  const text = normText(rawText);
+  if (text === '') return false;
+  const boundary = EXCLUSION_INTRO.exec(text);
+  const eligibleHalf = boundary === null ? text : text.slice(0, boundary.index);
+  return OPEN_LIST_MARKERS.some((marker) => marker.test(eligibleHalf));
+}
+
 interface FieldRequirement {
   /** Alternatives that actually name a field. */
   informative: FieldPhrase[];
   /** The funder said "any"/"all"/"none", or every alternative was pure noise. */
   unrestricted: boolean;
-  /** The funder said "or related field": adjacency we cannot adjudicate, so we include. */
+  /**
+   * The funder widened their own list — either with the "or related field"
+   * idiom that survives into `fields[]`, or by qualifying the whole list as
+   * non-exhaustive in `rawText`. Adjacency is not ours to adjudicate, so we
+   * include and let the applicant read the funder's verbatim wording.
+   */
   widened: boolean;
   excluded: FieldPhrase[];
 }
 
-function readFieldRequirement(fields: string[], excludedFields: string[]): FieldRequirement {
+function readFieldRequirement(
+  fields: string[],
+  excludedFields: string[],
+  rawText: string,
+): FieldRequirement {
   const informative: FieldPhrase[] = [];
   let unrestricted = false;
-  let widened = false;
+  let widened = fieldListIsOpen(rawText);
   for (const alternative of fields.flatMap(splitFieldAlternatives)) {
     if (isAnyFieldMarker(alternative)) {
       unrestricted = true;
@@ -446,10 +567,19 @@ function isOrg(profile: Profile): profile is OrgProfile {
   return profile.kind === 'organization';
 }
 
+/**
+ * `rawText` is the funder's own sentence — `Constraint.rawText`, which CONTRACT §3
+ * guarantees is ALWAYS populated. It is optional and additive so that every
+ * existing three-argument call still compiles and still means what it did; the
+ * only axis that reads it today is `field_of_study`, where the qualifier that
+ * says a list of eligible fields is not exhaustive lives in the sentence and
+ * nowhere in `ConstraintSpec`. `matchProgram` always supplies it.
+ */
 export function evaluateConstraint(
   spec: ConstraintSpec,
   profile: Profile,
   nowISO: string,
+  rawText = '',
 ): AxisResult {
   switch (spec.axis) {
     case 'license': {
@@ -481,7 +611,7 @@ export function evaluateConstraint(
 
     case 'field_of_study': {
       if (!isStudent(profile)) return NOT_EVALUABLE;
-      const required = readFieldRequirement(spec.fields, spec.excludedFields);
+      const required = readFieldRequirement(spec.fields, spec.excludedFields, rawText);
       // Nothing here can decide anything: no field list worth the name and no
       // exclusion. Answering "what do you study?" could not change the outcome,
       // so do not make the applicant answer it — a wasted `unknown` reads to the
@@ -498,10 +628,12 @@ export function evaluateConstraint(
       if (required.excluded.some((phrase) => fieldPhraseExcluded(mine, phrase))) return FAIL;
       if (required.unrestricted) return PASS;
       if (required.informative.some((phrase) => fieldPhrasesOverlap(mine, phrase))) return PASS;
-      // The funder wrote "or a related field". They widened it themselves, and
-      // relatedness is not something this matcher can adjudicate — so include,
-      // and let the applicant read the funder's own wording (Constraint.rawText,
-      // which Plan 3 renders) to judge the fit.
+      // The funder widened the list themselves — "or a related field" among the
+      // alternatives, or "including but not limited to" / "such as" qualifying
+      // the whole list in their own sentence. Neither relatedness nor "what else
+      // did they have in mind" is something this matcher can adjudicate, so
+      // include, and let the applicant read the funder's own wording
+      // (Constraint.rawText, which Plan 3 renders) to judge the fit.
       if (required.widened) return PASS;
       return FAIL;
     }
@@ -737,7 +869,7 @@ export function matchProgram(
     // Financial need is always a weighting, never a bar (spec §4.5 rule 11),
     // so it is forced soft whatever the record says.
     const isSoft = !constraint.hard || constraint.spec.axis === 'financial_need';
-    const result = evaluateConstraint(constraint.spec, profile, nowISO);
+    const result = evaluateConstraint(constraint.spec, profile, nowISO, constraint.rawText);
 
     if (isSoft) {
       if (result.status === 'pass') metPreferences.push(constraint);

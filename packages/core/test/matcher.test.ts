@@ -396,6 +396,338 @@ describe('field_of_study — free-text corpus values', () => {
 });
 
 /**
+ * REMEDIATION 2026-08-03 — a funder who says their list is not exhaustive is taken at their word.
+ *
+ * `RELATEDNESS_WORDS` widens a field list for exactly one idiom, "or a related field", and only
+ * because that idiom survives extraction as a member of `fields[]`. A funder who instead
+ * QUALIFIES the whole list — "including but not limited to", "such as" — leaves nothing in
+ * `fields[]` to notice, because the qualifier is not a field. The extractor was right not to
+ * synthesise one (that is the fabricated-field defect a sibling fix removed 26 instances of), so
+ * the signal is read where the funder actually wrote it: `Constraint.rawText`, threaded into the
+ * axis by `matchProgram`. No `ConstraintSpec` change, and therefore no CONTRACT §3 amendment.
+ *
+ * The reported case, from the close-out review: MARCO and John C. York both list healing-arts
+ * professions and both mark the list open, and both hard-excluded seven majors their own sentence
+ * invites. ARRL's text for MARCO asks applicants to "show a desire to encourage others in the
+ * healing arts to become licensed hams" — the award exists to bring exactly these students into
+ * amateur radio, and the product was telling them the door was shut.
+ *
+ * The constraints below are VERBATIM: `extractFieldOfStudy` produces them, ids and all, from the
+ * committed `fixtures/arrl-scholarship-descriptions` payload.
+ */
+describe('field_of_study — funders who say their list is not exhaustive', () => {
+  // "…including, but not necessarily leading to Medicine, Dentistry, …"
+  const MARCO_RAW =
+    'Field of study must be leading to a career in the healing arts, including, but not ' +
+    'necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, ' +
+    'or Radiology technician. Preference will be given to undergraduate students and those in ' +
+    'certificate programs, but graduate students may apply.';
+  // "…including but not limited to a career in Medicine, Nursing, …"
+  const YORK_RAW =
+    'Applicant must be pursuing a field of study leading to a career in the healing arts, ' +
+    'including but not limited to a career in Medicine, Nursing, Dentistry, Pharmacy, EMT, or ' +
+    'Radiology';
+
+  const marco = makeProgram({
+    id: 'arrl-marco',
+    name: 'The Medical Amateur Radio Council (MARCO) Scholarship',
+    constraints: [
+      {
+        id: 'field_of_study-0-f5b447bf',
+        hard: true,
+        fallbackRank: 0,
+        rawText: MARCO_RAW,
+        spec: {
+          axis: 'field_of_study',
+          fields: [
+            'healing arts',
+            'Medicine',
+            'Dentistry',
+            'Veterinary Medicine',
+            'Nursing',
+            'Pharmacy',
+            'EMT',
+            'Radiology technician',
+          ],
+          excludedFields: [],
+        },
+      },
+    ],
+  });
+
+  const york = makeProgram({
+    id: 'arrl-john-c-york',
+    name: 'The John C. York, KE5V, Scholarship',
+    constraints: [
+      {
+        id: 'field_of_study-0-6208f483',
+        hard: true,
+        fallbackRank: 0,
+        rawText: YORK_RAW,
+        spec: {
+          axis: 'field_of_study',
+          fields: [
+            'healing arts',
+            'Medicine',
+            'Nursing',
+            'Dentistry',
+            'Pharmacy',
+            'EMT',
+            'Radiology',
+          ],
+          excludedFields: [],
+        },
+      },
+    ],
+  });
+
+  /**
+   * The seven the close-out review named. Every one of them is a healing-arts major, none of them
+   * is on either funder's list, and all seven computed `ineligible` for both awards before this
+   * rule existed.
+   */
+  const THE_SEVEN = [
+    'Biomedical Engineering',
+    'Physical Therapy',
+    'Public Health',
+    'Respiratory Therapy',
+    'Physician Assistant Studies',
+    'Occupational Therapy',
+    'Biology (pre-med)',
+  ];
+
+  it('MARCO admits all seven majors its "including, but not necessarily" list invites', () => {
+    expect(MARCO_RAW).toContain('including, but not necessarily leading to');
+    for (const fieldOfStudy of THE_SEVEN) {
+      expect([fieldOfStudy, matchProgram(makeStudent({ fieldOfStudy }), marco, NOW)]).toEqual([
+        fieldOfStudy,
+        { kind: 'eligible' },
+      ]);
+    }
+  });
+
+  it('York admits all seven majors its "including but not limited to" list invites', () => {
+    expect(YORK_RAW).toContain('including but not limited to');
+    for (const fieldOfStudy of THE_SEVEN) {
+      expect([fieldOfStudy, matchProgram(makeStudent({ fieldOfStudy }), york, NOW)]).toEqual([
+        fieldOfStudy,
+        { kind: 'eligible' },
+      ]);
+    }
+  });
+
+  it('still admits the fields both funders actually named, and the governing one', () => {
+    for (const program of [marco, york]) {
+      for (const fieldOfStudy of ['Healing Arts', 'Nursing', 'Pharmacy', 'EMT']) {
+        expect(matchProgram(makeStudent({ fieldOfStudy }), program, NOW)).toEqual({
+          kind: 'eligible',
+        });
+      }
+    }
+  });
+
+  /**
+   * An open list makes the question unanswerable-in-a-useful-way, not unanswered: every reply
+   * passes, so demanding one would show a locked door where there is none. Same treatment the
+   * "or a related field" widening has always had.
+   */
+  it('stops asking an undeclared applicant a question that cannot change the answer', () => {
+    for (const program of [marco, york]) {
+      expect(matchProgram(makeStudent(), program, NOW)).toEqual({ kind: 'eligible' });
+    }
+  });
+
+  /**
+   * THE TRUE NEGATIVE. This rule fires on the funder's own words and on nothing else. A closed
+   * list stays closed, whatever else its sentence says — otherwise the fix is not "honour the
+   * open list", it is "delete the field axis".
+   */
+  it('leaves a genuinely closed list closed', () => {
+    // Wayne Nelson, KB4UT — real corpus value, no qualifier anywhere in it.
+    const engineeringOnly = makeProgram({
+      id: 'engineering-only',
+      constraints: [
+        makeConstraint(
+          { axis: 'field_of_study', fields: ['Engineering'], excludedFields: [] },
+          { id: 'closed-field', rawText: 'Engineering' },
+        ),
+      ],
+    });
+    const verdict = matchProgram(
+      makeStudent({ fieldOfStudy: 'Music Performance' }),
+      engineeringOnly,
+      NOW,
+    );
+    expect(verdict).toEqual({ kind: 'ineligible', reasons: [expect.objectContaining({ id: 'closed-field' })] });
+
+    // ...and the same, for every closed real-corpus sentence that a music major fails.
+    const closed: Array<[string[], string]> = [
+      [['Science', 'technology', 'engineering', 'mathematics'], 'Science, technology, engineering, or mathematics'],
+      [['Electrical', 'Communications Engineering'], 'Electrical or Communications Engineering'],
+      [['Horticulture', 'environmental sciences'], 'Horticulture and/or environmental sciences'],
+      [['Engineering', 'Medicine', 'Science', 'Business'], 'Engineering, Medicine, Science or Business'],
+      [['Mathematics', 'data science'], 'Mathematics or data science'],
+      [['International studies'], 'International studies'],
+    ];
+    for (const [fields, rawText] of closed) {
+      expect([
+        rawText,
+        evaluateConstraint(
+          { axis: 'field_of_study', fields, excludedFields: [] },
+          makeStudent({ fieldOfStudy: 'Music Performance' }),
+          NOW,
+          rawText,
+        ).status,
+      ]).toEqual([rawText, 'fail']);
+    }
+  });
+
+  /**
+   * Volunteers do not write to a schema. A sibling axis had to read "25 years of age and/or
+   * younger" and "five (5) members"; this one has to read every ordinary way of saying "these are
+   * examples". Punctuation cannot hide any of them — the text is normalized before matching, so
+   * "including, but not necessarily" and "e.g." flatten to the same tokens as their tidy forms.
+   */
+  it('reads the phrasings volunteers actually write', () => {
+    const open = [
+      'Engineering fields, including but not limited to electronics and physics',
+      'Engineering fields, including, but not necessarily limited to, electronics',
+      'Engineering fields including without limitation electronics',
+      'Fields such as engineering, physics and computer science',
+      'Any technical field, for example engineering or physics',
+      'Technical fields, e.g. engineering, physics',
+      'Engineering, physics, and related fields',
+      'Engineering, physics or a related technical field',
+      'Engineering and physics, among others',
+      'Engineering, physics, etc.',
+      'This list of eligible majors is not exhaustive: engineering, physics',
+    ];
+    for (const rawText of open) {
+      expect([
+        rawText,
+        evaluateConstraint(
+          { axis: 'field_of_study', fields: ['Engineering', 'physics'], excludedFields: [] },
+          makeStudent({ fieldOfStudy: 'Music Performance' }),
+          NOW,
+          rawText,
+        ).status,
+      ]).toEqual([rawText, 'pass']);
+    }
+  });
+
+  /**
+   * The other half of the same judgement, and the reason this is a narrow rule rather than a
+   * blanket one. Each of these is a real corpus sentence whose verdict must not move.
+   */
+  it('does not mistake a bounded qualifier for an open list', () => {
+    const stillClosed: Array<[string[], string]> = [
+      // Chuck Bierman, K7ZJ — "similar SCIENTIFIC field" names a bound; only a bare relatedness
+      // word ("or a related field", "or a related technical field") is a blanket widening.
+      [
+        ['Electronics', 'Electrical Engineering', 'Aerospace Engineering', 'Computer Science', 'similar scientific field'],
+        'Electronics, Electrical Engineering, Aerospace Engineering, Computer Science or similar scientific field',
+      ],
+      // NEAR-Fest — "or OTHER 4-year technical degree" is still a technical requirement. Only the
+      // plural "and/or/among others" opens a list.
+      [
+        ['Engineering', 'other 4-year technical degree'],
+        'Engineering or other 4-year technical degree',
+      ],
+      // Bare "including" introduces examples OF the list, not an invitation past it.
+      [['Engineering'], 'Engineering degrees, including electrical and computer'],
+      // "Technology-related field" / "a Health Care-related field" NAME a field (see the
+      // free-text corpus block above); the rawText rule must not undo that.
+      [
+        ['Business', 'Science', 'Math', 'Engineering', 'Technology-related field'],
+        'Business, Science, Math, Engineering or Technology-related field.',
+      ],
+    ];
+    for (const [fields, rawText] of stillClosed) {
+      expect([
+        rawText,
+        evaluateConstraint(
+          { axis: 'field_of_study', fields, excludedFields: [] },
+          makeStudent({ fieldOfStudy: 'Music Performance' }),
+          NOW,
+          rawText,
+        ).status,
+      ]).toEqual([rawText, 'fail']);
+    }
+  });
+
+  /**
+   * An open list is an invitation, never an override. Exclusion is the strict direction of this
+   * axis, and examples of what is BARRED are not examples of what is eligible.
+   */
+  it('never lets an open list defeat the funder\'s own exclusion', () => {
+    const status = (fieldOfStudy: string, rawText: string): string =>
+      evaluateConstraint(
+        { axis: 'field_of_study', fields: ['Any'], excludedFields: ['Liberal Arts'] },
+        makeStudent({ fieldOfStudy }),
+        NOW,
+        rawText,
+      ).status;
+    // Real corpus value (Six Meter Club of Chicago): "Any, except for Liberal Arts".
+    expect(status('liberal  arts', 'Any, except for Liberal Arts')).toBe('fail');
+    // ...and the marker sitting inside the exclusion half describes the BAR, not the invitation.
+    expect(status('liberal  arts', 'Any field, except for Liberal Arts such as history or music')).toBe('fail');
+    expect(status('Electrical Engineering', 'Any field, except for Liberal Arts such as history or music')).toBe('pass');
+  });
+
+  /**
+   * NON-REGRESSION: the "or a related field" widening predates this rule, reads `fields[]` rather
+   * than `rawText`, and must keep working with no rawText at all — every existing three-argument
+   * call to `evaluateConstraint` still means exactly what it did.
+   */
+  it('leaves the existing "or a related field" widening exactly as it was', () => {
+    const relatedness = (fields: string[], fieldOfStudy: string, rawText?: string): string =>
+      evaluateConstraint(
+        { axis: 'field_of_study', fields, excludedFields: [] },
+        makeStudent({ fieldOfStudy }),
+        NOW,
+        rawText,
+      ).status;
+    // No rawText argument at all — the old three-argument call.
+    expect(relatedness(['Electronics', 'communications', 'related fields'], 'physics')).toBe('pass');
+    expect(relatedness(['engineering', 'or a related technical field'], 'industrial design')).toBe('pass');
+    expect(relatedness(['engineering', 'sciences', 'similar field'], 'industrial design')).toBe('pass');
+    expect(relatedness(['Electronics', 'communications'], 'industrial design')).toBe('fail');
+    // ...and with the funder's real sentence supplied, the verdicts are unchanged.
+    expect(
+      relatedness(
+        ['Electronics', 'communications', 'related fields'],
+        'physics',
+        'Electronics, communications, or related fields',
+      ),
+    ).toBe('pass');
+    expect(relatedness(['Electronics', 'communications'], 'industrial design', 'Electronics, communications')).toBe('fail');
+  });
+
+  /**
+   * Kupferschmid is the third and last constraint in the committed corpus that carries an
+   * open-list marker, and unlike MARCO and York its named fields already covered its own
+   * audience — so this asserts the widening is real rather than incidental.
+   */
+  it('honours Kupferschmid\'s "including but not limited to" as well', () => {
+    const status = evaluateConstraint(
+      {
+        axis: 'field_of_study',
+        fields: [
+          'Applied sciences', 'technology', 'engineering', 'mathematics', 'astronomy',
+          'communications', 'computers', 'electronics', 'physics',
+        ],
+        excludedFields: [],
+      },
+      makeStudent({ fieldOfStudy: 'Music Performance' }),
+      NOW,
+      'Applied sciences, technology, engineering, and\nmathematics, including but not limited ' +
+        'to astronomy, communications,\ncomputers, electronics, and physics.',
+    ).status;
+    expect(status).toBe('pass');
+  });
+});
+
+/**
  * REMEDIATION 2026-08-03 — the stage taxonomy is not a partition.
  *
  * `Stage` mixes two different kinds of fact. `HS_SENIOR`/`UNDERGRAD`/`GRAD` name an academic
