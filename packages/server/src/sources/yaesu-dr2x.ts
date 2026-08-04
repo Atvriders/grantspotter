@@ -97,10 +97,15 @@ export const yaesuDr2x: SourceModule = {
   requests: [{ url: LANDING, method: 'GET', accept: 'html' }],
   expectedMinRecords: 1,
   notes:
-    'A DISCOUNTED PURCHASE, NOT A GRANT: $1,450 for the DR-2X, $1,860 with the LAN-01A — ' +
-    'confirmed verbatim on the live page 2026-08-03 ("The new program price is either $1,450.00 ' +
-    'or $1,860.00."), cents and all. Open to clubs, groups, organizations or individuals in ' +
-    'North America; collegiate clubs qualify. Ad-hoc windows, roughly 2-4 a year. WINDOW: the ' +
+    'A DISCOUNTED PURCHASE, NOT A GRANT: the live page states two prices verbatim, confirmed ' +
+    '2026-08-03, cents and all — "The new program price is either $1,450.00 or $1,860.00." — ' +
+    'but never says what distinguishes them. The "$1,860 = with the LAN-01A accessory" pairing ' +
+    'that circulated in earlier notes and in docs/research is UNCONFIRMED: "LAN-01A" and ' +
+    '"network module" appear zero times on the page. ELIGIBILITY: the page states none either — ' +
+    '"North America", "individual" and "organization" each appear zero times, so no audience or ' +
+    'geography claim is asserted here (the earlier "clubs, groups, organizations or individuals ' +
+    'in North America" line was never on the live page; collegiate clubs are not excluded by ' +
+    'anything it states, but nothing on it names them). Ad-hoc windows, roughly 2-4 a year. WINDOW: the ' +
     'earlier claim that the dates exist ONLY in the PDF title and "appear nowhere in the page ' +
     'body" is FALSE against the live page, which states the close date in prose above the ' +
     'application button ("…once again through August 31st, 2026") while the current form ' +

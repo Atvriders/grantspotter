@@ -212,7 +212,12 @@ export interface Obligations {
   indirectCostCapPct?: number;     // ARDC: 20
   costShareRequired: boolean;
   coFunderPreference: boolean;
-  sustainmentObligation?: string;  // Yaesu: on-air 12 months
+  sustainmentObligation?: string;  // e.g. a funder's own "must stay in service N months"
+                                    // term — NOT Yaesu: the captured DR-2X page states no such
+                                    // term (any obligation would live only in a linked PDF this
+                                    // crawler never downloads; see docs/research/2026-08-02-
+                                    // grant-landscape.md §6.6). Leave unset when the funder's
+                                    // page states nothing, rather than inferring one.
   reportingObligation?: string;    // YASME: year-end activity report
 }
 
