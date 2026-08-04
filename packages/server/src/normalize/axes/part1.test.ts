@@ -319,7 +319,10 @@ describe('extractInstitution', () => {
       partTimeOK: boolean;
       accreditationRequired: boolean;
     };
-    expect(spec.degreeLevels.sort()).toEqual(['ASSOC', 'BACH', 'GRAD']);
+    // CERT joined this list on 2026-08-03: "trade schools accepted" is the funder naming a school
+    // whose ordinary credential is a certificate, so the level list must not bar certificate
+    // study. See institution.test.ts, "a named trade school admits the credential it awards".
+    expect(spec.degreeLevels.sort()).toEqual(['ASSOC', 'BACH', 'CERT', 'GRAD']);
     expect(spec.tradeSchoolOK).toBe(true);
     expect(spec.partTimeOK).toBe(true);
     expect(spec.accreditationRequired).toBe(true);

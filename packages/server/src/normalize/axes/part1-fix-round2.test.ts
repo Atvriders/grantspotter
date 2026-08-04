@@ -111,7 +111,11 @@ describe('extractFieldOfStudy — postamble leak is fully clean, not just improv
   // necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, or
   // Radiology technician. Preference will be given to undergraduate students and those in
   // certificate programs, but graduate students may apply."
-  it('extracts exactly the 7 real fields and drops the whole degree-level postamble sentence (MARCO)', () => {
+  // 2026-08-03: the array now leads with "healing arts" — the funder's own GOVERNING field, which
+  // the list-intro stripper was deleting because MARCO's widener ("including, but not necessarily
+  // LEADING TO Medicine") ends in a phrase the stripper reads as a fresh list intro. The examples
+  // after it are unchanged. Full reasoning and the York twin live in fieldOfStudy.test.ts.
+  it('extracts exactly the 8 real fields and drops the whole degree-level postamble sentence (MARCO)', () => {
     const c = extractFieldOfStudy(
       raw({
         'Field of Study':
@@ -122,6 +126,7 @@ describe('extractFieldOfStudy — postamble leak is fully clean, not just improv
     expect(c[0].spec).toMatchObject({
       axis: 'field_of_study',
       fields: [
+        'healing arts',
         'Medicine',
         'Dentistry',
         'Veterinary Medicine',
@@ -138,7 +143,9 @@ describe('extractFieldOfStudy — postamble leak is fully clean, not just improv
   // healing arts, including ..." shape, found while sweeping, with a different lead-in
   // ("pursuing a field of study leading to a career in..."). No preference language at all here,
   // so hard stays true throughout — this asserts the fix doesn't accidentally change that.
-  it('extracts exactly the 6 real fields from the second "healing arts" shape (York)', () => {
+  // 2026-08-03: leads with "healing arts" for the same reason as MARCO above — York's widener
+  // ("including but not limited to A CAREER IN Medicine") ends in a list-intro phrase too.
+  it('extracts exactly the 7 real fields from the second "healing arts" shape (York)', () => {
     const c = extractFieldOfStudy(
       raw({
         'Field of Study':
@@ -149,7 +156,7 @@ describe('extractFieldOfStudy — postamble leak is fully clean, not just improv
     expect(c[0].hard).toBe(true);
     expect(c[0].spec).toMatchObject({
       axis: 'field_of_study',
-      fields: ['Medicine', 'Nursing', 'Dentistry', 'Pharmacy', 'EMT', 'Radiology'],
+      fields: ['healing arts', 'Medicine', 'Nursing', 'Dentistry', 'Pharmacy', 'EMT', 'Radiology'],
       excludedFields: [],
     });
   });

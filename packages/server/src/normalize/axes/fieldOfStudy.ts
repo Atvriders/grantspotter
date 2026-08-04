@@ -102,13 +102,9 @@ function stripDegreeIntro(text: string): string {
 
 /**
  * "leading to (a career in/as/to)", "career in/as", "pursuing/studying/majoring (in)" REPLACE
- * everything before them: in every real occurrence they introduce a field list from scratch,
- * with only generic filler prose ahead of them and no real field names lost by discarding it
- * (real corpus: "Field of study must be leading to a career in the healing arts, including, but
- * not necessarily leading to Medicine, ..." — MARCO Scholarship; "...pursuing a field of study
- * leading to a career in the healing arts, including but not limited to a career in Medicine,
- * ..." — John C. York Scholarship). Takes everything after the LAST such match, so a
- * repeated/nested one resolves to just the final list.
+ * everything before them: they introduce a field list from scratch, and what stands in front of
+ * them is generic filler ("Field of study must be", "Applicant must be", "Studies toward"). Takes
+ * everything after the LAST such match, so a repeated/nested one resolves to just the final list.
  */
 const LIST_INTRO_REPLACE =
   /\b(?:leading\s+to(?:\s+a\s+career\s+(?:in|as|to))?|career\s+(?:in|as)|pursuing(?:\s+studies)?(?:\s+in)?|studying(?:\s+in)?|majoring\s+in)\s+/gi;
@@ -121,16 +117,52 @@ const LIST_INTRO_REPLACE =
  * computers, electronics, and physics." — both halves are real fields; treating "including but
  * not limited to" the same as LIST_INTRO_REPLACE would wrongly discard the first four. Stripped
  * down to a bare separator instead.
+ *
+ * The tail — an optional "(leading to) (a) career in/as" — belongs to the WIDENER, not to a new
+ * list. Both healing-arts entries end their widener with exactly that phrase ("...but not
+ * necessarily leading to Medicine", "...but not limited to a career in Medicine"), which is why
+ * it is consumed here rather than left for LIST_INTRO_REPLACE to find. See `stripListIntro`.
  */
 const LIST_INTRO_MERGE =
-  /,?\s*\b(?:including|such\s+as)\b,?\s*(?:but\s+not\s+(?:limited\s+to|necessarily\s+(?:limited\s+to)?)?\s*(?:leading\s+to)?)?\s*/gi;
+  /,?\s*\b(?:including|such\s+as)\b,?\s*(?:but\s+not\s+(?:limited\s+to|necessarily\s+(?:limited\s+to)?)?\s*(?:leading\s+to)?)?\s*(?:(?:leading\s+to\s+)?(?:an?\s+)?careers?\s+(?:in|as)\s+)?/gi;
 
+/**
+ * MERGE RUNS FIRST, AND THAT ORDER IS THE WHOLE POINT.
+ *
+ * "including, but not necessarily leading to" and "including but not limited to a career in" both
+ * END in a phrase LIST_INTRO_REPLACE recognises as a list intro. Running REPLACE first therefore
+ * made the WIDENER the last intro in the string, and cutting to it deleted the very field the
+ * widener was widening:
+ *
+ *   MARCO   "Field of study must be leading to a career in THE HEALING ARTS, including, but not
+ *            necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy,
+ *            EMT, or Radiology technician."
+ *   York    "…pursuing a field of study leading to a career in THE HEALING ARTS, including but not
+ *            limited to a career in Medicine, Nursing, Dentistry, Pharmacy, EMT, or Radiology"
+ *
+ * Both came out as a closed list of the examples with the governing field — the healing arts, the
+ * one field both awards are actually endowed for, and the category one ARRL entry exists
+ * specifically to bring into amateur radio — deleted. A comment here used to assert that no real
+ * field name is lost this way and cite these two records as the evidence; it was false for both.
+ *
+ * Neutralising the widener before looking for an intro fixes it: MARCO and York keep "healing
+ * arts" at the head of their lists, and Kupferschmid's "Applied sciences, technology, engineering,
+ * and mathematics, including but not limited to astronomy, …" is unaffected because its widener
+ * has no intro phrase in it and REPLACE finds nothing to cut in either order.
+ *
+ * What IS still dropped in front of the last intro is only ever filler — "Field of study must be",
+ * "Applicant must be", "Studies toward a Bachelor of Science degree" — because `splitFields` and
+ * `isNonFieldFragment` would discard those words anyway. That is the honest form of the claim the
+ * old comment overstated.
+ */
 function stripListIntro(text: string): string {
-  let cut = text;
+  const merged = text.replace(LIST_INTRO_MERGE, ', ');
   let last: RegExpExecArray | null = null;
-  for (let m = LIST_INTRO_REPLACE.exec(cut); m !== null; m = LIST_INTRO_REPLACE.exec(cut)) last = m;
-  if (last) cut = cut.slice(last.index + last[0].length);
-  return cut.replace(LIST_INTRO_MERGE, ', ');
+  LIST_INTRO_REPLACE.lastIndex = 0;
+  for (let m = LIST_INTRO_REPLACE.exec(merged); m !== null; m = LIST_INTRO_REPLACE.exec(merged)) {
+    last = m;
+  }
+  return last === null ? merged : merged.slice(last.index + last[0].length);
 }
 
 /**

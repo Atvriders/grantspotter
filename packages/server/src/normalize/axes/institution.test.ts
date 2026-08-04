@@ -119,8 +119,17 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
   it.each([
     ['Accredited 4-year college or university, or graduate program.', ['BACH', 'GRAD']],
     ['Any accredited 4-year college or university, graduate studies permitted', ['BACH', 'GRAD']],
-    ['An accredited 2-or 4- year college, university, or trade school. Graduate studies accepted.', ['ASSOC', 'BACH', 'GRAD']],
-    ['An accredited 2- or 4-year college, university or trade school. Graduate studies permitted.', ['ASSOC', 'BACH', 'GRAD']],
+    // These two carry CERT because the funder names a trade school and says nothing about
+    // certificates — see the trade-school describe block below. 10-10 International / K3IVO
+    // Freestate / Steve Marks W5CIA use the first wording; Hy and Mimi Ginsberg / QCWA the second.
+    [
+      'An accredited 2-or 4- year college, university, or trade school. Graduate studies accepted.',
+      ['ASSOC', 'BACH', 'CERT', 'GRAD'],
+    ],
+    [
+      'An accredited 2- or 4-year college, university or trade school. Graduate studies permitted.',
+      ['ASSOC', 'BACH', 'CERT', 'GRAD'],
+    ],
     [
       'Any fully accredited 4-year US college or university or graduate school thereof, and have a ' +
         'GPA of 3.0 or higher out of a 4.0 scale',
@@ -186,20 +195,6 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     });
   });
 
-  /**
-   * The true negative for the same pattern: the ECARS Scholarship's Institution field, verbatim,
-   * is "Full-time studies at a two-year trade school or 4-year undergraduate institution" — here
-   * the trade school IS qualified, by "two-year" attached directly to it, so it names an
-   * ASSOCIATE-equivalent programme rather than an unqualified school type. This is a genuine
-   * degree-programme restriction and must still exclude certificate study; only an UNQUALIFIED
-   * trade/art/professional disjunct (no year attached, introduced by "or a ...") widens to CERT.
-   */
-  it('does not widen to CERT when the trade-school branch is itself degree-qualified (ECARS, real negative)', () => {
-    expect(
-      levels({ Institution: 'Full-time studies at a two-year trade school or 4-year undergraduate institution' }),
-    ).toEqual(['ASSOC', 'BACH']);
-  });
-
   it('reads "N-year degree/program" — a statement about the applicant\'s own course — as a level', () => {
     expect(levels({ Institution: 'Engineering or other 4-year technical degree' })).toEqual(['BACH']);
     expect(levels({ Institution: '2 or 4-year program' })).toEqual(['ASSOC', 'BACH']);
@@ -219,6 +214,132 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
 
   it('does not let a GPA "or higher" leak into the degree levels', () => {
     expect(levels({ 'Field of Study': "Bachelor's degree or higher; GPA 3.0 or higher" })).toEqual([
+      'BACH',
+      'GRAD',
+    ]);
+  });
+});
+
+/**
+ * NAMING A TRADE SCHOOL AND OMITTING `CERT`.
+ *
+ * The CWops ruling above was right and too narrow. It keyed on one sentence's grammar — "or A …
+ * school", indefinite article required — and left eight ARRL records whose funders name a trade,
+ * technical or professional school and whose `degreeLevels` still barred certificate students.
+ * matcher.ts:511-514 reads a non-empty `degreeLevels` as a bar, so those eight hid themselves from
+ * exactly the applicants their own sentence names, and did so silently.
+ *
+ * Every text below is verbatim from the committed capture, and each was read against its own
+ * record before being widened. What they share is not a grammatical shape but a fact about where
+ * the bar came from: in all seven widened records the levels are assembled from a NEIGHBOURING
+ * sentence ("Graduate studies permitted.") or from the OTHER branch of a disjunction ("…or 4-year
+ * undergraduate institution"), and then applied to the school branch by list membership alone. The
+ * funder never wrote anything about certificates, and silence is not a prohibition.
+ *
+ * ONE OF THE EIGHT IS NOT WIDENED — Six Meter Club of Chicago, below — because there the funder
+ * did write something about the credential.
+ */
+describe('extractInstitution — a named trade school admits the credential it awards', () => {
+  it.each([
+    // 10-10 International / K3IVO Freestate ARC / Steve Marks W5CIA Legacy — same sentence, three
+    // funders. The GRAD comes from the second sentence; the years describe the school's tier.
+    [
+      '10-10 International',
+      'An accredited 2-or 4- year college, university, or trade school. Graduate studies accepted.',
+      ['ASSOC', 'BACH', 'CERT', 'GRAD'],
+    ],
+    // Hy and Mimi Ginsberg / QCWA — the same sentence with "permitted" for "accepted".
+    [
+      'Hy and Mimi Ginsberg / QCWA',
+      'An accredited 2- or 4-year college, university or trade school. Graduate studies permitted.',
+      ['ASSOC', 'BACH', 'CERT', 'GRAD'],
+    ],
+    /**
+     * ECARS. A PRIOR ROUND ASSERTED THE OPPOSITE and this test deliberately overturns it.
+     *
+     * That round read "two-year" as attaching to the applicant's credential, making the trade
+     * branch "ASSOCIATE-equivalent". It does not: "two-year" qualifies the SCHOOL, and this file's
+     * own CREATES rules already refuse to read an institution tier as a degree level (a master's
+     * candidate attends a 4-year university too). A two-year trade school awards certificates,
+     * diplomas and associate degrees alike. Measured on the real record, neither ASSOC nor BACH
+     * comes from the trade branch at all — both come from "4-year UNDERGRADUATE institution", the
+     * other side of the "or". So the bar excluding certificate students was built entirely out of
+     * a branch the certificate student was never applying under.
+     */
+    [
+      'ECARS',
+      'Full-time studies at a two-year trade school or 4-year undergraduate institution',
+      ['ASSOC', 'BACH', 'CERT'],
+    ],
+    // NEAR-Fest, from its Field of Study value. The CWops article shape is right there ("or a
+    // two-year technical school"); only the word "technical" — absent from the old pattern's
+    // trade/vocational/art/professional alternation — kept it barred.
+    [
+      'NEAR-Fest',
+      'Any undergraduate degree or a two-year technical school in radio communications',
+      ['ASSOC', 'BACH', 'CERT'],
+    ],
+    // `levels()` sorts, so every expectation in this file is alphabetical, not LEVEL_ORDER.
+  ])('widens to CERT: %s', (_name, text, expected) => {
+    expect(levels({ Institution: text })).toEqual(expected);
+  });
+
+  /**
+   * THE TRUE NEGATIVE, and the line the rule is drawn on. Six Meter Club of Chicago, verbatim:
+   *
+   *   "Part-time or full-time post-secondary student at a regionally accredited technical school,
+   *    community college, college or university leading to an undergraduate degree"
+   *
+   * A technical school is named here too, but the funder has attached a DEGREE OUTCOME to the
+   * whole enumeration — the course of study must lead to an undergraduate degree, whichever of
+   * those institutions it is taken at. A certificate is not a degree. That is a restriction the
+   * funder stated, not silence this extractor is filling in, so it stands: this is the one of the
+   * eight reported records that keeps its bar.
+   */
+  it('does NOT widen when the funder states a degree outcome for the whole list (Six Meter Club)', () => {
+    expect(
+      levels({
+        Institution:
+          'Part-time or full-time post-secondary student at a regionally accredited technical ' +
+          'school, community college, college or university leading to an undergraduate degree',
+      }),
+    ).toEqual(['ASSOC', 'BACH']);
+  });
+
+  /**
+   * The other guard, and the reason this can only ever be a widening: naming a trade school must
+   * never CREATE a bar. All four are verbatim corpus text whose records carry no degree-level
+   * statement at all, and all four must stay completely unrestricted — a record that today shows
+   * an award to every applicant must not start asking about degree level because the word "trade"
+   * appears in it.
+   */
+  it.each([
+    ['Accredited 2 or 4-year college, technical school, or university'],
+    ['Any accredited college, university or trade school'],
+    ['Accredited college, university, junior college or trade school'],
+    ['An accredited 2- or 4-year college, university, or trade school within the United States'],
+  ])('never creates a degree-level bar out of a trade school alone: %s', (text) => {
+    expect(levels({ Institution: text })).toEqual([]);
+  });
+
+  it('leaves the CWops ruling exactly as it was', () => {
+    expect(
+      levels({
+        Institution:
+          'Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, ' +
+          'graduate or post-graduate, or a fully accredited trade, art or professional school',
+      }),
+    ).toEqual(['ASSOC', 'BACH', 'CERT', 'GRAD']);
+  });
+
+  /**
+   * And a record with a real degree-level bar and NO school of any kind named must be untouched —
+   * the widening has to be reachable only through the funder's own words. Mary Lou Brown's
+   * bachelor-or-higher floor still excludes certificate study.
+   */
+  it('still excludes certificate study where no trade school is named at all', () => {
+    expect(levels({ Institution: "Bachelor's degree or higher" })).toEqual(['BACH', 'GRAD']);
+    expect(levels({ Institution: 'Accredited 4-year college or university, or graduate program.' })).toEqual([
       'BACH',
       'GRAD',
     ]);

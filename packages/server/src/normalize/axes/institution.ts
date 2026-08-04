@@ -103,26 +103,56 @@ const CREATES: Array<[DegreeLevel, RegExp]> = [
 const UNDERGRAD_INCLUDES_ASSOC = /\bundergraduates?\b/i;
 
 /**
- * A trade/art/professional school named as its OWN disjunct — "or a fully accredited trade, art
- * or professional school" — rather than as one item folded into a year-qualified list ("college,
- * university, or trade school" / "2- or 4-year college, university, or trade school"). The
- * grammatical tell is the repeated indefinite article: "or A ... school" opens a brand-new noun
- * phrase, so nothing upstream of it (a "2- or 4-year"/"undergraduate, graduate or post-graduate"
- * enumeration) reaches across "or a" to qualify it. A flat list item never gets that article
- * ("...college, university, or trade school" has no "a" before "trade"), which is exactly what
- * keeps this from firing on the corpus's ~14 OTHER "trade school" mentions — all of them fold
- * trade school into a year-bound list and correctly stay at whatever level that list names.
+ * A trade / vocational / technical / art / professional school NAMED by the funder as somewhere
+ * the applicant may study.
  *
- * The CWops Scholarship, verbatim Institution field: "Fully accredited educational institution of
- * higher learning, 2- or 4-year, undergraduate, graduate or post-graduate, or a fully accredited
- * trade, art or professional school." The degree-level enumeration modifies "institution of
- * higher learning" only; the trade/art/professional branch names a school type with no
- * degree-level restriction of its own, and a certificate is the ordinary credential such a school
- * awards. Reading it as GRAD-and-below-only excluded certificate/vocational applicants even
- * though the funder's own text plainly admits them — corrected 2026-08-03.
+ * A certificate or diploma is the ordinary credential such a school awards. So when a funder
+ * names one and the record still carries a degree-level bar that omits `CERT`, that bar excludes
+ * exactly the students the funder's own sentence admits — the false-exclude direction this file's
+ * header forbids. And the bar in these records is never a statement about certificates: it is
+ * assembled from a NEIGHBOURING sentence ("Graduate studies permitted.") or from the OTHER branch
+ * of a disjunction ("…or 4-year undergraduate institution"), and then applied to the school branch
+ * by nothing more than list membership.
+ *
+ * This used to require the "or A … school" article shape, written to the one sentence that was
+ * reported (CWops). That shape is one way English opens a fresh branch, not the only one, and it
+ * left eight records whose funders name a trade school and whose `degreeLevels` still barred
+ * certificate students — verbatim, and every one of them widened by this rule:
+ *
+ *   10-10 International / Hy and Mimi Ginsberg / K3IVO Freestate / Steve Marks W5CIA / QCWA
+ *     "An accredited 2- or 4-year college, university, or trade school. Graduate studies
+ *      permitted." — the bar was ASSOC+BACH+GRAD, and every one of those levels comes from a
+ *      sentence about GRADUATE study plus the school's own 2-/4-year tier. Nothing here says a
+ *      trade-school certificate does not count.
+ *   ECARS  "Full-time studies at a two-year trade school or 4-year undergraduate institution" —
+ *      two branches; "undergraduate" qualifies the second one only.
+ *   NEAR-Fest  "Any undergraduate degree or a two-year technical school in radio communications" —
+ *      same two-branch shape, and the CWops article to boot; only the word "technical" kept it out.
+ *   CWops  "Fully accredited educational institution of higher learning, 2- or 4-year,
+ *      undergraduate, graduate or post-graduate, or a fully accredited trade, art or professional
+ *      school." — the original ruling, unchanged by this widening.
+ *
+ * The year figure in "2- or 4-year college, university, or trade school" is the SCHOOL'S tier, not
+ * the applicant's credential (see CREATES above, which already refuses to read it as a level): a
+ * two-year school awards certificates, diplomas and associate degrees alike.
  */
-const TRADE_SCHOOL_DISJUNCT =
-  /\bor\s+an?\s+[^;.]{0,60}?\b(?:trade|vocational|art|professional)\b[^;.]{0,30}?\bschools?\b/i;
+const TRADE_SCHOOL_NAMED =
+  /\b(?:trade|vocational|technical|art|professional)\b[^;.\n]{0,25}?\bschools?\b/i;
+
+/**
+ * …unless the funder attached a DEGREE OUTCOME to the enumeration itself.
+ *
+ * Six Meter Club of Chicago, verbatim: "Part-time or full-time post-secondary student at a
+ * regionally accredited technical school, community college, college or university LEADING TO AN
+ * UNDERGRADUATE DEGREE." The technical school is named, but the funder has said in its own words
+ * what the course of study must end in, and it says so about the whole list rather than about one
+ * branch of it. A certificate is not a degree, so that record keeps its ASSOC+BACH bar: this is
+ * silence being honoured where there is silence, and a stated restriction being honoured where
+ * there is a statement. It is the only one of the nine trade-school records carrying a
+ * degree-level bar that is NOT widened.
+ */
+const DEGREE_OUTCOME_STATED =
+  /\b(?:leading\s+to|toward|towards|culminating\s+in|resulting\s+in)\s+(?:an?\s+)?(?:[\w-]+\s+){0,2}?\b(?:degrees?|baccalaureates?)\b/i;
 
 /**
  * WIDENING tokens — institution tiers the funder enumerated. They may only ADD to a list that is
@@ -134,8 +164,12 @@ const TRADE_SCHOOL_DISJUNCT =
 const WIDENS: Array<[DegreeLevel, RegExp]> = [
   ['ASSOC', new RegExp(String.raw`\b${YEARS_2}\b|\bcommunity colleges?\b`, 'i')],
   ['BACH', new RegExp(String.raw`\b${YEARS_4}\b`, 'i')],
-  ['CERT', TRADE_SCHOOL_DISJUNCT],
 ];
+
+/** See TRADE_SCHOOL_NAMED / DEGREE_OUTCOME_STATED. Widens to CERT, never creates a bar. */
+function admitsCertificate(text: string): boolean {
+  return TRADE_SCHOOL_NAMED.test(text) && !DEGREE_OUTCOME_STATED.test(text);
+}
 
 /**
  * "or higher" opens every level above the one named — but only when it is attached to a degree
@@ -161,6 +195,7 @@ function degreeLevels(clauses: string[]): DegreeLevel[] {
   if (levels.size === 0) return [];
   const text = clauses.join(' ');
   for (const [level, re] of WIDENS) if (re.test(text)) levels.add(level);
+  if (admitsCertificate(text)) levels.add('CERT');
   return LEVEL_ORDER.filter((l) => levels.has(l));
 }
 
@@ -218,10 +253,9 @@ function spec(text: string): Extract<Constraint['spec'], { axis: 'institution' }
     axis: 'institution',
     degreeLevels: degreeLevels(splitClauses(text)),
     // "trade" is deliberately excluded from CREATES above — it drives tradeSchoolOK, not a
-    // certificate-level requirement; a trade school folded into a year-bound list alongside
-    // two/four-year/graduate programs isn't itself a certificate-level requirement. The one
-    // narrower exception — an UNQUALIFIED trade/art/professional-school disjunct, which names no
-    // degree level of its own — is handled separately by TRADE_SCHOOL_DISJUNCT in WIDENS above.
+    // certificate-level requirement, so naming a trade school can never CREATE a degree-level bar
+    // on a record that had none. Where a bar already exists from other wording, a named trade
+    // school WIDENS it to include CERT — see TRADE_SCHOOL_NAMED / admitsCertificate above.
     tradeSchoolOK: /\b(?:trade|vocational|technical schools?)\b/i.test(text),
     partTimeOK: partTimePermitted(text),
     accreditationRequired: /\baccredit/i.test(text),

@@ -246,12 +246,17 @@ describe('extractFieldOfStudy — preference handling is unchanged by this round
 
   // "The Medical Amateur Radio Council (MARCO) Scholarship" — round 2's postamble fix. The
   // degree-level preference sentence must still be dropped whole, not mined for fields.
+  //
+  // "healing arts" leads the array as of the round-5 fix: the widener "including, but not
+  // necessarily leading to" ends in a phrase LIST_INTRO_REPLACE reads as a list intro, so cutting
+  // to the LAST intro deleted the governing field. See the healing-arts describe block below.
   it('still drops the degree-level preference postamble sentence (MARCO)', () => {
     expect(
       fieldsOf(
         'Field of study must be leading to a career in the healing arts, including, but not necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, or Radiology technician. Preference will be given to undergraduate students and those in certificate programs, but graduate students may apply.',
       ),
     ).toEqual([
+      'healing arts',
       'Medicine',
       'Dentistry',
       'Veterinary Medicine',
@@ -360,6 +365,7 @@ describe('round 4 — a requirement and a preference in one Field of Study value
     expect(cs[0].spec).toEqual({
       axis: 'field_of_study',
       fields: [
+        'healing arts',
         'Medicine',
         'Dentistry',
         'Veterinary Medicine',
@@ -397,5 +403,112 @@ describe('round 4 — a requirement and a preference in one Field of Study value
       fields: [],
       excludedFields: ['Liberal Arts'],
     });
+  });
+});
+
+/**
+ * THE GOVERNING FIELD IS NOT SCAFFOLDING.
+ *
+ * `stripListIntro` cut to the LAST list intro it could find, and both healing-arts entries put an
+ * intro phrase INSIDE their widener ("…but not necessarily LEADING TO Medicine", "…but not limited
+ * to A CAREER IN Medicine"). So the widener itself became the last intro, and the cut deleted "the
+ * healing arts" — the one field both awards are actually endowed for. What was published was a
+ * closed list of the funder's EXAMPLES, presented as the requirement.
+ *
+ * A comment in fieldOfStudy.ts asserted that this cut loses no real field name and cited these two
+ * records as its evidence. It was false for both, and a comment that tells the next reader not to
+ * check is worse than no comment: the assertions below are what that claim should have been all
+ * along, on the whole array, so it can never drift back into being a claim nobody re-runs.
+ *
+ * Text quoted verbatim from fixtures/arrl-scholarship-descriptions/00-www-arrl-org-scholarship-
+ * descriptions.html (MARCO at line 1604, York at line 2592).
+ */
+describe('extractFieldOfStudy — the healing arts survive their own widener', () => {
+  const MARCO =
+    'Field of study must be leading to a career in the healing arts, including, but not ' +
+    'necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, ' +
+    'or Radiology technician. Preference will be given to undergraduate students and those in ' +
+    'certificate programs, but graduate students may apply.';
+  const YORK =
+    'Applicant must be pursuing a field of study leading to a career in the healing arts, ' +
+    'including but not limited to a career in Medicine, Nursing, Dentistry, Pharmacy, EMT, or ' +
+    'Radiology';
+
+  it('MARCO keeps "healing arts" at the head of its field list', () => {
+    expect(fieldsOf(MARCO)).toEqual([
+      'healing arts',
+      'Medicine',
+      'Dentistry',
+      'Veterinary Medicine',
+      'Nursing',
+      'Pharmacy',
+      'EMT',
+      'Radiology technician',
+    ]);
+  });
+
+  it('York keeps "healing arts" at the head of its field list', () => {
+    expect(fieldsOf(YORK)).toEqual([
+      'healing arts',
+      'Medicine',
+      'Nursing',
+      'Dentistry',
+      'Pharmacy',
+      'EMT',
+      'Radiology',
+    ]);
+  });
+
+  /**
+   * The whole point of the fix, stated as the outcome a user experiences: ARRL's own text for the
+   * MARCO award asks applicants to "show a desire to encourage others in the healing arts to
+   * become licensed hams". A student who answers "Healing Arts" was being told the award was not
+   * for them.
+   */
+  it('a student who says "Healing Arts" now matches the funder\'s own governing field', () => {
+    for (const value of [MARCO, YORK]) {
+      expect(fieldsOf(value).map((f) => f.toLowerCase())).toContain('healing arts');
+    }
+  });
+
+  /**
+   * The blast radius, and the reason the merge/replace ORDER matters rather than the merge alone:
+   * Kupferschmid's widener has no intro phrase in it, so it must read identically either way —
+   * "including but not limited to" still ADDS to the list in front of it rather than replacing it.
+   * Verbatim, "The Mark Kupferschmid, AC9PR, Scholarship".
+   */
+  it('Kupferschmid is unchanged: an intro-free widener still merges, never cuts', () => {
+    expect(
+      fieldsOf(
+        'Applied sciences, technology, engineering, and\nmathematics, including but not limited ' +
+          'to astronomy, communications,\ncomputers, electronics, and physics.',
+      ),
+    ).toEqual([
+      'Applied sciences',
+      'technology',
+      'engineering',
+      'mathematics',
+      'astronomy',
+      'communications',
+      'computers',
+      'electronics',
+      'physics',
+    ]);
+  });
+
+  /**
+   * The filler in front of an intro must still go. These are the words the OLD comment was right
+   * about, separated from the words it was wrong about: "Field of study must be", "Applicant must
+   * be pursuing a field of study" and "Studies toward a Bachelor of Science degree in" name no
+   * subject, and `isNonFieldFragment` would strike them even if they survived the cut.
+   */
+  it('still discards the filler that genuinely precedes a list intro', () => {
+    expect(fieldsOf('Studies toward a Bachelor of Science degree in any field of engineering')).toEqual([
+      'engineering',
+    ]);
+    expect(fieldsOf('Applicant must be pursuing studies in Electronics or Communications')).toEqual([
+      'Electronics',
+      'Communications',
+    ]);
   });
 });
