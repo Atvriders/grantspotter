@@ -321,7 +321,14 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                   <dd>
                     This program inherits its deadline from{' '}
                     <Link to={`/o/${deadlineOwner.programId}`}>{deadlineOwner.programName}</Link>.
-                    111 entries in the ARRL scholarship catalog share one close date, so the owning
+                    {/*
+                      Was "111 entries in the ARRL scholarship catalog share one close date". The
+                      figure is currently correct, which is exactly what made it worth removing: a
+                      census typed into rendered copy is true until the corpus moves and then
+                      silently is not, and nothing recounts it. What a reader needs is that the date
+                      lives somewhere else, not how many records agree.
+                    */}
+                    Every entry in the ARRL scholarship catalog shares one close date, so the owning
                     program is where that date actually lives — and where to check it.
                   </dd>
                 </>

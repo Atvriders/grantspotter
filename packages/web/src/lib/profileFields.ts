@@ -28,7 +28,13 @@ export interface ProfileFieldMeta {
  */
 export const PROFILE_FIELDS: ProfileFieldMeta[] = [
   { key: 'callsign', kind: 'student', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.' },
-  { key: 'licenseClass', kind: 'student', label: 'License class', help: 'NONE, TECH, GENERAL or EXTRA. These rank in that order; 110 of the 111 ARRL catalog entries gate on it.' },
+  // The help text said "110 of the 111 ARRL catalog entries gate on it". Two things were wrong
+  // with that. It was a census in copy nobody re-measures, which is the defect
+  // `test/cycleCountCopy.test.ts` exists to stop — and it was also simply false: 110 is how many
+  // catalog entries carry an INSTITUTION constraint. Every one of the 111 carries a licence one
+  // (measured over `data/seed/` by constraint axis). The qualitative claim is what the field
+  // actually needs to convey, and it cannot go stale.
+  { key: 'licenseClass', kind: 'student', label: 'License class', help: 'NONE, TECH, GENERAL or EXTRA. These rank in that order, and most awards here gate on it — including every entry in the ARRL scholarship catalog.' },
   { key: 'licensedSince', kind: 'student', label: 'Licensed since', help: 'The date you were first licensed. Several awards require the licence to be held for a minimum period.' },
   { key: 'state', kind: 'student', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.' },
   { key: 'county', kind: 'student', label: 'County', help: 'Some club scholarships name specific counties, for example seven counties around Austin, Texas.' },

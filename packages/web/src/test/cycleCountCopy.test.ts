@@ -95,25 +95,27 @@ const WEB_SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
  * told, by a failing test, to delete the line. An allow-list that silently goes stale is the same
  * mechanism that produced the defect this file exists to prevent.
  */
-const QUARANTINE: ReadonlyMap<string, string> = new Map([
-  [
-    'lib/profileFields.ts',
-    'Newly caught by the widened rule, not a new defect: "110 of the 111 ARRL catalog entries ' +
-      'gate on it" is a census typed into help text a user reads. Not this pass\'s file to edit.',
-  ],
-  [
-    'routes/Opportunity.tsx',
-    'Newly caught by the widened rule, not a new defect: "111 entries in the ARRL scholarship ' +
-      'catalog share one close date" is a census typed into rendered copy. Not this pass\'s file.',
-  ],
-  [
-    'routes/Sources.tsx',
-    'Newly caught by the widened rule, not a new defect: "the deadline 112 of 150 programmes ' +
-      'inherit" is a census typed into rendered copy, and it is ALREADY drifting the way 243/244 ' +
-      'did — `normalize/deadline.ts` says 112 of 152 for the same population, and `data/seed/` ' +
-      'holds 143 records rather than either denominator. Not this pass\'s file to edit.',
-  ],
-]);
+/**
+ * EMPTY, and it reached empty the way the comment above says it must — by the copy being fixed,
+ * not by the entries being deleted.
+ *
+ * The widening that added the CENSUS/SUBJECT/CLAIM rule immediately caught three sentences older
+ * than the cycle-count defect it was written for, all three rendered to a user:
+ *
+ *   - `lib/profileFields.ts`  "110 of the 111 ARRL catalog entries gate on it" — and this one was
+ *                             FALSE as well as fragile. 110 is how many catalog entries carry an
+ *                             INSTITUTION constraint; all 111 carry a licence one.
+ *   - `routes/Opportunity.tsx` "111 entries in the ARRL scholarship catalog share one close date" —
+ *                             correct when written, which is precisely why it was worth removing.
+ *   - `routes/Sources.tsx`    "the deadline 112 of 150 programmes inherit" — already drifting the
+ *                             way 243/244 did: `normalize/deadline.ts` says 112 of 152 for the same
+ *                             population, and `data/seed/` holds 143 records, so the denominator on
+ *                             screen matched neither corpus.
+ *
+ * Each is now a claim that cannot rot. Keeping this map in place, empty, is deliberate: the next
+ * person who needs to defer a fix has the mechanism and the rules already written down.
+ */
+const QUARANTINE: ReadonlyMap<string, string> = new Map([]);
 
 /**
  * Comments out, strings and JSX text kept.

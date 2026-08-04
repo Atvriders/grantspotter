@@ -124,8 +124,12 @@ export function crawlSentence(result: CrawlResponse): string {
  * at all (spec §12).
  *
  * WHY THIS PAGE EXISTS AT THE SIZE IT DOES. Six parsers once returned zero records from their own
- * live pages while the entire unit suite stayed green, and one of them owned the deadline that
- * 112 of 150 programmes inherit. Nothing in the application noticed, because "this source
+ * live pages while the entire unit suite stayed green, and one of them owned the close date
+ * inherited by 112 of the 152 programmes that crawl published — the ARRL catalog and QCWA, the
+ * same population `normalize/deadline.ts` measured. (The rendered copy below no longer quotes a
+ * figure. This comment may, because it names the crawl it measured; the sentence on screen said
+ * "112 of 150" against a corpus that ships 143 records, which is the drift that
+ * `test/cycleCountCopy.test.ts` now exists to catch.) Nothing in the application noticed, because "this source
  * returned nothing" and "this source has nothing right now" are the same row in the database and
  * were the same sentence on screen. The six health states, the yield column and the two notes
  * below exist to keep those two readings apart in front of a human.
@@ -298,7 +302,7 @@ export function Sources(): JSX.Element {
               Nothing yet records what a source normally yields, so a drop can only be measured
               against the minimum configured here and never against the source&rsquo;s own history.
               Six parsers once returned zero records from their own live pages while every test
-              stayed green, and one of them owned the deadline 112 of 150 programmes inherit.
+              stayed green, and one of them owned the close date that most of this corpus inherits.
             </p>
           </section>
 
