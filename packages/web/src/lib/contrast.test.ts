@@ -54,23 +54,256 @@ import { contrastRatio, parseHex } from './contrast.js';
  */
 const tokensCss = readFileSync(path.resolve(import.meta.dirname, '../styles/tokens.css'), 'utf8');
 
-/** Pull `--name: #rrggbb;` pairs out of a single CSS block. */
-function tokensInBlock(css: string, selector: string): Record<string, string> {
+/**
+ * THE PARSER WAS THE ESCAPE HATCH — AND IT USED TO FAIL OPEN.
+ *
+ * The Plan 3 close-out review defeated this file by execution without touching a single assertion.
+ * It added `--text-dim: #cdd` — a THREE-DIGIT hex, which is valid CSS and renders — symmetrically
+ * to all three theme blocks, and the suite passed 142 of 142. `--text-dim` matches `TEXT_INK`, so
+ * rules A and E should have asserted it against seven backgrounds per theme. They asserted nothing,
+ * because the old regex demanded `#` + exactly six hex digits, and a declaration it could not read
+ * was silently `continue`d. The token measures **1.32:1** against `--bg`. AA needs 4.5. It would
+ * have shipped as effectively invisible text, and this file — the file whose entire purpose is to
+ * make that impossible — would have reported the palette as fully compliant.
+ *
+ * The old comment even said the quiet part: "a token that does not parse goes MISSING, and the
+ * derivation below then cannot pair it, which the vacuity guards catch." It does not catch it. The
+ * vacuity guards count pairs and require MORE than 50; dropping one token leaves 142, which is
+ * more than 50. A floor cannot detect an omission.
+ *
+ * So the parser now FAILS CLOSED. Every `--name: value;` in the block is read, not only the ones
+ * matching one syntax, and each is classified exactly three ways:
+ *
+ *   MEASURABLE   resolved to an opaque `#rrggbb`: 3- and 6-digit hex, `rgb()`/`rgba()`, `hsl()`,
+ *                a CSS named colour, or a `var(--x)` chain ending in one of those. It joins the
+ *                matrix and is asserted like every other colour.
+ *   NOT A COLOUR a compound value (two or more top-level terms: a font stack, a shadow, the focus
+ *                ring) or a plain number/length. These cannot be an ink or a fill, and are skipped.
+ *   UNMEASURABLE anything else — `color-mix()`, `oklch()`, `transparent`, `currentColor`, a hex
+ *                with alpha, a `var()` that resolves to nothing. THIS NOW FAILS, by name, with its
+ *                value quoted. Not being able to measure a colour is not evidence it is fine.
+ *
+ * ...and the classification is overridden in one direction only: a token the derivation grammar
+ * calls an ink, a surface or a fill (`--text*`, `--bg`, `--surface*`, `--X-soft`, `--X-hover`,
+ * `--X-ink`) MUST be MEASURABLE whatever its value looks like. `--text-dim: 4px` is a failure, not
+ * a length.
+ */
+
+/** CSS named colours a design system plausibly reaches for. Anything else is UNMEASURABLE. */
+const NAMED_COLOURS: Record<string, string> = {
+  black: '#000000',
+  white: '#ffffff',
+  red: '#ff0000',
+  lime: '#00ff00',
+  blue: '#0000ff',
+  gray: '#808080',
+  grey: '#808080',
+  silver: '#c0c0c0',
+};
+
+/** Colour functions that exist and that this file deliberately refuses to guess the sRGB value of. */
+const UNRESOLVABLE_FUNCTIONS = ['color-mix(', 'oklch(', 'oklab(', 'lab(', 'lch(', 'hwb(', 'color(', 'light-dark('];
+
+type Classified =
+  | { readonly kind: 'measurable'; readonly hex: string }
+  | { readonly kind: 'not-a-colour'; readonly why: string }
+  | { readonly kind: 'unmeasurable'; readonly why: string };
+
+/** Split a CSS value on top-level whitespace and commas, ignoring anything inside `()` or quotes. */
+function topLevelTerms(value: string): string[] {
+  const terms: string[] = [];
+  let depth = 0;
+  let current = '';
+  let quote: string | undefined;
+  for (const c of value.trim()) {
+    if (quote !== undefined) {
+      current += c;
+      if (c === quote) quote = undefined;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      current += c;
+      continue;
+    }
+    if (c === '(') depth += 1;
+    if (c === ')') depth -= 1;
+    if (depth === 0 && (c === ' ' || c === '\t' || c === '\n' || c === ',')) {
+      if (current !== '') terms.push(current);
+      current = '';
+      continue;
+    }
+    current += c;
+  }
+  if (current !== '') terms.push(current);
+  return terms;
+}
+
+const clamp255 = (n: number): number => Math.max(0, Math.min(255, Math.round(n)));
+const toByte = (n: number): string => clamp255(n).toString(16).padStart(2, '0');
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((((h / 60) % 2) + 2) % 2 - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `#${toByte(((r ?? 0) + m) * 255)}${toByte(((g ?? 0) + m) * 255)}${toByte(((b ?? 0) + m) * 255)}`;
+}
+
+/**
+ * Classify one CSS custom-property value. `declarations` is the whole block, so `var(--x)` chains
+ * resolve; `seen` breaks a cycle rather than recursing forever.
+ */
+export function classifyValue(
+  raw: string,
+  declarations: Record<string, string> = {},
+  seen: ReadonlySet<string> = new Set(),
+): Classified {
+  const value = raw.trim();
+  if (value === '') return { kind: 'unmeasurable', why: 'empty value' };
+
+  const terms = topLevelTerms(value);
+  if (terms.length > 1) {
+    return { kind: 'not-a-colour', why: `a compound value of ${terms.length} terms, not an ink` };
+  }
+  const term = terms[0] ?? value;
+
+  const varMatch = /^var\(\s*(--[a-z0-9-]+)\s*(?:,([\s\S]*))?\)$/i.exec(term);
+  if (varMatch) {
+    const name = varMatch[1] ?? '';
+    const fallback = varMatch[2];
+    if (seen.has(name)) return { kind: 'unmeasurable', why: `var(${name}) is a cycle` };
+    const target = declarations[name];
+    if (target !== undefined) return classifyValue(target, declarations, new Set([...seen, name]));
+    if (fallback !== undefined) return classifyValue(fallback, declarations, new Set([...seen, name]));
+    return { kind: 'unmeasurable', why: `var(${name}) resolves to nothing in this block` };
+  }
+
+  const hex = /^#([0-9a-f]{3,8})$/i.exec(term);
+  if (hex) {
+    const digits = hex[1] ?? '';
+    if (digits.length === 3) {
+      const [r, g, b] = [...digits];
+      return { kind: 'measurable', hex: `#${r}${r}${g}${g}${b}${b}`.toLowerCase() };
+    }
+    if (digits.length === 6) return { kind: 'measurable', hex: `#${digits}`.toLowerCase() };
+    return {
+      kind: 'unmeasurable',
+      why: `${digits.length}-digit hex carries alpha, and alpha over an unknown backdrop has no ratio`,
+    };
+  }
+
+  const rgb = /^rgba?\(([^)]*)\)$/i.exec(term);
+  if (rgb) {
+    const body = (rgb[1] ?? '').replace(/\//g, ' ').split(/[\s,]+/).filter((p) => p !== '');
+    const nums = body.map((p) => (p.endsWith('%') ? (Number.parseFloat(p) * 255) / 100 : Number(p)));
+    const [r, g, b, a] = nums;
+    if (nums.length < 3 || nums.slice(0, 3).some((n) => !Number.isFinite(n))) {
+      return { kind: 'unmeasurable', why: `rgb() this file cannot read: ${term}` };
+    }
+    if (a !== undefined && a !== 255 && a < 1) {
+      return { kind: 'unmeasurable', why: 'rgb() with alpha < 1 has no ratio over an unknown backdrop' };
+    }
+    return { kind: 'measurable', hex: `#${toByte(r ?? 0)}${toByte(g ?? 0)}${toByte(b ?? 0)}` };
+  }
+
+  const hsl = /^hsla?\(([^)]*)\)$/i.exec(term);
+  if (hsl) {
+    const body = (hsl[1] ?? '').replace(/\//g, ' ').split(/[\s,]+/).filter((p) => p !== '');
+    const h = Number.parseFloat(body[0] ?? '');
+    const s = Number.parseFloat(body[1] ?? '') / 100;
+    const l = Number.parseFloat(body[2] ?? '') / 100;
+    const a = body[3] === undefined ? 1 : Number.parseFloat(body[3]);
+    if (![h, s, l].every(Number.isFinite)) {
+      return { kind: 'unmeasurable', why: `hsl() this file cannot read: ${term}` };
+    }
+    if (Number.isFinite(a) && a < 1) {
+      return { kind: 'unmeasurable', why: 'hsl() with alpha < 1 has no ratio over an unknown backdrop' };
+    }
+    return { kind: 'measurable', hex: hslToHex(((h % 360) + 360) % 360, s, l) };
+  }
+
+  const named = NAMED_COLOURS[term.toLowerCase()];
+  if (named !== undefined) return { kind: 'measurable', hex: named };
+
+  if (/^-?\d*\.?\d+(?:px|rem|em|%|vh|vw|vmin|vmax|ch|ex|pt|s|ms|deg)?$/i.test(term)) {
+    return { kind: 'not-a-colour', why: 'a number or length' };
+  }
+
+  const fn = UNRESOLVABLE_FUNCTIONS.find((f) => term.toLowerCase().startsWith(f));
+  if (fn !== undefined) {
+    return {
+      kind: 'unmeasurable',
+      why: `${fn.slice(0, -1)}() is a real colour this file cannot resolve to sRGB — it must not be ` +
+        'assumed compliant just because the parser gave up',
+    };
+  }
+  if (term.toLowerCase() === 'transparent' || term.toLowerCase() === 'currentcolor') {
+    return { kind: 'unmeasurable', why: `\`${term}\` has no fixed value, so it has no ratio` };
+  }
+  return { kind: 'unmeasurable', why: `unrecognised value \`${term}\`` };
+}
+
+/** Names the derivation grammar treats as an ink, a surface or a fill. These MUST be measurable. */
+function isColourByGrammar(name: string, allNames: readonly string[]): boolean {
+  if (NEUTRAL_SURFACE.test(name) || TEXT_INK.test(name)) return true;
+  if (/-(?:soft|hover|ink)$/.test(name)) return true;
+  return allNames.includes(`${name}-soft`); // a semantic family root
+}
+
+/** Every `--name: value;` declaration in a single CSS block, values unparsed. */
+export function declarationsInBlock(css: string, selector: string): Record<string, string> {
   const start = css.indexOf(selector);
   if (start === -1) throw new Error(`selector not found: ${selector}`);
   const open = css.indexOf('{', start);
   const close = css.indexOf('}', open);
   const block = css.slice(open + 1, close);
   const out: Record<string, string> = {};
-  for (const m of block.matchAll(/(--[a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g)) {
+  for (const m of block.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;}]+);/g)) {
     const name = m[1];
     const value = m[2];
-    // `noUncheckedIndexedAccess` is on, and a capture group is `string | undefined` to the
-    // compiler even when the pattern guarantees it. Skipping instead of asserting keeps the
-    // failure mode honest: a token that does not parse goes MISSING, and the derivation below
-    // then cannot pair it, which the vacuity guards catch.
     if (name === undefined || value === undefined) continue;
-    out[name] = value;
+    out[name] = value.trim();
+  }
+  return out;
+}
+
+/**
+ * Declarations this file cannot measure, and therefore refuses to pass over in silence. Empty is
+ * the healthy state; see UNMEASURABLE_BY_DESIGN for the only way an entry is allowed to persist.
+ */
+export function unmeasurableIn(
+  css: string,
+  selector: string,
+): Array<{ name: string; value: string; why: string }> {
+  const declarations = declarationsInBlock(css, selector);
+  const names = Object.keys(declarations);
+  const out: Array<{ name: string; value: string; why: string }> = [];
+  for (const [name, value] of Object.entries(declarations)) {
+    const verdict = classifyValue(value, declarations);
+    if (verdict.kind === 'measurable') continue;
+    if (verdict.kind === 'not-a-colour' && !isColourByGrammar(name, names)) continue;
+    out.push({
+      name,
+      value,
+      why:
+        verdict.kind === 'not-a-colour'
+          ? `the token grammar says ${name} is an ink, a surface or a fill, but its value is ${verdict.why}`
+          : verdict.why,
+    });
+  }
+  return out;
+}
+
+/** Every token in a block that resolves to an opaque `#rrggbb`, which is the matrix's input. */
+function tokensInBlock(css: string, selector: string): Record<string, string> {
+  const declarations = declarationsInBlock(css, selector);
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(declarations)) {
+    const verdict = classifyValue(value, declarations);
+    if (verdict.kind === 'measurable') out[name] = verdict.hex;
   }
   return out;
 }
@@ -128,9 +361,37 @@ export function derivePairs(tokens: Record<string, string>): Pair[] {
  */
 const EXEMPT: Record<string, string> = {};
 
+/**
+ * Declarations this file cannot resolve to an opaque colour and that are nevertheless allowed to
+ * stand, keyed by token name, each with the reason.
+ *
+ * EMPTY, and an entry is expensive on purpose. It is the only way past `fails closed on any colour
+ * it cannot measure`, and it is the exact shape the Plan 3 review's `--text-dim: #cdd` would have
+ * needed if the parser had been honest: somebody would have had to write down that a 1.32:1 ink is
+ * fine, instead of the parser writing it down for them by saying nothing. The guards below refuse a
+ * stale entry — the token must still exist in every theme, and must still be unmeasurable, so an
+ * entry cannot outlive its cause and be mistaken for documentation of a real constraint.
+ */
+const UNMEASURABLE_BY_DESIGN: Record<string, string> = {};
+
+/** The two blocks the AA matrix is derived over. */
 const THEMES: ReadonlyArray<readonly [selector: string, label: string]> = [
   [':root', 'light'],
   [':root[data-theme="dark"]', 'dark'],
+];
+
+/**
+ * EVERY block in the file, including the `prefers-color-scheme` copy — which is the one most users
+ * actually get, since most never touch the in-app toggle. The matrix is derived over THEMES only
+ * (the media block is held byte-for-byte equal to the data-theme block below, so measuring it twice
+ * would assert nothing new), but the FAIL-CLOSED check runs over all three: a token this file
+ * cannot measure, added to the media block alone, must not be able to slip in behind an equality
+ * test that only ever compared the tokens the parser managed to resolve.
+ */
+const ALL_BLOCKS: readonly string[] = [
+  ':root',
+  ':root[data-theme="dark"]',
+  ':root:not([data-theme="light"])',
 ];
 
 describe('contrastRatio', () => {
@@ -140,6 +401,96 @@ describe('contrastRatio', () => {
 
   it('parses hex into 0-255 channels', () => {
     expect(parseHex('#0f6f7a')).toEqual([15, 111, 122]);
+  });
+});
+
+/**
+ * THE FAIL-CLOSED RULE. Everything else in this file measures colours; this asserts that there is
+ * no colour it declined to measure. It is listed first because it is the precondition for every
+ * ratio below meaning anything: a matrix over a subset the parser happened to understand is not a
+ * statement about the palette.
+ */
+describe.each(ALL_BLOCKS)('the token block %s', (selector) => {
+  it('fails closed on any colour it cannot measure', () => {
+    const unresolved = unmeasurableIn(tokensCss, selector).filter(
+      (u) => !(u.name in UNMEASURABLE_BY_DESIGN),
+    );
+    expect(
+      unresolved.map((u) => `${u.name}: ${u.value} — ${u.why}`),
+      'these declarations are not asserted by ANY pair below, because this file cannot resolve ' +
+        'them to an opaque colour. Silently skipping them is how `--text-dim: #cdd` (a 3-digit ' +
+        'hex, 1.32:1 against --bg) passed 142/142. Either write the value in a form this file can ' +
+        'measure, or sign it in UNMEASURABLE_BY_DESIGN with a reason.',
+    ).toEqual([]);
+  });
+
+  it('resolves a real palette, so "nothing unmeasurable" is not "nothing at all"', () => {
+    // The vacuity guard for the guard: a classifier that returned `not-a-colour` for everything
+    // would satisfy the check above while measuring none of the palette.
+    const declarations = declarationsInBlock(tokensCss, selector);
+    const measured = tokensInBlock(tokensCss, selector);
+    expect(Object.keys(declarations).length).toBeGreaterThan(20);
+    expect(Object.keys(measured).length).toBeGreaterThan(20);
+    for (const name of ['--bg', '--surface', '--text', '--text-muted', '--accent', '--ok', '--warn']) {
+      expect(measured[name], `${name} must resolve to a measurable colour`).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});
+
+describe('the colour classifier', () => {
+  it('reads every colour syntax that renders, not only the one this palette happens to use', () => {
+    expect(classifyValue('#0f6f7a')).toEqual({ kind: 'measurable', hex: '#0f6f7a' });
+    expect(classifyValue('#FFF')).toEqual({ kind: 'measurable', hex: '#ffffff' });
+    // The exact token the Plan 3 review shipped past 142 green tests.
+    expect(classifyValue('#cdd')).toEqual({ kind: 'measurable', hex: '#ccdddd' });
+    expect(classifyValue('rgb(15, 111, 122)')).toEqual({ kind: 'measurable', hex: '#0f6f7a' });
+    expect(classifyValue('rgb(15 111 122)')).toEqual({ kind: 'measurable', hex: '#0f6f7a' });
+    expect(classifyValue('hsl(0, 0%, 100%)')).toEqual({ kind: 'measurable', hex: '#ffffff' });
+    expect(classifyValue('white')).toEqual({ kind: 'measurable', hex: '#ffffff' });
+    expect(classifyValue('var(--a)', { '--a': '#123456' })).toEqual({
+      kind: 'measurable',
+      hex: '#123456',
+    });
+    expect(classifyValue('var(--missing, #abc)')).toEqual({ kind: 'measurable', hex: '#aabbcc' });
+  });
+
+  it('calls a number, a length and a compound value what they are', () => {
+    for (const value of ['4px', '1.2', '0.06em', '208px', '#000 0 1px', 'ui-monospace, Menlo']) {
+      expect(classifyValue(value).kind, `${value} is not an ink`).toBe('not-a-colour');
+    }
+  });
+
+  it('refuses to call an unresolvable colour compliant', () => {
+    for (const value of [
+      'color-mix(in srgb, #fff 50%, #000)',
+      'oklch(0.7 0.1 200)',
+      'lab(50% 20 -30)',
+      'hwb(200 20% 30%)',
+      'light-dark(#fff, #000)',
+      '#ffffff80', // 8-digit hex: alpha over an unknown backdrop
+      '#fff8', // 4-digit hex, same
+      'rgba(255, 255, 255, 0.4)',
+      'transparent',
+      'currentColor',
+      'var(--nope)',
+      'not-a-real-value',
+    ]) {
+      expect(classifyValue(value).kind, `${value} must not be treated as fine`).toBe('unmeasurable');
+    }
+    // ...and a var() cycle terminates rather than hanging the suite.
+    expect(classifyValue('var(--a)', { '--a': 'var(--b)', '--b': 'var(--a)' }).kind).toBe('unmeasurable');
+  });
+
+  it('holds a grammar-named ink to the colour rule whatever its value looks like', () => {
+    // `4px` is an honest `not-a-colour` in general — but a token the derivation calls a text ink
+    // cannot be a length, and reporting it as "not a colour, skip" is how the hole worked.
+    const css = ':root { --text-dim: 4px; --r-9: 4px; }';
+    expect(unmeasurableIn(css, ':root').map((u) => u.name)).toEqual(['--text-dim']);
+  });
+
+  it('reads a declaration whatever its value syntax, not only #rrggbb', () => {
+    const css = ':root { --a: #cdd; --b: color-mix(in srgb, red, blue); --c: 4px; --d: rgb(1 2 3); }';
+    expect(Object.keys(declarationsInBlock(css, ':root'))).toEqual(['--a', '--b', '--c', '--d']);
   });
 });
 
@@ -237,10 +588,31 @@ describe('the contrast invariant can still see', () => {
     // Only the first is exercised by the matrix above. This was found by the deliberate break
     // that proved this file: a new family was added to the data-theme block alone and NOTHING
     // complained, so in system dark mode it would silently have fallen back to its LIGHT value.
-    const explicit = tokensInBlock(tokensCss, ':root[data-theme="dark"]');
-    const media = tokensInBlock(tokensCss, ':root:not([data-theme="light"])');
+    //
+    // It compares RAW DECLARATIONS, not resolved colours. Comparing `tokensInBlock` output would
+    // compare only what the parser managed to measure, so a token the parser cannot read would be
+    // absent from both sides and the blocks would look identical while differing — the same
+    // fail-open shape as the parser hole itself, one level up.
+    const explicit = declarationsInBlock(tokensCss, ':root[data-theme="dark"]');
+    const media = declarationsInBlock(tokensCss, ':root:not([data-theme="light"])');
     expect(Object.keys(explicit).length).toBeGreaterThan(15);
     expect(media).toEqual(explicit);
+  });
+
+  it('carries no stale UNMEASURABLE_BY_DESIGN entry', () => {
+    for (const [name, reason] of Object.entries(UNMEASURABLE_BY_DESIGN)) {
+      expect(reason.trim().length, `${name} needs a real reason, not a placeholder`).toBeGreaterThan(40);
+      for (const selector of ALL_BLOCKS) {
+        const declared = declarationsInBlock(tokensCss, selector)[name];
+        expect(declared, `${name} is signed as unmeasurable but is not declared in ${selector}`)
+          .toBeDefined();
+        expect(
+          unmeasurableIn(tokensCss, selector).map((u) => u.name),
+          `${name} is now measurable in ${selector} — the exemption is a lie. Delete the entry so ` +
+            'the matrix starts asserting it.',
+        ).toContain(name);
+      }
+    }
   });
 
   it('carries no stale exemption', () => {

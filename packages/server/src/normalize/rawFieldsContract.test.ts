@@ -430,24 +430,95 @@ const WRITE_ONLY_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([
   ['amountNote', "DEFECT. ARRL Amateur Radio Grants' \"In support of ARRL's Year of the Club, award amounts may be up to $5,000 in 2026.\" — a qualifier on the published amount, with a year on it, that no consumer reads and no Program field carries."],
 ]);
 
+/**
+ * A TRACKED DEFECT IS NOT A SATISFIED INVARIANT, AND THIS FILE NO LONGER LETS THE TWO BE COUNTED
+ * TOGETHER (Plan 3 close-out review, cross-cutting finding).
+ *
+ * `ALLOWED` used to be `WRITE_ONLY_BY_DESIGN ∪ WRITE_ONLY_KNOWN_DEFECTS`, and the orphan check
+ * `continue`d on both alike. The two lists say opposite things — one is "this value is meant to
+ * evaporate", the other is "this value is a bug, here is the consumer that ought to exist" — and
+ * merging them meant a green suite reported 18 open defects as indistinguishable from 40 reviewed
+ * decisions. The list's existence then reads as coverage: it looks like the field is handled
+ * because somebody wrote a paragraph about it.
+ *
+ * This project has already been burned by exactly that. An entry in a "known defects" allow-list
+ * was simultaneously propping up a regression canary being cited as proof of correctness, which is
+ * why the `no listed field has since gained a reader` guard below exists at all. The same shape had
+ * simply moved one level up: the ENTRIES were kept honest, and the LIST was not.
+ *
+ * So the two are separated at the assertion, in two ways:
+ *
+ *   1. Only WRITE_ONLY_BY_DESIGN exempts a key. A tracked defect is NOT skipped — it is REQUIRED to
+ *      still be an orphan, and the orphan set is asserted to equal the tracked-defect set exactly.
+ *      A new orphan is red (it is an untracked defect); a tracked key that gains a reader is red
+ *      (the entry is now a lie and must be deleted). The list can no longer grow quietly, and the
+ *      count is a fact about the code rather than a number somebody typed.
+ *   2. Every tracked defect is emitted as a `todo`, so `npm test` reports
+ *      `Tests  N passed | 18 todo` on its summary line, forever, until they are fixed. `todo` is
+ *      the one result vitest never counts as passing. There is now no run of this suite in which
+ *      the 18 are invisible, and no "all green" that includes them.
+ */
 const ALLOWED = new Set([...WRITE_ONLY_BY_DESIGN.keys(), ...WRITE_ONLY_KNOWN_DEFECTS.keys()]);
 
+/**
+ * The open defects, one `todo` each. Not decoration: this is the only place in the suite where they
+ * are counted, and they are counted in the column that means "not done".
+ */
+describe('rawFields: keys a source writes that nothing consumes — TRACKED DEFECTS, NOT EXEMPTIONS', () => {
+  for (const [key, reason] of WRITE_ONLY_KNOWN_DEFECTS) {
+    const summary = (/^DEFECT[^.]*\.\s*(.*?\.)/.exec(reason)?.[1] ?? reason).slice(0, 150);
+    it.todo(`consume rawFields.${key} — ${summary}`);
+  }
+});
+
 describe('rawFields: nothing a source writes may be silently consumed by nobody', () => {
-  it('has no rawFields key that is written by a source and read by nothing', async () => {
+  it('has no rawFields key that is written by a source and read by nothing, beyond the tracked defects', async () => {
     const written = await collectWrites();
     const readerSources = await collectReaderSources();
 
     const orphans: string[] = [];
-    for (const [key, writers] of [...written].sort()) {
-      if (ALLOWED.has(key)) continue;
+    for (const [key] of [...written].sort()) {
+      if (WRITE_ONLY_BY_DESIGN.has(key)) continue;
       if (readersOf(key, readerSources).length > 0) continue;
-      orphans.push(
-        `rawFields.${key} is written by ${writers.join(', ')} and read by NOTHING. ` +
-          'Either consume it, or add it to WRITE_ONLY_BY_DESIGN / WRITE_ONLY_KNOWN_DEFECTS ' +
-          'in rawFieldsContract.test.ts with a reason.',
-      );
+      orphans.push(key);
     }
-    expect(orphans).toEqual([]);
+
+    // EQUALITY, not containment. `>=` would let the list grow silently, which is how an allow-list
+    // becomes a parking space; `<=` would let a fixed key keep asserting a defect that is gone.
+    expect(
+      orphans.sort(),
+      'the set of rawFields keys written by a source and read by NOTHING must be exactly the set ' +
+        'tracked in WRITE_ONLY_KNOWN_DEFECTS.\n' +
+        '  A key here that is NOT in the list is an untracked defect: consume it, track it, or — ' +
+        'if it is genuinely meant to evaporate — move it to WRITE_ONLY_BY_DESIGN with a reason.\n' +
+        '  A key in the list that is NOT here has been FIXED: delete its entry. Leaving it makes ' +
+        'the list a place where fixed things go to look broken.',
+    ).toEqual([...WRITE_ONLY_KNOWN_DEFECTS.keys()].sort());
+  });
+
+  it('never counts a tracked defect as a satisfied invariant', async () => {
+    // The rule stated as a property rather than as a comment: no tracked defect may be exempt, and
+    // no exemption may be a tracked defect. If the two maps are ever merged again, this is what
+    // notices — before anyone cites a green run as evidence about these keys.
+    for (const key of WRITE_ONLY_KNOWN_DEFECTS.keys()) {
+      expect(
+        WRITE_ONLY_BY_DESIGN.has(key),
+        `${key} is tracked as a DEFECT and exempted as BY DESIGN at the same time`,
+      ).toBe(false);
+    }
+    for (const [key, reason] of WRITE_ONLY_BY_DESIGN) {
+      expect(
+        reason.toUpperCase().startsWith('DEFECT'),
+        `${key} is listed as a deliberate write-only but its reason calls it a defect — it belongs ` +
+          'in WRITE_ONLY_KNOWN_DEFECTS, where it will be counted as todo instead of skipped',
+      ).toBe(false);
+    }
+    // ...and the tracked half must still be non-empty in the way that matters: every entry names a
+    // real orphan. A list of zero would be fine; a list of entries that are not orphans would not.
+    const written = await collectWrites();
+    for (const key of WRITE_ONLY_KNOWN_DEFECTS.keys()) {
+      expect(written.has(key), `${key} is tracked as a defect but nothing writes it`).toBe(true);
+    }
   });
 
   it('keeps the write-only lists honest: every listed field is still written by a source', async () => {

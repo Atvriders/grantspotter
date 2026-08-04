@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -450,6 +450,299 @@ describe('vitest project coverage — the invariant can still see', () => {
     for (const project of projects) {
       expect(project.exclude.length, `${project.label} lost its exclude`).toBeGreaterThan(0);
     }
+  });
+});
+
+/* ------------------------------------------------------------------------------------------- *
+ * DEFECT 6: THE PROJECT-THAT-NEVER-RAN. The invocation layer, which everything above is blind to.
+ *
+ * Everything above compares FILES ON DISK against CONFIGURATION. The Plan 3 close-out review
+ * pointed out that this answers "does every test file belong to A project" and never "does every
+ * project actually RUN", and then proved the gap by execution: it changed the root package.json's
+ * `"test": "vitest run"` to `"vitest run --project server"` — DROPPING THE ENTIRE WEB SUITE, 653
+ * tests, plus core and scripts — and this file passed 12 of 12. That is the sharpest instance of
+ * the family: the guard written to stop a silently-shrinking suite did not notice the suite
+ * shrinking by 653 tests, because the shrink happened one layer below anything it read.
+ *
+ * `npm test` is what "the suite" MEANS in this repo — it is the command the plans, the close-out
+ * reviews and every "N passing" claim are measured with, and there is no CI workflow that would
+ * name the projects independently. So the invariant is: the declared entry point must invoke
+ * vitest over the WHOLE workspace, with nothing that narrows what is collected.
+ *
+ * IT IS AN ALLOW-LIST OF FLAGS, NOT A DENY-LIST OF THE NARROWING ONES — the same lesson
+ * `sources/registry.test.ts` learned when a deny-list of five egress substrings was walked past
+ * with `node:fs`. `--project` is only the flag somebody happened to try; `--dir`, `--root`,
+ * `--shard`, `--changed`, `--related`, a bare positional path filter and `--passWithNoTests` all
+ * shrink the run too, and the next one has not been invented yet. So every token in the command
+ * must be recognised as SAFE by name, and anything else fails loudly rather than being tolerated.
+ *
+ * WHAT THIS DOES NOT PROVE, stated plainly rather than left to be discovered: it does not observe a
+ * real vitest process, so it cannot prove what a developer typed at their own terminal, and it
+ * cannot prove a collected test ASSERTED anything. The `.only`/`.skip` scan below closes the
+ * biggest remaining slice of the second gap — a single `describe.only` silently drops every other
+ * file in its project, which is this defect family reached from inside a test file instead of from
+ * the config or the command line.
+ * ------------------------------------------------------------------------------------------- */
+
+/**
+ * Tokens `npm test` may contain. Each is either vitest's run mode or something that changes only
+ * how results are REPORTED — never which files are collected or which projects are run.
+ */
+const NON_NARROWING_TOKENS: ReadonlyMap<string, string> = new Map([
+  ['vitest', 'the runner itself'],
+  ['npx', 'the launcher'],
+  ['run', 'run mode: execute once and exit, rather than watch. Collects the same set either way.'],
+  ['--run', 'the flag spelling of run mode.'],
+  ['--silent', 'suppresses console output from tests; collection is untouched.'],
+  ['--no-color', 'reporter styling only.'],
+  ['--coverage', 'adds instrumentation; it cannot remove a file from the run.'],
+  ['--hideSkippedTests', 'reporter output only.'],
+]);
+
+/** Flag PREFIXES (`--reporter=json`) that are reporting-only, matched before the exact list. */
+const NON_NARROWING_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ['--reporter=', 'chooses how results are printed.'],
+  ['--outputFile=', 'where a reporter writes; collection is untouched.'],
+  ['--bail=', 'stops after N FAILURES. It can only cut a run short once something is already red.'],
+];
+
+/**
+ * The narrowing tokens that are known TODAY, named so the failure message can say what is wrong
+ * instead of only that something is. This is documentation attached to the allow-list above, NOT
+ * the gate: an unrecognised token fails whether or not it appears here.
+ */
+const KNOWN_NARROWING: ReadonlyMap<string, string> = new Map([
+  ['--project', 'runs only the named project(s) — this is the exact defeat this check exists for'],
+  ['-p', 'the short spelling of --project'],
+  ['--dir', 'moves the base directory the run scans'],
+  ['--root', 'moves the project root'],
+  ['--shard', 'runs a fraction of the files'],
+  ['--changed', 'runs only files affected by the working tree'],
+  ['--related', 'runs only files related to the named sources'],
+  ['--include', 'replaces the configured include globs'],
+  ['--exclude', 'removes files from the run'],
+  ['--testNamePattern', 'runs only tests whose NAME matches'],
+  ['-t', 'the short spelling of --testNamePattern'],
+  [
+    '--passWithNoTests',
+    'makes an EMPTY run green, which is this defect family with the volume turned all the way up',
+  ],
+]);
+
+/** Split a shell command into tokens, honouring quotes. Throws on shell syntax it cannot read. */
+export function tokenizeCommand(command: string): string[] {
+  if (/[|&;><`$()]/.test(command)) {
+    throw new Error(
+      `the test script uses shell syntax this check cannot read (${command}); teach it before ` +
+        'trusting this invariant again — an unread chain can hide anything',
+    );
+  }
+  const tokens: string[] = [];
+  for (const m of command.trim().matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) {
+    tokens.push(m[1] ?? m[2] ?? m[3] ?? '');
+  }
+  return tokens;
+}
+
+/** Every token in `npm test` that is not recognised as leaving the collected set alone. */
+export function narrowingTokens(command: string): string[] {
+  const bad: string[] = [];
+  for (const token of tokenizeCommand(command)) {
+    if (NON_NARROWING_TOKENS.has(token)) continue;
+    if (NON_NARROWING_PREFIXES.some(([prefix]) => token.startsWith(prefix))) continue;
+    const flag = token.split('=')[0] ?? token;
+    const why = KNOWN_NARROWING.get(flag);
+    bad.push(
+      why === undefined
+        ? `"${token}" is not in NON_NARROWING_TOKENS. If it cannot remove a file or a project from ` +
+          'the run, add it there with a reason; if it can, it does not belong in `npm test`.'
+        : `"${token}" ${why}`,
+    );
+  }
+  return bad;
+}
+
+const rootPackageJson = JSON.parse(
+  await readFile(path.join(REPO_ROOT, 'package.json'), 'utf8'),
+) as { scripts?: Record<string, string> };
+
+describe('vitest project coverage — `npm test` runs every project', () => {
+  it('declares a test script at all', () => {
+    expect(
+      rootPackageJson.scripts?.test,
+      'the root package.json has no `test` script, so there is no entry point for any "N tests ' +
+        'passing" claim to have measured',
+    ).toBeTruthy();
+  });
+
+  it('invokes vitest over the whole workspace, with nothing that narrows the run', () => {
+    const command = rootPackageJson.scripts?.test ?? '';
+    const tokens = tokenizeCommand(command);
+    expect(tokens, `\`npm test\` (${command}) does not invoke vitest`).toContain('vitest');
+
+    const bad = narrowingTokens(command);
+    expect(
+      bad,
+      bad.length === 0
+        ? ''
+        : `\`npm test\` is "${command}", which does not run the whole workspace:\n  ${bad.join('\n  ')}\n` +
+          'Every check above compares FILES against CONFIGURATION and cannot see this: a run that ' +
+          'silently drops a project is green here and green in the terminal, and the tests it ' +
+          'dropped are simply not mentioned. Narrowing belongs on the command line a developer ' +
+          'types, never in the script every claim about this suite is measured with.',
+    ).toEqual([]);
+  });
+
+  it('names every workspace project in a script that runs them all', () => {
+    // The positive statement of the same rule: whatever `npm test` is, the projects it runs must be
+    // the whole workspace. With no narrowing token there is nothing to subset it, so this asserts
+    // the conclusion the check above earns — and fails loudly if the workspace is ever emptied.
+    const running = narrowingTokens(rootPackageJson.scripts?.test ?? '').length === 0 ? [...workspace] : [];
+    expect(running).toEqual([...workspace]);
+    expect(running.length, 'the workspace declares no projects').toBeGreaterThan(1);
+  });
+
+  it('reads the command the way a shell would', () => {
+    expect(tokenizeCommand('vitest run')).toEqual(['vitest', 'run']);
+    expect(tokenizeCommand('vitest run --reporter=json')).toEqual(['vitest', 'run', '--reporter=json']);
+    expect(tokenizeCommand('vitest run -t "a b"')).toEqual(['vitest', 'run', '-t', 'a b']);
+    expect(() => tokenizeCommand('vitest run && echo ok')).toThrow(/shell syntax/);
+  });
+
+  /** The break that produced this section, plus the ones nobody tried, pinned as behaviour. */
+  it('rejects every narrowing invocation, not only the one that was tried', () => {
+    expect(narrowingTokens('vitest run')).toEqual([]);
+    expect(narrowingTokens('vitest run --silent --reporter=dot')).toEqual([]);
+    for (const command of [
+      'vitest run --project server', // the exact Plan 3 defeat: dropped 653 web tests, stayed green
+      'vitest run -p server',
+      'vitest run --dir packages/server',
+      'vitest run --shard=1/4',
+      'vitest run --changed',
+      'vitest run --related src/a.ts',
+      'vitest run --exclude "packages/web/**"',
+      'vitest run -t suppression',
+      'vitest run --passWithNoTests',
+      'vitest run packages/server', // a bare positional path filter needs no flag at all
+      'vitest run --some-flag-invented-next-year=1', // the whole point of an allow-list
+    ]) {
+      expect(narrowingTokens(command), `${command} must be rejected`).not.toEqual([]);
+    }
+  });
+});
+
+/**
+ * `.only` and `.skip`: the same silent shrink, reached from inside a test file.
+ *
+ * A single `describe.only` drops every other FILE in its project — vitest honours `only` across the
+ * whole run — and reports the survivors as passing. `.skip` and `.todo` drop one block and report
+ * it as skipped, which no "N passing" claim ever subtracts. Neither is visible to any check above,
+ * and both produce exactly the symptom this file exists to break: a green run over less than
+ * everyone thinks.
+ */
+const SKIPPED_BY_DESIGN: ReadonlyMap<string, string> = new Map<string, string>([
+  [
+    'packages/server/src/normalize/rawFieldsContract.test.ts',
+    'One `it.todo` per entry in WRITE_ONLY_KNOWN_DEFECTS — 18 rawFields keys a live source writes ' +
+      'and nothing consumes. They are `todo` ON PURPOSE and that is the whole point: `todo` is the ' +
+      'one result vitest never counts as passing, so `npm test` reports "N passed | 18 todo" and a ' +
+      'tracked defect can never be read as a satisfied invariant. This is the deliberate opposite ' +
+      'of the case this guard exists for — a block quietly removed from the run — so it is signed ' +
+      'rather than silenced, and the count shrinks as the defects are fixed.',
+  ],
+]);
+
+/**
+ * MATCHED AT STATEMENT POSITION — start of line, after indentation — never anywhere in the text.
+ *
+ * A file that scans for `.skip` has to quote `.skip` to test its own scanner, and this one does, a
+ * few tests below. The first draft stripped string literals instead and reported ITSELF as using
+ * `.only`: a backtick nested inside a quoted fixture desynchronised the stripper, which is a hand
+ * -rolled JS lexer's ordinary failure and exactly the kind of silent mis-scan the rest of this file
+ * exists to prevent. A real `describe.only(` is a STATEMENT; a quoted one never is. Anchoring is
+ * both simpler and harder to get wrong than lexing, so it is what this uses.
+ */
+const ONLY_MARKER = /^[ \t]*(?:describe|it|test|suite)\s*\.\s*only\b/gm;
+
+/**
+ * A STATIC skip — one that names a block and removes it unconditionally — as opposed to a runtime
+ * one. The first argument must be a quoted name (`describe.skip('…')`) or the marker must be
+ * chained (`describe.skip.each([…])`). That deliberately does NOT match
+ * `test.skip(!condition, reason)`, Playwright's imperative form used in `e2e/flow.spec.ts:56`, nor
+ * `it.skipIf(!hasFixture(id))(…)`, used twice in `sources/arrl-scholarship-descriptions.test.ts`:
+ * both decide at runtime and neither removes a file from the run. That leaves a residual hole this
+ * file cannot close — `it.skipIf(!hasFixture(...))` reports SKIPPED, not failed, when the fixture
+ * is deleted — which is the Plan 3 review's finding against the ARRL invariant and belongs to that
+ * test, not this one.
+ */
+const STATIC_SKIP = /^[ \t]*(?:describe|it|test|suite)\s*\.\s*(skip|todo|fails)\s*(?:\.\s*each\s*\(|\(\s*['"`])/gm;
+
+const withoutComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
+function onlyMarkersIn(src: string): string[] {
+  return [...withoutComments(src).matchAll(ONLY_MARKER)].map(() => 'only');
+}
+
+function skipMarkersIn(src: string): string[] {
+  return [...withoutComments(src).matchAll(STATIC_SKIP)].map((m) => m[1] ?? '');
+}
+
+describe('vitest project coverage — no test file quietly removes itself from the run', () => {
+  it('contains no `.only`, which silently drops every other file in its project', async () => {
+    const offenders: string[] = [];
+    for (const file of testFiles) {
+      if (onlyMarkersIn(await readFile(file, 'utf8')).length > 0) {
+        offenders.push(`${rel(file)} uses .only — every other file in its project is skipped`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('signs every statically-skipped block, so a skip is a decision and not a leftover', async () => {
+    const skipped: string[] = [];
+    for (const file of testFiles) {
+      const markers = skipMarkersIn(await readFile(file, 'utf8'));
+      if (markers.length > 0 && !SKIPPED_BY_DESIGN.has(rel(file))) {
+        skipped.push(`${rel(file)} uses .${[...new Set(markers)].join('/.')} unsigned`);
+      }
+    }
+    expect(
+      skipped,
+      'a statically skipped block runs nowhere and is subtracted from no count. Delete it, make it ' +
+        'conditional (.skipIf), or sign it in SKIPPED_BY_DESIGN with a reason.',
+    ).toEqual([]);
+  });
+
+  it('keeps SKIPPED_BY_DESIGN honest: every entry still exists and is still skipped', async () => {
+    for (const [file, reason] of SKIPPED_BY_DESIGN) {
+      expect(reason.trim().length, `${file} needs a real reason, not a placeholder`).toBeGreaterThan(20);
+      const src = await readFile(path.join(REPO_ROOT, file), 'utf8').catch(() => undefined);
+      expect(src, `${file} is signed as skipped but no longer exists`).toBeDefined();
+      if (src === undefined) continue;
+      expect(
+        skipMarkersIn(src),
+        `${file} no longer skips anything — delete its SKIPPED_BY_DESIGN entry`,
+      ).not.toEqual([]);
+    }
+  });
+
+  it('tells a static skip apart from a conditional one', () => {
+    expect(skipMarkersIn('describe.skip("x", () => {})')).toEqual(['skip']);
+    expect(skipMarkersIn('  it.skip(`x`, () => {})')).toEqual(['skip']);
+    expect(onlyMarkersIn('it.only("x", () => {})')).toEqual(['only']);
+    expect(skipMarkersIn('test.todo("x")')).toEqual(['todo']);
+    expect(skipMarkersIn('describe.skip.each([1])("x", () => {})')).toEqual(['skip']);
+    // Legitimate and in use in this repo — a runtime condition, not a block removing itself.
+    expect(skipMarkersIn("it.skipIf(!hasFixture(id))('x', () => {})")).toEqual([]);
+    expect(skipMarkersIn("describe.skipIf(cond)('x', () => {})")).toEqual([]);
+    expect(skipMarkersIn('describe.each(THEMES)("x", () => {})')).toEqual([]);
+    expect(skipMarkersIn('  test.skip(!isHtml(body), SPA_PENDING);')).toEqual([]); // e2e/flow.spec.ts:56
+    // ...and prose about skipping — or a quoted fixture, which is why matching is line-anchored —
+    // is not skipping.
+    expect(skipMarkersIn('// describe.skip("x", () => {})')).toEqual([]);
+    expect(skipMarkersIn('expect(scan(`describe.skip("x")`)).toEqual([]);')).toEqual([]);
+    expect(onlyMarkersIn('expect(scan("it.only(")).toEqual([]);')).toEqual([]);
   });
 });
 
