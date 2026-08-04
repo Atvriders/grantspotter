@@ -887,7 +887,8 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
   });
 
   /**
-   * THE THREE YEARLESS ANNUAL RULES, resolved by their RECUR directive and by nothing else.
+   * THE THREE YEARLESS RULES, resolved by their RECUR directive and by nothing else — and the two
+   * SHAPES those rules come in, which is the whole finding of this round.
    *
    * Each of these three pages states a rule in prose and prints no year anywhere on itself, so
    * `sources/util/proseWindow.ts` reads the month-days and refuses to date them, and the record
@@ -895,17 +896,30 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
    * records, not a convenience. What resolves them is the year-free directive, which is exactly
    * the case a recurrence exists for.
    *
-   * All three read `closed` against this corpus's clock, 2026-08-02. Austin ARC's is a plain fact
-   * (the window shut on July 31, three days before the capture). The two IEEE entries are a
-   * one-day window standing in for a stated deadline, which is the known cost recorded next to
-   * them in `RECURRENCE_BY_SOURCE` — asserted here so it is a decision on the record rather than
-   * something a later corpus run rediscovers.
+   * The verdicts differ because the PAGES differ, and that is the point:
+   *
+   *   - Austin ARC prints both ends — "Applications open May 1 and close July 31 each year" — so
+   *     it is a genuine `annual_window`, and `closed` on 2026-08-02 is a plain fact: the window
+   *     shut on July 31, three days before this corpus was captured.
+   *   - Neither IEEE page prints an opening at all. "must be received by October 1" and "due 15
+   *     March" are DEADLINES, and both pages say a late request rolls into the following year —
+   *     ARDC's claim exactly. As one-day `annual_window`s they read `closed` on 364 days of the
+   *     year, a false exclude of a live programme; as `n_fixed_dates` they read `open`, which is
+   *     what a funder who takes requests continuously and cuts off on a date actually offers.
    */
-  it('resolves the three yearless annual rules from their RECUR directive alone', () => {
-    for (const sourceId of ['austin-arc', 'ieee-mtts', 'ieee-student-branch-rebate']) {
-      const status = inferStatus(raw({ sourceId, rawFields: {} }), ctx({ sourceId }));
-      expect(status, sourceId).toBe('closed');
-      expect(status, sourceId).not.toBe('unknown');
+  it('resolves the three yearless rules from their RECUR directive alone', () => {
+    const statusOf = (sourceId: string): string =>
+      inferStatus(raw({ sourceId, rawFields: {} }), ctx({ sourceId }));
+
+    // A stated window, and today is outside it.
+    expect(statusOf('austin-arc')).toBe('closed');
+    expect(statusOf('austin-arc')).not.toBe('unknown');
+
+    // A stated deadline, which excludes nobody today.
+    for (const sourceId of ['ieee-mtts', 'ieee-student-branch-rebate']) {
+      expect(statusOf(sourceId), sourceId).toBe('open');
+      expect(statusOf(sourceId), sourceId).not.toBe('unknown');
+      expect(statusOf(sourceId), sourceId).not.toBe('closed');
     }
   });
 
@@ -918,22 +932,33 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
    * captures (asserted there and in each source's `(REAL fixture)` block); this pins the table to
    * the same values, so a typo in either one turns red instead of shipping a deadline nobody
    * published.
+   *
+   * THE KIND IS PINNED TOO, and separately from the month-days. `n_fixed_dates` versus
+   * `annual_window` is the difference between "cuts off on this date" and "you may not apply
+   * outside this interval" — a claim about how the funder operates, which only its page can
+   * settle. A directive silently changing shape is how the one-day-window false exclude got in.
    */
-  it('pins each directive to the month-days its funder actually prints', () => {
-    const windowOf = (sourceId: string): string => {
+  it('pins each directive to the month-days AND the shape its funder actually prints', () => {
+    const md = (d: { month: number; day: number }): string =>
+      `${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
+
+    // BOTH ENDS STATED -> a window. "Applications open May 1 and close July 31 each year."
+    const austin = parseRecurrence(RECURRENCE_BY_SOURCE['austin-arc']);
+    if (austin.kind !== 'annual_window') throw new Error('austin-arc is not an annual_window');
+    expect(`${md(austin.window.open)}..${md(austin.window.close)}`).toBe('05-01..07-31');
+
+    // ONE DATE, NO OPENING STATED -> a deadline. Asserted as `dates`, so an opening date cannot be
+    // reintroduced without this line turning red.
+    const datesOf = (sourceId: string): string[] => {
       const parsed = parseRecurrence(RECURRENCE_BY_SOURCE[sourceId]);
-      if (parsed.kind !== 'annual_window') throw new Error(`${sourceId} is not an annual_window`);
-      const md = (d: { month: number; day: number }): string =>
-        `${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
-      return `${md(parsed.window.open)}..${md(parsed.window.close)}`;
+      if (parsed.kind !== 'n_fixed_dates') throw new Error(`${sourceId} is not n_fixed_dates`);
+      return parsed.dates.map(md);
     };
-    // "Applications open May 1 and close July 31 each year."
-    expect(windowOf('austin-arc')).toBe('05-01..07-31');
     // "All requests for MTT chapter funding must be received by October 1 or the chapter may be
     //  asked to make its application in the following year."
-    expect(windowOf('ieee-mtts')).toBe('10-01..10-01');
+    expect(datesOf('ieee-mtts')).toEqual(['10-01']);
     // "Student Branch Annual Plans are due 15 March."
-    expect(windowOf('ieee-student-branch-rebate')).toBe('03-15..03-15');
+    expect(datesOf('ieee-student-branch-rebate')).toEqual(['03-15']);
 
     // And no directive smuggles a year in: the whole reason a rule lives here is that it carries
     // none. `arrl-etp-grants` — whose window IS dated — must have no entry at all.
@@ -966,7 +991,7 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
 });
 
 /**
- * THE THREE ANNUAL RULES, END TO END FROM THEIR REAL CAPTURES — page bytes in, calendar rows out.
+ * THE THREE YEARLESS RULES, END TO END FROM THEIR REAL CAPTURES — page bytes in, calendar rows out.
  *
  * Everything above tests `inferStatus` against a hand-built `RawOpportunity`. This runs the actual
  * committed HTML through the actual source module, through `normalizeRaw`, and into the two
@@ -974,8 +999,13 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
  * asserted here is what the product would put on a user's calendar, not what a fixture agrees to.
  *
  * The horizon is `cycleHorizonEndISO(NOW)`, the product's own, for the same reason.
+ *
+ * THE CLOSE INSTANTS ARE THE SAME UNDER EITHER SHAPE, which is the measurement that settled the
+ * IEEE ruling: `n_fixed_dates dates=10-01` and `annual_window window=10-01..10-01` both close at
+ * 2026-10-02T03:59Z, so nothing was traded away for the honest badge. What differs is the
+ * `opensAt` a deadline must not claim, and the label a user reads — asserted below, both.
  */
-describe('the three yearless annual rules, from their real captures to their calendar rows', () => {
+describe('the three yearless rules, from their real captures to their calendar rows', () => {
   const horizon = cycleHorizonEndISO(NOW);
 
   const programFor = (
@@ -1006,6 +1036,13 @@ describe('the three yearless annual rules, from their real captures to their cal
       // NOW is 2026-08-02: the 2026 window shut on July 31, and 2028's close falls past the
       // 550-day horizon. One projected cycle, 2027's.
       closes: ['2027-08-01T04:59:00.000Z'],
+      // A window states both ends, so the calendar row carries an open instant and reads as a
+      // window. It is the club's own sentence, so this claims nothing the club did not print.
+      opens: ['2027-05-01T05:00:00.000Z'],
+      labels: ['May 1 – Jul 31, 2027 window'],
+      kind: 'annual_window',
+      // Today is 2026-08-02, three days after the stated close. A plain fact, not an artefact.
+      status: 'closed',
     },
     {
       sourceId: 'ieee-mtts',
@@ -1021,6 +1058,15 @@ describe('the three yearless annual rules, from their real captures to their cal
           'ieee-mtts',
         ),
       closes: ['2026-10-02T03:59:00.000Z', '2027-10-02T03:59:00.000Z'],
+      // NO OPEN INSTANT, on either row. mtt.org states when a request must be RECEIVED BY and
+      // never states when the intake begins, so there is no open date to publish — and a one-day
+      // window's invented `2026-10-01T04:00:00.000Z` was exactly the fabrication being undone.
+      opens: [undefined, undefined],
+      labels: ['Oct 1, 2026 deadline', 'Oct 1, 2027 deadline'],
+      kind: 'n_fixed_dates',
+      // A chapter can prepare and submit its request today; October 1 is when that stops. `closed`
+      // here would exclude a live opportunity for 364 days a year.
+      status: 'open',
     },
     {
       sourceId: 'ieee-student-branch-rebate',
@@ -1036,6 +1082,10 @@ describe('the three yearless annual rules, from their real captures to their cal
         ),
       // 2026's 15 March is behind NOW; 2028's falls past the horizon.
       closes: ['2027-03-16T03:59:00.000Z'],
+      opens: [undefined],
+      labels: ['Mar 15, 2027 deadline'],
+      kind: 'n_fixed_dates',
+      status: 'open',
     },
   ];
 
@@ -1051,16 +1101,33 @@ describe('the three yearless annual rules, from their real captures to their cal
         expect(program.deadline.note.split('|')[0]).not.toMatch(/\b(?:19|20)\d{2}\b/);
       });
 
-      it('resolves closed against the 2026-08-02 corpus clock', () => {
-        expect(program.trust.status).toBe('closed');
-        expect(program.trust.status).not.toBe('open');
+      /**
+       * THE VERDICT IS THE FUNDER'S, NOT THE TABLE'S. Austin ARC printed a close date that has
+       * passed, so `closed`. IEEE printed a cutoff and no opening, so `open` — the shape the page
+       * supports, and the one that does not exclude a chapter that could apply today.
+       */
+      it(`resolves ${String(c.status)} against the 2026-08-02 corpus clock`, () => {
+        expect(program.trust.status).toBe(c.status);
         expect(program.trust.status).not.toBe('unknown');
+        expect(program.deadline.kind).toBe(c.kind);
       });
 
       it('projects exactly the estimated cycles its rule supports inside the horizon', () => {
         const projected = expandCycles(program, [program], NOW, horizon);
         expect(projected.map((x) => x.closesAt)).toEqual(c.closes);
         expect(projected.every((x) => x.isEstimated)).toBe(true);
+      });
+
+      /**
+       * AND THE ROW SAYS WHAT THE PAGE SAYS. A window row carries an open instant and reads
+       * "… window"; a deadline row carries none and reads "… deadline". This is the user-visible
+       * half of the ruling — a one-day window rendered as "Oct 1–1, 2026 window", which is both an
+       * invented opening and an unreadable label.
+       */
+      it('labels the row as the shape the funder stated, and invents no opening', () => {
+        const projected = expandCycles(program, [program], NOW, horizon);
+        expect(projected.map((x) => x.label)).toEqual(c.labels);
+        expect(projected.map((x) => x.opensAt)).toEqual(c.opens);
       });
 
       /**

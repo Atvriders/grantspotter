@@ -4,17 +4,6 @@ import { parseProseWindow } from './util/proseWindow.js';
 import { type SinglePageConfig, makeSinglePageSource } from './util/singlePage.js';
 
 /**
- * The prose-window reader now lives in `util/proseWindow.js` — it is a pure text helper with no
- * source of its own, exactly like `util/dates.ts` and `util/text.ts`, and it only ever shipped here
- * because a new file under `sources/` needs an entry in `registry.test.ts`'s allow-list.
- *
- * Re-exported under its old name because `tier-c-a.test.ts` imports it from this module, and the
- * import path is not what this move is about. New callers should import it from `util/proseWindow.js`
- * directly; this line goes away with the last old import.
- */
-export { type ProseWindow, parseProseWindow } from './util/proseWindow.js';
-
-/**
  * EVERY LEADING WILDCARD IN THIS FILE IS `[^.\n]*`, NEVER `[^.]*`.
  *
  * The six real captures committed alongside this file (fixtures/<id>/00-*.html, pulled

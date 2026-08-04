@@ -3,7 +3,7 @@ import { fixturePayload } from '../../test/fixtures.js';
 import { type NormalizeContext, normalizeRaw } from '../normalize/index.js';
 import { extractGender } from '../normalize/axes/index.js';
 import { TIER_C_A_SOURCES, austinArc, qcwa, sara, ylrl } from './tier-c-a.js';
-import { parseProseWindow } from './tier-c-b.js';
+import { parseProseWindow } from './util/proseWindow.js';
 import { programIdFor } from './util/ids.js';
 
 // The committed REAL captures under fixtures/<id>/00-*.html — pages actually pulled from the

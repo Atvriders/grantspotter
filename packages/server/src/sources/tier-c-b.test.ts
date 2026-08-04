@@ -422,25 +422,36 @@ describe('ieee-mtts (REAL fixture)', () => {
   });
 
   /**
-   * WHERE THE MONTH-DAY WENT. The parser's refusal above left 10-01 with nothing reading it, and
-   * this record published `unknown`. The rule now lives in `normalize/deadline.ts`'s
-   * `RECURRENCE_BY_SOURCE` as `RECUR annual_window window=10-01..10-01` — a directive that carries
-   * NO YEAR by construction, which is the whole reason it is the right home for a sentence whose
-   * page prints none.
+   * WHERE THE MONTH-DAY WENT, AND WHY IT IS A DEADLINE AND NOT A WINDOW.
+   *
+   * The parser's refusal above left 10-01 with nothing reading it, and this record published
+   * `unknown`. The rule now lives in `normalize/deadline.ts`'s `RECURRENCE_BY_SOURCE` as
+   * `RECUR n_fixed_dates dates=10-01` — a directive that carries NO YEAR by construction, which is
+   * the whole reason it is the right home for a sentence whose page prints none.
+   *
+   * `n_fixed_dates`, not `annual_window`, because of what the sentence above says and does not
+   * say: "must be received BY October 1" names a cutoff, "or the chapter may be asked to make its
+   * application in the following year" says a late request is deferred rather than refused, and
+   * NOTHING ANYWHERE ON THIS PAGE says when the intake opens. It shipped once as
+   * `annual_window window=10-01..10-01`, which invented that opening and made this record read
+   * `closed` on all 364 other days of the year — a false exclude of a chapter that could apply
+   * today. The calendar is unchanged either way (same close instants, same row count); only the
+   * badge and the label move.
    *
    * The record still publishes no dated window: `published by the funder` is the observed channel's
    * marker, and asserting its absence is what keeps the two apart. What it gains is a calendar row
    * for the next October 1, projected from the rule and marked `isEstimated: true`.
-   *
-   * `closed` on 2026-08-02 is the known cost of encoding a stated DEADLINE as a one-day window;
-   * it is recorded in full next to the directive itself. Asserted here, not glossed over.
    */
-  it('reads its status from the annual rule now that one is stated, and still publishes no date', () => {
+  it('reads its status from the stated deadline now that one is routed, and still publishes no date', () => {
     const program = normalizeRaw(raws[0], ctxFor('ieee-mtts', 'ieee-mtts'));
-    expect(program.trust.status).toBe('closed');
-    expect(program.trust.status).not.toBe('open');
+    expect(program.trust.status).toBe('open');
+    expect(program.trust.status).not.toBe('closed');
+    expect(program.trust.status).not.toBe('unknown');
+    expect(program.deadline.kind).toBe('n_fixed_dates');
     expect(program.deadline.note).not.toContain('published by the funder');
-    expect(program.deadline.note).toContain('RECUR annual_window');
+    expect(program.deadline.note).toContain('RECUR n_fixed_dates');
+    // The shape that invented an opening IEEE never printed must not come back.
+    expect(program.deadline.note).not.toContain('annual_window');
     expect(program.deadline.note).not.toMatch(/\b(?:19|20)\d{2}\b/);
   });
 });
@@ -528,18 +539,26 @@ describe('ieee-student-branch-rebate (REAL fixture)', () => {
   });
 
   /**
-   * Same routing as ieee-mtts above: the month-day the parser refused to date is now carried by a
-   * year-free `RECUR annual_window window=03-15..03-15` directive, and "Student Branch ANNUAL
-   * Plans" is the page stating the rule in the programme's own name. The record still publishes no
-   * dated window — the deadline the page prints has no year, and inventing one is what this whole
-   * refusal exists to prevent — and it gains a calendar row for the next 15 March.
+   * Same routing and the same shape as ieee-mtts above: the month-day the parser refused to date
+   * is now carried by a year-free `RECUR n_fixed_dates dates=03-15` directive, and "Student Branch
+   * ANNUAL Plans" is the page stating the recurrence in the programme's own name.
+   *
+   * A DEADLINE, because "are due 15 March" is the entire schedule this page prints — it never says
+   * when a Branch may start submitting, so no opening may be published, and a one-day window
+   * asserting one made this record read `closed` for 364 days a year while a Branch was writing
+   * the very plan it describes. The record still publishes no dated window — the deadline the page
+   * prints has no year, and inventing one is what this whole refusal exists to prevent — and it
+   * gains a calendar row for the next 15 March.
    */
-  it('reads its status from the annual rule now that one is stated, and still publishes no date', () => {
+  it('reads its status from the stated deadline now that one is routed, and still publishes no date', () => {
     const program = normalizeRaw(raws[0], ctxFor('ieee-student-branch-rebate', 'ieee'));
-    expect(program.trust.status).toBe('closed');
-    expect(program.trust.status).not.toBe('open');
+    expect(program.trust.status).toBe('open');
+    expect(program.trust.status).not.toBe('closed');
+    expect(program.trust.status).not.toBe('unknown');
+    expect(program.deadline.kind).toBe('n_fixed_dates');
     expect(program.deadline.note).not.toContain('published by the funder');
-    expect(program.deadline.note).toContain('RECUR annual_window');
+    expect(program.deadline.note).toContain('RECUR n_fixed_dates');
+    expect(program.deadline.note).not.toContain('annual_window');
     expect(program.deadline.note).not.toMatch(/\b(?:19|20)\d{2}\b/);
   });
 
