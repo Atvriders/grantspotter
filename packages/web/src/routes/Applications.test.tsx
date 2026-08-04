@@ -480,7 +480,7 @@ interface Call {
 }
 
 /** One fetch stub for the whole screen, recording every call so a test can assert what was sent. */
-function stubScreenFetch(options: { putStatus?: number } = {}): Call[] {
+function stubScreenFetch(options: { putStatus?: number; exportStatus?: number } = {}): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
     'fetch',
@@ -522,6 +522,29 @@ function stubScreenFetch(options: { putStatus?: number } = {}): Call[] {
         });
       }
       if (url.endsWith('/export-readiness')) return json(READINESS);
+      if (url.startsWith('/api/exports/draft.')) {
+        if (options.exportStatus !== undefined && options.exportStatus !== 200) {
+          return json(
+            {
+              error: {
+                code: 'conflict',
+                message:
+                  'This draft is not ready to export: 2 unconfirmed factual assertion(s) and 1 ' +
+                  'unresolved [TODO: …] marker(s) must be handled first.',
+              },
+              requestId: 'req-export',
+            },
+            options.exportStatus,
+          );
+        }
+        return new Response(new Blob(['x']), {
+          status: 200,
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-disposition': 'attachment; filename="draft.docx"',
+          },
+        });
+      }
       if (url.startsWith('/api/applications/')) {
         // A PATCH answers with the patched draft, as the router does — a stub that echoed the
         // original would make every "the screen reflects the change" test pass for the wrong reason.
@@ -626,6 +649,57 @@ describe('confirming a fact', () => {
     );
     expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1);
     expect(screen.getByText(/read the values again and tick them/i)).toBeTruthy();
+  });
+});
+
+/**
+ * Task 9's three POST exports, reachable from the writing desk. `assertExportReady` refuses a
+ * draft with an unconfirmed fact or an open [TODO: …] marker with HTTP 409 and its own sentence
+ * naming which and how many — the point of these tests is that the sentence reaches the screen,
+ * not a generic "that failed".
+ */
+describe('downloading the draft', () => {
+  it('offers DOCX, Markdown and packet ZIP once a draft is open', async () => {
+    stubScreenFetch();
+    renderScreen();
+    await openTheDraft();
+
+    expect(screen.getByRole('button', { name: 'Download DOCX' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download Markdown' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download application packet (ZIP)' })).toBeTruthy();
+  });
+
+  it('posts the applicationId to the DOCX endpoint, never the draft text', async () => {
+    const calls = stubScreenFetch();
+    renderScreen();
+    await openTheDraft();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download DOCX' }));
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/exports/draft.docx')).toBe(true));
+    const call = calls.find((c) => c.url === '/api/exports/draft.docx');
+    expect(call?.body).toEqual({ applicationId: 'app-1', programId: 'ardc-grants' });
+    expect(JSON.stringify(call?.body)).not.toContain('Dana Ruiz');
+  });
+
+  it('names which blocker is unmet, from the server, rather than failing silently', async () => {
+    stubScreenFetch({ exportStatus: 409 });
+    renderScreen();
+    await openTheDraft();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download Markdown' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/2 unconfirmed factual assertion/i);
+    expect(alert.textContent).toMatch(/1 unresolved \[TODO: …\] marker/i);
+  });
+
+  it('says exports are blocked while the checklist below has unconfirmed items or open gaps', async () => {
+    stubScreenFetch();
+    renderScreen();
+    await openTheDraft();
+
+    expect(screen.getByText(/exports are blocked until every item in the fact checklist below/i)).toBeTruthy();
+    expect(screen.getByText(/2 unconfirmed/i)).toBeTruthy();
+    expect(screen.getByText(/1 open/i)).toBeTruthy();
   });
 });
 

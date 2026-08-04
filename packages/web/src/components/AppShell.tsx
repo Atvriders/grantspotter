@@ -14,6 +14,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/', label: 'Browse', end: true },
   { to: '/calendar', label: 'Calendar', end: false },
+  { to: '/exports', label: 'Exports', end: false },
   { to: '/watchlist', label: 'Watchlist', end: false },
   { to: '/templates', label: 'Templates', end: false },
   { to: '/applications', label: 'Applications', end: false },

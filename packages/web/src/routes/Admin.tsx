@@ -245,19 +245,33 @@ export function Admin(): JSX.Element {
     try {
       // The backup IS a JSON document, so it is posted as JSON — the restore
       // endpoint reads the parsed body, not multipart form data.
-      const result = await apiSend<{ tablesRestored?: string[]; rowsRestored?: number }>(
-        'POST',
-        '/api/admin/restore',
-        payload,
-      );
+      const result = await apiSend<{
+        tablesRestored?: string[];
+        tablesSkipped?: string[];
+        rowsRestored?: number;
+        programsReindexed?: number | null;
+      }>('POST', '/api/admin/restore', payload);
       const tables = result.tablesRestored?.length ?? 0;
       const restored = result.rowsRestored ?? 0;
+      const skipped = result.tablesSkipped ?? [];
+      // `programsReindexed` is `null`, never `0`, when this build has no browse projection to
+      // rebuild — restore now genuinely calls `reindexBrowse` inside the same transaction, so
+      // there is a real count to report and no reason left to tell the operator to restart the
+      // server for Browse to catch up.
+      const reindexed = result.programsReindexed ?? null;
+      const reindexSentence =
+        reindexed === null
+          ? 'This build has no browse projection to rebuild, so whether Browse reflects this restore could not be determined here.'
+          : `The browse index was rebuilt for ${plural(reindexed, 'programme', 'programmes')}.`;
+      const skippedSentence =
+        skipped.length > 0
+          ? ` ${plural(skipped.length, 'table', 'tables')} in that file ${skipped.length === 1 ? 'is' : 'are'} not known to this build and ${skipped.length === 1 ? 'was' : 'were'} skipped: ${skipped.join(', ')}.`
+          : '';
       setNotice({
         kind: 'message',
         text:
           `Restored ${plural(restored, 'row', 'rows')} across ${plural(tables, 'table', 'tables')}. ` +
-          'Browse answers from a derived index that is rebuilt when GrantSpotter starts, so restart ' +
-          'the server if Browse still shows what was there before this restore.',
+          `${reindexSentence}${skippedSentence}`,
       });
       setConfirmWord('');
       setRestoreFile(null);

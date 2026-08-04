@@ -1,0 +1,123 @@
+/* GrantSpotter print stylesheet.
+   PDF output is the browser's own "Save as PDF" against this sheet. There is no
+   headless Chromium in the container image: it would add roughly 400 MB and its
+   arm64 build under QEMU emulation is a recurring CI failure.
+
+   Every class named below is rendered by a real component: AppShell ships
+   .shell / .shell-rail / .shell-topbar / .shell-main / .skip-link, Browse ships
+   .filter-panel / .row-warning / .estimated-mark, Opportunity ships .card /
+   .panel / .trust / .trust-unverified / .disputed / .stale-mirror /
+   .detail-actions / .opportunity-brief, and PrintButton ships
+   .print-button / .no-print. print.test.ts fails the build if that stops being
+   true. */
+
+@media print {
+  @page {
+    size: letter;
+    margin: 14mm 12mm 16mm;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #16191d !important;
+    font-size: 10.5pt;
+    line-height: 1.45;
+  }
+
+  .no-print,
+  nav,
+  .shell-rail,
+  .shell-topbar,
+  .skip-link,
+  button,
+  input,
+  select,
+  .filter-panel {
+    display: none !important;
+  }
+
+  /* The actions row keeps its "Apply at the funder" anchor — the URL expands via the
+     a[href]::after rule below — while the buttons inside it are hidden by the rule above. */
+  .detail-actions {
+    display: block;
+    margin: 4pt 0;
+  }
+
+  /* AppShell is a CSS grid on screen. Printing it as a grid keeps the main
+     region at its on-screen column width and wastes half the page. */
+  .shell,
+  .shell-main {
+    display: block !important;
+    grid-template-areas: none;
+    grid-template-columns: none;
+    width: auto !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  h1, h2, h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr,
+  .card,
+  .panel,
+  .opportunity-brief {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  th, td {
+    border-bottom: 1px solid #c9ced6;
+    padding: 3pt 4pt;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  a {
+    color: #16191d !important;
+    text-decoration: none;
+  }
+
+  a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 8pt;
+    color: #444;
+    word-break: break-all;
+  }
+
+  /* Trust surfaces are the point of this app; they must survive printing. */
+  .trust,
+  .trust-unverified,
+  .disputed,
+  .stale-mirror,
+  .row-warning,
+  .estimated-mark {
+    display: block !important;
+    border: 1px solid #7a7f88;
+    padding: 3pt 5pt;
+    margin: 4pt 0;
+    font-size: 9pt;
+    color: #16191d !important;
+    background: #fff !important;
+  }
+
+  .trust-unverified,
+  .estimated-mark,
+  .stale-mirror {
+    font-weight: 700;
+  }
+}

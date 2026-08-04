@@ -5,6 +5,7 @@ import { Login } from './routes/Login.js';
 import { Browse } from './routes/Browse.js';
 import { Opportunity } from './routes/Opportunity.js';
 import { Calendar } from './routes/Calendar.js';
+import { ExportsRoute } from './routes/Exports.js';
 import { Watchlist } from './routes/Watchlist.js';
 import { Inbox } from './routes/Inbox.js';
 import { Profile } from './routes/Profile.js';
@@ -62,6 +63,7 @@ function Authenticated(): JSX.Element {
         <Route path="/browse" element={<Navigate to="/" replace />} />
         <Route path="/o/:programId" element={<Opportunity />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/exports" element={<ExportsRoute />} />
         <Route path="/watchlist" element={<Watchlist />} />
         {/*
           The writing desk. The `*Screen` wrappers are the query-string-aware versions;

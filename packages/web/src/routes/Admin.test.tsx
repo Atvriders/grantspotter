@@ -404,13 +404,18 @@ describe('Admin console — backup, restore and ICS tokens', () => {
     expect(screen.getByText(/user accounts/i)).toBeInTheDocument();
   });
 
-  it('posts the chosen file to the restore endpoint and reports what came back', async () => {
+  it('posts the chosen file to the restore endpoint and reports what came back, including the real reindex count', async () => {
     const fetchMock = stubFetch((url, init) =>
       init?.method === 'POST' && url === '/api/admin/restore'
         ? {
             ok: true,
             status: 200,
-            json: async () => ({ tablesRestored: ['funders', 'programs'], rowsRestored: 176 }),
+            json: async () => ({
+              tablesRestored: ['funders', 'programs'],
+              tablesSkipped: [],
+              rowsRestored: 176,
+              programsReindexed: 150,
+            }),
           }
         : undefined);
     renderAdmin();
@@ -432,8 +437,41 @@ describe('Admin console — backup, restore and ICS tokens', () => {
     const banner = await screen.findByRole('status');
     expect(banner).toHaveTextContent(/176 rows/i);
     expect(banner).toHaveTextContent(/2 tables/i);
-    // Browse reads a derived index that a restore does not rebuild.
-    expect(banner).toHaveTextContent(/restart/i);
+    // Restore now genuinely calls reindexBrowse in the same transaction, so the copy states the
+    // real count rather than telling the operator to restart the server for Browse to catch up
+    // (the plan's own "restart the server" claim was never true once the reindex call was real).
+    expect(banner).toHaveTextContent(/rebuilt for 150 programmes/i);
+    expect(banner).not.toHaveTextContent(/restart/i);
+  });
+
+  it('reports null reindex honestly rather than rendering it as zero', async () => {
+    const fetchMock = stubFetch((url, init) =>
+      init?.method === 'POST' && url === '/api/admin/restore'
+        ? {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              tablesRestored: ['funders'],
+              tablesSkipped: ['a_future_table'],
+              rowsRestored: 26,
+              programsReindexed: null,
+            }),
+          }
+        : undefined);
+    renderAdmin();
+    const file = new File(['{"app":"grantspotter","tables":{}}'], 'backup.json', {
+      type: 'application/json',
+    });
+    await userEvent.upload(await screen.findByLabelText(/backup file/i), file);
+    await userEvent.type(screen.getByLabelText(/type replace to confirm/i), 'REPLACE');
+    await userEvent.click(screen.getByRole('button', { name: /restore from backup/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const banner = await screen.findByRole('status');
+    expect(banner).not.toHaveTextContent(/rebuilt for 0/i);
+    expect(banner).toHaveTextContent(/no browse projection to rebuild/i);
+    expect(banner).toHaveTextContent(/a_future_table/);
+    expect(banner).toHaveTextContent(/skipped/i);
   });
 
   it('names the file as the problem when it is not JSON, and posts nothing', async () => {

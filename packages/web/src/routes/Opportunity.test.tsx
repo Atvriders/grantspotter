@@ -462,6 +462,11 @@ describe('Opportunity detail', () => {
     expect(apply).toHaveAttribute('href', 'https://www.arrl.org/club-grant-program');
     expect(apply).toHaveAttribute('rel', expect.stringContaining('noopener'));
   });
+
+  it('offers a print / save-as-PDF control for the brief', async () => {
+    renderDetail();
+    expect(await screen.findByRole('button', { name: 'Print brief' })).toBeInTheDocument();
+  });
 });
 
 /**

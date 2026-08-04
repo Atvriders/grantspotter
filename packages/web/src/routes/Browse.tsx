@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../store/useApi.js';
 import { FilterPanel } from '../components/FilterPanel.js';
+import { ExportMenu } from '../components/ExportMenu.js';
 import { ProgramTable, type ProgramRow } from '../components/ProgramTable.js';
 import {
   filtersToSearchParams,
@@ -172,6 +173,8 @@ export function Browse({ now }: { now?: string }): JSX.Element {
           {data !== null && data.profileApplied !== null && (
             <Census summary={data.summary} filters={filters} />
           )}
+
+          <ExportMenu filters={filters} />
 
           {loading && <p className="eyebrow">Loading…</p>}
           {error !== null && (

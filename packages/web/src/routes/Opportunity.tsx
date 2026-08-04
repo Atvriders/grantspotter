@@ -12,6 +12,7 @@ import { IneligibilityDrawer } from '../components/IneligibilityDrawer.js';
 import { ProvenanceTable, type FieldProvenance } from '../components/ProvenanceTable.js';
 import { SourceLink } from '../components/SourceLink.js';
 import { VerifyButton } from '../components/VerifyButton.js';
+import { PrintButton } from '../components/PrintButton.js';
 import { linkRefusal, type LinkRefusal } from '../lib/safety.js';
 import { profileFieldHelp, profileFieldHref, profileFieldLabel } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
@@ -291,6 +292,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
           Start an application for this program
         </Link>
         <VerifyButton programId={program.id} onVerified={reload} />
+        <PrintButton label="Print brief" className="btn" />
       </div>
 
       {watchError !== null && (
@@ -301,6 +303,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
 
       {program.trust.disputed !== undefined && <DisputedPanel disputed={program.trust.disputed} />}
 
+      <article className="opportunity-brief">
       <div className="detail-grid">
         <div>
           <section className="panel card" aria-label="Deadline">
@@ -608,6 +611,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
           </section>
         </div>
       </div>
+      </article>
     </>
   );
 }

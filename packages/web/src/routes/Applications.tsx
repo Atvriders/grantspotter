@@ -23,6 +23,7 @@ import {
   patchApplication,
   putFactConfirmations,
 } from '../api/writing.js';
+import { downloadDraftExport } from '../api/exports.js';
 import { COPY_PROMPT_DISCLOSURE_OFF, CopyPromptButton } from '../components/CopyPromptButton.js';
 import { type DraftGap, DraftGaps, extractGaps } from '../components/DraftGaps.js';
 import { FactChecklist } from '../components/FactChecklist.js';
@@ -313,6 +314,50 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
               <button type="button" className="btn" onClick={runProseCheck}>
                 Run prose check
               </button>
+
+              {/*
+                The three POST exports (Task 9 / spec §11.3). A 409 here means `assertExportReady`
+                refused the draft — an unconfirmed fact or an open [TODO: …] marker — and its own
+                sentence names WHICH one and how many, so `fail` routes it straight to the same
+                `role="alert"` banner every other failure on this screen uses rather than a silent
+                no-op download.
+              */}
+              <div className="export-links">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void downloadDraftExport('docx', { applicationId: current.id, programId: current.programId ?? '' })
+                      .catch(fail);
+                  }}
+                >
+                  Download DOCX
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void downloadDraftExport('md', { applicationId: current.id, programId: current.programId ?? '' })
+                      .catch(fail);
+                  }}
+                >
+                  Download Markdown
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void downloadDraftExport('zip', { applicationId: current.id, programId: current.programId ?? '' })
+                      .catch(fail);
+                  }}
+                >
+                  Download application packet (ZIP)
+                </button>
+              </div>
+              {readiness && !readiness.ready && (
+                <p className="export-note">
+                  Exports are blocked until every item in the fact checklist below is confirmed and
+                  every <code>[TODO: …]</code> marker is resolved: {readiness.unconfirmed} unconfirmed,{' '}
+                  {readiness.openTodos} open. That rule is enforced on the server, not just here.
+                </p>
+              )}
 
               <SlotForm
                 slots={slots}
