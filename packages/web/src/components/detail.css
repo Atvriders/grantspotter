@@ -1,0 +1,117 @@
+/* Opportunity detail. Every colour is a semantic token from tokens.css, whose derived
+   contrast invariant already asserts each foreground/background pair at AA in both themes. */
+
+.detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3);
+  margin-bottom: var(--s-3);
+}
+
+.detail-lead {
+  font-size: var(--fs-400);
+  max-width: 70ch;
+}
+
+.detail-actions {
+  display: flex;
+  gap: var(--s-2);
+  margin: var(--s-4) 0 var(--s-6);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.panel { padding: var(--s-4); margin-bottom: var(--s-4); }
+.panel h2 { font-size: var(--fs-400); margin-bottom: var(--s-3); }
+
+.panel dl { display: grid; grid-template-columns: 180px 1fr; gap: var(--s-2) var(--s-4); margin: 0; }
+.panel dt { color: var(--text-muted); font-size: var(--fs-200); }
+.panel dd { margin: 0; }
+
+@media (max-width: 560px) {
+  .panel dl { grid-template-columns: minmax(0, 1fr); gap: var(--s-1); }
+  .panel dd { margin-bottom: var(--s-3); }
+}
+
+/* Anything the funder wrote is quoted, never paraphrased. */
+.verbatim {
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  line-height: var(--lh-loose);
+  white-space: pre-wrap;
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+  padding: var(--s-3);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+
+/* An obligation nobody stated. Muted, and never dressed as an answer. */
+.unstated { color: var(--text-muted); }
+
+.disputed { border-left: 3px solid var(--warn); background: var(--warn-soft); }
+.disputed ol { margin: 0; padding-left: var(--s-5); display: grid; gap: var(--s-3); }
+.disputed .claim { margin-bottom: var(--s-1); }
+
+.stale-mirror {
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  color: var(--no);
+  padding: var(--s-3);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin-bottom: var(--s-4);
+}
+
+/* A link this product refuses to offer. Loud, because the whole point of the record it appears
+   on is to stop someone following the instruction printed on the funder's own page. */
+.blocked-host {
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  color: var(--no);
+  padding: var(--s-3);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin-bottom: var(--s-4);
+}
+
+.blocked-host .host {
+  font-family: var(--font-data);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+/* A verification that was refused rather than one that failed. Amber: nothing broke, and
+   nothing was re-checked either. */
+.notice {
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+  padding: var(--s-3);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+
+.notice .verbatim { color: var(--text); }
+
+.error-text { color: var(--no); }
+
+.cycle-list { margin: var(--s-3) 0 0; padding-left: var(--s-5); display: grid; gap: var(--s-2); }
+.cycle-published { color: var(--ok); font-size: var(--fs-200); font-weight: 600; }
+.cycle-projected { color: var(--unk); font-size: var(--fs-200); font-weight: 600; }
+.cycle-zone { color: var(--text-muted); font-size: var(--fs-100); }
+
+.table-wrap { overflow-x: auto; }
+
+.diff-table td.before { color: var(--no); text-decoration: line-through; }
+.diff-table td.after { color: var(--ok); font-weight: 600; }
+
+.untraceable { color: var(--text-muted); font-style: italic; }
