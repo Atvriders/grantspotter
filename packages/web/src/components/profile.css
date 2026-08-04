@@ -1,0 +1,174 @@
+/* The profile editors and the completeness meter.
+   Every class is `profile-`-prefixed on purpose: several of these stylesheets are
+   bundled together, and a generic name (`.field`, `.panel`, `.tabs`) written here
+   would restyle another route's markup at a distance. Colours are semantic tokens
+   only, so both themes and the AA contrast invariant in `contrast.test.ts` apply
+   without this file naming a single hex value. */
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: var(--s-5);
+  align-items: start;
+}
+
+.profile-lede {
+  max-width: 72ch;
+  color: var(--text-muted);
+}
+
+/* ---- tabs ---- */
+
+.profile-tabs {
+  display: flex;
+  gap: var(--s-1);
+  border-bottom: 1px solid var(--border);
+  margin: var(--s-4) 0;
+}
+
+.profile-tabs button {
+  font: inherit;
+  font-weight: 560;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--r-1) var(--r-1) 0 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.profile-tabs button:hover { color: var(--text); }
+
+.profile-tabs button[aria-selected='true'] {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* ---- the form ---- */
+
+.profile-form {
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-4);
+}
+
+.profile-field { display: grid; gap: var(--s-1); }
+
+.profile-field > label,
+.profile-field > .profile-legend {
+  font-weight: 560;
+  font-size: var(--fs-200);
+}
+
+.profile-field input,
+.profile-field select {
+  padding: var(--s-2);
+  font: inherit;
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+}
+
+.profile-field .profile-help {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  max-width: 66ch;
+}
+
+.profile-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+}
+
+.profile-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-300);
+  font-weight: 400;
+}
+
+.profile-checks input { width: auto; }
+
+.profile-required {
+  color: var(--no);
+  font-weight: 700;
+}
+
+.profile-alert {
+  color: var(--no);
+  background: var(--no-soft);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  margin: 0;
+}
+
+.profile-status {
+  color: var(--ok);
+  margin: 0;
+  min-height: 1.2em;
+}
+
+/* ---- the meter ---- */
+
+.profile-meter {
+  padding: var(--s-4);
+  margin-bottom: var(--s-4);
+}
+
+.profile-meter h2 { font-size: var(--fs-400); margin-bottom: var(--s-2); }
+
+.profile-meter-figure {
+  font-family: var(--font-data);
+  font-size: var(--fs-700);
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+}
+
+.profile-meter-shell {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  overflow: hidden;
+  margin: var(--s-2) 0;
+}
+
+.profile-meter-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.profile-meter-count {
+  font-size: var(--fs-200);
+  margin-bottom: var(--s-2);
+}
+
+/* Which profile the single report speaks for. Never optional: one report, up to
+   two profiles, so the number is meaningless without the name beside it. */
+.profile-meter-for {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.profile-meter-warn {
+  font-size: var(--fs-200);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  margin: var(--s-3) 0 0;
+}
+
+@media (max-width: 900px) {
+  .profile-grid { grid-template-columns: minmax(0, 1fr); }
+}
