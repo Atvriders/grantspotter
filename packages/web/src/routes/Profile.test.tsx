@@ -570,6 +570,61 @@ describe('Profile', () => {
     expect(screen.getByRole('button', { name: /save student profile/i })).not.toBeDisabled();
   });
 
+  /**
+   * The `held[kind]` guard on `needsMeterRefetch`, pinned. Both tabs are always in the DOM no
+   * matter what the user holds, so a user with only a student profile can click the
+   * organization tab even though nothing was ever saved there. Without `held[kind]`, that click
+   * alone would ask the server for `?profile=organization` anyway; the real route
+   * (`profileRouter.ts`) answers a `prefer` the caller does not hold exactly like the
+   * holds-nothing case — `completenessFor: null` and an empty report — and the effect that reads
+   * `meterData` would paint that straight over the correctly-measured 60%-complete student
+   * profile, which is not even the tab now open. `report`/`measuredFor` never feed `save()`
+   * (that reads only `drafts[kind]`), so this could not itself overwrite the STORED profile —
+   * but it is exactly the "0%, not measured" claim made from ignorance about a profile that
+   * really is measured that every other surface in this product refuses to make, and it does
+   * not even announce itself: the same guard fires a real refetch on the way back to the
+   * student tab and quietly repaints the right number, so only a user who never flips back
+   * would ever see the wrong meter.
+   */
+  it("does not let a click on an unheld tab null out the other profile's real measurement", async () => {
+    const EMPTY_REPORT: CompletenessReport = { total: 5, unknownCount: 5, score: 0, fields: [] };
+    const fetchMock = stubFetch({
+      get: {
+        student: SAVED_STUDENT,
+        organization: null,
+        completenessFor: 'student',
+        completeness: STUDENT_REPORT,
+      },
+      getFor: {
+        // The real server's answer to a `?profile=` the caller does not hold: `loadActiveProfile`
+        // given a `prefer` not on file returns null, the same as the no-preference/holds-nothing
+        // case (profileRouter.ts).
+        organization: {
+          student: SAVED_STUDENT,
+          organization: null,
+          completenessFor: null,
+          completeness: EMPTY_REPORT,
+        },
+      },
+    });
+    await renderLoaded();
+    expect(screen.getByText(/measured against your student profile/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+
+    // No refetch was ever asked for a profile the user does not hold...
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes('profile=organization')),
+    ).toBe(false);
+    // ...so the meter is still telling the truth about the profile it actually measured, even
+    // though the open tab is now the one it does not speak for.
+    expect(screen.getByText(/measured against your student profile/i)).toBeInTheDocument();
+    expect(screen.getByRole('meter', { name: /profile completeness/i })).toHaveAttribute(
+      'aria-valuenow',
+      '60',
+    );
+  });
+
   it('says so when no profile has been measured at all', async () => {
     stubFetch({
       get: {
