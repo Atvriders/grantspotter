@@ -258,6 +258,41 @@ describe('App', () => {
     expect(container.querySelectorAll('main')).toHaveLength(1);
   });
 
+  /**
+   * A FRESH INSTALL, COMPOSED — the screen Task 22 could not get past.
+   *
+   * `Authenticated` returned `<Login>` for every session-less visitor, so an operator who
+   * had just started the container with an empty DATA_DIR was shown a sign-in form for an
+   * account that did not exist yet, and `POST /api/auth/bootstrap` was reachable only by
+   * hand-written curl. `SignedOut` asks `bootstrap-status` first, and this is the only test
+   * in the package that draws that decision inside the real `App` — the same reason
+   * `/applications` needed a composed test to find its nested landmark.
+   */
+  it('offers first-run setup instead of a sign-in form on an install with no accounts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        new URL(url, 'http://localhost').pathname === '/api/auth/bootstrap-status'
+          ? jsonResponse(200, { required: true })
+          : jsonResponse(401, {
+              error: { code: 'unauthorized', message: 'Sign in to continue.' },
+              requestId: 'req-test-1',
+            }),
+      ),
+    );
+    const { container } = renderAt('/');
+
+    expect(await screen.findByRole('heading', { name: /set up grantspotter/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/setup token/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^sign in$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: /primary/i })).not.toBeInTheDocument();
+
+    // The setup screen is a page ROOT like Login: it composes Login's `SignedOutPage`
+    // rather than opening a second landmark, which is what keeps `routes/Login.tsx` the
+    // only route named in `AppShell.test.tsx`'s MAY_RENDER_MAIN.
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+  });
+
   it('renders Browse inside the shell for a signed-in member', async () => {
     stubSignedIn('member');
     const { container } = renderAt('/');

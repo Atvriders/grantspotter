@@ -1,6 +1,30 @@
 import { useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { apiSend, ApiError } from '../api/client.js';
+
+/**
+ * The signed-out page's ONE `main` landmark.
+ *
+ * `App.tsx` returns this page INSTEAD of `AppShell` when there is no session, so nothing
+ * else on screen owns a `main` — which is why `AppShell.test.tsx` names `routes/Login.tsx`
+ * in `MAY_RENDER_MAIN`. The first-run screen is the same page in a different mode, so it
+ * composes this wrapper rather than opening a second landmark: a `<main>` of its own would
+ * be a nested landmark on the composed page and would put a third entry on that allowlist,
+ * which that test's comment asks be a deliberate decision. Keeping the element here means
+ * the signed-out tree has exactly one, in exactly one file, whichever form is showing.
+ */
+export function SignedOutPage({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <main
+      id="main"
+      style={{ maxWidth: 380, margin: '12vh auto', padding: 'var(--s-5)' }}
+      className="card"
+    >
+      <p className="eyebrow">GrantSpotter</p>
+      {children}
+    </main>
+  );
+}
 
 /**
  * What to tell the user, per failure. Deliberately NOT one sentence for
@@ -29,7 +53,20 @@ function messageFor(err: unknown): string {
   }
 }
 
-export function Login({ onAuthenticated }: { onAuthenticated: () => void }): JSX.Element {
+export function Login({
+  onAuthenticated,
+  notice,
+}: {
+  onAuthenticated: () => void;
+  /**
+   * Something the signed-out gate needs to say ABOVE the form — that the first-run
+   * check could not be made, or that another operator finished setup first. It is
+   * rendered inside this page's one landmark rather than beside it so the page keeps
+   * a single `main`, and it is a prop rather than state because the fact belongs to
+   * whoever chose to show this form, not to the form.
+   */
+  notice?: ReactNode;
+}): JSX.Element {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -50,13 +87,9 @@ export function Login({ onAuthenticated }: { onAuthenticated: () => void }): JSX
   }
 
   return (
-    <main
-      id="main"
-      style={{ maxWidth: 380, margin: '12vh auto', padding: 'var(--s-5)' }}
-      className="card"
-    >
-      <p className="eyebrow">GrantSpotter</p>
+    <SignedOutPage>
       <h1 style={{ marginBottom: 'var(--s-5)' }}>Sign in</h1>
+      {notice}
 
       <form
         onSubmit={(e) => {
@@ -99,6 +132,6 @@ export function Login({ onAuthenticated }: { onAuthenticated: () => void }): JSX
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
-    </main>
+    </SignedOutPage>
   );
 }

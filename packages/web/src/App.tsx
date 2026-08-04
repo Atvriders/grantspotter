@@ -1,7 +1,7 @@
 import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
 import { SessionProvider, useSession } from './store/session.js';
 import { AppShell } from './components/AppShell.js';
-import { Login } from './routes/Login.js';
+import { SignedOut } from './routes/FirstRun.js';
 import { Browse } from './routes/Browse.js';
 import { Opportunity } from './routes/Opportunity.js';
 import { Calendar } from './routes/Calendar.js';
@@ -36,7 +36,15 @@ function AdminOnly({ children }: { children: JSX.Element }): JSX.Element {
 function Authenticated(): JSX.Element {
   const { user, loading, refresh } = useSession();
   if (loading) return <p className="eyebrow">Loading…</p>;
-  if (!user) return <Login onAuthenticated={refresh} />;
+  /*
+    Not `<Login>` directly. On a fresh install there is no account to sign in to, and this
+    line handed the operator a sign-in form for one anyway — the only way past it was a
+    hand-written curl to `POST /api/auth/bootstrap`. `SignedOut` asks the server which of
+    the two screens is true first. `refresh` is passed through unchanged: bootstrap opens a
+    session exactly as login does, so creating the first administrator lands them in the
+    same place a sign-in does.
+  */
+  if (!user) return <SignedOut onAuthenticated={refresh} />;
 
   return (
     <AppShell>

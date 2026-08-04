@@ -31,6 +31,21 @@ export interface AuthRouterDeps {
   loginLimiter: RateLimiter;
 }
 
+/**
+ * The SIGN-IN body. `min(1)` is deliberate and must stay.
+ *
+ * A length floor belongs at the points that SET a credential, never at the point that
+ * CHECKS one. Raising this to the policy minimum would (a) permanently lock out anyone
+ * who already holds a shorter password — a restored database, a migration from an older
+ * release, an account an operator inserted by hand — since there would then be no body
+ * that both matches their password and passes the schema, and (b) leak the policy to an
+ * unauthenticated attacker, because a below-floor guess would answer 422 where an
+ * above-floor guess answers 401. Every wrong password must be the same 401.
+ *
+ * The floor for CREATING a credential is `assertPasswordPolicy` (auth/password.ts),
+ * applied in the bootstrap handler below. It is the only route in the server that takes
+ * a caller-chosen password: `adminUsersRouter` generates the passwords it stores.
+ */
 const credentialsSchema = z.object({
   email: z.string().min(3).max(320),
   password: z.string().min(1).max(512),
@@ -73,9 +88,17 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       if (!deps.bootstrap.required()) {
         throw new AppError('conflict', 'An account already exists; bootstrap is closed.');
       }
-      if (!deps.bootstrap.consume(body.token)) {
-        throw new AppError('unauthorized', 'That bootstrap token is not valid.');
-      }
+
+      // The password is checked BEFORE the token is consumed, and the order is the
+      // whole point. `consume` sets the one-time token to null on a match, so when
+      // this ran after it, an operator who typed a short password got a 422 telling
+      // them to pick a longer one — and the token they had just copied out of
+      // `docker logs` was already spent. Every retry, correct token and good password,
+      // then answered 401 "That bootstrap token is not valid", while bootstrap-status
+      // went on reporting `required: true` and the first-run screen went on inviting
+      // them to try. Restarting the container to mint a fresh token was the only way
+      // in. A rejected body must cost the operator nothing; the token is spent only by
+      // an attempt that would otherwise have created the account.
       try {
         assertPasswordPolicy(body.password);
       } catch (err) {
@@ -83,6 +106,10 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
           throw new AppError('validation_failed', err.message);
         }
         throw err;
+      }
+
+      if (!deps.bootstrap.consume(body.token)) {
+        throw new AppError('unauthorized', 'That bootstrap token is not valid.');
       }
 
       const user = users.create({
