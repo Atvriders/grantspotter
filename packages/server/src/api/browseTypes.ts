@@ -69,6 +69,15 @@ export interface FieldProvenance {
   rawLabel: string;
   rawValue: string;
   fetchedAt: string;
+  /**
+   * The page this value was read off, or null when the row cannot be traced to
+   * one. Added by Task 5: `sourceId` names the source MODULE and `snapshotId`
+   * is nullable (Task 10's verify path always passes null), so without this
+   * field the provenance panel can show a value and its label but no address a
+   * professional could open to check it — which is the whole point of spec §8.
+   * Null is rendered as "not traceable", never as an authoritative value.
+   */
+  sourceUrl: string | null;
 }
 
 export interface OpportunityDetail {

@@ -61,6 +61,14 @@ const REQUIRED: Record<string, string[]> = {
     'last_verified_at', 'haystack',
   ],
   program_facets: ['program_id', 'facet_kind', 'facet_value'],
+  // Plan-3-local (migration 031). `source_url` is Task 5's documented addition
+  // to the brief's seven columns: `source_id` names the source MODULE, and
+  // `snapshot_id` is nullable — Task 10's verify path always writes null — so
+  // without it a provenance row carries no page a reader could open.
+  field_provenance: [
+    'program_id', 'field_path', 'source_id', 'snapshot_id', 'raw_label',
+    'raw_value', 'fetched_at', 'source_url',
+  ],
 };
 
 describe('schema conformance (Plan 3 read-contract)', () => {

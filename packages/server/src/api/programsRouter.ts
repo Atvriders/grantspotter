@@ -11,6 +11,7 @@ import type { RouterDeps } from './deps.js';
 import { AppError } from './errors.js';
 import { hydratePrograms, queryProgramIds, type HydratedProgram } from './browseQuery.js';
 import { isProfileKind, loadActiveProfile, type ProfileKind } from './profileStore.js';
+import { createProgramDetailHandler } from './programDetail.js';
 import {
   DEFAULT_FILTERS,
   type BrowseFilters,
@@ -270,6 +271,11 @@ export function createProgramsRouter(deps: RouterDeps): Router {
     };
     res.json(body);
   });
+
+  // Opportunity detail (spec §8), Task 5. Registered last, and it is the only
+  // pattern route on this router: any literal sub-path added later has to be
+  // declared above it or `/:id` swallows it.
+  router.get('/:id', deps.requireAuth, createProgramDetailHandler(deps));
 
   return router;
 }

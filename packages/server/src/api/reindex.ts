@@ -4,7 +4,15 @@ import { expandCycles, observedCycles } from '@grantspotter/core';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { isDoNotPublish } from '../normalize/index.js';
 
-const HORIZON_DAYS = 550; // ~18 months: long enough to catch next year's annual window.
+/**
+ * ~18 months: long enough to catch next year's annual window.
+ *
+ * Exported for the opportunity detail route (Task 5), which projects the same
+ * cycles for one program that this file projects for all of them. Two copies of
+ * the number would let the detail page and the browse row beside it disagree
+ * about whether a program has a next deadline at all.
+ */
+export const HORIZON_DAYS = 550;
 
 function addDays(iso: string, days: number): string {
   return new Date(Date.parse(iso) + days * 86_400_000).toISOString();
