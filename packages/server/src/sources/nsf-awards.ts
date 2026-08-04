@@ -15,11 +15,15 @@ export const nsfAwards: SourceModule = {
   expectedMinRecords: 1,
   notes:
     'AWARDED HISTORY, not open opportunities — every record is stamped recordType=past_award so ' +
-    'it can never render as a live deadline. Two undocumented API facts: printFields DOES work ' +
-    'here despite the docs (without it abstractText is missing, and abstractText is the only ' +
-    'field with enough prose to score adjacency), and rpp is HARD-CAPPED AT 25 — asking for 100 ' +
-    'silently returns 25, so a paginator advancing by its requested page size skips three ' +
-    'quarters of the results and never notices. offset is 1-based.',
+    'it can never render as a live deadline, and normalize/ tags it do_not_publish. offset is ' +
+    '1-based. TWO PREVIOUSLY DOCUMENTED "API FACTS" WERE RE-MEASURED AGAINST THE LIVE API ON ' +
+    '2026-08-03 AND ARE NO LONGER TRUE. (1) printFields does NOT restrict the response: every ' +
+    'award comes back with all 61 fields whether or not printFields is sent, and abstractText ' +
+    'is present without it — so printFields is now inert, not load-bearing. (2) rpp is NOT ' +
+    'capped at 25: rpp=100 returned exactly 100 awards. NSF_AWARDS_MAX_RPP (federal/nsf.ts) is ' +
+    'therefore leaving three quarters of each keyword’s candidates unread. Raising it is a ' +
+    'deliberate call about request size, not a bug fix, so it has been left at 25 and flagged ' +
+    'rather than silently changed.',
 
   parse(payloads: FetchedPayload[]): RawOpportunity[] {
     const byId = new Map<string, RawOpportunity>();

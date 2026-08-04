@@ -12,10 +12,18 @@ export const nsfFundingRss: SourceModule = {
   requests: NSF_FEED_URLS.map((url) => ({ url, method: 'GET' as const, accept: 'xml' as const })),
   expectedMinRecords: 10,
   notes:
-    'The only working .gov funding RSS. The upcoming feed is pinned to the hyphenated ' +
-    'funding-upcoming/rss.xml form because the published URL 301-chains twice. Items are ' +
-    'scored by federal/adjacency.ts before they reach the review queue — the genuinely ' +
-    'winnable federal money is adjacent (geospace, ECCS, ATE, Noyce), not "amateur radio".',
+    'OPEN SOLICITATIONS — the one federal source here that is genuinely not award history, so ' +
+    'it publishes rather than being suppressed. The only working .gov funding RSS: all three ' +
+    'feeds really do return application/rss+xml (checked 2026-08-03), unlike every advertised ' +
+    'Grants.gov feed. The upcoming feed is pinned to the hyphenated funding-upcoming/rss.xml ' +
+    'form because the published URL 301-chains twice. NOT SCORED: unlike nsf-awards, ' +
+    'usaspending and the two Grants.gov sources, this module runs no adjacency filter, so all ' +
+    '45 items of a real capture reach the queue and on 2026-08-03 NONE of them cleared ' +
+    'ADJACENCY_THRESHOLD (top score 1: Gravitational Physics, Chemical Oceanography, SBIR). ' +
+    'The earlier claim that items "are scored by federal/adjacency.ts before they reach the ' +
+    'review queue" was never implemented anywhere. Feed shapes differ: only rss_www_funding.xml ' +
+    'carries pubDate, and rss_www_funding-upcoming states the actual deadline only as prose ' +
+    'inside the description ("Full Proposal Target Date: August 4, 2026").',
   parse(payloads: FetchedPayload[]): RawOpportunity[] {
     const out: RawOpportunity[] = [];
     for (const payload of payloads) {

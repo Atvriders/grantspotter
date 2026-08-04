@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { fixturePayload } from '../../test/fixtures.js';
-import { GRANTS_GOV_SEARCH_URL } from '../federal/grantsGov.js';
+import { fixturePayload, hasFixture, loadFixture } from '../../test/fixtures.js';
+import { GRANTS_GOV_SEARCH_URL, parseSearchResponse } from '../federal/grantsGov.js';
 import { SIMPLER_GRANTS_SEARCH_URL } from '../federal/simplerGrants.js';
 import { resolveRequests } from './types.js';
 import { grantsGovFederal } from './grants-gov-federal.js';
@@ -142,5 +142,106 @@ describe('Simpler.Grants.gov is optional (spec §7.5)', () => {
     const b = withoutSimpler.find((r) => r.externalKey === '354102');
     expect(Number(a?.rawFields.adjacencyScore)).toBeGreaterThan(Number(b?.rawFields.adjacencyScore));
     expect(a?.rawFields.adjacencyHits).toContain('simpler:');
+  });
+});
+
+/**
+ * The REAL search2 + fetchOpportunity API, captured 2026-08-03: five POST searches and the one
+ * follow-up detail fetch they earned, all HTTP 200, `content-type: application/json`.
+ *
+ * This is also the standing evidence for the RSS warning in `notes`: search2 answers with real
+ * JSON, while all four advertised Grants.gov feeds answer 200 with an HTML SPA shell.
+ */
+describe('grantsGovFederal against the real captured API responses', () => {
+  const SEARCH_FILES = [
+    '00-api-grants-gov-v1-api-search2.json',
+    '01-api-grants-gov-v1-api-search2.json',
+    '02-api-grants-gov-v1-api-search2.json',
+    '03-api-grants-gov-v1-api-search2.json',
+    '04-api-grants-gov-v1-api-search2.json',
+  ] as const;
+  const DETAIL_FILE = '05-api-grants-gov-v1-api-fetchopportunity.json';
+  const captured = () =>
+    SEARCH_FILES.every((f) => hasFixture('grants-gov-federal', f)) &&
+    hasFixture('grants-gov-federal', DETAIL_FILE);
+  const searches = () =>
+    SEARCH_FILES.map((f) => fixturePayload('grants-gov-federal', f, GRANTS_GOV_SEARCH_URL));
+  const detail = () =>
+    fixturePayload(
+      'grants-gov-federal',
+      DETAIL_FILE,
+      'https://api.grants.gov/v1/api/fetchOpportunity',
+    );
+
+  it.runIf(captured())('reads 128 distinct real hits across the five keyword searches', () => {
+    const ids = new Set<string>();
+    for (const f of SEARCH_FILES) {
+      const hits = parseSearchResponse(loadFixture('grants-gov-federal', f));
+      expect(hits).toHaveLength(50); // rows: 50, and every keyword filled the page
+      for (const h of hits) ids.add(h.id);
+    }
+    expect(ids.size).toBe(128);
+  });
+
+  it.runIf(captured())('decodes HTML entities out of real hit titles', () => {
+    // 8 of the 128 real titles carry entities. Undecoded, the reviewer reads "&ndash;".
+    const titles = SEARCH_FILES.flatMap((f) =>
+      parseSearchResponse(loadFixture('grants-gov-federal', f)).map((h) => h.title),
+    );
+    for (const t of titles) expect(t).not.toMatch(/&(?:[a-z]+|#\d+);/i);
+    expect(titles).toContain(
+      'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
+    );
+    expect(titles).toContain(
+      'Boosting Innovative GEOINT - Science & Technology Broad Agency Announcement (BIG-ST BAA)',
+    );
+    expect(titles).toContain(
+      "Improving global health security in Côte d'Ivoire to stop the spread of infectious disease",
+    );
+  });
+
+  it.runIf(captured())('hydrates exactly one of the 128 real hits', () => {
+    // Honest yield: the federal sweep is meant to surface 10-30 relevant opportunities A YEAR.
+    const followUps = grantsGovFederal.followUp(searches());
+    expect(followUps).toHaveLength(1);
+    expect((followUps[0].body as { opportunityId: number }).opportunityId).toBe(363179);
+  });
+
+  it.runIf(captured())('emits the one real open opportunity, read exactly as published', () => {
+    const raws = grantsGovFederal.parse([...searches(), detail()]);
+    expect(raws).toHaveLength(1);
+    const ntia = raws[0];
+    expect(ntia.externalKey).toBe('363179');
+    expect(ntia.name).toBe(
+      'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
+    );
+    expect(ntia.sourceUrl).toBe('https://www.grants.gov/search-results-detail/363179');
+    expect(ntia.rawFields.opportunityNumber).toBe('NTIA-PWSCIF-26-01');
+    expect(ntia.rawFields.agencyCode).toBe('DOC-NTIA');
+    expect(ntia.rawFields.oppStatus).toBe('posted');
+    expect(ntia.rawFields.openDate).toBe('07/14/2026');
+    expect(ntia.rawFields.closeDate).toBe('09/09/2026');
+    expect(ntia.rawFields.responseDate).toBe('Sep 09, 2026 12:00:00 AM EDT');
+    expect(ntia.rawFields.cfda).toBe('11.038');
+    expect(ntia.rawFields.adjacencyScore).toBe('6');
+    expect(ntia.rawFields.adjacencyHits).toBe(
+      'Public Wireless Supply Chain Innovation Fund, PWSCIF',
+    );
+    // "none" award ceilings must not become "$0": this real record has no figure at all.
+    expect(ntia.rawFields.amountRaw).toBeUndefined();
+  });
+
+  it.runIf(captured())('would emit nothing without the halved follow-up threshold', () => {
+    // The only real record scores 3 on title+agency and only reaches 6 — exactly the threshold
+    // — once the synopsis is hydrated. Raising FOLLOWUP_THRESHOLD to ADJACENCY_THRESHOLD would
+    // silently take this source to zero records a year.
+    expect(grantsGovFederal.parse(searches())).toHaveLength(0);
+    expect(grantsGovFederal.parse([...searches(), detail()])).toHaveLength(1);
+  });
+
+  it.runIf(captured())('leaves the real open opportunity publishable, unlike the award sources', () => {
+    const raws = grantsGovFederal.parse([...searches(), detail()]);
+    expect(raws[0].rawFields.recordType).toBeUndefined();
+    expect(raws[0].rawFields.deadlineKind).toBeUndefined();
   });
 });

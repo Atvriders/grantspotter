@@ -105,6 +105,14 @@ function safeJson(json: string): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * REAL-CAPTURE FIX (2026-08-03). search2 returns JSON, but the strings inside it are HTML: 8 of
+ * the 128 hits in the committed capture carry `&ndash;`, `&amp;`, `&nbsp;`, `&rsquo;` or
+ * `&ocirc;` in the title. Only the synopsis was being flattened, so those entities travelled
+ * uncorrected into `RawOpportunity.name` and therefore into `Program.name`, where the reviewer
+ * would read a literal "Grant Program &ndash; Solutions for AI-Native RAN". flattenHtml decodes
+ * them and also strips the trailing runs of `&nbsp;` that Grants.gov titles are padded with.
+ */
 export function parseSearchResponse(json: string): GrantsGovHit[] {
   const root = safeJson(json);
   if (!root || root.errorcode !== 0) return [];
@@ -113,8 +121,10 @@ export function parseSearchResponse(json: string): GrantsGovHit[] {
   return (data.oppHits as Array<Record<string, unknown>>).map((h) => ({
     id: String(h.id ?? ''),
     number: String(h.number ?? ''),
-    title: String(h.title ?? ''),
-    agency: String(h.agency ?? ''),
+    title: flattenHtml(String(h.title ?? '')),
+    // Truncated to 50 characters by the API itself, e.g. "National Telecommunications and
+    // Information Admini" — that is upstream's doing and is left verbatim.
+    agency: flattenHtml(String(h.agency ?? '')),
     agencyCode: String(h.agencyCode ?? ''),
     openDate: String(h.openDate ?? ''),
     closeDate: String(h.closeDate ?? ''),

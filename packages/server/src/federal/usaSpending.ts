@@ -28,7 +28,20 @@ const FIELDS = [
 ];
 
 export interface UsaSpendingAward {
+  /** The FAIN, e.g. "2045755". Stable identity, but NOT a usable URL segment — see `permalinkId`. */
   awardId: string;
+  /**
+   * `generated_internal_id`, e.g. "ASST_NON_2045755_049". This — not the FAIN — is the segment
+   * usaspending.gov and the API both address an award by.
+   *
+   * REAL-CAPTURE FIX (2026-08-03). The award link was built from the FAIN, and every one of them
+   * was dead. It looked fine because usaspending.gov is a single-page app: GET
+   * /award/2045755 returns HTTP 200 text/html (the shell) and then renders nothing, exactly the
+   * silent-200 failure mode that makes feeds and SPAs so dangerous here. The API is the honest
+   * oracle and it is unambiguous: /api/v2/awards/2045755/ -> 404 "No Award found",
+   * /api/v2/awards/ASST_NON_2045755_049/ -> 200 with the award. Never rebuild this from the FAIN.
+   */
+  permalinkId: string;
   recipientName: string;
   description: string;
   awardingAgency: string;
@@ -72,6 +85,7 @@ export function parseUsaSpending(json: string): UsaSpendingAward[] {
     const amount = Number(row['Award Amount']);
     const award: UsaSpendingAward = {
       awardId: String(row['Award ID'] ?? ''),
+      permalinkId: String(row.generated_internal_id ?? ''),
       recipientName: String(row['Recipient Name'] ?? ''),
       description: String(row.Description ?? ''),
       awardingAgency: String(row['Awarding Agency'] ?? ''),
