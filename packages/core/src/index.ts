@@ -16,13 +16,16 @@ export {
   DEFAULT_CLOSE_TIME,
   DEFAULT_OPEN_TIME,
   expandCycles,
+  observedCycles,
+  OBSERVED_WINDOW_MARKER,
+  parseObservedWindow,
   parseRecurrence,
   RECURRENCE_PREFIX,
   RecurrenceParseError,
   resolveDeadlineOwner,
   zonedWallTimeToUtcISO,
 } from './deadline.js';
-export type { DateWindow, MonthDay, Recurrence, TimeOfDay } from './deadline.js';
+export type { DateWindow, MonthDay, ObservedWindow, Recurrence, TimeOfDay } from './deadline.js';
 
 // CONTRACT §4 — geography.
 export {

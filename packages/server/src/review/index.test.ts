@@ -2,8 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import type { ChangeEvent, DeadlineSpec, Program } from '@grantspotter/core';
-import { expandCycles, hashProgram } from '@grantspotter/core';
+import { expandCycles, hashProgram, observedCycles } from '@grantspotter/core';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { fixturePayload } from '../../test/fixtures.js';
+import { contextForSource } from '../crawl/context.js';
 import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
 import { createCycleRepo } from '../db/repositories/cycles.js';
@@ -14,7 +16,9 @@ import {
   listReviewItems,
   upsertProgram,
 } from '../db/repositories/ingestion.js';
-import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
+import { DO_NOT_PUBLISH_TAG, normalizeRaw } from '../normalize/index.js';
+import { SOURCES, funderFor } from '../sources/registry.js';
+import { resolveRequests } from '../sources/types.js';
 import {
   SuppressedProgramError,
   approveReviewItem,
@@ -26,6 +30,7 @@ import {
   provenanceFor,
   rejectKeyFor,
   rejectReviewItem,
+  reprojectAllCycles,
   sourceKeyFor,
 } from './index.js';
 
@@ -621,6 +626,239 @@ describe('cycle backfill converges regardless of approval order (SEAM FIX round 
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((c) => c.programId === dependent(1).id)).toBe(true);
     expect(rows[0].label).toContain('via ARRL Foundation Scholarship Program');
+  });
+
+  /**
+   * REMEDIATION 2026-08-03. The same convergence, for an owner whose deadline is a window its
+   * funder STATED rather than a RECUR rule. `backfillInheritedDependents` re-projects dependents
+   * through `writeCyclesFor`, so if the observed half were wired into only the forward path this
+   * would come apart in exactly the way round 2 came apart for the projected half.
+   */
+  it('converges identically when the owner states a one-off window instead of a recurrence', async () => {
+    const statedOwner = (): Program => ({
+      ...owner(),
+      deadline: {
+        kind: 'ad_hoc',
+        source: { kind: 'self' },
+        note:
+          'Irregular windows announced by the funder with no fixed schedule. ' +
+          'Application window published by the funder: opens 2026-09-01, closes 2026-11-30.',
+      },
+    });
+    const deps = [dependent(1), dependent(2)];
+    const ids = [statedOwner().id, ...deps.map((d) => d.id)];
+
+    const ownerFirstDb = freshDb();
+    await approveOn(ownerFirstDb, statedOwner(), 'evt-stated-owner-a');
+    for (const [i, d] of deps.entries()) await approveOn(ownerFirstDb, d, `evt-stated-dep-a-${i}`);
+
+    const dependentsFirstDb = freshDb();
+    for (const [i, d] of deps.entries()) await approveOn(dependentsFirstDb, d, `evt-stated-dep-b-${i}`);
+    await approveOn(dependentsFirstDb, statedOwner(), 'evt-stated-owner-b');
+
+    const snapOwnerFirst = snapshot(ownerFirstDb, ids);
+    expect(snapshot(dependentsFirstDb, ids)).toEqual(snapOwnerFirst);
+
+    // Three rows total: the owner's stated window plus one per dependent, each under its own id,
+    // and not one of them projected into a later year.
+    const all = createCycleRepo(ownerFirstDb).listClosingBetween(NOW, cycleHorizonEndISO(NOW));
+    expect(all).toHaveLength(3);
+    expect(all.every((c) => c.isEstimated === false)).toBe(true);
+    expect(all.every((c) => c.closesAt === '2026-11-30T23:59:59.999Z')).toBe(true);
+    expect(all.filter((c) => c.label.includes('via ARRL Foundation Scholarship Program'))).toHaveLength(2);
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the calendar entry for a deadline a funder actually published.
+ *
+ * `normalize/deadline.ts` had just been taught to read the dates the sources genuinely parse off
+ * funders' pages, and correctly REFUSED to feed a one-off window through the `RECUR` channel: one
+ * dated window is not a yearly rule, and `RECUR annual_window window=07-01..09-30` would have put
+ * a 2027 ARISS deadline — which ARISS has never announced — on the calendar. The cost of that
+ * refusal was that an observed window produced no `Cycle` row at all, and the calendar is built
+ * from `cycles`: the six programmes whose dates had just been corrected from their funders' own
+ * pages appeared on it nowhere, while every recurring and inherited deadline did. A calendar that
+ * omits exactly the dates a funder published, and looks complete, is worse than an empty one.
+ *
+ * These are the readers for the other half — `core`'s `observedCycles`, written here with
+ * `isEstimated: false`. The first one runs the REAL committed ARISS capture through the real
+ * parse -> normalize -> approve path, which is also what pins `describeObservedWindow` (the
+ * writer, in `normalize/deadline.ts`) to `parseObservedWindow` (the reader, in `core`): the two
+ * communicate through `DeadlineSpec.note` because CONTRACT §3 gives a deadline nowhere else to
+ * put a date, so nothing but an end-to-end test can stop them drifting apart.
+ */
+describe('observed cycles: a window the funder stated reaches the calendar', () => {
+  function insertEvent(id: string, programId: string, sourceId = 'qcwa'): void {
+    db.prepare(
+      'INSERT INTO change_events (id, source_id, program_id, kind, detected_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(id, sourceId, programId, 'new', NOW);
+  }
+
+  async function approveNew(p: Program, eventId: string, sourceId = 'qcwa'): Promise<Program> {
+    insertEvent(eventId, p.id, sourceId);
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: eventId, sourceId, programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      sourceId,
+    );
+    return approveReviewItem(db, item.id, 'user-1', NOW);
+  }
+
+  /** The real ARISS record, from the committed capture, through the real source and normalize. */
+  async function arissCandidate(): Promise<Program> {
+    const module = SOURCES.find((s) => s.id === 'ariss');
+    if (module === undefined) throw new Error('the `ariss` source module is not registered');
+    const [request] = await resolveRequests(module);
+    const raws = module.parse([
+      fixturePayload('ariss', '00-ariss-usa-org-proposal-overview.html', request.url),
+    ]);
+    expect(raws).toHaveLength(1);
+    return normalizeRaw(raws[0], contextForSource(module, NOW));
+  }
+
+  it('approving ARISS lands its real captured window as an isEstimated:false cycle', async () => {
+    const funder = funderFor('ariss-usa');
+    db.prepare(
+      'INSERT INTO funders (id, name, homepage, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(funder.id, funder.name, funder.homepage, NOW, NOW);
+
+    const candidate = await arissCandidate();
+    // The dates come off the funder's own page, not out of any table in this repo.
+    expect(candidate.deadline.note).toContain('opens 2026-07-01, closes 2026-09-30');
+    expect(candidate.deadline.kind).toBe('quarterly_rewritten'); // NOT promoted to a projectable kind
+
+    await approveNew(candidate, 'evt-ariss', 'ariss');
+
+    const rows = createCycleRepo(db).listForProgram(candidate.id);
+    expect(rows).toEqual([
+      {
+        id: `${candidate.id}:observed:2026-09-30T23:59:59.999Z`,
+        programId: candidate.id,
+        opensAt: '2026-07-01T00:00:00.000Z',
+        closesAt: '2026-09-30T23:59:59.999Z',
+        timezone: 'UTC',
+        label: 'Jul 1 – Sep 30, 2026 window',
+        isEstimated: false,
+      },
+    ]);
+
+    // NO SUCCESSOR. The horizon runs 18 months past `now`, which is long enough to hold a 2027
+    // repeat of this window; ARISS has announced no such thing, so nothing may invent one.
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain('2027');
+    const everything = createCycleRepo(db).listClosingBetween(NOW, '2030-01-01T00:00:00.000Z');
+    expect(everything).toHaveLength(1);
+  });
+
+  it('a RECUR-bearing programme still expands to exactly the dates its directive states', async () => {
+    // The regression guard for the whole change: the observed half must not have disturbed the
+    // projected half. Real ARDC directive, real dates, 18-month horizon from 2026-08-02.
+    const ardc = program({
+      id: 'qcwa--recur-unchanged--00000009',
+      tags: [],
+      deadline: {
+        kind: 'n_fixed_dates',
+        source: { kind: 'self' },
+        note: 'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | four fixed dates a year.',
+      },
+    });
+    await approveNew(ardc, 'evt-recur-unchanged');
+
+    const rows = createCycleRepo(db).listForProgram(ardc.id);
+    expect(rows.map((c) => c.closesAt)).toEqual([
+      '2026-09-02T06:59:00.000Z', // Sep 1, 2026 23:59 PDT
+      '2027-02-02T07:59:00.000Z', // Feb 1, 2027 23:59 PST
+      '2027-04-02T06:59:00.000Z', // Apr 1, 2027 23:59 PDT
+      '2027-07-02T06:59:00.000Z', // Jul 1, 2027 23:59 PDT
+      '2027-09-02T06:59:00.000Z', // Sep 1, 2027 23:59 PDT
+    ]);
+    expect(rows.every((c) => c.isEstimated)).toBe(true);
+    expect(rows.every((c) => c.timezone === 'America/Los_Angeles')).toBe(true);
+  });
+
+  const stated = (note: string): DeadlineSpec => ({ kind: 'ad_hoc', source: { kind: 'self' }, note });
+  const YAESU = stated(
+    'Irregular windows announced by the funder with no fixed schedule. ' +
+      'Application deadline published by the funder: closes 2026-08-31.',
+  );
+
+  it('replaces the stated window rather than accumulating one when the funder MOVES it', async () => {
+    const p = program({ id: 'qcwa--stated-moved--00000010', deadline: YAESU, tags: [] });
+    insertEvent('evt-stated-moved', p.id);
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: 'evt-stated-moved', sourceId: 'qcwa', programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    approveReviewItem(db, item.id, 'user-1', NOW);
+    expect(createCycleRepo(db).listForProgram(p.id).map((c) => c.closesAt)).toEqual([
+      '2026-08-31T23:59:59.999Z',
+    ]);
+
+    const moved = {
+      ...p,
+      deadline: stated(
+        'Irregular windows announced by the funder with no fixed schedule. ' +
+          'Application deadline published by the funder: closes 2026-10-15.',
+      ),
+    };
+    editReviewItem(db, item.id, 'user-1', NOW, moved);
+
+    // The old date is GONE, not sitting alongside the new one. The id carries the close instant,
+    // so a bare upsert would leave both and the calendar would show a deadline nobody states.
+    expect(createCycleRepo(db).listForProgram(p.id).map((c) => c.closesAt)).toEqual([
+      '2026-10-15T23:59:59.999Z',
+    ]);
+  });
+
+  it('removes the row entirely when the funder WITHDRAWS the window', async () => {
+    const p = program({ id: 'qcwa--stated-withdrawn--00000011', deadline: YAESU, tags: [] });
+    insertEvent('evt-stated-withdrawn', p.id);
+    const [item] = await buildReviewItems(
+      db,
+      [{ id: 'evt-stated-withdrawn', sourceId: 'qcwa', programId: p.id, kind: 'new', after: p, detectedAt: NOW }],
+      new Map([[p.id, p]]),
+      'C',
+      'qcwa',
+    );
+    approveReviewItem(db, item.id, 'user-1', NOW);
+    expect(createCycleRepo(db).listForProgram(p.id)).toHaveLength(1);
+
+    const withdrawn = {
+      ...p,
+      deadline: stated('Irregular windows announced by the funder with no fixed schedule.'),
+    };
+    editReviewItem(db, item.id, 'user-1', NOW, withdrawn);
+    expect(createCycleRepo(db).listForProgram(p.id)).toEqual([]);
+  });
+
+  it('reprojectAllCycles refreshes the horizon and neither duplicates nor drops the stated window', async () => {
+    const p = program({ id: 'qcwa--stated-reproject--00000012', deadline: YAESU, tags: [] });
+    await approveNew(p, 'evt-stated-reproject');
+    const first = createCycleRepo(db).listForProgram(p.id);
+    expect(first).toHaveLength(1);
+
+    reprojectAllCycles(db, NOW);
+    expect(createCycleRepo(db).listForProgram(p.id)).toEqual(first);
+
+    // Six months on, the stated window has passed. The nightly re-projection rolls the horizon
+    // forward and the expired row leaves the calendar with it — the same rule the projected half
+    // has always followed, not a special case.
+    reprojectAllCycles(db, '2027-02-02T00:00:00.000Z');
+    expect(createCycleRepo(db).listForProgram(p.id)).toEqual([]);
+  });
+
+  it('writes exactly what core computed — the seam persists the cycle, it does not re-derive it', async () => {
+    const p = program({ id: 'qcwa--stated-parity--00000013', deadline: YAESU, tags: [] });
+    await approveNew(p, 'evt-stated-parity');
+    expect(createCycleRepo(db).listForProgram(p.id)).toEqual(
+      observedCycles(p, [p], NOW, cycleHorizonEndISO(NOW)),
+    );
   });
 });
 

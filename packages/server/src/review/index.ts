@@ -8,7 +8,7 @@ import type {
   ReviewItem,
   SourceTier,
 } from '@grantspotter/core';
-import { expandCycles, hashProgram, resolveDeadlineOwner } from '@grantspotter/core';
+import { expandCycles, hashProgram, observedCycles, resolveDeadlineOwner } from '@grantspotter/core';
 import type { AiAssist } from '../ai/assist.js';
 import { ADJACENCY_THRESHOLD } from '../federal/adjacency.js';
 import type { CycleRepo } from '../db/repositories/cycles.js';
@@ -283,22 +283,50 @@ export function cycleHorizonEndISO(nowISO: string): string {
 }
 
 /**
- * Projects one program's deadline into `cycles` against `allPublished`. `removeEstimatedForProgram`
- * before `upsertMany`, not a bare upsert, is what makes a re-publish REPLACE rather than
- * accumulate: a projected cycle's id is derived from its `closesAt`, so if the RECUR note itself
- * changes (a funder moves its deadline) the old dates would otherwise never be removed. Observed
- * cycles (`isEstimated: false` — nothing in this codebase writes those yet, per `cycles.ts`'s own
- * doc comment) are deliberately left untouched.
+ * REMEDIATION (2026-08-03). Deletes the `isEstimated: false` rows for one program — the mirror of
+ * `CycleRepo.removeEstimatedForProgram`, and the half of "replace, never accumulate" that observed
+ * cycles need now that something finally writes them.
+ *
+ * Without it, a funder that MOVES its stated window leaves the old row behind (the id carries the
+ * close instant, so the new window upserts alongside rather than over it), and a funder that
+ * WITHDRAWS its window leaves a deadline on the calendar that no page states any more — which is
+ * the same failure as publishing a date nobody announced, one step removed.
+ *
+ * Raw SQL here rather than a `CycleRepo` method for the same reason `kindOf` above is raw SQL:
+ * this file is the seam that AUTHORS cycles, and the delete exists only to serve the write below
+ * it. `removeEstimatedForProgram` is its natural neighbour and the two belong on the repo together
+ * whenever that file is next opened.
  */
-function writeProjectedCycles(
+function removeObservedForProgram(db: Database.Database, programId: string): void {
+  db.prepare('DELETE FROM cycles WHERE program_id = ? AND is_estimated = 0').run(programId);
+}
+
+/**
+ * Writes one program's cycles against `allPublished`: the recurrence PROJECTED forward
+ * (`isEstimated: true`) plus the one window its funder actually STATED (`isEstimated: false`).
+ *
+ * Delete-then-upsert, not a bare upsert, is what makes a re-publish REPLACE rather than accumulate:
+ * every cycle id is derived from its `closesAt`, so if the RECUR note or the stated window changes
+ * (a funder moves its deadline) the old dates would otherwise never be removed.
+ *
+ * The two halves are deliberately separate calls into `core`. A `RECUR` directive is a rule and is
+ * repeated into every year of the horizon; a stated window is one dated window and is written once,
+ * with no successor invented for the years after it — see `observedCycles`. Merging them into one
+ * `expandCycles` call is exactly the shortcut that would put a 2027 ARISS deadline on the calendar.
+ */
+function writeCyclesFor(
   cycles: CycleRepo,
+  db: Database.Database,
   program: Program,
   allPublished: Program[],
   nowISO: string,
 ): void {
-  const projected = expandCycles(program, allPublished, nowISO, cycleHorizonEndISO(nowISO));
+  const horizonEnd = cycleHorizonEndISO(nowISO);
+  const projected = expandCycles(program, allPublished, nowISO, horizonEnd);
+  const stated = observedCycles(program, allPublished, nowISO, horizonEnd);
   cycles.removeEstimatedForProgram(program.id);
-  cycles.upsertMany(projected);
+  removeObservedForProgram(db, program.id);
+  cycles.upsertMany([...projected, ...stated]);
 }
 
 /**
@@ -321,6 +349,7 @@ function writeProjectedCycles(
  */
 function backfillInheritedDependents(
   cycles: CycleRepo,
+  db: Database.Database,
   justPublished: Program,
   allPublished: Program[],
   nowISO: string,
@@ -330,7 +359,7 @@ function backfillInheritedDependents(
     if (other.deadline.source.kind !== 'inherited') continue;
     const owner = resolveDeadlineOwner(other, allPublished);
     if (owner.id !== justPublished.id) continue;
-    writeProjectedCycles(cycles, other, allPublished, nowISO);
+    writeCyclesFor(cycles, db, other, allPublished, nowISO);
   }
 }
 
@@ -344,8 +373,8 @@ function backfillInheritedDependents(
 function projectCycles(db: Database.Database, program: Program, nowISO: string): void {
   const allPublished = createProgramRepo(db).list();
   const cycles = createCycleRepo(db);
-  writeProjectedCycles(cycles, program, allPublished, nowISO);
-  backfillInheritedDependents(cycles, program, allPublished, nowISO);
+  writeCyclesFor(cycles, db, program, allPublished, nowISO);
+  backfillInheritedDependents(cycles, db, program, allPublished, nowISO);
 }
 
 /**
@@ -364,7 +393,7 @@ export function reprojectAllCycles(db: Database.Database, nowISO: string): void 
   const allPublished = createProgramRepo(db).list();
   const cycles = createCycleRepo(db);
   for (const program of allPublished) {
-    writeProjectedCycles(cycles, program, allPublished, nowISO);
+    writeCyclesFor(cycles, db, program, allPublished, nowISO);
   }
 }
 

@@ -349,8 +349,10 @@ function projectWindow(
  * Project concrete dated Cycle instances into [fromISO, toISO].
  *
  * Every projected cycle carries isEstimated: true — it comes from a recurrence
- * rule, not from an observed page. Cycles actually seen on a funder's site are
- * written to the cycles table by Plan 2 with isEstimated: false.
+ * rule, not from an observed page. A window the funder actually stated becomes
+ * an isEstimated: false cycle through `observedCycles` below; the two are
+ * separate functions because they are separate claims, and a caller that wants
+ * both asks for both (`review/index.ts` does).
  *
  * Cycle ids are `${programId}:${closesAt}` so a nightly re-projection upserts
  * over the previous run rather than duplicating rows.
@@ -433,4 +435,170 @@ export function expandCycles(
     if (delta !== 0) return delta;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+}
+
+/* ------------------------------------------- observed (funder-stated) windows ---------------- */
+
+/**
+ * REMEDIATION (2026-08-03) — the calendar entry for a window a funder actually stated.
+ *
+ * `expandCycles` above is the whole calendar, and it projects a RECURRENCE: a rule with no year in
+ * it, repeated forwards. That is the right and only channel for ARDC's four dates and the ARRL
+ * windows, and it is the wrong channel for ARISS, which states ONE dated window ("opens
+ * 2026-07-01, closes 2026-09-30"). `normalize/deadline.ts` refused to feed that window through
+ * `RECUR annual_window window=07-01..09-30` precisely because doing so would publish a 2027 ARISS
+ * deadline ARISS has never announced, and that refusal was correct. The cost of the refusal was
+ * that the six programmes whose dates were just corrected from their funders' own pages produced
+ * NO `Cycle` row at all, so a calendar built from `cycles` showed only recurring and inherited
+ * deadlines while silently omitting every deadline a funder had actually published — which reads
+ * as complete and is not.
+ *
+ * This is the other half. It records the window that EXISTS, and invents no successor: one stated
+ * window yields exactly one `Cycle`, marked `isEstimated: false`, and nothing is repeated into any
+ * later year. Nothing here consults `PROJECTABLE_KINDS`, and nothing here can add a second row.
+ *
+ * WHY THE NOTE IS THE CHANNEL. CONTRACT §3 freezes `DeadlineSpec` as `{ kind, source, note }` —
+ * there is no field for a date — which is the same reason the `RECUR` micro-format lives in `note`.
+ * `normalize/deadline.ts`'s `describeObservedWindow` writes the sentence below and this parses it
+ * back; the two are pinned together end-to-end by a test in `review/index.test.ts` that runs the
+ * real ARISS capture through the real parse → normalize → approve path, so the writer cannot drift
+ * away from this reader without a red run.
+ */
+export const OBSERVED_WINDOW_MARKER = 'published by the funder:';
+
+/** A window the funder itself stated, as ISO days. Mirrors normalize/deadline.ts's writer-side type. */
+export interface ObservedWindow {
+  opensAt?: string;
+  closesAt?: string;
+}
+
+const OBSERVED_OPENS = /\bopens\s+(\d{4})-(\d{2})-(\d{2})\b/;
+const OBSERVED_CLOSES = /\bcloses\s+(\d{4})-(\d{2})-(\d{2})\b/;
+
+/**
+ * A `YYYY-MM-DD` that is a real calendar day, or `undefined`. Year-aware, so 2027-02-29 is
+ * rejected while 2028-02-29 is kept — unlike `parseMonthDay` above, which has no year to test
+ * against and defers Feb 29 to projection time. REJECTED, NEVER CLAMPED: a recurrence rule with no
+ * year has to be clamped to be usable at all, but a date a funder printed either parses as what it
+ * says or is not trustworthy enough to put on a calendar.
+ */
+function realIsoDay(match: RegExpExecArray | null): string | undefined {
+  if (match === null) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1990 || year > 2100) return undefined;
+  if (month < 1 || month > 12) return undefined;
+  if (day < 1 || day > daysInMonth(year, month)) return undefined;
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+/**
+ * The window a funder stated, read back out of `DeadlineSpec.note`, or `undefined` when the note
+ * carries none.
+ *
+ * Only text AFTER `OBSERVED_WINDOW_MARKER` is read. Everything before it is our own prose or a
+ * `RECUR` directive, and reading a date out of either would let a table we wrote masquerade as
+ * something the funder said.
+ *
+ * A window whose close precedes its open is rejected WHOLE, not half-kept — the same rule
+ * `normalize/deadline.ts` applies on the way in, for the same reason: both halves came out of one
+ * sentence, so if they contradict each other neither is trustworthy.
+ */
+export function parseObservedWindow(note: string): ObservedWindow | undefined {
+  const at = note.indexOf(OBSERVED_WINDOW_MARKER);
+  if (at < 0) return undefined;
+  const stated = note.slice(at + OBSERVED_WINDOW_MARKER.length);
+
+  const opensAt = realIsoDay(OBSERVED_OPENS.exec(stated));
+  const closesAt = realIsoDay(OBSERVED_CLOSES.exec(stated));
+  if (opensAt === undefined && closesAt === undefined) return undefined;
+  // Canonical ISO days compare correctly as strings.
+  if (opensAt !== undefined && closesAt !== undefined && closesAt < opensAt) return undefined;
+
+  const window: ObservedWindow = {};
+  if (opensAt !== undefined) window.opensAt = opensAt;
+  if (closesAt !== undefined) window.closesAt = closesAt;
+  return window;
+}
+
+/**
+ * Kinds that are an explicit statement that there is no application cycle to put on a calendar.
+ *
+ * `no_application_exists` is a researched finding that the funder selects recipients itself, and
+ * `dormant` is a historical record with no live cycle; a date appearing anywhere in the prose of
+ * either is not an application deadline. `inherited` is here for a different reason: a programme
+ * still carrying that kind after `resolveDeadlineOwner` is one whose owner is NOT published, which
+ * that function documents as "an incomplete corpus must not fabricate dates" — so it must not
+ * acquire a deadline from its own note either.
+ */
+const KINDS_WITH_NO_CYCLE: ReadonlySet<DeadlineKind> = new Set<DeadlineKind>([
+  'no_application_exists',
+  'dormant',
+  'inherited',
+]);
+
+/**
+ * The single `Cycle` for a window the funder stated, if there is one, inside [fromISO, toISO].
+ *
+ * Returns at most ONE cycle, always. That is the entire point: an observed window is one dated
+ * window, not a yearly rule, so there is no successor to generate and no year loop to run.
+ *
+ * DAY PRECISION, UTC FRAME. The dates a funder prints carry no time and no zone. The close is
+ * therefore taken as the very end of the stated day in UTC — the reading that cannot close a
+ * programme early anywhere on earth, and byte-for-byte the same instant `normalize/deadline.ts`'s
+ * `hasClosed` uses to decide `ProgramStatus`, so the calendar and the status badge can never
+ * disagree about whether a window is over. `timezone: 'UTC'` is that frame, not a claim about
+ * where the funder is.
+ *
+ * A window with an open date but NO close date yields nothing. `cycles.closes_at` is what
+ * `listClosingBetween` selects on, so such a row could never appear on the calendar it was written
+ * for — a write-only row is the defect class this codebase keeps having to close, not a feature.
+ * The open date is still published, as prose, on the record itself.
+ *
+ * Inheritance is followed exactly as `expandCycles` follows it, so a dependent riding an owner
+ * that states a one-off window gets that window under its own id with the same `(via <owner>)`
+ * label. No source that inherits parses dates today, so this is symmetry, not a live path.
+ */
+export function observedCycles(
+  program: Program,
+  allPrograms: Program[],
+  fromISO: string,
+  toISO: string,
+): Cycle[] {
+  const owner = resolveDeadlineOwner(program, allPrograms);
+  if (KINDS_WITH_NO_CYCLE.has(owner.deadline.kind)) return [];
+
+  const window = parseObservedWindow(owner.deadline.note);
+  if (window?.closesAt === undefined) return [];
+
+  const fromMs = Date.parse(fromISO);
+  const toMs = Date.parse(toISO);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || toMs < fromMs) return [];
+
+  const closesAt = `${window.closesAt}T23:59:59.999Z`;
+  const closesMs = Date.parse(closesAt);
+  if (closesMs < fromMs || closesMs > toMs) return [];
+
+  const [closeYear, closeMonth, closeDay] = window.closesAt.split('-').map(Number);
+  let label = `${labelDate(closeYear, closeMonth, closeDay)} deadline`;
+  if (window.opensAt !== undefined) {
+    const [openYear, openMonth, openDay] = window.opensAt.split('-').map(Number);
+    label = labelWindow(openYear, openMonth, openDay, closeYear, closeMonth, closeDay);
+  }
+  if (owner.id !== program.id) label = `${label} (via ${owner.name})`;
+
+  const cycle: Cycle = {
+    // The `observed:` infix keeps this id disjoint from `expandCycles`'s `${id}:${closesAt}` even
+    // if a projection ever lands on the same instant, and makes the row self-describing in the
+    // table.
+    id: `${program.id}:observed:${closesAt}`,
+    programId: program.id,
+    closesAt,
+    timezone: 'UTC',
+    label,
+    isEstimated: false,
+  };
+  if (window.opensAt !== undefined) cycle.opensAt = `${window.opensAt}T00:00:00.000Z`;
+  return [cycle];
 }
