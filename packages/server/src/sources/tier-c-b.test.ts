@@ -1,6 +1,7 @@
 import type { SourceModule } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
+import { extractLicense } from '../normalize/axes/index.js';
 import {
   TIER_C_B_SOURCES,
   ariss,
@@ -118,6 +119,9 @@ describe('ncdxf-scholarships', () => {
     ]);
     expect(raws[0].rawFields.age).toMatch(/25 or younger/i);
     expect(raws[0].rawFields.benefit).toMatch(/tuition/i);
+    // The synthetic fixture's own wording of the same rule ("any license class"), which is the
+    // second alternative in the `license` pattern and the shape 40+ ARRL catalog entries use.
+    expect(raws[0].rawFields.license).toBe('Open to licensed amateurs 25 or younger, any license class.');
   });
 });
 
@@ -179,6 +183,35 @@ describe('ncdxf-scholarships (REAL fixture)', () => {
   it('reads the scholarship page and never the DXpedition grant page', () => {
     expect(raws[0].sourceUrl).toBe('https://www.ncdxf.org/pages/scholarships.html');
     expect(raws[0].rawFields.summary).not.toMatch(/DXpedition|budget worksheet/i);
+  });
+
+  // Raw HTML line 240, the closing sentence of the tuition paragraph:
+  //   There is no restriction as to class of license.
+  // It used to land nowhere `extractLicense` reads (the rest of that paragraph is captured as
+  // `age`, and line 241's licence sentence as `applyNote`), so this record published with no
+  // licence constraint at all — the same defect already fixed for QCWA and the three YLRL
+  // scholarships in tier-c-a.ts.
+  it('files the licence sentence under a field extractLicense actually reads', () => {
+    expect(raws[0].rawFields.license).toBe('There is no restriction as to class of license.');
+    // The other licence sentence on the page is deliberately NOT the anchor: it carries "25
+    // years of age", which heldMonthsFrom would read as a 300-month licence-tenure requirement.
+    expect(raws[0].rawFields.license).not.toMatch(/\d/);
+  });
+
+  it('computes the exact licence floor the live page states: TECH, with no tenure requirement', () => {
+    const [constraint, ...rest] = extractLicense(raws[0]);
+    expect(rest).toEqual([]);
+    // "No restriction as to CLASS of license" presupposes a licence and disclaims only a floor
+    // above the entry level, so the floor is TECH — never NONE. Reading it as NONE is what
+    // publishes a licensed-operators-only award to an applicant with no amateur licence.
+    expect(constraint.spec).toEqual({ axis: 'license', licenseMin: 'TECH' });
+    expect(constraint.hard).toBe(true);
+    expect(constraint.rawText).toBe('There is no restriction as to class of license.');
+  });
+
+  it('states the licence requirement in its notes, in the funder\'s own words', () => {
+    expect(ncdxfScholarships.notes).toMatch(/AN AMATEUR RADIO LICENCE IS A HARD REQUIREMENT/);
+    expect(ncdxfScholarships.notes).toMatch(/ANY CLASS QUALIFIES/);
   });
 });
 

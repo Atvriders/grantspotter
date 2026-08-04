@@ -115,6 +115,35 @@ const CONFIGS: SinglePageConfig[] = [
       // (line 241). Ends in a COLON, not a period — the two university contact URLs follow as
       // their own lines. normalize publishes this as applyContact.
       applyNote: /(If you are a licensed[^.\n]*contacting the appropriate University directly:)/i,
+      // THE LICENCE REQUIREMENT ITSELF, which this config used to drop on the floor — the third
+      // and last instance of a defect already fixed in tier-c-a.ts for QCWA and for the three
+      // YLRL scholarships. `extractLicense` (normalize/axes/license.ts) reads ONLY the
+      // `License Requirement` and `license` rawFields. Both of this page's licence sentences
+      // landed elsewhere — one inside `age`, one inside `applyNote` — so this record published
+      // with NO licence constraint at all, and a scholarship the funder restricts to licensed
+      // hams showed as open to an applicant holding no amateur licence. It escaped the
+      // hs-unlicensed regression canary only because a missing constraint lands such an applicant
+      // in the `unknown` bucket rather than `eligible`, so it never moved the number.
+      //
+      // POLARITY, which is what makes this class dangerous. The live sentence (real capture line
+      // 240) is "There is no restriction as to class of license." That is ANY CLASS QUALIFIES: it
+      // PRESUPPOSES a licence and disclaims only a floor above the entry level. It is NOT "no
+      // licence needed", one word away in English. license.ts's CLASS_AGNOSTIC check — ordered
+      // before NO_LICENSE for exactly this shape — resolves it to TECH, the entry-level US class
+      // that every higher class also satisfies. The job here is only to make the sentence REACH it.
+      //
+      // ANCHORED AWAY FROM THE PAGE'S OTHER LICENCE SENTENCE ON PURPOSE. Line 241 states the rule
+      // too ("If you are a licensed amateur radio operator 25 years of age or younger…") and is
+      // the more obvious anchor, but `extractLicense` runs `heldMonthsFrom` over whatever text it
+      // is handed, and that sentence's "25 years" would parse as heldMonthsMin: 300 — a
+      // twenty-five-year licence-tenure requirement this funder never stated, and a far worse
+      // error than the one being fixed. The captured sentence must carry the licence rule and no
+      // unrelated number, which the class-restriction sentence does and the age sentence does not.
+      //
+      // Two alternatives, one per fixture: the live page's "no restriction as to class of
+      // license", and the "any license class" wording of the synthetic pathological.html (also
+      // the shape 40+ ARRL catalog entries use), which keeps that fixture exercising this path.
+      license: /([^.\n]*\b(?:no restrictions? as to (?:the )?class of licen[sc]e|any licen[sc]e class)\b[^.]*\.)/i,
       // The page also carries the RETIRED predecessor: "Previous ARRL Foundation Scholarship
       // Program (No Longer Active)" over a 1998-2012 recipient table. Captured explicitly so a
       // reviewer can see that the "No Longer Active" text on this page belongs to the old cash
@@ -122,7 +151,13 @@ const CONFIGS: SinglePageConfig[] = [
       // normalize-side consequence.
       retiredPredecessor: /(Previous ARRL Foundation Scholarship Program \(No Longer Active\))/i,
     },
-    requiredFields: ['benefit'],
+    // `license` is required for a sharper reason than `benefit`, and the same one tier-c-a.ts
+    // gives for QCWA: if `benefit` goes quiet the record merely gets thinner, but if the licence
+    // sentence goes quiet the record gets WIDER — it silently reverts to publishing a
+    // licensed-hams-only scholarship as open to everyone, which is the defect this entry exists
+    // to prevent. An empty yield is loud and a human fixes it the same day; a missing licence
+    // floor is silent and misleads applicants until someone re-reads the page.
+    requiredFields: ['benefit', 'license'],
     expectedMinRecords: 1,
     notes:
       'Licensed hams 25 or younger, any class. Benefit is full tuition at DX University or ' +
@@ -136,7 +171,12 @@ const CONFIGS: SinglePageConfig[] = [
       'scholarship, but it lives in the same rawText that normalize/deadline.ts scans for ' +
       'inactivity, so this record currently computes status=dormant off a sentence about a ' +
       'different program. The $20,000 figures on the page are DONATIONS INTO the fund, never ' +
-      'award amounts — no amount field is extracted here, deliberately.',
+      'award amounts — no amount field is extracted here, deliberately. AN AMATEUR RADIO LICENCE ' +
+      'IS A HARD REQUIREMENT, floor TECH: the page says "If you are a licensed amateur radio ' +
+      'operator 25 years of age or younger, you can apply", and "There is no restriction as to ' +
+      'class of license" is ANY CLASS QUALIFIES — not "no licence needed". The two must never be ' +
+      'conflated; the second reading publishes a licensed-operators-only award to an unlicensed ' +
+      'applicant.',
   },
   {
     id: 'ariss',
