@@ -1,0 +1,34 @@
+-- Owner: Plan 1, packages/server/src/db/migrations/001-init.sql.
+-- `profiles` (id, user_id, kind, data, updated_at) is created there, with
+-- user_id REFERENCES users(id) ON DELETE CASCADE and UNIQUE (user_id, kind).
+-- RESOLUTIONS R19: this file adds indexes ONLY. Table DDL belongs to 001-init.sql
+-- and re-declaring it here would no-op — SQLite matches CREATE TABLE IF NOT
+-- EXISTS on the name alone — while nonetheless *reading* as this plan's schema.
+-- `schemaConformance.test.ts` asserts Plan 1's columns and fails on any table or
+-- index name declared twice across the migration set.
+--
+-- A user may hold BOTH a student and an organization profile (spec §5), which is
+-- what the composite uniqueness expresses; the named index below is the lookup
+-- Plan 3's `loadProfile(db, userId, kind)` runs on every browse request.
+--
+-- MEASURED, so the next reader does not have to guess (2026-08-03, EXPLAIN QUERY
+-- PLAN on this schema, `SELECT data FROM profiles WHERE user_id = ? AND kind = ?`):
+--
+--   without this file : SEARCH profiles USING INDEX sqlite_autoindex_profiles_2
+--   with this file    : SEARCH profiles USING INDEX idx_profiles_user_kind
+--
+-- The lookup was ALREADY indexed before this migration existed: Plan 1's
+-- UNIQUE (user_id, kind) makes SQLite build exactly this index implicitly, and
+-- the planner simply switches to whichever of the two it is given. So this
+-- statement buys no speed, and it is kept for one reason only — it gives the
+-- structure a name the schema can be reasoned about by, instead of leaving
+-- Plan 3's hot lookup depending on an anonymous `sqlite_autoindex_*` that no
+-- migration mentions and any future rewrite of the table constraint would take
+-- away silently. A covering variant `(user_id, kind, data)` was tried and
+-- rejected in the same session: the planner ignored it in favour of the
+-- autoindex, so it was pure write amplification over a JSON blob.
+--
+-- Being a second unique index over the same key does NOT make `saveProfile`'s
+-- `ON CONFLICT (user_id, kind) DO UPDATE` ambiguous; that was checked directly
+-- against this schema before the statement was kept.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_user_kind ON profiles (user_id, kind);
