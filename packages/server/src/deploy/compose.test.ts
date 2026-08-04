@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
+  DEFAULT_CONTACT_URL,
+  FORMER_PLACEHOLDER_CONTACT_URL,
   loadConfig,
-  PLACEHOLDER_CONTACT_URL,
   PLACEHOLDER_MARKER,
   PLACEHOLDER_SESSION_SECRET,
 } from '../config.js';
@@ -140,13 +141,11 @@ describe('docker-compose.yml is the only file an operator needs', () => {
 });
 
 describe('the shipped secret is not a secret, and the server knows it', () => {
-  it('ships the exact placeholder strings config.ts refuses', () => {
-    // Imported constants, not literals retyped here: this is the assertion that makes it
+  it('ships the exact placeholder SESSION_SECRET config.ts refuses', () => {
+    // Imported constant, not a literal retyped here: this is the assertion that makes it
     // impossible for the compose file and the loader to drift apart on the value.
     expect(envEntries.SESSION_SECRET).toBe(PLACEHOLDER_SESSION_SECRET);
-    expect(envEntries.CONTACT_URL).toBe(PLACEHOLDER_CONTACT_URL);
     expect(envEntries.SESSION_SECRET).toContain(PLACEHOLDER_MARKER);
-    expect(envEntries.CONTACT_URL).toContain(PLACEHOLDER_MARKER);
   });
 
   it('refuses to start on exactly what this file ships', () => {
@@ -157,32 +156,49 @@ describe('the shipped secret is not a secret, and the server knows it', () => {
     expect(() => loadConfig(envEntries)).toThrow(/SESSION_SECRET is still the placeholder/);
   });
 
-  it('refuses the shipped CONTACT_URL even once the secret is real', () => {
-    // Fixing one required value must not silently let the other through: an operator who
-    // generated a secret and stopped reading would otherwise crawl 25 nonprofits anonymously.
-    const secretFixed = { ...envEntries, SESSION_SECRET: 'f'.repeat(64) };
-    expect(() => loadConfig(secretFixed)).toThrow(/CONTACT_URL is still the placeholder/);
-  });
-
-  it('starts once both placeholders are replaced, and changes nothing else', () => {
-    // The other half of the claim. If a non-placeholder value in this file were wrong — a mistyped
-    // cron, a YAML boolean `parseBool` rejects — the operator would hit it only after fixing the
-    // two that are flagged, which is the worst moment to find it.
-    const config = loadConfig({
-      ...envEntries,
-      SESSION_SECRET: 'f'.repeat(64),
-      // Was `https://www.example.org/grantspotter` — the string the CONTACT_URL error message
-      // used to offer as its worked example, which this assertion then certified as acceptable.
-      // Both are gone: reserved documentation domains are refused, and the message no longer
-      // hands out an address at all.
-      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
-    });
+  /**
+   * THIS TEST USED TO ASSERT THE OPPOSITE, and the assertion was not wrong — the design was
+   * different. It read "refuses the shipped CONTACT_URL even once the secret is real", because
+   * the compose file shipped a `CHANGE_ME` contact URL and a second edit was required. That edit
+   * is gone: CONTACT_URL has a default, the compose file ships it, and one value — the session
+   * secret, which nothing but the operator can generate — is all that stands between a fresh
+   * clone and a running server. So the claim to bind is the new one, and it is the sharper of
+   * the two: EXACTLY ONE value in this file must need editing, checked by editing exactly that
+   * one and requiring a config back.
+   */
+  it('needs exactly one edit — the secret — and starts on the shipped contact URL', () => {
+    const config = loadConfig({ ...envEntries, SESSION_SECRET: 'f'.repeat(64) });
+    expect(config.contactUrl).toBe(envEntries.CONTACT_URL);
+    expect(config.contactUrl).toBe(DEFAULT_CONTACT_URL);
+    // …and nothing else in this file is quietly broken. A mistyped cron or a YAML boolean
+    // `parseBool` rejects would otherwise surface only after the operator fixed the secret,
+    // which is the worst moment to find it.
     expect(config.port).toBe(3030);
     expect(config.dataDir).toBe('/data');
     expect(config.crawlEnabled).toBe(true);
     expect(config.crawlCron).toBe('17 3 * * *');
     expect(config.anthropicApiKey).toBeUndefined();
     expect(config.simplerGrantsApiKey).toBeUndefined();
+  });
+
+  it('ships a contact URL that is real, not a placeholder wearing https', () => {
+    // The guard on CONTACT_URL did not go away with the requirement to edit it, so what this
+    // file ships has to clear the same bar an operator's own value does.
+    expect(envEntries.CONTACT_URL).not.toBe(FORMER_PLACEHOLDER_CONTACT_URL);
+    expect(envEntries.CONTACT_URL ?? '').not.toContain(PLACEHOLDER_MARKER);
+    expect(() =>
+      loadConfig({ SESSION_SECRET: 'f'.repeat(64), CONTACT_URL: envEntries.CONTACT_URL }),
+    ).not.toThrow();
+  });
+
+  it('says in the file itself who the default reaches, and when to override it', () => {
+    // The operator decides this while looking at this file and nowhere else, so the caveat has
+    // to be here and not only in the README: every deployment that keeps the default names the
+    // same tracker, which is not the operator's.
+    expect(compose).toContain(DEFAULT_CONTACT_URL);
+    expect(compose).toMatch(/OVERRIDE IT/);
+    expect(compose).toMatch(/same tracker/i);
+    expect(compose).toMatch(/fork/i);
   });
 
   it('tells the operator how to generate a secret the server will accept', () => {
@@ -206,8 +222,16 @@ describe('the shipped secret is not a secret, and the server knows it', () => {
     }
   });
 
-  it('carries no real secret and no example address that resolves', () => {
+  it('carries no real secret, and no address but this project’s own', () => {
     expect(compose).not.toMatch(/sk-ant-[A-Za-z0-9-]{10,}/);
-    expect(compose).toMatch(/example\.org|example\.com/);
+    // This assertion used to require a reserved documentation domain to be present, which was
+    // the right shape when the only address here was a placeholder nobody should reach. The file
+    // now prints one address ON PURPOSE and it resolves, so the guard inverts: every http(s) URL
+    // in this file must be this project's, never a third party's and never an operator's.
+    const urls = [...compose.matchAll(/https?:\/\/[^\s"']+/g)].map((m) => m[0]);
+    expect(urls.length).toBeGreaterThan(0); // vacuity guard on the match above
+    for (const url of urls) {
+      expect(url, url).toMatch(/^https:\/\/github\.com\/Atvriders\/grantspotter\b/);
+    }
   });
 });

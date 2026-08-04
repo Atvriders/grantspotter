@@ -30,5 +30,7 @@ artefact of this fixture — it was re-measured directly against the live API on
 and without `printFields`, and the field set is identical either way. See the `notes` on
 `sources/nsf-awards.ts` for the two previously-documented API facts this capture disproves.
 
-To refresh: `CONTACT_URL=<url> npm run capture-fixture -- nsf-awards`, then re-run the redaction
-above before committing.
+To refresh: `npm run capture-fixture -- nsf-awards`, then re-run the redaction above before
+committing. `CONTACT_URL` no longer has to be set for it — it defaults to the project's issue
+tracker, the same as the server — but set it if the site being fetched should be able to reach you
+rather than us.

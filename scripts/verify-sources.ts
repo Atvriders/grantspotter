@@ -12,18 +12,16 @@
  *   npm run verify-sources                 # every source in the registry
  *   npm run verify-sources -- qcwa austin-arc   # just these source ids
  */
-import { buildUserAgent } from '../packages/server/src/config.js';
+import { buildUserAgent, DEFAULT_CONTACT_URL } from '../packages/server/src/config.js';
 import { formatVerifyReport, verifyExitCode, verifySources } from '../packages/server/src/crawl/verify.js';
 import { createFetcher } from '../packages/server/src/fetcher/index.js';
 import { simplerAuthHeaders } from '../packages/server/src/federal/simplerGrants.js';
 
 async function main(): Promise<void> {
-  const contactUrl = process.env.CONTACT_URL;
-  if (!contactUrl) {
-    console.error('CONTACT_URL must be set — it goes in the crawler User-Agent.');
-    process.exitCode = verifyExitCode();
-    return;
-  }
+  // The server's default, not a second rule: unset means "identify through the project's issue
+  // tracker", and this script polls the same live sites the crawler does. Set CONTACT_URL if the
+  // sites you are about to poll should be able to reach YOU about it.
+  const contactUrl = process.env.CONTACT_URL?.trim() || DEFAULT_CONTACT_URL;
   const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
   const fetcher = createFetcher({
     userAgent: buildUserAgent(contactUrl),

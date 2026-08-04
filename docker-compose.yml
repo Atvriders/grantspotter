@@ -1,19 +1,17 @@
 # GrantSpotter. Pulls the image published by GitHub Actions; it does not build.
 #
-# There is no .env file and nothing to copy. Edit the two values marked EDIT THIS below,
-# then:
+# There is no .env file and nothing to copy. Edit the ONE value marked EDIT THIS below, then:
 #
 #   docker compose pull
 #   docker compose up -d
 #
-# Both of those ship as placeholders, and the server refuses to start while any recognisable
-# piece of either is still in place — see packages/server/src/config.ts. Deleting the CHANGE_ME_
-# prefix is not an edit; the rest of the line is published here too, and the check is on any
-# eight-character run, not on the marker. That refusal replaces the ":?" interpolation guard this
-# file used to carry, and it exists because this repository is public: a session secret readable
-# on GitHub is one every unedited deployment shares, so the cookie signature stops proving this
-# server issued anything, and a crawler with a placeholder contact URL is one the ~25 small
-# nonprofits it polls can neither identify nor ask to stop.
+# That value ships as a placeholder, and the server refuses to start while any recognisable piece
+# of it is still in place — see packages/server/src/config.ts. Deleting the CHANGE_ME_ prefix is
+# not an edit; the rest of the line is published here too, and the check is on any eight-character
+# run, not on the marker. That refusal replaces the ":?" interpolation guard this file used to
+# carry, and it exists because this repository is public: a session secret readable on GitHub is
+# one every unedited deployment shares, so the cookie signature stops proving this server issued
+# anything.
 #
 # THIS FILE IS TRACKED BY GIT. If your copy of this repository is a fork you push, the secret you
 # paste below is published the moment you push it — the same accident, from the other direction.
@@ -45,16 +43,23 @@ services:
       PORT: 3030
       DATA_DIR: /data
 
-      # EDIT THIS — required, no default, and the placeholder below is refused by value.
+      # EDIT THIS — the only value in this file you must change. Required, no default, and the
+      # placeholder below is refused by value.
       # Generate a real one with:  openssl rand -hex 32
       SESSION_SECRET: CHANGE_ME_generate_one_with_openssl_rand_hex_32_and_paste_it_here
 
-      # EDIT THIS — required, no default, and the placeholder below is refused by value.
-      # An http(s) page you control and can be reached through: it goes into the crawler's
-      # User-Agent, and it is how a site owner finds out who is polling them. No example is
-      # given here on purpose — every address short enough to print in a comment is one of the
-      # reserved documentation names, which reach nobody and which the server also refuses.
-      CONTACT_URL: https://example.org/CHANGE_ME_to_a_page_that_says_who_runs_this
+      # Works as shipped. This goes into the crawler's User-Agent and is how a site owner finds
+      # out who is polling them; left at the value below it points them at this project's issue
+      # tracker, which reaches a human.
+      #
+      # OVERRIDE IT if complaints should reach YOU rather than this project's maintainers — you
+      # are running a modified fork, a large or long-running deployment, or polling on behalf of
+      # an institution. Every deployment that keeps this default names the SAME tracker, so a
+      # site owner who wants your instance in particular to stop reaches people who do not run it
+      # and cannot stop it. Replace it with an http(s) page you control and can be reached
+      # through. The reserved documentation domains (example.com/.net/.org, .invalid, .test,
+      # .example) are refused: they resolve for nobody, which is anonymity wearing a name tag.
+      CONTACT_URL: https://github.com/Atvriders/grantspotter/issues
 
       CRAWL_ENABLED: "true"
       CRAWL_CRON: "17 3 * * *"

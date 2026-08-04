@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildUserAgent,
   ConfigError,
+  DEFAULT_CONTACT_URL,
+  FORMER_PLACEHOLDER_CONTACT_URL,
   loadConfig,
   MIN_SESSION_SECRET_LENGTH,
-  PLACEHOLDER_CONTACT_URL,
+  PLACEHOLDER_MARKER,
   PLACEHOLDER_RUN_LENGTH,
   PLACEHOLDER_SESSION_SECRET,
+  reservedContactName,
 } from '../src/config.js';
 
 /**
@@ -57,11 +60,13 @@ describe('loadConfig', () => {
       );
     });
 
-    it('refuses the exact CONTACT_URL the compose file ships, though it is a valid https URL', () => {
-      // It parses. Nothing about its SHAPE is wrong, which is why the check has to be by value.
-      expect(new URL(PLACEHOLDER_CONTACT_URL).protocol).toBe('https:');
-      expect(() => loadConfig({ ...VALID, CONTACT_URL: PLACEHOLDER_CONTACT_URL })).toThrow(
-        /CONTACT_URL is still the placeholder/,
+    it('refuses the CONTACT_URL placeholder it used to ship, though it is a valid https URL', () => {
+      // The compose file no longer ships this — CONTACT_URL has a default now — but the guard is
+      // not what was removed. It parses; nothing about its SHAPE is wrong, which is why the check
+      // has to be by value.
+      expect(new URL(FORMER_PLACEHOLDER_CONTACT_URL).protocol).toBe('https:');
+      expect(() => loadConfig({ ...VALID, CONTACT_URL: FORMER_PLACEHOLDER_CONTACT_URL })).toThrow(
+        /CONTACT_URL still contains CHANGE_ME/,
       );
     });
 
@@ -74,7 +79,7 @@ describe('loadConfig', () => {
       );
       expect(() =>
         loadConfig({ ...VALID, CONTACT_URL: 'https://radioclub.example.org/CHANGE_ME' }),
-      ).toThrow(/CONTACT_URL is still the placeholder/);
+      ).toThrow(/CONTACT_URL still contains CHANGE_ME/);
       // Lowercased by an operator who retyped it rather than pasting.
       expect(() =>
         loadConfig({ ...VALID, SESSION_SECRET: 'change_me_i_will_do_this_properly_tomorrow' }),
@@ -198,12 +203,15 @@ describe('loadConfig', () => {
       // The message that names a usable-looking example is the defect, not the wording.
       let message = '';
       try {
-        loadConfig({ ...VALID, CONTACT_URL: PLACEHOLDER_CONTACT_URL });
+        loadConfig({ ...VALID, CONTACT_URL: FORMER_PLACEHOLDER_CONTACT_URL });
       } catch (err) {
         message = (err as Error).message;
       }
-      expect(message).toMatch(/CONTACT_URL is still the placeholder/);
+      expect(message).toMatch(/CONTACT_URL still contains CHANGE_ME/);
       expect(message).not.toMatch(/example\.(org|com|net)/);
+      // It does have somewhere to send them now, and it is the one address that needs no
+      // invention: leave the variable alone.
+      expect(message).toMatch(/unset it entirely/);
     });
 
     it('accepts an address that is somebody’s', () => {
@@ -219,14 +227,93 @@ describe('loadConfig', () => {
     });
   });
 
-  it('refuses a missing or malformed CONTACT_URL', () => {
-    expect(() => loadConfig({ SESSION_SECRET: VALID.SESSION_SECRET })).toThrow(
-      /CONTACT_URL is required and has no default/,
-    );
-    expect(() => loadConfig({ ...VALID, CONTACT_URL: 'not a url' })).toThrow(
-      /CONTACT_URL must be an http\(s\) URL/,
-    );
-    expect(() => loadConfig({ ...VALID, CONTACT_URL: 'ftp://example.org' })).toThrow(ConfigError);
+  /**
+   * WHAT THIS BLOCK REPLACED, AND WHY THE OLD ASSERTION WAS NOT WRONG.
+   *
+   * Until 2026-08-04 this file asserted `CONTACT_URL is required and has no default` and that
+   * `loadConfig` threw when it was absent. That assertion was true about the code and faithful to
+   * the design of the day — "an anonymous crawler is one nobody can ask to stop" — so it is being
+   * rewritten because the DESIGN changed under it, not because it had gone stale or stood in the
+   * way of green. The requirement was doing one useful thing (no anonymous crawler) and one
+   * harmful one (a self-hoster could not start the server until they invented a contact page, and
+   * the value that actually gets pasted at that moment is one that parses and reaches nobody).
+   *
+   * The replacement has to hold the new design at least as tightly as the old one held the old,
+   * so these tests assert the three things that survive the change: the default is a real https
+   * address that is somebody's, an explicit value still wins, and a BAD explicit value is still
+   * refused. What stopped being required is the operator's edit — not the guard on it.
+   */
+  describe('CONTACT_URL has a default now, and the default is a real address', () => {
+    it('starts with no CONTACT_URL in the environment at all', () => {
+      const config = loadConfig({ SESSION_SECRET: VALID.SESSION_SECRET });
+      expect(config.contactUrl).toBe(DEFAULT_CONTACT_URL);
+    });
+
+    it('defaults to this project’s issue tracker, which reaches a human', () => {
+      // Pinned by value: the whole point of the change is WHICH address this is. A default that
+      // drifted to some other page would still pass every structural check below.
+      expect(DEFAULT_CONTACT_URL).toBe('https://github.com/Atvriders/grantspotter/issues');
+    });
+
+    it('holds the default to every rule an operator’s value is held to', () => {
+      // The default is not exempt from the loader's checks; it is the first value that has to
+      // pass them. A default under a reserved name, or one still carrying a marker, would be the
+      // exact failure this loader refuses in an operator's value.
+      const parsed = new URL(DEFAULT_CONTACT_URL);
+      expect(parsed.protocol).toBe('https:');
+      expect(reservedContactName(parsed.hostname)).toBeNull();
+      expect(DEFAULT_CONTACT_URL.toUpperCase()).not.toContain(PLACEHOLDER_MARKER);
+      // …and fed back in as though an operator had typed it, it survives loadConfig unchanged.
+      expect(loadConfig({ ...VALID, CONTACT_URL: DEFAULT_CONTACT_URL }).contactUrl).toBe(
+        DEFAULT_CONTACT_URL,
+      );
+    });
+
+    it('lets an explicit value win, because the operator is who a complaint should reach', () => {
+      // The override is not a leftover: it is the answer for a fork, a large deployment, or an
+      // institution, none of which the project's own tracker can speak for.
+      const mine = 'https://w9xyz-radio-club.org/grantspotter';
+      expect(loadConfig({ ...VALID, CONTACT_URL: mine }).contactUrl).toBe(mine);
+      expect(loadConfig({ ...VALID, CONTACT_URL: VALID.CONTACT_URL }).contactUrl).toBe(
+        VALID.CONTACT_URL,
+      );
+    });
+
+    it('treats blank as unset rather than as an anonymous crawler', () => {
+      // `CONTACT_URL: ""` in a compose file is a variable somebody blanked, not a value. The
+      // alternative reading — empty string as the contact URL — is the one case that could put a
+      // `(+; …)` on the wire.
+      for (const blank of ['', '   ']) {
+        expect(loadConfig({ ...VALID, CONTACT_URL: blank }).contactUrl).toBe(DEFAULT_CONTACT_URL);
+      }
+    });
+
+    it('still refuses an explicitly bad value: the edit stopped being required, the guard did not', () => {
+      const bad: Record<string, [string, RegExp]> = {
+        'the placeholder this project used to ship': [
+          FORMER_PLACEHOLDER_CONTACT_URL,
+          /CONTACT_URL still contains CHANGE_ME/,
+        ],
+        'a marker left in an otherwise real address': [
+          'https://w9xyz-radio-club.org/CHANGE_ME',
+          /CONTACT_URL still contains CHANGE_ME/,
+        ],
+        'a reserved documentation domain': [
+          'https://my-club.example.org/contact',
+          /reserved for documentation/,
+        ],
+        'a reserved TLD': ['https://my-club.invalid/contact', /reserved for documentation/],
+        'not a URL at all': ['not a url', /CONTACT_URL must be an http\(s\) URL/],
+        'a scheme no site owner can follow': [
+          'ftp://w9xyz-radio-club.org',
+          /CONTACT_URL must be an http\(s\) URL/,
+        ],
+      };
+      for (const [why, [value, message]] of Object.entries(bad)) {
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: value }), why).toThrow(ConfigError);
+        expect(() => loadConfig({ ...VALID, CONTACT_URL: value }), why).toThrow(message);
+      }
+    });
   });
 
   it('applies the CONTRACT §7 defaults', () => {
@@ -279,7 +366,7 @@ describe('buildUserAgent', () => {
   // RESOLUTIONS R10: one definition, one output string. Plan 2 imports this
   // function instead of declaring its own.
   const EXPECTED =
-    'GrantSpotter/0.1.0 (+http://127.0.0.1:3030/grantspotter; nightly grant-deadline change detector)';
+    'GrantSpotter/0.1.0 (+http://127.0.0.1:3030/grantspotter; nightly grant-deadline change detector; contact the operator at that page)';
 
   it('names the app and carries the contact URL', () => {
     // Plan 2's fetcher sends this on every request. Politeness §7.1.3.
@@ -292,7 +379,52 @@ describe('buildUserAgent', () => {
     expect(buildUserAgent(loadConfig(VALID))).toBe(buildUserAgent(VALID.CONTACT_URL));
   });
 
+  /**
+   * The string a stranger reads. Everything in this block is about the reader who is not a user
+   * of this software: a sysadmin at 2am with a log line from something they have never heard of.
+   */
+  it('is the exact line a polled site sees from a stock deployment', () => {
+    expect(buildUserAgent(loadConfig({ SESSION_SECRET: VALID.SESSION_SECRET }))).toBe(
+      'GrantSpotter/0.1.0 (+https://github.com/Atvriders/grantspotter/issues; ' +
+        'nightly grant-deadline change detector; open an issue there to contact the maintainers)',
+    );
+  });
+
+  it('spells out an action the URL in it can actually support', () => {
+    // "open an issue" beside a club homepage would be an instruction nobody can follow, so the
+    // clause is derived from the URL rather than fixed to the default's wording.
+    expect(buildUserAgent(DEFAULT_CONTACT_URL)).toContain('open an issue there');
+    expect(buildUserAgent('https://github.com/someone/their-fork/issues')).toContain(
+      'open an issue there',
+    );
+    const club = buildUserAgent('https://w9xyz-radio-club.org/about');
+    expect(club).toContain('contact the operator at that page');
+    expect(club).not.toContain('open an issue');
+  });
+
+  it('is never anonymous and never more than one header line, whatever the contact URL', () => {
+    // The properties that have to hold for EVERY value the loader can produce, not just the
+    // three strings spelled out above. A User-Agent with no `+URL` is the thing this whole
+    // variable exists to prevent; a User-Agent with a newline in it is a header-injection bug.
+    const configs = [
+      loadConfig({ SESSION_SECRET: VALID.SESSION_SECRET }), // the default
+      loadConfig(VALID), // an http override
+      loadConfig({ ...VALID, CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter' }),
+      loadConfig({ ...VALID, CONTACT_URL: DEFAULT_CONTACT_URL }), // the default, set explicitly
+    ];
+    for (const config of configs) {
+      const ua = buildUserAgent(config);
+      expect(ua, ua).toContain(`GrantSpotter/0.1.0 (+${config.contactUrl};`);
+      expect(ua, ua).toContain('nightly grant-deadline change detector');
+      expect(ua, ua).toMatch(/contact/); // says how to reach somebody, not just who
+      expect(ua, ua).not.toMatch(/[\r\n]/);
+      expect(ua, ua).toMatch(/^[\x20-\x7e]+$/); // a legal single-line header value
+    }
+  });
+
   it('refuses to build an anonymous User-Agent', () => {
+    // Unreachable through `loadConfig` — blank falls back to the default — and kept because this
+    // function is exported and the scripts in scripts/ pass a bare string straight in.
     expect(() => buildUserAgent('')).toThrow(/CONTACT_URL is required/);
     expect(() => buildUserAgent('   ')).toThrow(/CONTACT_URL is required/);
   });

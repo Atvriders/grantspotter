@@ -12,7 +12,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FetchRequest, FetchedPayload } from '@grantspotter/core';
-import { buildUserAgent } from '../packages/server/src/config.js';
+import { buildUserAgent, DEFAULT_CONTACT_URL } from '../packages/server/src/config.js';
 import { createFetcher } from '../packages/server/src/fetcher/index.js';
 import { getSource } from '../packages/server/src/sources/registry.js';
 import { hasFollowUp, resolveRequests } from '../packages/server/src/sources/types.js';
@@ -39,12 +39,10 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const contactUrl = process.env.CONTACT_URL;
-  if (!contactUrl) {
-    console.error('CONTACT_URL must be set — it goes in the crawler User-Agent.');
-    process.exitCode = 2;
-    return;
-  }
+  // The server's default, not a second rule: unset means "identify through the project's issue
+  // tracker", and this script hits the same live sites the crawler does. Set CONTACT_URL if the
+  // site you are about to fetch should be able to reach YOU about it.
+  const contactUrl = process.env.CONTACT_URL?.trim() || DEFAULT_CONTACT_URL;
 
   const source = getSource(sourceId);
   const fetcher = createFetcher({ userAgent: buildUserAgent(contactUrl), contactUrl });

@@ -121,7 +121,7 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/400\s?MB/i);
   });
 
-  it('documents every environment variable and that two have no default', () => {
+  it('documents every environment variable, and the one that has no default', () => {
     for (const key of [
       'HOST_PORT',
       'PORT',
@@ -138,6 +138,56 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/no default/i);
     expect(readme).toMatch(/32 characters/);
     expect(readme).toMatch(/User-Agent/);
+  });
+
+  /**
+   * THE TRADE THIS README HAS TO KEEP ADMITTING TO.
+   *
+   * Until 2026-08-04 `CONTACT_URL` was required with no default, and this README said why in one
+   * sentence: *an anonymous crawler is one nobody can ask to stop*. It has a default now — the
+   * project's own issue tracker — and the tempting edit was to delete that sentence and say
+   * nothing further. What is true after the change is two things, not one: the crawler is no
+   * longer anonymous, AND every deployment that keeps the default points at the same tracker,
+   * which belongs to the maintainers of the software rather than to the operator of the instance
+   * doing the polling. A site owner who wants one instance stopped reaches people who cannot stop
+   * it.
+   *
+   * So this test exists to make the second half as hard to lose as the first. A README that
+   * advertises the default and drops the caveat would pass every other assertion in this file.
+   */
+  it('does not oversell the CONTACT_URL default: same tracker, not the operator’s', () => {
+    expect(readme).toContain('https://github.com/Atvriders/grantspotter/issues');
+    // `\W{0,3}` rather than a space: the emphasis markers around *same* are markdown, not meaning.
+    expect(readme).toMatch(/same\W{0,3}tracker/i);
+    expect(readme).toMatch(/not yours|not you\b/i);
+    // …and says what to do about it, to whom, and when.
+    expect(readme).toMatch(/override it/i);
+    expect(readme).toMatch(/fork/i);
+    expect(readme).toMatch(/institution/i);
+    // The remedy that does not depend on reaching anybody at all.
+    expect(readme).toMatch(/User-agent: GrantSpotter/);
+    expect(readme).toMatch(/Disallow: \//);
+  });
+
+  /**
+   * The README sends a site owner to an issue template, so the template has to exist and has to
+   * lead with the thing that works without us. A dangling link is bad; a link to a page that
+   * opens by asking an annoyed stranger for information before telling them how to make the
+   * problem stop is worse.
+   */
+  it('links an issue template that leads with the remedy, not with a request for data', () => {
+    const templatePath = resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md');
+    expect(readme).toContain('.github/ISSUE_TEMPLATE/crawler-contact.md');
+    const template = readFileSync(templatePath, 'utf8');
+    expect(template).toMatch(/^---\nname: /); // GitHub only offers it with front matter
+    expect(template).toContain('User-agent: GrantSpotter');
+    // The robots.txt block comes before anything the template asks the reader for.
+    expect(template.indexOf('User-agent: GrantSpotter')).toBeLessThan(
+      template.indexOf('Useful if you have it'),
+    );
+    // And it admits the limits of both remedies rather than promising a fix it cannot deliver.
+    expect(template).toMatch(/once per server process/);
+    expect(template).toMatch(/cannot switch it off|cannot stop it/i);
   });
 
   it('names the verified negatives so a reader does not re-research them', () => {

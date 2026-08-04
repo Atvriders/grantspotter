@@ -135,8 +135,19 @@ re-verifies quarterly.
 ## Polite crawling
 
 - Per-host serialisation. Never parallel within a host.
-- `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org.
-- A descriptive User-Agent naming the app and your `CONTACT_URL`.
+- `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org. The agent token is
+  `GrantSpotter`, so any site can stop any deployment of this with `User-agent: GrantSpotter` and
+  `Disallow: /`.
+- A User-Agent that says what this is and how to reach a human, in words rather than by the `+URL`
+  convention alone. A deployment that has not set `CONTACT_URL` sends, on every request:
+
+  ```
+  GrantSpotter/0.1.0 (+https://github.com/Atvriders/grantspotter/issues; nightly grant-deadline change detector; open an issue there to contact the maintainers)
+  ```
+
+  Set `CONTACT_URL` to an address of your own and that clause becomes *contact the operator at that
+  page* — the instruction always matches the URL beside it. [Environment](#environment) says when
+  you should.
 - Exponential backoff. No rate limits are published for Grants.gov, NSF or USAspending, but absence
   of documentation is not absence of limits.
 - Nightly, jittered. Nothing here changes faster than weekly, and most sources change three or four
@@ -294,22 +305,26 @@ exist to prevent.
 The image is built by GitHub Actions for `linux/amd64` and `linux/arm64` and published to
 `ghcr.io/atvriders/grantspotter:latest`. The repository and the package are public.
 
-There is one file and nothing to copy. Open `docker-compose.yml`, replace the two values marked
+There is one file and nothing to copy. Open `docker-compose.yml`, replace the one value marked
 `EDIT THIS`, and bring it up:
 
 ```bash
 # in docker-compose.yml, under environment:
 #   SESSION_SECRET: <the output of `openssl rand -hex 32`>
-#   CONTACT_URL:    <an http(s) page you control>
 docker compose pull
 docker compose up -d
 ```
 
-Both ship as placeholders containing `CHANGE_ME`, and **the server refuses to start while either
-is still there**, naming the one it found and what to do about it. That refusal is not politeness:
-this repository is public, so a placeholder session secret left in place would be a signing key
-everyone can read, and it is enforced by value in `packages/server/src/config.ts` rather than by
-the compose file, because the compose file is the thing being shipped.
+`SESSION_SECRET` ships as a placeholder containing `CHANGE_ME`, and **the server refuses to start
+while it is still there**, saying what it found and what to do about it. That refusal is not
+politeness: this repository is public, so a placeholder session secret left in place would be a
+signing key everyone can read, and it is enforced by value in `packages/server/src/config.ts`
+rather than by the compose file, because the compose file is the thing being shipped.
+
+`CONTACT_URL` used to be a second must-edit value and is not one now — it defaults to this
+project's issue tracker, which is enough to get you running. If you are deploying anything more
+than a personal instance, read the note under [Environment](#environment) before you leave it
+alone: the default identifies the *software*, not *you*.
 
 Then read the container log for the one-time admin bootstrap token. There is still no sign-up form
 for the public, but there **is** a first-run screen: open the app and, because no accounts exist yet,
@@ -365,14 +380,14 @@ hand from the Actions tab, and subsequent pushes behave normally.
 | `HOST_PORT` | no | `3030` | compose host port only; the only interpolated value left |
 | `PORT` | no | `3030` | in-container listen port |
 | `SESSION_SECRET` | **yes** | **no default** | at least **32 characters**; the server refuses to start without it, and refuses the shipped `CHANGE_ME` placeholder by value |
-| `CONTACT_URL` | **yes** | **no default** | an `http(s)` URL; goes in the crawler User-Agent; the shipped `CHANGE_ME` placeholder is refused by value |
+| `CONTACT_URL` | no | `https://github.com/Atvriders/grantspotter/issues` | an `http(s)` URL; goes in the crawler User-Agent. The default reaches this project's maintainers, **not you** — see below for when to override it. A `CHANGE_ME` value or a reserved documentation domain is still refused by value |
 | `DATA_DIR` | no | `/data` | SQLite, snapshots, fixture cache |
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
 | `ANTHROPIC_API_KEY` | no | none | optional parse assist only |
 | `SIMPLER_GRANTS_API_KEY` | no | none | optional federal ranking |
 
-Both required variables fail loudly on startup, and that is deliberate:
+One variable fails loudly on startup, and one carries a caveat rather than a requirement:
 
 - **`SESSION_SECRET` has no default because a shipped default session secret is a shared secret,
   which is not a secret.** Generate one with `openssl rand -hex 32`. The value in
@@ -382,14 +397,41 @@ Both required variables fail loudly on startup, and that is deliberate:
   eight-character run of the shipped placeholder may appear in your value; `openssl rand -hex 32`
   emits `[0-9a-f]` only and the placeholder's longest all-hex run is two characters, so a secret
   generated that way can never trip it.
-- **`CONTACT_URL` has no default because an anonymous crawler is one nobody can ask to stop.** It
-  goes into the crawler's User-Agent. Most of the ~25 sources this polls are small, volunteer-run
-  organisations — club sites, a foundation run by retirees, a scholarship page maintained by one
-  person — and they should be able to see who is polling them and get in touch. Use an `http(s)`
-  page you control and can be reached through. The reserved documentation domains are rejected
-  (`example.com`, `example.net`, `example.org`, and the `.invalid`, `.test` and `.example` TLDs):
-  they exist precisely so that they reach nobody, and a crawler identifying itself with one is
-  anonymous while looking identified.
+- **`CONTACT_URL` defaults to this project's issue tracker, which makes the crawler identifiable
+  but not necessarily answerable.** Read both halves of that.
+
+  It goes into the crawler's User-Agent. Most of the ~25 sources this polls are small,
+  volunteer-run organisations — club sites, a foundation run by retirees, a scholarship page
+  maintained by one person — and they should be able to see who is polling them and get in touch.
+  With the default, they can: the software has a name, a public source tree and an issue tracker a
+  human reads, and the User-Agent says so in words rather than leaving them to know the `+URL`
+  convention.
+
+  **What the default does not do is make your deployment answerable for itself.** Every deployment
+  that keeps it points at the *same* tracker — this project's, not yours. A site owner who wants
+  *your* instance in particular to stop polling them will reach maintainers who do not run it and
+  cannot stop it. There is one remedy that works no matter who is running what, and it is
+  `robots.txt`: every instance honours it, matched on the `GrantSpotter` token, so
+  `User-agent: GrantSpotter` + `Disallow: /` stops all of them — with the caveat that an instance
+  reads a given site's `robots.txt` once per server process, so a container that has been up for
+  months acts on a new file at its next restart. That is the first thing
+  [the issue template](.github/ISSUE_TEMPLATE/crawler-contact.md) tells an arriving site owner,
+  before it asks them for anything.
+
+  **Override it if a complaint should reach you rather than us** — you are running a modified fork,
+  a large or long-running deployment, or an instance polling on behalf of an institution. Point it
+  at an `http(s)` page you control and can be reached through. The reserved documentation domains
+  are rejected (`example.com`, `example.net`, `example.org`, and the `.invalid`, `.test` and
+  `.example` TLDs): they exist precisely so that they reach nobody, and a crawler identifying
+  itself with one is anonymous while looking identified. A value still containing `CHANGE_ME` is
+  rejected too — nobody has to edit this any more, but a half-finished edit is not an address.
+
+  This variable used to be required with no default, on the reasoning that *an anonymous crawler is
+  one nobody can ask to stop*. That was right about anonymity and wrong about the remedy: it made
+  the first run of a self-hosted app depend on the operator inventing a contact page, and an
+  operator who has none picks between finding one and pasting something that parses. The second is
+  what happens, and it yields a plausible-looking address that reaches nobody — the exact failure
+  the requirement existed to prevent, now wearing a name tag.
 
 ---
 

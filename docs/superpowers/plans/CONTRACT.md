@@ -474,6 +474,13 @@ as TEXT containing JSON and validated through the zod schemas in `core/schema.ts
 
 `SESSION_SECRET` having no default is deliberate — same rule as ham-net-assistant's `JWT_SECRET`.
 
+**Amended 2026-08-04.** `CONTACT_URL` is no longer required: it defaults to
+`https://github.com/Atvriders/grantspotter/issues`, so a self-hoster does not have to invent a
+contact page to start the server. The guard on an explicit value is unchanged (a `CHANGE_ME` value
+or a reserved documentation domain is still refused). The row above is left as written because
+these five plans were implemented against it; the live documentation is README → Environment,
+which also records what the default does not buy.
+
 ## 8. npm scripts (root)
 
 ```
