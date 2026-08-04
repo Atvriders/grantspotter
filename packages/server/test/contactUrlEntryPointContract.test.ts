@@ -119,6 +119,31 @@ const THE_WIRE_BOUNDARY = 'packages/server/src/fetcher/index.ts';
  * harness just started. Routing our own test server's health check through the crawler's politeness
  * machinery would test the machinery, not the server.
  *
+ * `packages/server/src/index.ts` supplies the transport for the user-initiated callsign lookup
+ * (`POST /api/callsign/lookup`). ADDED 2026-08-04, and it is a decision, not a convenience.
+ *
+ *   WHY IT IS NOT A POLL. It is one request, to one host, made because a person pressed a button
+ *   about their own public licence record, carrying no state and following no link. It enumerates
+ *   nothing, repeats nothing and is not scheduled. That is a different act from visiting ~25
+ *   volunteer-run sites on a timer, which is the act `createFetcher` is the boundary for, and
+ *   `callsign/callook.ts` sets out at length why routing it through the crawler instead would
+ *   both be wrong and delete the feature.
+ *
+ *   WHY IT IS INDEX.TS AND NOT THE CLIENT. `callook.ts` requires its transport and refuses to
+ *   default one, precisely so no file below the composition root holds a `fetch`. The transport
+ *   therefore has to be built somewhere, and the somewhere has to be a file allowed to call
+ *   `buildUserAgent` — which is this list's sibling above, and which is the point: until
+ *   2026-08-04 the lookup went out as `user-agent: node`, the only anonymous request this
+ *   software made. It is now the same identified string as every crawl request, from the same
+ *   factory, off the same CONTACT_URL. Exempting this file is what let that be fixed WITHOUT
+ *   minting a second User-Agent somewhere the rule above cannot see.
+ *
+ *   WHAT THE EXEMPTION COSTS. index.ts can now open a socket without anything noticing, and it is
+ *   the largest file on this list. That is bearable only because it is the composition root: it
+ *   has no callers, cannot be imported (it runs `main()` at module load), and every line in it is
+ *   read by whoever changes how this application is assembled. It is not a licence for a second
+ *   `fetch` in here, and a third file wanting one is a decision for whoever is reading this next.
+ *
  * `scripts/measure-pacing.ts` imports `node:http` to LISTEN, not to poll. It is the harness that
  * measures the per-host interval this project advertises, and measuring the gap between requests
  * requires a server that records when each one arrived. Its outbound side is a real fetcher — it is
@@ -130,6 +155,7 @@ const THE_WIRE_BOUNDARY = 'packages/server/src/fetcher/index.ts';
  */
 const DIRECT_NETWORK = [
   'packages/server/src/ai/assist.ts',
+  'packages/server/src/index.ts',
   'e2e/shippedSeed.ts',
   'scripts/measure-pacing.ts',
 ];
@@ -384,6 +410,35 @@ describe('every path that can name this crawler goes through one predicate', () 
         .some((line) => OPENS_A_SOCKET.some((pattern) => pattern.test(line)));
       expect(hit, rel).toBe(true);
     }
+  });
+
+  /**
+   * THE ONE EXEMPTION THAT COULD RE-CREATE THE DEFECT, HELD SHUT.
+   *
+   * `index.ts` is on DIRECT_NETWORK so that the callsign lookup can be given a transport at the
+   * composition root. That exemption switches off the only structural guarantee this file has
+   * about that file — and the defect it was granted to FIX was an anonymous request. If somebody
+   * later adds a second `fetch` in there, or drops the header while keeping the call, the request
+   * goes back to `user-agent: node` and nothing above notices, because the file is on the list.
+   *
+   * So the exemption is narrowed to exactly what was argued for: ONE call, carrying a User-Agent
+   * that came from the one factory. Nothing here checks the wire — `e2e/api.spec.ts` does that
+   * against a real socket — this checks that the composition root cannot quietly stop trying.
+   */
+  it('holds the one exempted fetch in index.ts to a single identified call', async () => {
+    const rel = 'packages/server/src/index.ts';
+    const source = (await scannedFiles()).find((f) => f.rel === rel)?.source ?? '';
+    expect(source, rel).not.toBe('');
+
+    const calls = source.split('\n').filter((line) => /(?<![.\w$])fetch\s*\(/.test(line));
+    expect(calls, `${rel} may open exactly one socket of its own`).toHaveLength(1);
+
+    // The identity, and where it came from. `buildUserAgent(config)` and not a literal: a
+    // hand-written "GrantSpotter/0.1.0 (…)" here would be a second User-Agent that agrees with
+    // the real one until the day somebody changes one of them.
+    expect(source).toMatch(/headers\.set\(\s*['"]user-agent['"]/);
+    expect(source).toMatch(/buildUserAgent\s*\(\s*config\s*\)/);
+    expect(source, `${rel} must not re-spell the User-Agent`).not.toMatch(/GrantSpotter\/\d/);
   });
 
   /**

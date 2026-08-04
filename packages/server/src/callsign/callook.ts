@@ -8,7 +8,7 @@ import type { CallsignLookupResult, CallsignRecord } from './types.js';
  *
  * This module exists so that a student setting up an account can type `KD9XYZ` instead of ten
  * fields. It is not a crawler and must not become one: one request per call, no cache, no
- * discovery, no following of links or redirects, nothing queued, nothing retried more than once.
+ * discovery, no following of links or redirects, nothing queued, nothing retried.
  * Every source of data this project POLLS goes through the crawler's fetcher (robots.txt,
  * per-host pacing, snapshots, a contact-bearing User-Agent); a lookup a person triggers about
  * their own licence is a different act, and the differences are enumerated below rather than
@@ -54,8 +54,14 @@ export const CALLOOK_BASE_URL = 'https://callook.info';
  * The crawler's timeout is sized for a volunteer-run site on shared hosting that nobody is
  * watching. This one is sized for the person watching the spinner: past a few seconds they have
  * already decided the form is broken, and the fallback — typing four fields themselves — costs
- * less than waiting. The worst case a user can experience is this budget once (see the retry
- * rule in {@link lookupCallsign}).
+ * less than waiting. The worst case a user can experience is this budget ONCE, and that sentence
+ * is now true rather than aspirational (see the no-retry rule in {@link lookupCallsign}).
+ *
+ * IT WAS NOT TRUE UNTIL 2026-08-04. This file retried once on a dropped connection, each attempt
+ * with its own fresh `AbortSignal.timeout(timeoutMs)`, so the budget was per ATTEMPT and not per
+ * call. Measured against a loopback server that accepted the connection and then destroyed the
+ * socket at 900 ms, with `timeoutMs = 1000`: two requests and 1808 ms of spinner. That is what
+ * this comment already promised would not happen.
  */
 const DEFAULT_TIMEOUT_MS = 8_000;
 
@@ -173,6 +179,24 @@ function record(value: unknown): Record<string, unknown> {
  */
 function normalise(callsign: string): string {
   return callsign.replace(/\s+/g, '').toUpperCase();
+}
+
+/**
+ * Does looking this callsign up cost callook.info a request?
+ *
+ * EXPORTED FOR THE THING THAT RATIONS REQUESTS. `api/callsign.ts` limits how often one person may
+ * make this software ask somebody else's server a question, and a callsign that is not a US prefix
+ * is refused here, in this process, before any socket exists — see the short-circuit in
+ * {@link lookupCallsign}, which calls THIS function so that there is exactly one opinion about it
+ * and the ration can never disagree with the request it is rationing.
+ *
+ * Until 2026-08-04 the route had no way to ask, so it charged every press. Nine `DL1ABC` presses
+ * from one member spent the whole allowance without a single request leaving the process, and the
+ * next press — with a real US callsign — was refused for ten minutes. That punished exactly the
+ * international operators the `not_us` message exists to reassure.
+ */
+export function wouldReachTheSource(callsign: string): boolean {
+  return callDistrictFromCallsign(normalise(callsign)) !== undefined;
 }
 
 /**
@@ -345,19 +369,28 @@ function wasAborted(error: unknown): boolean {
  * encodes the US prefix rule (the whole K/N/W blocks, AA-AL of the A block) and this file does not
  * mint a second opinion about what a callsign looks like.
  *
- * RETRIES: at most one, and never after a timeout. A dropped connection is a coin-flip worth
- * flipping twice and costs nothing when it succeeds. A timeout is not: the source has already had
- * the whole budget, and spending it again doubles the wait for somebody who is watching a spinner
- * and whose alternative — typing four fields — takes less time than the second attempt. An HTTP
- * status is not retried either: a 429 or a 503 is the source asking to be left alone, and this
- * path has no backoff to honour it with, because it is not allowed to sleep in front of a user.
+ * RETRIES: NONE. One press of the button is one request, and that is a promise made to two
+ * different readers who both have to be able to check it — the person watching the spinner, who is
+ * told the wait is bounded by {@link DEFAULT_TIMEOUT_MS}, and callook.info, whom the README tells
+ * that this feature is "one user-initiated request to one host" and not a crawl. It used to retry
+ * once on a dropped connection, on the reasoning that a coin-flip worth flipping twice "costs
+ * nothing when it succeeds". It cost something when it FAILED: a fresh timeout budget per attempt,
+ * measured at two requests and 1808 ms against a 1000 ms budget, and a second request to a host
+ * that had just dropped the first one. Both published sentences were false while that stood, and
+ * of the two ways to make them agree — widen the promise, or narrow the code — narrowing the code
+ * is the one that leaves a promise worth having. A dropped connection now says so and offers the
+ * button again, which is a retry the person decides on.
+ *
+ * An HTTP status is not retried either, for the reason it never was: a 429 or a 503 is the source
+ * asking to be left alone, and this path has no backoff to honour it with, because it is not
+ * allowed to sleep in front of a user.
  */
 export async function lookupCallsign(
   callsign: string,
   deps: CallsignLookupDeps,
 ): Promise<CallsignLookupResult> {
   const wanted = normalise(callsign);
-  if (callDistrictFromCallsign(wanted) === undefined) {
+  if (!wouldReachTheSource(callsign)) {
     // Quoted back so the reader can see what we read, but capped: this is the one message that can
     // be built from arbitrary input, and a pasted paragraph must not become a pasted paragraph
     // with an apology around it. No US callsign is longer than 6 characters.
@@ -392,29 +425,20 @@ export async function lookupCallsign(
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const now = deps.now ?? Date.now;
 
-  let response: Response | undefined;
-  let failure: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      response = await deps.transport(url, {
-        method: 'GET',
-        headers: { accept: 'application/json' },
-        // We do not follow redirects. Following one means requesting a host that has not been
-        // past `assertNotBlocked`, and one request per call is the promise this module makes.
-        redirect: 'manual',
-        // A fresh signal per attempt: an AbortSignal that has already fired cannot be reused.
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      break;
-    } catch (error) {
-      failure = error;
-      if (wasAborted(error)) break;
-    }
-  }
-
-  if (response === undefined) {
+  let response: Response;
+  try {
+    // THE ONLY REQUEST. There is no loop around this on purpose; see the RETRIES paragraph above.
+    response = await deps.transport(url, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      // We do not follow redirects. Following one means requesting a host that has not been
+      // past `assertNotBlocked`, and one request per call is the promise this module makes.
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
     return unavailable(
-      wasAborted(failure)
+      wasAborted(error)
         ? 'callook.info did not answer in time, so nothing was filled in. That is the network or ' +
           'the source being slow, not anything to do with your callsign — try again in a moment, ' +
           'or type your details in and carry on.'

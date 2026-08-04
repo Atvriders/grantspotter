@@ -123,9 +123,17 @@ constructor option and no second list that can re-permit any host named here.
 | `grantwatch.com` | "Automated access, including scripts, bots, or data scraping tools, is prohibited"; "We do not offer or authorize any API access". |
 | `grantstation.com` | The EULA bans robots and spiders, and bans use for training large language models. |
 | `instrumentl.com` | The ToS bans crawling, and `robots.txt` explicitly names `anthropic-ai`, `ClaudeBot` and `Claude-Web`, disallowing `/grants`, `/foundations` and `/990-report`. |
+| `qrz.com` | Its Terms of Service forbid automated access **and** forbid storing what the database returns. Either half alone would rule it out. |
+| `hamcall.net`, `buckmasterinternational.com` | HamCall's `robots.txt` names `ClaudeBot`, `Claude-Web` and `anthropic-ai` in turn and then closes with `User-agent: *` / `Disallow: /`. The second domain is the same operator, listed so that a redirect or a rebrand is not a way round a decision made about the operator. |
 
 We deep-link out to the commercial aggregators where they are genuinely useful to a human. We never
 store their text.
+
+The last three are callsign directories rather than funding sites, and nothing in this software has
+any reason to fetch them. They are on the list precisely because of that: GrantSpotter does look one
+US callsign up when a person presses a button ([below](#the-callsign-lookup)), and the obvious next
+idea is "add a second source for when the first is down". These are the second sources, each has
+said no in writing, and a list is the only form of "no" that outlives the person who read it.
 
 Separately, five sites deliberately block non-browser clients — `yasme.org`, `ncdxf.org`,
 `radioclubofamerica.org`, `mga.ieee.org` (HTTP 418) and `k9ona.com`. **We do not spoof a user agent
@@ -143,10 +151,29 @@ re-verifies quarterly.
   30 s and you get 30 s. Ask for 0 s and you still get the host interval. Publish a `Crawl-delay`
   and the longest of the three wins — nothing here adds two waits together, and nothing here lets a
   server talk us *below* our own floor.
-- **One page fetch, or one `/robots.txt` read, costs at most nine requests to your server** —
-  redirect hops and retries spend one shared budget rather than two that multiply, so a chain that
-  redirects five times *and* fails at every hop costs nine requests and not 5 x 4 = 24. When the
-  budget runs out we stop and skip the source for that run.
+- **One page fetch costs at most nine requests to your server in total, the `/robots.txt` read
+  included** — however many origins (schemes or ports) that one server answers on. Redirect hops,
+  retries and the `robots.txt` read spend one shared budget rather than budgets that multiply, so a
+  chain that redirects five times *and* fails at every hop costs nine requests and not 5 x 4 = 24.
+  When the budget runs out we stop and skip the source for that run.
+
+  Until 2026-08-04 this sentence read "one page fetch, **or** one `/robots.txt` read", and that
+  `or` was the defect: the two had independent budgets of nine, and the robots budget was opened
+  once per **origin** visited rather than once per server. Constructed and counted against real
+  loopback servers, one page fetch, before → after: one origin **18 → 9**; an `http` → `https`
+  redirect on the same host **20 → 9**; five hops across six origins of one host **63 → 9**. A
+  chain that redirects to a *different host* still gets that host its own nine, deliberately —
+  that is a different server, owned by somebody else.
+- **A site that answers on more than one origin has its `robots.txt` read once per origin, and
+  that is deliberate.** Rules are per origin: `https://www.example.org/robots.txt` says nothing
+  about `http://` or about another port, so we have genuinely not read your rules for an origin
+  until we ask that origin. A site publishing `Disallow: /` therefore costs **one request per
+  origin we poll it under, per run**, not one flat. Today `www.arrl.org` is that case: of the eight
+  ARRL page URLs this software polls, six are spelled `https://` and two are still `http://`, so a
+  `Disallow: /` there would cost two requests a night rather than one.
+  `npm run measure-pacing twoOriginsOneHost` prints that exact shape — 2 requests, both
+  `/robots.txt`, one per origin. Reusing one origin's file for another would be cheaper and would
+  be us obeying rules nobody gave us, which is the one thing this project will not do.
 - These are measurements, not intentions. `npm run measure-pacing` drives the real fetcher against
   throwaway loopback HTTP servers — happy path, `429` with `Retry-After` 0/1/30, `503` with no
   header, a five-hop redirect chain, a chain that also 429s, and a host publishing `Crawl-delay: 5`
@@ -178,6 +205,103 @@ re-verifies quarterly.
   times a year.
 - An empty scrape is not a failure: `grants.austinhams.org` legitimately shows "No opportunities
   available" between 1 August and 30 April.
+- **Everything above is about the crawler, and the crawler is not the only thing here that opens a
+  socket.** There is exactly one other, it is not scheduled and it is not a crawl, and it is
+  written up in full rather than left for somebody to find in a log:
+  [The callsign lookup](#the-callsign-lookup).
+
+---
+
+## The callsign lookup
+
+There is a button beside the callsign field on the profile screen and on the first-run setup
+screen. Press it and this server makes **one** request to `callook.info`, a free service that
+republishes the FCC amateur radio licence database, and offers back what that licence says.
+
+**What it fills — four values, and only four**, named here by the form labels you will see them
+under: **Callsign**; **State**; **License class**, on a personal licence; and
+**Organization name**, on a club licence.
+The list is short because the profile has nowhere to put the rest: there is no street field, no
+city field, no ZIP field and no licensee-name field, so those values are shown and then dropped
+rather than kept for later. Nothing is saved by
+pressing the button — each of the four arrives in the form marked as read from callook.info rather
+than stated by you, and you accept or overwrite it before you save anything.
+
+The callsign is a special case worth knowing about: it counts as the source's answer only when it
+**differs** from what you typed. callook answers a lookup of a *superseded* callsign with the
+licensee's current record, so `K9OLD` can come back as `W5NEW` — and that is also what a typo
+landing on a stranger's callsign looks like. You are asked to confirm the swap before anything is
+filled, rather than having your input quietly replaced.
+
+**What it deliberately does not fill.** `licensedSince` — "first licensed" — is not filled and
+cannot be. The only date-shaped field in the answer is `grantDate`, which is the date the **current**
+licence was granted; it resets on every renewal and on every vanity callsign change. That number
+feeds "held a licence for at least N months" in the eligibility matcher, so filling it from
+`grantDate` would print a confident ELIGIBLE or NOT ELIGIBLE on an award your real licence date
+decides differently. It is shown, labelled *current licence granted*, and it stays there.
+Three legacy operator classes — Novice, Advanced, Technician Plus, still held by roughly 212,000
+people — map onto none of the four classes this software knows, so they arrive unmapped and you
+pick. The nearest neighbour is always upward and guessing upward manufactures an ELIGIBLE verdict
+on an award the holder cannot enter.
+
+**The address.** The licence's mailing address — street, city and ZIP — comes back with the record
+and is **shown to you**, because reading it is how you confirm the record is yours and not
+somebody else's with a similar callsign. It is **not stored**: there is no field in this product
+that holds a street address and nothing here reads one. Of that block only the **state** is kept,
+because eligibility rules are written in terms of states, ARRL Divisions and ARRL Sections. A PO
+box is flagged where the record gives one, since a few funders will not post a cheque to one.
+
+**Who may press it.** You, for your own profile, or the operator during first-run setup. There is
+no user parameter on the endpoint and a request that names one is refused rather than quietly
+answered for the caller: an administrator creating somebody else's account may not look that
+person's callsign up, because the result is a name and a home address and filling it into a third
+party's profile would make GrantSpotter state facts on their behalf that they never gave it. One
+press is one request; eight in ten minutes per person, which is a typist correcting a typo rather
+than a batch. A callsign that is not a US prefix is refused **here**, before any request exists,
+and costs neither a request nor a slice of that allowance.
+
+**If you are not licensed in the United States**, this button cannot help you and says so in those
+words. callook.info holds FCC records and nothing else. Told "not found" while creating an account,
+a licensed operator reads "your licence is invalid", so a non-US callsign gets its own message and
+its own reasoning: nothing in GrantSpotter works differently for you, and your licence is no less
+valid for being issued somewhere this lookup cannot reach.
+
+### `callook.info/robots.txt` says `Disallow: /`, and we query it anyway
+
+Both halves of that sentence are true and neither is hidden, because the honest version is the only
+one worth publishing.
+
+- `https://callook.info/robots.txt`, read 2026-08-04, is 26 bytes: `User-agent: *` / `Disallow: /`.
+- The same site's API reference, read the same day, says under Usage Terms: *"The callook.info API
+  is publicly available and is free to use however you wish."*
+
+Those are both the site owner's documents and they address different clients. RFC 9309 §1 scopes
+the Robots Exclusion Protocol to "automatic clients known as crawlers" — a browser fetching a page
+because a person asked for it has never been in scope, and neither is this. What makes that a claim
+worth believing rather than a convenient reading is the shape of the code: nothing on this path runs
+without a person supplying a callsign, nothing enumerates URLs, nothing follows a redirect, nothing
+retries, nothing is cached and nothing is scheduled. One press, one request, one host, about the
+presser's own public licence record.
+
+**The nightly crawler is a different thing and obeys `robots.txt` absolutely, everywhere, with no
+exception of any kind.** The paragraph above is not a hole in that and is not a precedent for one.
+`qrz.com`, `hamcall.net` and `buckmasterinternational.com` — the obvious "second source when
+callook is down" — are on the [hard blocklist](#the-blocklist-and-why-each-host-is-on-it) and
+cannot be contacted by anything in this software, including this button.
+
+**And there is a switch.** `CALLSIGN_LOOKUP_ENABLED=false` in `docker-compose.yml` and the route is
+not registered at all: your deployment never contacts callook.info. It defaults to **on**. If you
+read the argument above and are not persuaded by it, that line is the answer, and the cost of using
+it is that people type four fields — which is what everyone outside the United States does anyway.
+
+**Attribution, which is required rather than polite.** The underlying records are the **United
+States Federal Communications Commission**'s and are public-domain US Government work; `callook.info`
+is the service that republishes them in a form this software can read. The interface names
+callook.info as the source of every marked value, with the date it was read and the sentence *"They
+are values GrantSpotter read, not values you stated"*, and — where the record carries one — links
+the FCC's own ULS page for that licence, so you can check us against the FCC rather than against us.
+We never request that ULS page ourselves: `wireless2.fcc.gov` answers 403 to non-browser clients,
+including on its own `robots.txt`, which is exactly why the link is for you and not for us.
 
 ---
 
@@ -417,6 +541,7 @@ hand from the Actions tab, and subsequent pushes behave normally.
 | `DATA_DIR` | no | `/data` | SQLite, snapshots, fixture cache |
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
+| `CALLSIGN_LOOKUP_ENABLED` | no | `true` | the one user-initiated request this product makes. `false` and the route is not registered, so this deployment never contacts `callook.info` — see [The callsign lookup](#the-callsign-lookup) |
 | `ANTHROPIC_API_KEY` | no | none | optional parse assist only |
 | `SIMPLER_GRANTS_API_KEY` | no | none | optional federal ranking |
 
@@ -459,7 +584,8 @@ Two variables fail loudly on startup, and neither of them can be given a default
   Disallow: /
   ```
 
-  stops all of them. It takes effect on the next nightly crawl — each run re-reads every site's
+  stops the crawler in every deployment of this software, and the crawler is the thing that visits
+  you. It takes effect on the next nightly crawl — each run re-reads every site's
   `robots.txt` before it fetches anything, and a cached copy expires after six hours regardless, so
   no instance acts on rules more than a day old. A `robots.txt` that redirects is followed; one we
   fail to *reach* — a dropped connection, or a 429 or 5xx after four attempts — stops the crawl of
@@ -471,6 +597,17 @@ Two variables fail loudly on startup, and neither of them can be given a default
   That is the first thing
   [the issue template](.github/ISSUE_TEMPLATE/crawler-contact.md) tells an arriving site owner,
   before it asks them for anything.
+
+  **The one thing that sentence does not cover, stated here rather than discovered later.** There
+  is exactly one request in this product that a `Disallow: /` does not stop, and it is not the
+  crawler: the [callsign lookup](#the-callsign-lookup) goes to `callook.info` — one request, to
+  that one host, when a person presses a button about their own public licence record. It visits
+  nobody else, ever, so unless you run `callook.info` this paragraph is not about your site. It is
+  written down anyway, because the alternative is a sentence up there that is true of everything
+  except the case somebody eventually finds. callook.info's own API reference grants that use in
+  writing, RFC 9309 scopes `robots.txt` to automatic clients that go looking for URLs, and the
+  tension between those two documents is set out in full in that section rather than resolved in
+  our favour and left there. An operator who disagrees turns it off with one line.
 
   **What to put in it.** An `http(s)` page you control **and that can be reached from outside your
   own network**. It does not have to be this instance and it does not have to be much: a club page,

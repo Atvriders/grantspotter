@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { createRateLimiter, type RateLimiter } from '../auth/rateLimit.js';
-import { lookupCallsign } from '../callsign/callook.js';
+import { lookupCallsign, wouldReachTheSource } from '../callsign/callook.js';
 import type { CallsignLookupResult } from '../callsign/types.js';
 import { asyncHandler } from './asyncHandler.js';
 import { AppError } from './errors.js';
@@ -29,6 +29,16 @@ import { AppError } from './errors.js';
  * exactly as `verifyRouter` returns `ok: false` with a 200. The request succeeded; it is the
  * source that had nothing, or was mid-import, or was unreachable. Flattening those into an
  * HTTP error would tell a licensed operator that something is wrong with their licence.
+ *
+ * WHETHER IT EXISTS AT ALL IS THE OPERATOR'S CALL. `index.ts` mounts this router only when
+ * `CALLSIGN_LOOKUP_ENABLED` is true (it defaults to true). This is the one path in the product
+ * that contacts a host publishing `Disallow: /` — see the header of `callsign/callook.ts` for why
+ * RFC 9309 does not scope a user-initiated lookup, and the README section "The callsign lookup"
+ * for the same argument written for a reader who is not holding the code. An operator who reads
+ * that and disagrees must be able to act on it without patching the image, so there is a switch.
+ * With it off the route is not registered and `/api/callsign/lookup` 404s; the profile form keeps
+ * every field and the user types four of them, which is what it does today for every non-US
+ * licensee anyway.
  */
 
 /**
@@ -79,6 +89,21 @@ export interface CallsignRouterDeps {
  * this button is one request to somebody else's server, and a lookup that keeps timing out is
  * the moment that server can least afford to be asked again. Same reasoning as
  * `verifyRouter`'s ledger insert, which also lands before the fetch and is not rolled back.
+ *
+ * WHICH MEANS A PRESS THAT MAKES NO REQUEST IS NOT RATIONED, and that is not a loophole, it is
+ * the sentence above taken literally. `callsign/callook.ts` refuses a callsign that is not a US
+ * prefix in this process, from a table core already holds, before any socket exists — callook
+ * publishes FCC records and nothing else, so there is nothing to ask. Until 2026-08-04 the route
+ * charged for it anyway: nine `DL1ABC` presses from one member returned 200 eight times and then
+ * 429, with zero requests made to anybody, and the next press — with a real US callsign — was
+ * refused for 600 seconds. The people that hit hardest are the international operators whose
+ * whole experience of this feature is the `not_us` message, which exists specifically to tell them
+ * nothing is wrong with their licence. Telling them that eight times and then locking the form is
+ * the opposite of what it says.
+ *
+ * `wouldReachTheSource` is the predicate, and it is EXPORTED BY THE CLIENT rather than restated
+ * here: it is the same call `lookupCallsign` makes for its own short-circuit, so the thing being
+ * rationed and the thing being counted cannot drift apart.
  *
  * The numbers are a judgement, not a measurement: this is a person typing one callsign, and a
  * few corrections to a typo is the widest honest use. Eight in ten minutes covers that with
@@ -162,22 +187,38 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
         );
       }
 
-      const decision = limiter.check(rateKey);
-      if (!decision.allowed) {
-        // Retry-After is a transport header; the body stays the one error envelope.
-        res.set('Retry-After', String(decision.retryAfterSec));
-        throw new AppError(
-          'rate_limited',
-          'That is more callsign lookups than one person filling in a form makes. callook.info ' +
-            'answers these for free; GrantSpotter asks it politely. Try again shortly, or type ' +
-            'your licence details in yourself.',
-          { retryAfterSec: decision.retryAfterSec },
-        );
+      /**
+       * The gate is on the REQUEST, so a press that cannot become one walks straight past it.
+       *
+       * Asked BEFORE `limiter.check`, not after, and that ordering is the whole of it: a member
+       * who has genuinely spent their eight and then types a German callsign gets the `not_us`
+       * sentence rather than a 429, because answering them costs callook.info nothing at all.
+       *
+       * The cost of letting it past is local and bounded — a whitespace strip, an upper-case and a
+       * prefix test — and the caller is already authenticated or holds the one-time setup token,
+       * so this is not a door anyone can reach without one. Authorisation above; rationing here.
+       */
+      if (wouldReachTheSource(body.callsign)) {
+        const decision = limiter.check(rateKey);
+        if (!decision.allowed) {
+          // Retry-After is a transport header; the body stays the one error envelope.
+          res.set('Retry-After', String(decision.retryAfterSec));
+          throw new AppError(
+            'rate_limited',
+            'That is more callsign lookups than one person filling in a form makes. callook.info ' +
+              'answers these for free; GrantSpotter asks it politely. Try again shortly, or type ' +
+              'your licence details in yourself.',
+            { retryAfterSec: decision.retryAfterSec },
+          );
+        }
+        // Counted BEFORE the lookup and never rolled back: what is being rationed is the request
+        // this is about to make, and a source that is failing must not be retriable as fast as a
+        // person can click. Counting it AFTER instead would also have fixed the `not_us` charge,
+        // and would have opened a worse hole — `check` and `recordFailure` are synchronous
+        // neighbours today, so nothing can interleave between them; with an `await` in the middle,
+        // eight concurrent presses would all pass a check that none of them had yet paid for.
+        limiter.recordFailure(rateKey);
       }
-      // Counted BEFORE the lookup and never rolled back: what is being rationed is the request
-      // this is about to make, and a source that is failing must not be retriable as fast as a
-      // person can click.
-      limiter.recordFailure(rateKey);
 
       const result: CallsignLookupResult = await lookupCallsign(body.callsign, {
         transport: deps.transport,

@@ -412,3 +412,166 @@ describe('README honesty surfaces', () => {
     }
   });
 });
+
+/**
+ * THE ONE REQUEST THIS PRODUCT MAKES THAT A `robots.txt` DOES NOT STOP.
+ *
+ * The README's central promise to a polled site is that `User-agent: GrantSpotter` /
+ * `Disallow: /` is the remedy that works no matter who is running what. On 2026-08-04 that
+ * sentence became false as written: the callsign lookup queries `callook.info`, which publishes
+ * `Disallow: /`.
+ *
+ * The fix is NOT to weaken the crawler, and it is not to delete the sentence either. It is to say
+ * both true things and the tension between them — the crawler obeys robots.txt absolutely and
+ * everywhere; the lookup is one user-initiated request, to one host, about the caller's own public
+ * licence record, which RFC 9309 does not scope; and callook's own API reference grants that use
+ * in writing. A README that states only the convenient half is the failure mode this project
+ * exists to avoid, so the inconvenient half is what these gates hold.
+ */
+describe('README: the callsign lookup, described against itself', () => {
+  it('names the section and reaches it from the polite-crawling promise', () => {
+    expect(readme).toMatch(/^## The callsign lookup$/m);
+    // The anchor the crawler sections point at. A dangling in-page link is how a caveat gets lost.
+    expect(readme).toMatch(/\(#the-callsign-lookup\)/);
+  });
+
+  it('states BOTH of the site owner’s documents, including the one against us', () => {
+    // The refusal, quoted rather than summarised, with the date it was read.
+    expect(readme).toMatch(/callook\.info\/robots\.txt/);
+    expect(readme).toMatch(/`User-agent: \*` \/ `Disallow: \/`/);
+    expect(readme).toMatch(/2026-08-04/);
+    // The permission, quoted, and named as the same owner's.
+    expect(readme).toMatch(/free to use however you wish/);
+    // And the reasoning, not just the conclusion.
+    expect(readme).toMatch(/RFC 9309/);
+    expect(readme).toMatch(/automatic clients known as crawlers/);
+  });
+
+  it('does not let the exception read as a softening of the crawler', () => {
+    expect(readme).toMatch(
+      /nightly crawler is a different thing and obeys `robots\.txt` absolutely, everywhere/,
+    );
+    expect(readme).toMatch(/not a hole in that and is not a precedent for one/i);
+  });
+
+  it('gives the operator a switch, on by default, and says where it lives', () => {
+    expect(readme).toMatch(/CALLSIGN_LOOKUP_ENABLED/);
+    expect(readme).toMatch(/CALLSIGN_LOOKUP_ENABLED=false/);
+    expect(readme).toMatch(/defaults to \*\*on\*\*|defaults to `true`/i);
+    expect(readme).toMatch(/`CALLSIGN_LOOKUP_ENABLED` \| no \| `true`/);
+  });
+
+  /**
+   * THE LIST OF FILLED FIELDS, CHECKED AGAINST THE CODE THAT FILLS THEM.
+   *
+   * This paragraph first said "Name, operator class, city, state, ZIP, and — for a club licence —
+   * the organisation name", which was wrong in three places at once: a person's name, the city and
+   * the ZIP are DISPLAYED and then dropped, because the profile has no field for any of them.
+   * Overstating what a lookup writes into somebody's profile is precisely the misattribution this
+   * whole feature is careful about everywhere else, so the sentence is bound to the one function
+   * that decides it — `acceptedValues` in `packages/web/src/lib/callsignFill.ts`, whose own comment
+   * says it is written out longhand "so a new accepted field is a deliberate line here". A fifth
+   * line there now fails this test until the README grows a fifth value.
+   */
+  it('names exactly the fields the lookup actually fills, by the label they carry', () => {
+    const fill = readFileSync(resolve(REPO_ROOT, 'packages/web/src/lib/callsignFill.ts'), 'utf8');
+    const written = [...fill.matchAll(/\['([a-zA-Z]+)', accepted\./g)].map((m) => m[1]!);
+    expect(written.length, 'the accepted-values parser found nothing').toBeGreaterThan(0);
+
+    // Profile field key → the form label the README promises the reader they will see.
+    const documented: Record<string, string> = {
+      callsign: 'Callsign',
+      state: 'State',
+      licenseClass: 'License class',
+      orgName: 'Organization name',
+    };
+    expect(new Set(written)).toEqual(new Set(Object.keys(documented)));
+
+    expect(readme).toMatch(/four values, and only four/i);
+    for (const label of Object.values(documented)) {
+      expect(readme, label).toContain(`**${label}**`);
+    }
+    // …and it says, in the same breath, why the rest of the record is not on that list.
+    expect(readme).toMatch(/no street field, no\s*\n?\s*city field, no ZIP field/i);
+  });
+
+  it('says what it fills, what it refuses to fill, and what it does with the address', () => {
+    // The refusal is the interesting half: grantDate is not "first licensed".
+    expect(readme).toMatch(/licensedSince/);
+    expect(readme).toMatch(/grantDate/);
+    expect(readme).toMatch(/resets on every renewal/i);
+    // The legacy classes it will not guess upward from.
+    expect(readme).toMatch(/Novice, Advanced, Technician Plus/);
+    expect(readme).toMatch(/guessing upward/i);
+    // The address: shown to confirm identity, not kept.
+    expect(readme).toMatch(/\*\*not stored\*\*/);
+    // And the mandatory attribution, both parties named.
+    expect(readme).toMatch(/Federal Communications Commission/);
+    expect(readme).toMatch(/public-domain US Government work/);
+  });
+
+  it('blocklists the three directories that are the obvious second source', () => {
+    for (const host of ['qrz.com', 'hamcall.net', 'buckmasterinternational.com']) {
+      expect(readme, host).toContain(host);
+    }
+    expect(readme).toMatch(/forbid automated access/i);
+    // The reason they are listed rather than merely not used.
+    expect(readme).toMatch(/second source/i);
+  });
+
+  it('tells a site owner about it in the template they actually read', () => {
+    const template = readFileSync(
+      resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
+      'utf8',
+    );
+    expect(template).toMatch(/callook\.info/);
+    expect(template).toMatch(/free to use however you wish/);
+    expect(template).toMatch(/RFC 9309/);
+    // The reader's own question answered first: is this what is in MY log?
+    expect(template).toMatch(/unless you run `callook\.info`/i);
+    // And the remedy that is actually ours to give, offered to the one site it applies to.
+    expect(template).toMatch(/If you are callook\.info/);
+  });
+});
+
+/**
+ * THE PUBLISHED CEILING, AFTER THE SECOND ROUND OF MEASURING IT.
+ *
+ * `states the pacing rules a polled site can check against its own logs` above holds the number.
+ * This holds what the number COUNTS, which is what was wrong: the README said "one page fetch, or
+ * one `/robots.txt` read, costs at most nine requests" and that `or` licensed 9 + 9 — plus a fresh
+ * nine for every scheme or port one machine answered on. A site owner counting nine against their
+ * access log would have found sixty-three.
+ */
+describe('README: nine means nine to one server', () => {
+  it('counts the robots.txt read inside the ceiling, not beside it', () => {
+    expect(readme).toMatch(/at most nine requests to your server in total/);
+    expect(readme).toMatch(/`\/robots\.txt` read\s*\n?\s*included/);
+    expect(readme).toMatch(/however many origins \(schemes or ports\)/);
+    // The `or` that licensed the doubling must not come back.
+    expect(readme).not.toMatch(/One page fetch, or one `\/robots\.txt` read, costs/);
+    // The measured before → after, so the claim is checkable rather than asserted.
+    expect(readme).toMatch(/18 → 9/);
+    expect(readme).toMatch(/20 → 9/);
+    expect(readme).toMatch(/63 → 9/);
+  });
+
+  it('says a different host gets its own nine, so the bound is not oversold', () => {
+    expect(readme).toMatch(/\*different host\* still gets that host its own nine/i);
+  });
+
+  /**
+   * The one number in this section that is not a fix. `www.arrl.org` is polled under two origins
+   * because two of the eight shipped ARRL source URLs are spelled `http://`, so a `Disallow: /`
+   * there costs two requests a night and not one. The fetcher is RIGHT to read both — rules are
+   * per origin, and reusing one origin's file for another is exactly the "value we derived
+   * presented as a value somebody stated" this product refuses. So the README states the true
+   * number instead of the flattering one.
+   */
+  it('states the true per-origin cost for a site that blocks us', () => {
+    expect(readme).toMatch(/one request per\s*\n?\s*origin we poll it under, per run/);
+    expect(readme).toMatch(/www\.arrl\.org/);
+    expect(readme).toMatch(/measure-pacing twoOriginsOneHost/);
+    expect(readme).toMatch(/rules nobody gave us/i);
+  });
+});

@@ -19,6 +19,13 @@ const REQUIRED = [
   'grantwatch.com',
   'grantstation.com',
   'instrumentl.com',
+  // The three callsign directories, added with the callsign lookup on 2026-08-04. They are here
+  // for the reason `instrumentl.com` is: each has said no in writing, and this is the only form
+  // of "no" that survives the person who read it. Nothing in the product wants to fetch them
+  // TODAY — the pressure is the obvious next idea, "a second source for when callook is down".
+  'qrz.com',
+  'hamcall.net',
+  'buckmasterinternational.com',
 ];
 
 describe('BLOCKED_HOSTS', () => {
@@ -92,6 +99,33 @@ describe('assertNotBlocked', () => {
     ]) {
       expect(() => assertNotBlocked(url)).toThrow(BlockedHostError);
     }
+  });
+
+  /**
+   * THE LIST HAS TEETH ON THE LOOKUP PATH TOO, NOT ONLY IN THE CRAWLER.
+   *
+   * `callsign/callook.ts` calls `assertNotBlocked` before it builds a request, so the blocklist is
+   * a rule about what this SOFTWARE may contact rather than a rule about crawling. Without that
+   * line the callsign lookup would be a way round the list — a route that takes a base URL and
+   * asks it a question is exactly the shape that walks past a crawler-only guard.
+   */
+  it('blocks the three callsign directories, their subdomains and their spellings', () => {
+    for (const url of [
+      'https://qrz.com/db/W1AW',
+      'https://www.qrz.com/db/W1AW',
+      'http://QRZ.COM/lookup',
+      'https://hamcall.net/call',
+      'https://api.hamcall.net/W1AW',
+      'https://hamcall.net./call',
+      'https://buckmasterinternational.com/',
+      'https://www.buckmasterinternational.com:8443/hamcall',
+    ]) {
+      expect(() => assertNotBlocked(url), url).toThrow(BlockedHostError);
+    }
+    // And still not fooled by a host that merely ends the same way.
+    expect(() => assertNotBlocked('https://notqrz.com/')).not.toThrow();
+    // The one callsign source this product IS allowed to ask stays allowed.
+    expect(() => assertNotBlocked('https://callook.info/W1AW/json')).not.toThrow();
   });
 
   it('rejects non-http(s) schemes outright', () => {

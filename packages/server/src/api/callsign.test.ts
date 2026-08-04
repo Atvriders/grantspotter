@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
@@ -210,6 +213,70 @@ describe('POST /api/callsign/lookup — rate limit', () => {
       (await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' })).status,
     ).toBe(200);
   });
+
+  /**
+   * WHAT IS RATIONED IS THE REQUEST, AND A `not_us` PRESS MAKES NONE.
+   *
+   * Measured before the fix, on this exact shape: nine `DL1ABC` presses from one member answered
+   * 200 eight times and then 429, with the transport called ZERO times throughout — and the next
+   * press, with a real US callsign, was refused for 600 seconds. The people who only ever see the
+   * `not_us` path are international operators, and that message exists to tell them their licence
+   * is fine and to carry on. Charging them for hearing it, and then locking the form, says the
+   * opposite. `wouldReachTheSource` is now asked first, and it is the same predicate the client
+   * uses for its own short-circuit, so what is counted and what is spent cannot disagree.
+   */
+  it('spends no ration on a callsign that can never become a request', async () => {
+    const { app, transport } = buildApp({ user: MEMBER });
+
+    // Twice the whole allowance, all of them refused before any socket could exist.
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW * 2; i += 1) {
+      const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'DL1ABC' });
+      expect(res.status, `press ${String(i + 1)}`).toBe(200);
+      expect(res.body.status).toBe('not_us');
+    }
+    expect(transport).not.toHaveBeenCalled();
+
+    // …and the allowance is still whole, which is the half that actually hurt somebody.
+    const real = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+    expect(real.status).toBe(200);
+    expect(real.body.status).toBe('found');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The carve-out above is exactly as wide as its reason and no wider. A caller who has genuinely
+   * spent the allowance on real lookups is still refused, and is refused on the FIRST real press
+   * after it — a `not_us` press in between neither restores the ration nor extends it.
+   */
+  it('still refuses a real lookup from a caller who has spent the allowance', async () => {
+    const { app, transport } = buildApp({ user: MEMBER });
+
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW; i += 1) {
+      expect((await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' })).status).toBe(200);
+    }
+    // A press that costs callook nothing is answered even now.
+    const foreign = await request(app).post('/api/callsign/lookup').send({ callsign: 'DL1ABC' });
+    expect(foreign.status).toBe(200);
+    expect(foreign.body.status).toBe('not_us');
+
+    const refused = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+    expect(refused.status).toBe(429);
+    expect(transport).toHaveBeenCalledTimes(LOOKUP_MAX_PER_WINDOW);
+  });
+
+  /**
+   * Authorisation is decided BEFORE the ration, and the `not_us` carve-out does not move it: an
+   * anonymous caller with no token is refused whatever they type. Otherwise the cheapest way to
+   * find out whether this endpoint exists, and to burn CPU on it, would be to send it rubbish.
+   */
+  it('refuses an anonymous caller even when the press would cost the source nothing', async () => {
+    const { app, transport } = buildApp({ setupToken: 'a-different-token' });
+    const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'DL1ABC' });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('unauthorized');
+    expect(transport).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/callsign/lookup — failing soft', () => {
@@ -230,9 +297,18 @@ describe('POST /api/callsign/lookup — failing soft', () => {
     expect(typeof res.body.message).toBe('string');
     expect(res.body.message.length).toBeGreaterThan(0);
     expect(res.body.record).toBeUndefined();
-    // The client's one retry, which is its business — asserted only so a change to it is a
-    // change somebody makes on purpose.
-    expect(transport).toHaveBeenCalledTimes(2);
+    /*
+     * WAS `toHaveBeenCalledTimes(2)`, with the comment "the client's one retry, which is its
+     * business — asserted only so a change to it is a change somebody makes on purpose". This is
+     * that change, made on purpose: the client no longer retries. The rate-limit comment at the
+     * top of `callsign.ts` says one press of this button is one request to somebody else's
+     * server, the README defends contacting a `Disallow: /` host on precisely that basis, and a
+     * dropped connection was quietly making it two — with a second fresh timeout budget, measured
+     * at 1808 ms against a 1000 ms limit. The number here is the number a site owner can count in
+     * their own log, so it is the one the sentence has to match. See the note beside the two
+     * assertions in `callsign/callook.test.ts` that changed with it.
+     */
+    expect(transport).toHaveBeenCalledTimes(1);
   });
 
   it('answers 200 with `updating` while the source re-imports the FCC database', async () => {
@@ -270,5 +346,65 @@ describe('POST /api/callsign/lookup — failing soft', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('not_us');
     expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE ROUTER EXISTED FOR A DAY AND NOTHING MOUNTED IT.
+ *
+ * Every test above passed against a router assembled inside this file, and the feature was
+ * nevertheless entirely dead: `createCallsignRouter` had no caller, so `POST /api/callsign/lookup`
+ * answered 404 in production while this suite was green. A unit test that builds its own app can
+ * never see that, and it is the exact failure this project keeps finding — a green test pointing at
+ * something that is not wired to anything.
+ *
+ * So this block reads the composition root as TEXT. `index.ts` calls `main()` at import time and
+ * cannot be imported by a test; reading it is the only way to assert anything about it, and it is
+ * enough to hold the three facts that would silently kill the feature again:
+ *
+ *   1. it is mounted at all;
+ *   2. it is mounted BEFORE the SPA fallback — Express matches in registration order and
+ *      `createSpaMiddleware` serves index.html for anything the routers above it did not claim,
+ *      so a router registered after it is unreachable;
+ *   3. the router and `createApp` share ONE BootstrapState, because two would mean two different
+ *      random setup tokens — the first-run screen would hold one the lookup route never heard of.
+ *
+ * Comments are stripped first, for the reason `index.ts` states in its own header: a comment that
+ * quotes a mount call is indistinguishable from a mount call to a scanner.
+ */
+describe('the composition root actually mounts this router', () => {
+  const source = readFileSync(
+    resolve(fileURLToPath(new URL('.', import.meta.url)), '..', 'index.ts'),
+    'utf8',
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
+    .join('\n');
+
+  it('imports and mounts it on /api/callsign', () => {
+    expect(source).toMatch(/import \{ createCallsignRouter \} from '\.\/api\/callsign\.js';/);
+    expect(source).toMatch(/'\/api\/callsign',\s*\n?\s*createCallsignRouter\(/);
+  });
+
+  it('mounts it above the SPA fallback, which must stay last', () => {
+    const mount = source.indexOf('createCallsignRouter(');
+    const spa = source.indexOf('createSpaMiddleware(');
+    expect(mount, 'createCallsignRouter is not mounted').toBeGreaterThan(-1);
+    expect(spa, 'createSpaMiddleware is not mounted').toBeGreaterThan(-1);
+    expect(mount, 'a router after the SPA fallback is unreachable').toBeLessThan(spa);
+  });
+
+  it('gives it the same BootstrapState createApp uses, and reads the token rather than spending it', () => {
+    expect(source).toMatch(/const bootstrap = createBootstrapState\(db\)/);
+    // Passed IN to createApp, so createApp does not build a second one with a second token.
+    expect(source).toMatch(/createApp\(\{\s*\n?\s*db,\s*\n?\s*config,\s*\n?\s*bootstrap,/);
+    expect(source).toMatch(/setupToken: \(\) => bootstrap\.token\(\)/);
+    // `consume` spends the token; this route must never call it.
+    expect(source).not.toMatch(/bootstrap\.consume\(/);
+  });
+
+  it('lets the operator switch the whole feature off', () => {
+    expect(source).toMatch(/if \(config\.callsignLookupEnabled\)/);
   });
 });

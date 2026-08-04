@@ -303,36 +303,65 @@ describe('lookupCallsign: failures', () => {
     expect(result.message).toMatch(/not anything to do with your callsign/);
   });
 
-  it('retries a dropped connection exactly once', async () => {
+  /**
+   * TWO ASSERTIONS CHANGED HERE ON 2026-08-04, AND WHY THEY WERE WRONG.
+   *
+   * They were `retries a dropped connection exactly once` (asserting `attempts === 2` and a
+   * `found` result reached on the second try) and `never makes a third attempt` (asserting
+   * `attempts === 2`). Both were faithful descriptions of what the code did. What made them wrong
+   * is that the code contradicted two published sentences at once:
+   *
+   *   - `callook.ts`'s own timeout comment — "the worst case a user can experience is this budget
+   *     once" — while each attempt got a FRESH `AbortSignal.timeout(timeoutMs)`. Measured against
+   *     a loopback server that accepted and then destroyed the socket at 900 ms with a 1000 ms
+   *     budget: 2 requests, 1808 ms.
+   *   - `api/callsign.ts`'s rate-limit comment — "one press of this button is one request to
+   *     somebody else's server" — which is also the sentence the README uses to justify querying a
+   *     host that publishes `Disallow: /` at all. A feature defended in public as "one
+   *     user-initiated request" may not quietly send two.
+   *
+   * So the promises stayed and the retry went. The assertions below are strictly STRONGER than the
+   * ones they replace — one attempt is a subset of at most two — and they are the ones the
+   * documents can be checked against.
+   */
+  it('does not retry a dropped connection: one press is one request', async () => {
     let attempts = 0;
     const deps: CallsignLookupDeps = {
       now: () => Date.parse(AT),
       transport: () => {
         attempts += 1;
+        // A second attempt WOULD have succeeded. That is the point: the old code took it, and
+        // the cost of taking it was a second request to a host that had just dropped the first.
         if (attempts === 1) return Promise.reject(new Error('ECONNRESET'));
         return Promise.resolve(new Response(loadFixture('callook', 'person-extra.json')));
       },
     };
     const result = await lookupCallsign('WV0ZZZ', deps);
 
-    expect(result.status).toBe('found');
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(1);
+    expect(result.status).toBe('unavailable');
+    expect(result.message).toMatch(/could not reach callook\.info/);
+    expect(result.message).toMatch(/not your callsign/);
+    // The retry is the person's to make, and the message has to offer it.
+    expect(result.message).toMatch(/try again in a moment/);
   });
 
-  it('never makes a third attempt', async () => {
-    let attempts = 0;
+  it('spends one timeout budget per call, not one per attempt', async () => {
+    // Pins the mechanism rather than the wall clock: a fake timer would make an elapsed-time
+    // assertion pass against code that still minted a second signal, and a real one would make
+    // this test take a second and fail on a loaded machine.
+    const signals: unknown[] = [];
     const deps: CallsignLookupDeps = {
-      transport: () => {
-        attempts += 1;
+      timeoutMs: 1_000,
+      transport: (_url, init) => {
+        signals.push(init.signal);
         return Promise.reject(new Error('ECONNRESET'));
       },
     };
     const result = await lookupCallsign('W1AW', deps);
 
+    expect(signals).toHaveLength(1);
     expect(result.status).toBe('unavailable');
-    expect(attempts).toBe(2);
-    expect(result.message).toMatch(/could not reach callook\.info/);
-    expect(result.message).toMatch(/not your callsign/);
   });
 
   it('reports an HTTP status as the source having trouble', async () => {

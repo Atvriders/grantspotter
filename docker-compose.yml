@@ -79,6 +79,32 @@ services:
       CRAWL_ENABLED: "true"
       CRAWL_CRON: "17 3 * * *"
 
+      # The callsign lookup. On by default; set it to "false" to remove it entirely.
+      #
+      # WHAT IT IS. On the profile screen and on the first-run screen there is a button beside the
+      # callsign field. Press it and this server makes ONE request to callook.info, a free service
+      # that republishes the FCC amateur licence database, and offers back four values from that
+      # licence: the callsign, the state, the licence class on a personal licence and the
+      # organisation name on a club one. Nothing is saved by pressing it — each value is reviewed
+      # first, and every filled field is marked as having been read from there rather than stated
+      # by the user. The mailing address is displayed so the user can confirm the record is
+      # theirs, and is not stored: only the state is kept.
+      #
+      # WHY IT HAS A SWITCH AT ALL, when nothing else optional here does. It is the only thing in
+      # this software that contacts a site whose robots.txt says "Disallow: /". The crawler obeys
+      # robots.txt absolutely and always; this is not the crawler — it is one request, that one
+      # person asked for, about that person's own public licence record, to a host whose published
+      # API terms say the API is "free to use however you wish". Both of those documents belong to
+      # the same site owner and they address different clients, which is a real tension and not a
+      # loophole; the README section "The callsign lookup" sets out the whole of the argument
+      # rather than the convenient half of it.
+      #
+      # If you read that and are not persuaded, this is the line. With it "false" the route is not
+      # registered, this server never contacts callook.info, and the profile form keeps every
+      # field — you type four of them, which is what everyone outside the United States does
+      # already, because their licence is not in the FCC database at all.
+      CALLSIGN_LOOKUP_ENABLED: "true"
+
       # Optional. Everything works with these empty: the deterministic parsers, the rule-based
       # scoring and the copy-prompt flow need no key. Paste one in to use it.
       ANTHROPIC_API_KEY: ""

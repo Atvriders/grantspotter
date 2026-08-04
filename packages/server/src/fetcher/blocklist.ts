@@ -22,6 +22,26 @@ import { canonicalHostname } from '../net/hosts.js';
  * instrumentl.com — ToS bans crawling; robots.txt explicitly names anthropic-ai, ClaudeBot and
  *   Claude-Web and disallows /grants, /foundations, /990-report.
  *
+ * THE THREE CALLSIGN DIRECTORIES (added 2026-08-04, with the callsign lookup). These are not
+ * funding sites and nothing in this product has any reason to fetch them — which is exactly why
+ * they are written down. GrantSpotter now looks a US callsign up at callook.info when a person
+ * presses a button (see `callsign/callook.ts`), and the next idea anybody has about that feature
+ * is a second source for when the first one is down. These three are the second sources, each
+ * has said no in writing, and a list is the only form of "no" that survives the person who read
+ * it. This is the `instrumentl.com` pattern exactly: consistency means naming a host we have
+ * decided not to contact, rather than quietly not contacting it.
+ *
+ * qrz.com — its Terms of Service forbid automated access AND forbid storing what the database
+ *   returns. Both halves matter here: the first rules out asking, and the second would rule out
+ *   this product's entire shape even if the first did not, because a lookup that fills a profile
+ *   is a lookup whose answer is kept.
+ * hamcall.net — its robots.txt names `ClaudeBot`, `Claude-Web` and `anthropic-ai` one after
+ *   another and then closes with `User-agent: *` / `Disallow: /`. There is no reading of that
+ *   file under which this software is welcome.
+ * buckmasterinternational.com — Buckmaster operates HamCall. The same operator's other domain is
+ *   listed with it so that a redirect, a rebrand or an API on the corporate host does not become
+ *   a way round a decision that was made about the operator and not about the hostname.
+ *
  * We deep-link out to the commercial aggregators where a human would find them useful.
  * We never store their text.
  */
@@ -33,6 +53,9 @@ export const BLOCKED_HOSTS: readonly string[] = Object.freeze([
   'grantwatch.com',
   'grantstation.com',
   'instrumentl.com',
+  'qrz.com',
+  'hamcall.net',
+  'buckmasterinternational.com',
 ]);
 
 export class BlockedHostError extends Error {

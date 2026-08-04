@@ -19,6 +19,11 @@
  *     place to apply, so an apply URL is exactly the field that has been wrong before.
  *   - The commercial aggregators below are here for licence reasons and we do deep-link out to
  *     them elsewhere; withholding those links costs a user nothing they cannot reach by typing.
+ *   - The last three are callsign directories, added with the callsign lookup on 2026-08-04.
+ *     `qrz.com` forbids automated access and forbids storing what it returns; `hamcall.net`
+ *     disallows every agent in its robots.txt and names this vendor's crawlers first;
+ *     `buckmasterinternational.com` is HamCall's operator. The reasons are written out once, in
+ *     the fetcher's copy, and are not repeated here — one list, one explanation.
  *
  * If the two lists ever diverge, the fetcher's wins — it is the one with teeth.
  */
@@ -30,6 +35,9 @@ export const BLOCKED_HOSTS: readonly string[] = Object.freeze([
   'grantwatch.com',
   'grantstation.com',
   'instrumentl.com',
+  'qrz.com',
+  'hamcall.net',
+  'buckmasterinternational.com',
 ]);
 
 /**

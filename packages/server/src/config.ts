@@ -10,6 +10,16 @@ export interface AppConfig {
   dataDir: string;
   crawlEnabled: boolean;
   crawlCron: string;
+  /**
+   * The user-initiated callsign lookup at `POST /api/callsign/lookup`. Default TRUE — the owner
+   * asked for the feature — and it is a switch rather than a constant because it is the one path
+   * in this product that contacts a host whose `robots.txt` says `Disallow: /`. That is defended
+   * at length in `callsign/callook.ts` and in the README, and the defence rests on it being one
+   * request a person asked for rather than a crawl. An operator who reads the argument and does
+   * not accept it should not have to fork the image, so: `CALLSIGN_LOOKUP_ENABLED=false`, and
+   * `index.ts` does not register the router at all.
+   */
+  callsignLookupEnabled: boolean;
   anthropicApiKey?: string;
   simplerGrantsApiKey?: string;
 }
@@ -468,6 +478,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
     dataDir: optional(env, 'DATA_DIR') ?? '/data',
     crawlEnabled: parseBool(env, 'CRAWL_ENABLED', true),
     crawlCron: optional(env, 'CRAWL_CRON') ?? '17 3 * * *',
+    callsignLookupEnabled: parseBool(env, 'CALLSIGN_LOOKUP_ENABLED', true),
   };
 
   const anthropicApiKey = optional(env, 'ANTHROPIC_API_KEY');

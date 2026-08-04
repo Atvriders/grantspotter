@@ -116,11 +116,35 @@ describe('docker-compose.yml is the only file an operator needs', () => {
       'DATA_DIR',
       'CRAWL_ENABLED',
       'CRAWL_CRON',
+      'CALLSIGN_LOOKUP_ENABLED',
       'ANTHROPIC_API_KEY',
       'SIMPLER_GRANTS_API_KEY',
     ]) {
       expect(envKeys, key).toContain(key);
     }
+  });
+
+  /**
+   * THE ONE SWITCH WHOSE COMMENT IS THE POINT OF IT.
+   *
+   * `CALLSIGN_LOOKUP_ENABLED` turns off the only request in this product that goes to a host
+   * publishing `Disallow: /`. An operator who never learns that is an operator who cannot make
+   * the decision the switch exists to offer them, and this file is the only documentation a
+   * `docker compose up` deployment is guaranteed to have opened.
+   */
+  it('explains beside the switch what it switches off, and admits the awkward half', () => {
+    expect(envEntries.CALLSIGN_LOOKUP_ENABLED).toBe('true');
+    const block = compose.slice(
+      compose.indexOf('# The callsign lookup.'),
+      compose.indexOf('CALLSIGN_LOOKUP_ENABLED:'),
+    );
+    expect(block.length).toBeGreaterThan(200); // vacuity guard on the two indexOf calls
+    expect(block).toMatch(/callook\.info/);
+    expect(block).toMatch(/Disallow: \//);
+    expect(block).toMatch(/free to use however you wish/);
+    // It must not sell the convenient half alone.
+    expect(block).toMatch(/tension/i);
+    expect(block).toMatch(/README/);
   });
 
   it('passes no variable the server does not read', () => {

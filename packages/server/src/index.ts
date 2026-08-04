@@ -9,7 +9,9 @@ import { ensureIngestionSchema } from './db/ingestSchema.js';
 import { migrate, openDatabase } from './db/migrate.js';
 import { createFetcher } from './fetcher/index.js';
 import { requireAdmin, requireAuth } from './auth/middleware.js';
+import { createBootstrapState } from './auth/bootstrap.js';
 import { currentSessionUser, mountProductApi } from './api/mount.js';
+import { createCallsignRouter } from './api/callsign.js';
 import { createVerifyRunner } from './api/verify.js';
 import { reindexBrowse } from './api/reindex.js';
 import { drainChangeEvents } from './api/notify.js';
@@ -159,6 +161,48 @@ function main(): void {
 
   const verifyRunner = createVerifyRunner({ db, fetcher, sources: SOURCES, now });
 
+  /**
+   * THE ONE REQUEST IN THIS PRODUCT THAT DOES NOT GO THROUGH THE FETCHER, AND THE NAME IT SIGNS.
+   *
+   * `callsign/callook.ts` deliberately does not hold a fetch of its own — it takes a transport and
+   * refuses to default one, so the unit suite cannot reach the network from it even by accident.
+   * The transport therefore has to be supplied HERE, and this is the right place for a second
+   * reason: `buildUserAgent` may only be called from a declared entry point (see
+   * `test/contactUrlEntryPointContract.test.ts`), and minting a second User-Agent anywhere else
+   * would be exactly the shared-identity defect that file exists to prevent.
+   *
+   * WHY IT CARRIES ONE AT ALL. Until 2026-08-04 it did not: measured against a loopback server,
+   * the lookup arrived as `user-agent: node` while every crawl request from the same process
+   * arrived as `GrantSpotter/0.1.0 (+<the operator's page>; …)`. This project spent its whole
+   * design on the rule that no outbound request is anonymous — a small site's owner must be able
+   * to see who is asking and reach a human — and then made one request that was. callook.info is
+   * a volunteer-run service answering these for free; it is entitled to the same courtesy, and to
+   * knowing which deployment to write to. It is now the SAME string, from the same factory, from
+   * the same `CONTACT_URL` the server refuses to start without.
+   *
+   * `Headers` rather than a spread of `init.headers`: the client sends a plain object today, and a
+   * spread would silently drop the caller's `accept` the day it sends a `Headers` instance
+   * instead. `set` (not `append`) so a transport-level identity can never end up doubled.
+   */
+  const callsignUserAgent = buildUserAgent(config);
+  const callsignTransport = (url: string, init: RequestInit): Promise<Response> => {
+    const headers = new Headers(init.headers);
+    headers.set('user-agent', callsignUserAgent);
+    return fetch(url, { ...init, headers });
+  };
+
+  /**
+   * ONE BootstrapState FOR THE PROCESS, constructed here rather than left to `createApp`.
+   *
+   * Two routers now read the same one-time token: `createAuthRouter`, which SPENDS it to create
+   * the first administrator, and `createCallsignRouter`, which only READS it to authorise the
+   * first-run screen's lookup. `createApp` builds its own when `deps.bootstrap` is absent, and two
+   * instances would mean two different random tokens — the setup screen would hold one that the
+   * lookup route had never heard of, and vice versa. Passing one in is what makes them the same
+   * token. The first-run banner is printed as a side effect of this call, once, exactly as before.
+   */
+  const bootstrap = createBootstrapState(db);
+
   // PLAN-LOCAL dependency bundle, satisfying the ExportDeps interface exported
   // by api/exports.ts. Built inline: there is deliberately no createExportDeps
   // factory, because a second definition of the same bundle is a second thing
@@ -192,9 +236,12 @@ function main(): void {
   // below, and NO plan mounts anything on the returned app. (Task 23 §15 greps
   // this file for a mount on the returned app and expects zero hits, so this
   // note describes the forbidden call rather than quoting it.)
+  console.log(`[callsign] lookup enabled=${String(config.callsignLookupEnabled)}`);
+
   const app = createApp({
     db,
     config,
+    bootstrap,
     mountRoutes: (a) => {
       // --- Plan 3: browse, detail, verify, profiles, watches, notifications,
       //     channels, calendar, inbox, admin users, sources ---
@@ -228,6 +275,33 @@ function main(): void {
       // the fallback would never be reached at all.
       a.use('/api', createExportsRouter(exportDeps));
       a.use('/', createCalendarFeedRouter(exportDeps));
+
+      // --- The user-initiated callsign lookup. ABOVE the SPA middleware below,
+      //     like every other /api router; a router registered after the
+      //     fallback is never reached for a GET, and this one would 404 on a
+      //     POST for the ordinary reason that nothing matched.
+      //
+      //     Conditional, and the ONLY conditional mount in this callback. This
+      //     is the one path in the product that contacts a host publishing
+      //     `Disallow: /` — the argument for why that is legitimate is written
+      //     out in api/callsign.ts, in callsign/callook.ts and in the README,
+      //     and an operator who does not accept it needs a way to act on that
+      //     which is not "fork the image". With it false the route is never
+      //     registered, so the SPA's profile form falls back to what a non-US
+      //     licensee already gets: four fields typed in by hand.
+      //
+      //     `bootstrap.token()` is READ, never consumed — spending the one-time
+      //     token on a callsign lookup would leave the operator holding one that
+      //     can no longer create the administrator account. ---
+      if (config.callsignLookupEnabled) {
+        a.use(
+          '/api/callsign',
+          createCallsignRouter({
+            transport: callsignTransport,
+            setupToken: () => bootstrap.token(),
+          }),
+        );
+      }
 
       // --- The built SPA. THIS IS THE LAST STATEMENT IN THIS CALLBACK
       //     (RESOLUTIONS R16, R25). Real files first, then index.html for any
