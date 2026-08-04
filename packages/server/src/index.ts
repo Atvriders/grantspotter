@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { join } from 'node:path';
+import type { Request } from 'express';
 import { createApp } from './app.js';
 import { buildUserAgent, ConfigError, loadConfig, type AppConfig } from './config.js';
 import { createAiAssist, runCrawl, startScheduler } from './crawl/index.js';
@@ -34,10 +35,13 @@ import { createPromptsRouter } from './api/prompts.js';
 // re-declared in api/spa.ts (RESOLUTIONS R27).
 import { createSpaMiddleware } from './api/spa.js';
 import { webDistRoot } from './api/webDist.js';
-// NOTE (RESOLUTIONS R25): there are still deliberately NO imports here from
-// api/exports.ts or exports/dataSource.ts (Plan 5 Task 9). That task adds its
-// own import lines when it adds its own mount lines. Adding them now breaks
-// `npm run build`, and a broken build takes the e2e suite with it.
+// Plan 5 Task 9: the export routes (csv/xlsx/ics/docx/md/zip plus the admin
+// backup and restore) and the token-authenticated public ICS feed, which is
+// mounted at the ROOT because a subscribing calendar client cannot send a
+// session cookie. Imported here, with the mount lines below, in the one commit
+// (RESOLUTIONS R25).
+import { createCalendarFeedRouter, createExportsRouter } from './api/exports.js';
+import { createSqliteExportDataSource } from './exports/dataSource.js';
 //
 // DEVIATION FROM THE TASK BRIEF (2026-08-04): `createAiAssist` is imported from
 // ./crawl/index.js, NOT from the assist module directly as the brief's snippet
@@ -144,6 +148,31 @@ function main(): void {
 
   const verifyRunner = createVerifyRunner({ db, fetcher, sources: SOURCES, now });
 
+  // PLAN-LOCAL dependency bundle, satisfying the ExportDeps interface exported
+  // by api/exports.ts. Built inline: there is deliberately no createExportDeps
+  // factory, because a second definition of the same bundle is a second thing
+  // to keep in sync (RESOLUTIONS R22). `requireAuth`, `requireAdmin` and `now`
+  // are the same values routerDeps above was built from.
+  const exportDeps = {
+    data: createSqliteExportDataSource(db),
+    requireAuth: requireAuth(),
+    requireAdmin: requireAdmin(),
+    now,
+    // req.auth is populated by Plan 1's attachUser middleware through a module
+    // augmentation of Express's Request. THERE IS NO express-session IN THIS
+    // STACK: an express-session style `session` property does not exist on
+    // Request, does not compile, and must appear nowhere (R22). Plan 1's own
+    // `sessionKey` property on Request is a different, legitimate thing — its
+    // logout route reads it back to revoke the session row — and is not
+    // affected.
+    userIdOf: (req: Request) => req.auth?.id,
+    // The public base for a subscribable feed URL. `app.set('trust proxy', 1)`
+    // in app.ts means req.protocol and req.get('host') reflect the CLIENT's
+    // view through a Cloudflare Tunnel or nginx, which is the only view that
+    // produces a URL a phone can actually fetch.
+    publicBaseUrl: (req: Request) => `${req.protocol}://${req.get('host') ?? '127.0.0.1'}`,
+  };
+
   // THE SINGLE COMPOSITION SITE FOR THE WHOLE APPLICATION (RESOLUTIONS R5 /
   // CONTRACT §10.3). createApp invokes deps.mountRoutes and then seals the app
   // with the not-found handler and the error handler, so a router registered
@@ -177,14 +206,17 @@ function main(): void {
       a.use('/api/prose', createProseRouter(routerDeps));
       a.use('/api/prompts', createPromptsRouter(routerDeps));
 
-      // --- Plan 5 Task 9 Step 9 inserts its two export mounts HERE, in this
-      //     gap: the exports router under /api and the calendar feed router at
-      //     the root, both built from an exportDeps value constructed inline
-      //     and reading `req.auth?.id` (R22 — there is no express-session in
-      //     this stack). They go ABOVE the SPA middleware below, never after
-      //     it. (Deliberately described rather than quoted: a commented mount
-      //     line is indistinguishable from a real one to the grep gates in
-      //     Task 17 Step 6 and Task 23 §15.) ---
+      // --- Plan 5 Task 9: exports, and the public ICS feed at the root ---
+      // '/api' plus the router's own '/exports/…' paths gives
+      // /api/exports/opportunities.csv. The feed router owns '/calendar/:token'
+      // and is mounted at '/' on purpose: a calendar client cannot send a
+      // session cookie, so the token in the path IS the credential. It sits
+      // ABOVE the SPA middleware below and can never be after it — api/spa.ts
+      // reserves the '/calendar/' prefix (with the trailing slash, so the SPA's
+      // own bare /calendar page still resolves), but a router registered after
+      // the fallback would never be reached at all.
+      a.use('/api', createExportsRouter(exportDeps));
+      a.use('/', createCalendarFeedRouter(exportDeps));
 
       // --- The built SPA. THIS IS THE LAST STATEMENT IN THIS CALLBACK
       //     (RESOLUTIONS R16, R25). Real files first, then index.html for any

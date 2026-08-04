@@ -1,5 +1,5 @@
 import cookieParser from 'cookie-parser';
-import express, { type Express } from 'express';
+import express, { type Express, type RequestHandler } from 'express';
 import { createAuthRouter } from './api/auth.js';
 import { errorHandler, notFoundHandler, requestIdMiddleware } from './api/errors.js';
 import { createHealthRouter } from './api/health.js';
@@ -33,6 +33,44 @@ export interface AppDeps {
   mountRoutes?: (app: Express) => void;
 }
 
+/**
+ * The one route whose request body is legitimately a whole database.
+ *
+ * DEVIATION FROM PLAN 5 TASK 9'S FILE LIST, found by running the route rather than by reading it.
+ * `GET /api/admin/backup.json` on the committed corpus serves **2.2 MB**, and posting that exact
+ * document back to `POST /api/admin/restore` answered **413 payload_too_large** — the global
+ * `express.json({ limit: '1mb' })` rejects it before any router sees it. A restore endpoint that
+ * cannot accept the backup its own sibling route just produced is decorative, and nothing in
+ * either task's unit suite could see it: both mount their own bare express app with their own
+ * parser, and the fixtures are a handful of rows.
+ *
+ * The limit stays at 1 MB for EVERY OTHER ROUTE. Raising it globally would widen the memory a
+ * single unauthenticated POST can make this process buffer, on every endpoint, to fix one — and
+ * `test/app.health.test.ts` pins the 1 MB refusal on `/api/health` precisely so that cannot happen
+ * quietly.
+ *
+ * The residual exposure is stated rather than hidden: body parsing runs before `attachUser`, so an
+ * anonymous caller can make the process buffer up to this much on this one path before the
+ * `requireAdmin` guard refuses them. 32 MB is roughly fifteen times the current corpus's backup —
+ * headroom for a deployment that has grown, not an open door — and this is a single-process,
+ * self-hosted application behind the operator's own tunnel.
+ */
+const BACKUP_RESTORE_PATH = '/api/admin/restore';
+const BACKUP_JSON_LIMIT = '32mb';
+const STANDARD_JSON_LIMIT = '1mb';
+
+function bodyParsers(): RequestHandler {
+  const standard = express.json({ limit: STANDARD_JSON_LIMIT });
+  const backup = express.json({ limit: BACKUP_JSON_LIMIT });
+  return (req, res, next) => {
+    if (req.method === 'POST' && req.path === BACKUP_RESTORE_PATH) {
+      backup(req, res, next);
+      return;
+    }
+    standard(req, res, next);
+  };
+}
+
 export function createApp(deps: AppDeps): Express {
   const app = express();
 
@@ -49,7 +87,7 @@ export function createApp(deps: AppDeps): Express {
   // response body regardless, which is what let this slip past body-only
   // assertions in review). Fix round 1 finding, app.ts:39-41.
   app.use(requestIdMiddleware());
-  app.use(express.json({ limit: '1mb' }));
+  app.use(bodyParsers());
   app.use(cookieParser());
   app.use(
     attachUser({

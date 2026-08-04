@@ -15,18 +15,24 @@ import { openTestDb } from '../src/test/testDb.js';
  * being a migration index that was already redundant, and a source module whose note promised it
  * "refuses to publish" while nothing read the tag it set).
  *
- * THE CONCRETE THING COMING. Plan 5 adds an `ics_tokens` table, and its planned shape carries a
- * `user_id` with NO foreign key. The moment that lands, deleting a user stops revoking their
- * calendar feed: the delete route still reports the account gone, `removed` still counts profiles
- * and watches and sessions, and a removed member's ICS subscription keeps serving the
- * organisation's programme data to whoever holds the URL — indefinitely, because nothing else in
- * the system ever revisits that row. Nothing fails. Nobody is told. Task 13's report already
- * states "the ICS token dies with the row", and that statement rests entirely on a cascade that
- * would not exist.
+ * THE CONCRETE THING COMING — WHICH CAME, AND WAS CAUGHT (updated 2026-08-04, Plan 5 Task 9).
  *
- * `ics_tokens` is not in any migration yet, which is exactly why the answer is an invariant rather
- * than a fix: there is nothing to repair, and the trap is set for any future table keyed on a
- * user, of which Plan 5 adds several.
+ * This file was written while `ics_tokens` existed only in a plan. Its planned shape carried a
+ * `user_id` with NO foreign key, and the brief said so in as many words ("No FOREIGN KEY on
+ * user_id: that would couple this migration to the exact column type Plan 1 chose for users.id.
+ * Rows are cleaned up by the delete route."). Had that shipped, deleting a user would have stopped
+ * revoking their calendar feed: the delete route would still report the account gone, `removed`
+ * would still count profiles and watches and sessions, and a removed member's ICS subscription
+ * would keep serving the organisation's programme data to whoever held the URL — indefinitely,
+ * because nothing else in the system ever revisits that row. Nothing would fail. Nobody would be
+ * told. Task 13's report already states "the ICS token dies with the row", and that statement
+ * rested entirely on a cascade that did not exist.
+ *
+ * `090-ics-tokens.sql` shipped WITH the cascade, citing this file. So the assertions below now say
+ * the opposite of what they said when they were written — `ics_tokens.user_id` is expected to be
+ * in `CASCADING` — and that is the invariant working, not the invariant being weakened: the
+ * classifier, the exemption guards and the fires-for-real probe are unchanged, and the trap
+ * remains set for the next table keyed on a user.
  *
  * WHAT IT ASSERTS, read from the LIVE SCHEMA (`PRAGMA foreign_key_list` / `table_info` on a
  * freshly migrated database) rather than from the migration text, so it holds no matter which
@@ -43,8 +49,8 @@ import { openTestDb } from '../src/test/testDb.js';
  * `normalize/rawFieldsContract.test.ts`, `test/vitestCoverageContract.test.ts`,
  * `test/blocklistParity.test.ts`): the scan must be shown to still see the schema, every exemption
  * must name a column that exists and STILL lacks the cascade — so an exemption cannot outlive the
- * condition it excuses — and the classifier is exercised on names that are not in the schema yet,
- * `ics_tokens.user_id` among them.
+ * condition it excuses — and the classifier is exercised on names it will meet later as well as
+ * on the ones already in the schema.
  *
  * Proven by deliberate break on 2026-08-04, both ways: a scratch table with a bare `user_id`
  * turned rule 2 red naming `drift_probe.user_id`, and the same column with
@@ -273,14 +279,49 @@ describe('deleting a user — the invariant can still see', () => {
     }
   });
 
-  it('would have caught the ics_tokens shape before it was written', () => {
-    // Plan 5's planned table, played through the classifier: a `user_id` with no foreign key is
-    // not in CASCADING and is not in OUTLIVES_THE_USER, so rule 2 reports it. This is the whole
-    // reason the file exists, pinned so that a later narrowing of `namesAUser` cannot quietly
-    // stop it applying.
+  it('caught the ics_tokens shape, and the table arrived with the cascade', () => {
+    // WHAT THIS ASSERTED BEFORE 2026-08-04, and why it is inverted now. While `ics_tokens` was
+    // only a plan, this played its PLANNED shape through the classifier and pinned the outcome:
+    // a bare `user_id` is in neither CASCADING nor OUTLIVES_THE_USER, so rule 2 above would report
+    // it. Plan 5 Task 9's `090-ics-tokens.sql` then shipped the table WITH
+    // `REFERENCES users(id) ON DELETE CASCADE`, against its own brief, citing this file.
+    //
+    // So the expectation flips from `false` to `true` — and the flip is the point. The classifier
+    // check is untouched, so a later narrowing of `namesAUser` still cannot quietly stop rule 2
+    // applying to this column; the exemption check is untouched, so nobody may retire the cascade
+    // by writing a reason instead; and the row-level probe below proves the DDL is not merely
+    // decorative. Turning this back into `false` means the token table lost its foreign key.
     expect(namesAUser('user_id')).toBe(true);
-    expect(CASCADING.has('ics_tokens.user_id')).toBe(false);
+    expect(TABLES).toContain('ics_tokens');
+    expect(
+      CASCADING.has('ics_tokens.user_id'),
+      "ics_tokens.user_id lost ON DELETE CASCADE — a removed member's calendar feed now keeps " +
+        "serving the organisation's programme data to whoever holds the URL, forever, while the " +
+        'admin console reports the account gone',
+    ).toBe(true);
     expect(OUTLIVES_THE_USER.has('ics_tokens.user_id')).toBe(false);
+  });
+
+  it('actually revokes a deleted user’s calendar feed, at the row', () => {
+    // The DDL enforces nothing without `PRAGMA foreign_keys`, and this is the one cascade whose
+    // failure hands out data rather than leaving litter — so it is proven by deletion, not by
+    // reading `foreign_key_list`.
+    const id = 'u-ics-cascade-probe';
+    db.prepare(
+      `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+       VALUES (?, ?, ?, 'x', 'member', ?, '2026-08-04T00:00:00.000Z')`,
+    ).run(id, 'feed@example.test', 'feed@example.test', 'ics-feed-cascade-probe');
+    db.prepare(
+      `INSERT INTO ics_tokens (user_id, token_hash, created_at)
+       VALUES (?, 'a-sha256-digest-stands-in-here', '2026-08-04T00:00:00.000Z')`,
+    ).run(id);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM ics_tokens WHERE user_id = ?').get(id),
+      'the calendar token outlived its user — the feed is still being served',
+    ).toEqual({ n: 0 });
   });
 
   it('sees every user-identifying column the schema has today', () => {
@@ -292,6 +333,7 @@ describe('deleting a user — the invariant can still see', () => {
     expect(seen).toEqual(expect.arrayContaining([
       'applications.user_id',
       'audit_log.actor_user_id',
+      'ics_tokens.user_id',
       'notification_channel_health.user_id',
       'notification_channels.user_id',
       'notifications.user_id',
