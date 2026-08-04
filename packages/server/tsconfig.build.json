@@ -2,5 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "types": ["node"] },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/test/**"]
+  // `testCorpus.ts` is a TEST HELPER that happens not to end in `.test.ts`, and it imports
+  // `scripts/profile-corpus.ts` — which is outside `rootDir`. Without this line `npm run build`
+  // fails with TS6059 and, before failing, drags the whole `scripts/` and `packages/core/src`
+  // trees into the server's build program. It is test-only: nothing under `src/` that ships
+  // imports it, and `tsc --noEmit -p tsconfig.json` still type-checks it on every `npm run
+  // typecheck`, so excluding it here loses no coverage.
+  "exclude": ["src/**/*.test.ts", "src/test/**", "src/exports/testCorpus.ts"]
 }
