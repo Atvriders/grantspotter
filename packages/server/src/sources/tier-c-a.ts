@@ -56,13 +56,22 @@ const YLRL_ELIGIBILITY_SENTENCE =
   /((?:Applicants? must be female|licensed[^.]*(?:women|female|YL))[^.]*\.)/i;
 
 /**
+ * The licence bullet, shared with the `ylrl` config's `fieldPatterns.license` below. Named
+ * separately from the eligibility sentence because `extractLicense` reads ONLY the `license` /
+ * `License Requirement` fields: text that lands anywhere else — `eligibility`, `rawText` — never
+ * reaches the licence axis, so a licence requirement filed under `eligibility` is a licence
+ * requirement that is not enforced.
+ */
+const YLRL_LICENSE_SENTENCE = /(Applicants? must have an Amateur Radio License[^.]*\.)/i;
+
+/**
  * Every document-level restriction sentence, in page order. YLRL states its two hard rules —
  * female, and licensed — as two separate bullets on the live page, so a single-sentence capture
  * necessarily drops one of them.
  */
 const YLRL_ELIGIBILITY_PATTERNS: readonly RegExp[] = [
   YLRL_ELIGIBILITY_SENTENCE,
-  /(Applicants? must have an Amateur Radio License[^.]*\.)/i,
+  YLRL_LICENSE_SENTENCE,
 ];
 
 export function ylrlEligibility(flatText: string): string {
@@ -72,6 +81,12 @@ export function ylrlEligibility(flatText: string): string {
     if (m) found.push((m[1] ?? m[0]).replace(/\s+/g, ' ').trim());
   }
   return found.join(' ');
+}
+
+/** The document-level licence bullet on its own, for the `license` field of each named record. */
+export function ylrlLicense(flatText: string): string | undefined {
+  const m = YLRL_LICENSE_SENTENCE.exec(flatText);
+  return m ? (m[1] ?? m[0]).replace(/\s+/g, ' ').trim() : undefined;
 }
 
 const YLRL_APPLY_URL = /(https?:\/\/ylrl\.net\/apply\/?)/i;
@@ -97,6 +112,7 @@ export function parseYlrlScholarships(
     YLRL_AWARDS.filter((a) => a.mention.test(line)).map((a) => a.key),
   );
   const eligibility = ylrlEligibility(flatText);
+  const license = ylrlLicense(flatText);
   const applyUrl = YLRL_APPLY_URL.exec(html)?.[1];
   const out: RawOpportunity[] = [];
 
@@ -135,6 +151,13 @@ export function parseYlrlScholarships(
     // applies to all three awards. Attaching it to each record is the only thing that stops
     // three genuinely female-only scholarships publishing as open to everyone.
     if (eligibility) rawFields.eligibility = eligibility;
+    // Same argument, licence axis — and the same defect the QCWA config above carried. The
+    // licence bullet is document-level too, but it only ever reached the whole-page record's
+    // `license` field via fieldPatterns; these three named records carried it inside
+    // `eligibility`, where `extractLicense` cannot see it, so all three published with no
+    // licence floor at all. Only the unrelated female-only gender constraint was keeping them
+    // away from unlicensed applicants, and a hard rule must not rest on another axis's accident.
+    if (license) rawFields.license = license;
     if (applyUrl) rawFields.detailUrl = applyUrl;
 
     out.push({
@@ -171,6 +194,25 @@ const CONFIGS: SinglePageConfig[] = [
       deadlineNote: /(before the first week (?:in|of) January[^.]*\.)/i,
       applyNote: /((?:administered in partnership with|submitted through) the ARRL Foundation[^.]*\.)/i,
       applyUrl: /(https?:\/\/www\.arrl\.org\/scholarship[a-z-]*)/i,
+      // THE LICENCE REQUIREMENT ITSELF, which this config used to drop on the floor.
+      //
+      // `eligibility` below keeps "There are no restrictions regarding class of amateur license,
+      // race, sex, residence, or field of study." — a sentence that PRESUPPOSES a licence but
+      // never states that one is needed. `extractLicense` reads `License Requirement`/`license`
+      // and nothing else, so with no `license` field it emitted no constraint at all, and QCWA
+      // published as eligible to an applicant holding no amateur licence. The live page is
+      // explicit twice over: applications are "requested by interested licensed radio amateurs",
+      // and "Scholarships are awarded to worthy Amateur Radio operators enrolled in accredited
+      // colleges or universities". Honouring an unambiguous funder statement is not
+      // over-restriction; the false-include leniency this codebase applies elsewhere is for
+      // AMBIGUOUS text.
+      //
+      // Leading `[^.\n]*` so the sentence is captured from its own start rather than mid-clause
+      // (same idiom as SARA's `audience` below). The alternation covers both of the page's own
+      // wordings plus the "licensed amateur radio operators" variant, so a rewrite has to remove
+      // every statement of the requirement — not merely reword one — before this goes quiet.
+      license:
+        /([^.\n]*\b(?:licensed radio amateurs?|licensed amateur radio operators?|Amateur Radio operators?)\b[^.]*\.)/i,
       eligibility: /(no restrictions regarding[^.]*\.)/i,
       history: /(As of \d{4}, [\d,]+ scholarships totaling \$[\d,]+[^.]*\.)/i,
       // Without this the summary falls back to the whole flattened page, which on the live page
@@ -178,9 +220,16 @@ const CONFIGS: SinglePageConfig[] = [
       summary: /(The QCWA Scholarship Program is administered[^.]*\.|Scholarships are awarded[^.]*\.)/i,
     },
     // NOT `amount`: requiring it is what made this source return zero records from its own live
-    // page while the synthetic-fixture suite stayed green. These three are the facts qcwa.org
+    // page while the synthetic-fixture suite stayed green. These four are the facts qcwa.org
     // does print, and losing any of them is a real change worth an empty-yield alarm.
-    requiredFields: ['sponsor', 'deadlineNote', 'applyNote'],
+    //
+    // `license` is required for a sharper reason than the other three. If the other three go
+    // quiet the record merely gets thinner; if the licence sentence goes quiet the record gets
+    // WIDER — it silently reverts to publishing a licensed-operators-only scholarship as open to
+    // everyone, which is the defect this entry exists to prevent. An empty yield is loud and a
+    // human fixes it the same day; a missing licence floor is silent and misleads applicants
+    // until someone re-reads the page.
+    requiredFields: ['sponsor', 'deadlineNote', 'applyNote', 'license'],
     expectedMinRecords: 1,
     notes:
       'NO PER-AWARD AMOUNT IS PUBLISHED. The live page (captured 2026-08-03) prints only a ' +
@@ -189,7 +238,12 @@ const CONFIGS: SinglePageConfig[] = [
       'hardcoded here (15 x $3,000 = $45,000, not $57,000). Amount stays unknown rather than ' +
       'guessed. Intake is the ARRL Foundation portal at arrl.org/scholarship-descriptions, NOT ' +
       'QCWA — the deadline is INHERITED from arrl-scholarship-program. A recommendation from an ' +
-      'active QCWA member is a hard requirement. The live page carries NO farweb.org link (the ' +
+      'active QCWA member is a hard requirement. AN AMATEUR RADIO LICENCE IS A HARD REQUIREMENT: ' +
+      'applications are "requested by interested licensed radio amateurs" and "Scholarships are ' +
+      'awarded to worthy Amateur Radio operators". The page adds that there are "no restrictions ' +
+      'regarding class of amateur license" — that is ANY CLASS QUALIFIES (floor TECH), not "no ' +
+      'licence needed", and the two must never be conflated. The live page carries NO ' +
+      'farweb.org link (the ' +
       'earlier note here claimed it did); that domain remains hard-blocklisted in the fetcher ' +
       'because it now redirects to a gambling site.',
   },
@@ -204,7 +258,7 @@ const CONFIGS: SinglePageConfig[] = [
     externalKey: 'ylrl-scholarships',
     fieldPatterns: {
       eligibility: YLRL_ELIGIBILITY_SENTENCE,
-      license: /(Applicants? must have an Amateur Radio License[^.]*\.)/i,
+      license: YLRL_LICENSE_SENTENCE,
       residency: /(There are no residency restrictions[^.]*\.(?:\s*Non-U\.?S\.? Amateurs are eligible\.)?)/i,
       membershipPreference: /(Preference will be given to YLRL members[^.]*\.)/i,
       studyPreference: /(Preference will be given to students studying[^.]*\.)/i,

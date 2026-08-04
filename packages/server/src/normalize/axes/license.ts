@@ -4,10 +4,36 @@ import { makeConstraint } from './preference.js';
 const WORD_MONTHS: Record<string, number> = { one: 12, two: 24, three: 36, four: 48, five: 60 };
 
 // Genuinely NO amateur licence is required at all — e.g. this corpus's one real
-// "License Requirement: None" entry. Checked FIRST: it must win over the generic "mentions a
-// licence but names no class" fallback below, or the one real unlicensed-OK award in this corpus
-// would wrongly gain a TECH floor it doesn't have.
+// "License Requirement: None" entry (The North Fulton Amateur Radio League Scholarship, whose
+// ARRL catalog value is the bare word "None"). Checked before the generic "mentions a licence but
+// names no class" fallback below, or the one real unlicensed-OK award in this corpus would
+// wrongly gain a TECH floor it doesn't have.
 const NO_LICENSE = /\bnone\b|\bnot\s+required\b|\bno\s+licen[sc]e\s+(?:is\s+)?required\b|\bn\/a\b/i;
+
+/**
+ * "ANY CLASS QUALIFIES" — which is NOT "no licence needed". These phrases PRESUPPOSE a licence
+ * and disclaim only a floor ABOVE the entry level, so the correct answer is the entry-level
+ * floor, TECH, and never NONE.
+ *
+ * Checked BEFORE NO_LICENSE, and deliberately so. The two families are one word apart in
+ * English and share their most distinctive tokens: qcwa.org's live page says "There are no
+ * restrictions regarding class of amateur license, race, sex, residence, or field of study" one
+ * sentence after saying the award is for "licensed radio amateurs", and that sentence contains
+ * "no", "license", and a negation, exactly like "no license required". Any future widening of
+ * NO_LICENSE toward the shapes it still misses ("no ham ticket needed", "licence not necessary")
+ * walks straight into it. Reading a class disclaimer as a licence disclaimer publishes a
+ * licensed-operators-only award as eligible to someone with no amateur licence — the one
+ * direction a funding desk whose entire subject is amateur radio must not fail in.
+ *
+ * Narrow on purpose: it matches only text that disclaims a restriction on the CLASS, never the
+ * much larger "any class" family ("Any active Amateur Radio License Class", "FCC issued amateur
+ * radio license, any class" — 40+ entries). Those already resolve to TECH through the fallback
+ * below, and short-circuiting them here would flatten the one entry that reads "Any active
+ * Amateur Radio License Class for two years, preference for General Class" from a General-class
+ * PREFERENCE to a bare TECH, discarding the funder's stated preference.
+ */
+const CLASS_AGNOSTIC =
+  /\bno\s+restrictions?\s+(?:regarding|on|as\s+to|upon)\s+(?:the\s+)?(?:(?:amateur\s+)?licen[sc]e\s+)?class\b|\bclass\s+(?:of\s+(?:amateur\s+)?licen[sc]e\s+)?is\s+not\s+restricted\b/i;
 
 const CLASS_RANK: Record<'TECH' | 'GENERAL' | 'EXTRA', number> = { TECH: 1, GENERAL: 2, EXTRA: 3 };
 
@@ -26,8 +52,13 @@ const CLASS_RANK: Record<'TECH' | 'GENERAL' | 'EXTRA', number> = { TECH: 1, GENE
  * License Requirement values are exactly this shape; falling through to NONE (no licence needed
  * at all, as this function used to do) showed ham-radio-only awards as eligible to applicants
  * with no amateur licence — the worst possible direction for this product to fail in.
+ *
+ * CLASS_AGNOSTIC outranks NO_LICENSE for the reason given at its definition: "no restrictions
+ * regarding CLASS of amateur license" is a statement about which licence qualifies, not about
+ * whether one is needed, and TECH is the floor it describes.
  */
 function licenseMinFrom(text: string): LicenseClass {
+  if (CLASS_AGNOSTIC.test(text)) return 'TECH';
   if (NO_LICENSE.test(text)) return 'NONE';
   const named: Array<'TECH' | 'GENERAL' | 'EXTRA'> = [];
   if (/\bextra\b/i.test(text)) named.push('EXTRA');
