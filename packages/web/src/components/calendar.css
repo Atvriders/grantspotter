@@ -1,14 +1,19 @@
 /*
  * Calendar — month grid, agenda and the prep-lead overlay (spec §11.1).
  *
- * Semantic tokens only; no raw colours. Two rules here are load-bearing rather than decorative:
+ * Semantic tokens only; no raw colours. Three rules here are load-bearing rather than decorative:
  *
- *   .chip.estimated  — a PROJECTED date must never look like one a funder published. It is the
- *                      only chip drawn with a dashed edge, and the word "projected" is in its
- *                      accessible name as well, because colour and dash are not readable by
- *                      everyone and 240 of the corpus's 244 cycles are projections.
- *   .lead-bar        — the answer to "when do I start", drawn rather than computed by the reader.
- *                      Its split is `--elapsed`, the share of the prep runway already spent.
+ *   .chip.estimated       — a PROJECTED date must never look like one a funder published. It is
+ *                           the only chip drawn with a dashed edge, and the word "projected" is
+ *                           in its accessible name as well, because colour and dash are not
+ *                           readable by everyone and 240 of the corpus's 244 cycles are
+ *                           projections.
+ *   .prep-mark.estimated  — the same distinction for the one mark on this page a planner acts on:
+ *                           when to start preparing. 123 of a 12-month window's 127 prep marks are
+ *                           projected, not funder-published.
+ *   .lead-bar             — the answer to "when do I start", drawn rather than computed by the
+ *                           reader. Its split is `--elapsed`, the share of the prep runway already
+ *                           spent.
  */
 
 .cal-tabs {
@@ -263,6 +268,21 @@
 
 .prep-mark {
   border-left: 3px dotted var(--border-strong);
+}
+
+/*
+ * A projected prep start must never look anchored to a date a funder actually published — the
+ * same reason `.chip.estimated` exists. `PrepMark` has carried the `estimated` class since it
+ * gained the "(projected date)" wording in its visible text, but nothing here styled it, so 123 of
+ * the 127 marks in a 12-month window read identically to the 4 that ARE funder-published. Same
+ * treatment as `.chip.estimated`: the dotted edge above becomes dashed, plus an inset outline, so
+ * the distinction survives colour weakness and low contrast alike and does not depend on the text
+ * alone.
+ */
+.prep-mark.estimated {
+  border-left-style: dashed;
+  outline: 1px dashed currentColor;
+  outline-offset: -1px;
 }
 
 .opens-mark {

@@ -240,9 +240,47 @@ export const disputedSchema = z.object({
   note: z.string(),
 });
 
+/**
+ * An absolute http(s) URL, and nothing else. The store-side half of the same allowlist
+ * `web/src/lib/safety.ts` applies before it renders an anchor.
+ *
+ * Three fields share this: `programSchema.applyUrl`, `trustFieldsSchema.sourceUrl` and
+ * `aiPolicySchema.url`. All three were once a bare `z.string()`, and `POST
+ * /api/inbox/:id/decision` validates an admin-edited candidate with nothing but `programSchema` —
+ * so `javascript:…` was a storable value for any of them, and `SourceLink` renders `applyUrl`,
+ * `trust.sourceUrl` and `aiPolicy.url` as `<a href>` with no guard of its own upstream (`applyUrl`
+ * is the one field `Opportunity.tsx` also screens through `linkRefusal` before offering as the
+ * "Apply at the funder" button; the other two go straight to `SourceLink`). `applyUrl` was
+ * tightened first, closing the finding that named it; `sourceUrl` and `url` were the same shape
+ * and stayed bare — latent, since every stored value happens to parse today, and exactly why it
+ * is worth closing before a record proves it rather than after.
+ *
+ * NOT `z.string().url()`: zod's `.url()` accepts `javascript:alert(1)` — it checks that the URL
+ * constructor succeeds, which is the same hole the browser-side copy had. The scheme is checked
+ * by name. `//host/path` is rejected too: `new URL()` throws on it, and a browser resolves it to
+ * the host — which is how a protocol-relative farweb.org link reached the page as a live anchor.
+ *
+ * A REGEX RATHER THAN `new URL()` because `core` is compiled with `lib: ["ES2022"]` and
+ * `types: []` (spec §14 purity — no `node:`, no DOM, no host environment assumed at all), so
+ * `URL` is not in scope here. The pattern is deliberately narrower than the constructor: scheme,
+ * `//`, a non-empty authority with no whitespace, and an optional path/query/fragment. Verified
+ * against every URL the corpus stores — 703 of 703 `applyUrl` values match, and every string
+ * `web/src/lib/safety.ts` refuses is refused here too.
+ */
+const HTTP_URL = /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i;
+
+export const httpUrlSchema = z
+  .string()
+  .refine((value) => HTTP_URL.test(value), { message: 'must be an absolute http or https URL' });
+
 export const trustFieldsSchema = z.object({
   status: programStatusSchema,
-  sourceUrl: z.string(),
+  // Tightened alongside `applyUrl` (close-out review I5's deviation note): rendered as an anchor
+  // by `SourceLink` on every detail page, unconditionally — there is no `blocked_host`-style guard
+  // upstream of it the way `applyUrl` has one in `Opportunity.tsx`. `httpUrlSchema` is defined
+  // once, above, precisely so this and `aiPolicy.url` do not each grow their own copy of the
+  // allowlist and silently drift from it.
+  sourceUrl: httpUrlSchema,
   lastVerifiedAt: z.string(),
   verificationMethod: verificationMethodSchema,
   contentHash: z.string(),
@@ -253,7 +291,10 @@ export const trustFieldsSchema = z.object({
 export const aiPolicySchema = z.object({
   stance: aiStanceSchema,
   quote: z.string().optional(),
-  url: z.string().optional(),
+  // Same allowlist as `applyUrl` and `trust.sourceUrl` — also rendered through `SourceLink`,
+  // also bare `z.string()` before this fix. Optional stays optional: the key is absent on every
+  // record whose funder has not published an AI policy at all.
+  url: httpUrlSchema.optional(),
 });
 
 export const obligationsSchema = z.object({
@@ -275,34 +316,6 @@ export const funderSchema = z.object({
   ein: z.string().optional(),
   note: z.string().optional(),
 });
-
-/**
- * An absolute http(s) URL, and nothing else. The store-side half of the same allowlist
- * `web/src/lib/safety.ts` applies before it renders an anchor.
- *
- * `applyUrl` was a bare `z.string()`, and `POST /api/inbox/:id/decision` validates an
- * admin-edited candidate with nothing but `programSchema` — so `javascript:…` was a storable
- * value, and the detail page renders `applyUrl` as an `<a href>`. All 703 stored apply URLs are
- * absolute http/https today (591 https, 112 http, 0 unparseable), which is exactly why this is
- * worth closing before a record proves it rather than after.
- *
- * NOT `z.string().url()`: zod's `.url()` accepts `javascript:alert(1)` — it checks that the URL
- * constructor succeeds, which is the same hole the browser-side copy had. The scheme is checked
- * by name. `//host/path` is rejected too: `new URL()` throws on it, and a browser resolves it to
- * the host — which is how a protocol-relative farweb.org link reached the page as a live anchor.
- *
- * A REGEX RATHER THAN `new URL()` because `core` is compiled with `lib: ["ES2022"]` and
- * `types: []` (spec §14 purity — no `node:`, no DOM, no host environment assumed at all), so
- * `URL` is not in scope here. The pattern is deliberately narrower than the constructor: scheme,
- * `//`, a non-empty authority with no whitespace, and an optional path/query/fragment. Verified
- * against every URL the corpus stores — 703 of 703 `applyUrl` values match, and every string
- * `web/src/lib/safety.ts` refuses is refused here too.
- */
-const HTTP_URL = /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i;
-
-export const httpUrlSchema = z
-  .string()
-  .refine((value) => HTTP_URL.test(value), { message: 'must be an absolute http or https URL' });
 
 export const programSchema = z.object({
   id: z.string(),

@@ -428,16 +428,34 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
             </section>
           )}
 
-          {program.fundingRestrictions.length > 0 && (
-            <section className="panel card" aria-label="Funding restrictions">
-              <h2>Funding restrictions</h2>
+          {/*
+            CLOSE-OUT REVIEW RESIDUAL — I4's second paragraph, left undone alongside the six
+            obligations. An empty array made this whole section vanish on 147 of the 150
+            publishable records: no heading, nothing. That silence reads as "there are none",
+            which is an assertion the data does not make — a program with no funding restrictions
+            ON RECORD is not the same claim as a funder stating in writing that none apply, and
+            the same inversion that had 597 obligation rows render as nothing (I4, above).
+
+            The section now ALWAYS renders, and says so in words when the list is empty, the same
+            choice I4 made for `licenseObligation`, `indirectCostCapPct`, `sustainmentObligation`
+            and `reportingObligation`: never let an absent row stand in for "not required".
+          */}
+          <section className="panel card" aria-label="Funding restrictions">
+            <h2>Funding restrictions</h2>
+            {program.fundingRestrictions.length > 0 ? (
               <ul>
                 {program.fundingRestrictions.map((restriction) => (
                   <li key={restriction}>{restriction}</li>
                 ))}
               </ul>
-            </section>
-          )}
+            ) : (
+              <p className="unstated">
+                No funding restrictions are recorded for this program. That is not the same as the
+                funder saying none apply — ask before assuming there is no restriction on how the
+                award may be used.
+              </p>
+            )}
+          </section>
 
           {/*
             ALL SIX ROWS, ALWAYS. Four of these used to be wrapped in

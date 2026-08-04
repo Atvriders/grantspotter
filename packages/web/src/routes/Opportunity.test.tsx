@@ -247,6 +247,23 @@ describe('Opportunity detail', () => {
     expect(screen.getByText('No ongoing operating expenses.')).toBeInTheDocument();
   });
 
+  /**
+   * CLOSE-OUT REVIEW RESIDUAL — I4's second paragraph. 147 of the 150 publishable records carry
+   * `fundingRestrictions: []`, and the whole section used to vanish for them: no heading, no
+   * sentence, nothing. That silence reads as "there are none" — an assertion no funder made —
+   * the same inversion I4 closed for the four obligation rows that used to emit no row at all.
+   */
+  it('still shows the Funding restrictions heading, and says plainly none are recorded, rather than omitting the section', async () => {
+    stubFetch({
+      ...CLUB_GRANT_DETAIL,
+      program: { ...CLUB_GRANT_DETAIL.program, fundingRestrictions: [] },
+    });
+    renderDetail();
+    const section = await screen.findByRole('region', { name: /funding restrictions/i });
+    expect(within(section).getByText(/no funding restrictions are recorded/i)).toBeInTheDocument();
+    expect(within(section).queryByRole('list')).not.toBeInTheDocument();
+  });
+
   it('shows the obligations applicants miss, including the indirect cost cap', async () => {
     renderDetail();
     expect(await screen.findByText(/open-source \/ open-access/)).toBeInTheDocument();

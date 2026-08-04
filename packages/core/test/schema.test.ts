@@ -67,6 +67,72 @@ describe('zod mirrors of CONTRACT §3', () => {
     }
   });
 
+  /**
+   * THE SAME ALLOWLIST, ON THE OTHER TWO FIELDS `SourceLink` RENDERS AS AN ANCHOR.
+   *
+   * `trust.sourceUrl` is required (never optional — every record has a source page) and
+   * `aiPolicy.url` is optional exactly like `applyUrl` (absent on every record whose funder has
+   * not published an AI policy). Both were bare `z.string()` until this fix, both go straight to
+   * `SourceLink` with no `Opportunity.tsx`-level guard the way `applyUrl` has, and both are
+   * latent today — every stored value happens to parse — which is exactly why this is worth
+   * closing before a record proves it rather than after.
+   */
+  it('accepts an absolute http(s) trust.sourceUrl, which is required', () => {
+    for (const sourceUrl of [
+      'https://www.arrl.org/club-grant-program',
+      'http://www.arrl.org/club-grant-program',
+      'https://example.test:8443/apply?x=1#top',
+    ]) {
+      const program = makeProgram({ trust: { ...makeProgram().trust, sourceUrl } });
+      expect(programSchema.parse(program).trust.sourceUrl).toBe(sourceUrl);
+    }
+  });
+
+  it('refuses to store a trust.sourceUrl no page can safely render as a link', () => {
+    for (const sourceUrl of [
+      'javascript:alert(document.cookie)',
+      'data:text/html,<script>alert(1)</script>',
+      'vbscript:msgbox(1)',
+      'file:///etc/passwd',
+      '//www.farweb.org/scholarships',
+      '/apply',
+      'not a url',
+      '',
+    ]) {
+      const program = makeProgram({ trust: { ...makeProgram().trust, sourceUrl } });
+      expect(() => programSchema.parse(program), sourceUrl).toThrow();
+    }
+  });
+
+  it('accepts an absolute http(s) aiPolicy.url, and lets the key be absent', () => {
+    for (const url of [
+      'https://www.ardc.net/apply/grant-application-instructions/',
+      'http://www.arrl.org/ai-policy',
+      'https://example.test:8443/policy?x=1#top',
+    ]) {
+      const program = makeProgram({ aiPolicy: { stance: 'permitted', url } });
+      expect(programSchema.parse(program).aiPolicy.url).toBe(url);
+    }
+    const noUrl = makeProgram({ aiPolicy: { stance: 'unaddressed' } });
+    expect(programSchema.parse(noUrl).aiPolicy.url).toBeUndefined();
+  });
+
+  it('refuses to store an aiPolicy.url no page can safely render as a link', () => {
+    for (const url of [
+      'javascript:alert(document.cookie)',
+      'data:text/html,<script>alert(1)</script>',
+      'vbscript:msgbox(1)',
+      'file:///etc/passwd',
+      '//www.farweb.org/scholarships',
+      '/apply',
+      'not a url',
+      '',
+    ]) {
+      const program = makeProgram({ aiPolicy: { stance: 'permitted', url } });
+      expect(() => programSchema.parse(program), url).toThrow();
+    }
+  });
+
   it('rejects a Constraint whose spec axis is not in the union', () => {
     expect(() => constraintSpecSchema.parse({ axis: 'vibes', note: 'nope' })).toThrow();
   });
