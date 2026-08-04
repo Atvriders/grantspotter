@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 import type {
   FetchRequest,
   FetchedPayload,
+  OrgProfile,
   Profile,
   Program,
   StudentProfile,
@@ -197,6 +198,11 @@ export interface NamedProfile {
 }
 
 const student = (over: Partial<StudentProfile>): StudentProfile => ({ kind: 'student', ...over });
+const org = (over: Partial<OrgProfile>): OrgProfile => ({
+  kind: 'organization',
+  entity: 'club_501c3',
+  ...over,
+});
 
 export const PROFILES: NamedProfile[] = [
   {
@@ -290,6 +296,65 @@ export const PROFILES: NamedProfile[] = [
       activityKinds: ['club_member'],
       financialNeed: true,
       gender: 'male',
+    }),
+  },
+  {
+    key: 'cert-trade',
+    label:
+      'licensed certificate/vocational student — Technician class since 2023, Avionics & ' +
+      'Communications certificate at an accredited trade school in AZ, full-time, 3.5 GPA, US ' +
+      'citizen, age 20, financial need — exercises the CWops trade/art/professional-school fix',
+    profile: student({
+      callsign: 'K7EXAMPLE',
+      licenseClass: 'TECH',
+      licensedSince: '2023-09-01T00:00:00.000Z',
+      state: 'AZ',
+      callDistrict: '7',
+      fieldOfStudy: 'Avionics and Communications Technology',
+      degreeLevel: 'CERT',
+      institution: 'A Technical Institute',
+      accredited: true,
+      partTime: false,
+      gpa: 3.5,
+      citizenship: 'US_CITIZEN',
+      birthDate: '2006-01-10T00:00:00.000Z',
+      stage: 'UNDERGRAD',
+      activityKinds: ['on_air', 'club_member'],
+      cwWpm: 20,
+      financialNeed: true,
+      gender: 'female',
+    }),
+  },
+  {
+    key: 'radio-club',
+    label:
+      'ARRL-affiliated 501(c)(3) radio club — 45 members, repeater/EmComm-focused, in WA, applying ' +
+      'for the ARRL Club Grant Program, ARRL Amateur Radio Grants, and the Yaesu DR-2X discount — ' +
+      'the org-facing population the individual profiles above can never see',
+    profile: org({
+      entity: 'club_501c3',
+      orgName: 'A Community Amateur Radio Club',
+      callsign: 'W7EXAMPLE',
+      state: 'WA',
+      is501c3: true,
+      hasFiscalSponsor: false,
+      arrlAffiliated: true,
+      memberCount: 45,
+    }),
+  },
+  {
+    key: 'school-org',
+    label:
+      'public middle school (LEA) with an amateur radio club, in MN, applying as an institution — ' +
+      'never as an individual — for programs like ARISS, the ARRL ETP, and ARDC/NASA CSLI grants',
+    profile: org({
+      entity: 'school_lea',
+      orgName: 'A Public Middle School',
+      state: 'MN',
+      is501c3: false,
+      arrlAffiliated: false,
+      memberCount: 20,
+      institutionName: 'A Public School District',
     }),
   },
 ];
