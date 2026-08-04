@@ -9,7 +9,20 @@ import {
   type CompletenessReport,
   type ProfileKind,
 } from '../store/session.js';
-import { PROFILE_FIELDS, type ProfileFieldMeta } from '../lib/profileFields.js';
+import {
+  callsignFillableFields,
+  callsignFillRefusal,
+  PROFILE_FIELDS,
+  type ProfileFieldMeta,
+} from '../lib/profileFields.js';
+import {
+  profileValueOrigin,
+  pruneFieldSources,
+  type Profile as StoredProfile,
+  type ProfileFieldSource,
+} from '@grantspotter/core';
+import { CallsignLookup, type AcceptedCallsign } from '../components/CallsignLookup.js';
+import { formatDate } from '../lib/trust.js';
 import '../components/profile.css';
 
 type FormValues = Record<string, string>;
@@ -186,6 +199,26 @@ export function toPayload(kind: ProfileKind, values: FormValues): Payload {
 
 const EMPTY_DRAFTS: Record<ProfileKind, FormValues> = { student: {}, organization: {} };
 
+/**
+ * The provenance markers held per tab, in exactly the shape the profile is STORED with.
+ *
+ * Not a private bookkeeping structure: `ProfileFieldSource` is core's, it rides along with the
+ * values it describes in the PUT body, and it comes back on the next load — so a licence class
+ * a lookup wrote is still distinguishable from one the applicant typed a week later. Nothing
+ * here clears a marker when the user edits a field: `profileValueOrigin` compares the marker's
+ * stored value against what the field now holds, so an edit invalidates it by arithmetic rather
+ * than by some code path remembering to.
+ */
+type FieldSources = Record<ProfileKind, Record<string, ProfileFieldSource>>;
+
+const NO_SOURCES: FieldSources = { student: {}, organization: {} };
+
+/** The markers a stored profile arrived with, or none. */
+function sourcesOf(saved: Record<string, unknown> | null): Record<string, ProfileFieldSource> {
+  const raw = saved?.fieldSources;
+  return typeof raw === 'object' && raw !== null ? (raw as Record<string, ProfileFieldSource>) : {};
+}
+
 export function Profile(): JSX.Element {
   const [searchParams] = useSearchParams();
   const kindParam = searchParams.get('kind');
@@ -195,6 +228,21 @@ export function Profile(): JSX.Element {
     kindParam === 'organization' ? 'organization' : 'student',
   );
   const [drafts, setDrafts] = useState<Record<ProfileKind, FormValues>>(EMPTY_DRAFTS);
+  const [sources, setSources] = useState<FieldSources>(NO_SOURCES);
+  /**
+   * The link to the FCC's own copy of the record last looked up on each tab.
+   *
+   * Deliberately NOT persisted, because `ProfileFieldSource` has no room for it: the stored
+   * marker carries the source, the day and the value it wrote, which is what makes it
+   * self-invalidating. So the link is offered while the lookup is still on screen, and after a
+   * reload the banner still names the source and the day it read them — it just cannot hand
+   * out a link nobody stored. Reconstructing a ULS URL from a callsign would be this tool
+   * inventing a citation.
+   */
+  const [ulsUrls, setUlsUrls] = useState<Record<ProfileKind, string | undefined>>({
+    student: undefined,
+    organization: undefined,
+  });
   const [held, setHeld] = useState<Record<ProfileKind, boolean>>({
     student: false,
     organization: false,
@@ -222,6 +270,9 @@ export function Profile(): JSX.Element {
       student: toForm(data.student, 'student'),
       organization: toForm(data.organization, 'organization'),
     });
+    // The markers travel with the profile, so a value a lookup wrote is still marked as one on
+    // every later visit — not only in the minute after the button was pressed.
+    setSources({ student: sourcesOf(data.student), organization: sourcesOf(data.organization) });
     setHeld({ student: data.student !== null, organization: data.organization !== null });
     setReport(data.completeness);
     const server = data.completenessFor ?? null;
@@ -286,6 +337,45 @@ export function Profile(): JSX.Element {
 
   function setValue(key: string, value: string): void {
     setDrafts((current) => ({ ...current, [kind]: { ...current[kind], [key]: value } }));
+    // No marker is touched here, and that is the design rather than an omission: a marker
+    // holds the value it wrote, so `profileValueOrigin` reports this field as the user's the
+    // moment its value differs. A flag cleared by hand is a flag some path forgets to clear.
+  }
+
+  /**
+   * The user pressed "Use these values" in the lookup panel.
+   *
+   * Everything here is written into the DRAFT, never to the server: the profile is saved by
+   * the same Save button as every other edit, so a lookup the user changes their mind about
+   * costs nothing. The street address is not among these values and has nowhere to go — see
+   * `CallsignLookup`, which shows it and drops it.
+   *
+   * WHICH fields get a marker is `callsignFillableFields`, not "everything that was filled".
+   * The callsign itself is the question the user asked, not an answer this tool found, and
+   * core's `StudentFieldSources` / `OrgFieldSources` have no room to record one for it — a
+   * marker this form invented and the schema then stripped would show on screen and vanish on
+   * save, which is a worse lie than no marker at all.
+   */
+  function applyLookup(values: AcceptedCallsign): void {
+    const applied: FormValues = { callsign: values.callsign };
+    if (values.state !== undefined) applied.state = values.state;
+    if (values.licenseClass !== undefined) applied.licenseClass = values.licenseClass;
+    if (values.orgName !== undefined) applied.orgName = values.orgName;
+
+    const fillable = new Set(callsignFillableFields(kind));
+    const marks: Record<string, ProfileFieldSource> = { ...sources[kind] };
+    for (const [key, value] of Object.entries(applied)) {
+      if (!fillable.has(key)) continue;
+      marks[key] = {
+        source: values.provenance.source,
+        fetchedAt: values.provenance.fetchedAt,
+        value,
+      };
+    }
+
+    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...applied } }));
+    setSources((current) => ({ ...current, [kind]: marks }));
+    setUlsUrls((current) => ({ ...current, [kind]: values.provenance.ulsUrl }));
   }
 
   function toggleActivity(value: string, on: boolean): void {
@@ -312,10 +402,27 @@ export function Profile(): JSX.Element {
       return;
     }
 
+    /**
+     * The provenance rides along with the values it describes, and `pruneFieldSources` — core's
+     * own storage rule, called rather than re-implemented — drops every marker whose value the
+     * user has since typed over, and every marker for a field that is now empty. Without it a
+     * "read from callook.info" marker for a value nobody can see any more would sit in the
+     * database waiting for the next reader to discount it.
+     */
+    const marks = sources[kind];
+    const payload = pruneFieldSources(
+      (Object.keys(marks).length === 0
+        ? body
+        : { ...body, fieldSources: marks }) as unknown as StoredProfile,
+    );
+
     setSaving(true);
     try {
-      const response = await apiSend<SaveResponse>('PUT', `/api/profiles/${kind}`, body);
+      const response = await apiSend<SaveResponse>('PUT', `/api/profiles/${kind}`, payload);
       setDrafts((current) => ({ ...current, [kind]: toForm(response.profile, kind) }));
+      // The server's echo, so what is on screen is what is stored — including a marker the
+      // schema stripped.
+      setSources((current) => ({ ...current, [kind]: sourcesOf(response.profile) }));
       setHeld((current) => ({ ...current, [kind]: true }));
       setReport(response.completeness);
       // The kind the SERVER echoed, not the tab this component happens to be on.
@@ -346,6 +453,22 @@ export function Profile(): JSX.Element {
   }
 
   const noun = kind === 'student' ? 'student' : 'organization';
+  const kindSources = sources[kind];
+  /**
+   * Whether this field still holds the value a lookup wrote. `profileValueOrigin` is core's
+   * and is the only sanctioned reader: testing for a marker's presence would report "read from
+   * callook.info" for a value the user has typed over, which is the precise misattribution the
+   * marker's stored value exists to prevent.
+   */
+  function lookedUpSource(key: string): ProfileFieldSource | undefined {
+    const source = kindSources[key];
+    return profileValueOrigin(drafts[kind][key], source) === 'looked_up' ? source : undefined;
+  }
+  // Every live marker on a tab came from one lookup, so any of them names the source and day.
+  const firstFilled = callsignFillableFields(kind).find(
+    (key) => lookedUpSource(key) !== undefined,
+  );
+  const lookupMark = firstFilled === undefined ? null : (kindSources[firstFilled] ?? null);
   const unevaluated = unevaluatedProfileKinds({
     hasStudentProfile: held.student,
     hasOrgProfile: held.organization,
@@ -397,11 +520,45 @@ export function Profile(): JSX.Element {
             void save();
           }}
         >
+          {/* Where the marked values came from, stated once, with the day and a link to the
+              FCC's own copy of the record. It outlives the lookup panel on purpose: the
+              panel closes, and the fields it filled are still on screen. */}
+          {lookupMark !== null && (
+            <p className="callsign-source">
+              The marked fields below were read from <strong>{lookupMark.source}</strong> on{' '}
+              {formatDate(lookupMark.fetchedAt)}. They are values GrantSpotter read, not values
+              you stated.{' '}
+              {ulsUrls[kind] !== undefined && (
+                <a href={ulsUrls[kind]} target="_blank" rel="noopener noreferrer">
+                  Check this record in the FCC ULS
+                </a>
+              )}
+              {ulsUrls[kind] !== undefined ? '. ' : ''}
+              Editing one makes it yours, and the mark comes off.
+            </p>
+          )}
+
           {fieldsFor(kind).map((field) => {
             const id = `field-${field.key}`;
             const helpId = `${id}-help`;
             const value = drafts[kind][field.key] ?? '';
             const isRequired = REQUIRED[kind] === field.key;
+            const mark = lookedUpSource(field.key);
+            /**
+             * One sentence per field about the lookup, and a field can only ever need one of
+             * the two: either a lookup filled this field, or a lookup will never fill it and
+             * `callsignFillRefusal` says why. The refusal only appears once a lookup has
+             * happened — before that there is nothing to explain, and "we did not fill this
+             * from a record you never asked us to read" is noise.
+             */
+            const refusal = lookupMark === null ? undefined : callsignFillRefusal(field.key, kind);
+            const note =
+              mark !== undefined
+                ? `Read from ${mark.source} — not a value you stated. Edit it and it becomes yours.`
+                : refusal;
+            // The note is part of the field's DESCRIPTION, not decoration beside it: a
+            // screen-reader user has to hear that this value was read for them too.
+            const describedBy = note === undefined ? helpId : `${helpId} ${id}-lookup`;
 
             if (ARRAYS.has(field.key)) {
               const chosen = value.split(',').filter((v) => v !== '');
@@ -459,7 +616,7 @@ export function Profile(): JSX.Element {
                     // never says WHY the field is the one an organization cannot be
                     // stored without. Announcing it here keeps one explanation.
                     aria-required={isRequired}
-                    aria-describedby={helpId}
+                    aria-describedby={describedBy}
                     onChange={(event) => setValue(field.key, event.target.value)}
                   >
                     <option value="">{isRequired ? 'Choose one' : 'Not stated'}</option>
@@ -474,7 +631,7 @@ export function Profile(): JSX.Element {
                   <select
                     id={id}
                     value={value}
-                    aria-describedby={helpId}
+                    aria-describedby={describedBy}
                     onChange={(event) => setValue(field.key, event.target.value)}
                   >
                     <option value="">Not stated</option>
@@ -487,13 +644,39 @@ export function Profile(): JSX.Element {
                     type={NUMBERS.has(field.key) ? 'number' : DATES.has(field.key) ? 'date' : 'text'}
                     step={field.key === 'gpa' ? '0.01' : undefined}
                     value={value}
-                    aria-describedby={helpId}
+                    aria-describedby={describedBy}
                     onChange={(event) => setValue(field.key, event.target.value)}
                   />
                 )}
                 <span className="profile-help" id={helpId}>
                   {field.help}
                 </span>
+                {note !== undefined && (
+                  <span
+                    className={mark === undefined ? 'profile-help' : 'callsign-filled'}
+                    id={`${id}-lookup`}
+                  >
+                    {note}
+                  </span>
+                )}
+                {field.key === 'callsign' && (
+                  <CallsignLookup
+                    callsign={value}
+                    target={kind}
+                    onAccept={applyLookup}
+                    clubNotice={
+                      kind === 'student'
+                        ? 'This is a club station licence, not an individual one. GrantSpotter ' +
+                          'keeps a club on the Organization tab, which is where an organisation ' +
+                          'name and the entity type funders ask for belong. The callsign and ' +
+                          'state can still be used here.'
+                        : 'This is a club station licence, which is what a collegiate club’s ' +
+                          'callsign is. A club licence carries no operator class, so there is ' +
+                          'none to fill in — the organisation name below goes straight onto this ' +
+                          'profile.'
+                    }
+                  />
+                )}
               </div>
             );
           })}

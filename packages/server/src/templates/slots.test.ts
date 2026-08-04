@@ -72,8 +72,16 @@ const FUNDER: Funder = {
  * decide whether the new field deserves a slot. A profile-sourced slot that nothing maps is
  * invisible — it becomes a permanent `[TODO: …]` the applicant can never clear from their
  * profile, which is how an organisation's geography once became permanently unresolvable.
+ *
+ * `fieldSources` IS OMITTED, and the omission is that decision being made rather than dodged.
+ * It arrived with core's profile provenance (`ProfileFieldSource`: which values this tool
+ * fetched, when, and what it wrote) and it is provenance ABOUT the other fields, not a field an
+ * applicant fills in — core names it in `PROFILE_NON_FIELD_KEYS` alongside the discriminant for
+ * exactly that reason. A template slot for it would render a marker into an application
+ * narrative, which is not a fact about the applicant. The tripwire fired as designed; this is
+ * the answer to it.
  */
-const MAXIMAL_ORG: Required<OrgProfile> = {
+const MAXIMAL_ORG: Required<Omit<OrgProfile, 'fieldSources'>> = {
   kind: 'organization',
   entity: 'club_501c3',
   orgName: 'Example Collegiate Amateur Radio Club',
@@ -89,7 +97,8 @@ const MAXIMAL_ORG: Required<OrgProfile> = {
   institutionName: 'Example State University',
 };
 
-const MAXIMAL_STUDENT: Required<StudentProfile> = {
+/** Same omission, same reason: see MAXIMAL_ORG above. */
+const MAXIMAL_STUDENT: Required<Omit<StudentProfile, 'fieldSources'>> = {
   kind: 'student',
   callsign: 'KD9XYZ',
   licenseClass: 'GENERAL',

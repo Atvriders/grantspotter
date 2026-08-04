@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
+import type { ProfileFieldSource } from '@grantspotter/core';
+import { apiSend, ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
+import { CallsignLookup, type AcceptedCallsign } from '../components/CallsignLookup.js';
+import { callsignFillableFields } from '../lib/profileFields.js';
 import { Login, SignedOutPage } from './Login.js';
 
 /**
@@ -95,10 +98,63 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
   const [token, setToken] = useState('');
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [callsign, setCallsign] = useState('');
+  const [accepted, setAccepted] = useState<AcceptedCallsign | null>(null);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The administrator exists and this browser is signed in, but the starter profile did not
+   * save. There is no retry that helps here — bootstrap answers 409 from now on — so the
+   * form is replaced by the truth and a way onwards, rather than a form that can only fail.
+   */
+  const [stranded, setStranded] = useState<string | null>(null);
+
+  /**
+   * The starter profile, written AFTER the account exists because that is the first moment
+   * there is a session to write it with. It carries only what the profile actually stores:
+   * a callsign, a state and — when the record's operator class maps exactly onto one of
+   * GrantSpotter's four — a licence class. No street address, and never `licensedSince`.
+   *
+   * A club station is deliberately NOT written. Club details belong on the organization
+   * profile, which cannot be stored without an entity type, and this screen does not ask for
+   * one; inventing an entity to make the write succeed is exactly the kind of guess this
+   * product refuses. The lookup panel says so before the account is created.
+   */
+  async function saveStarterProfile(): Promise<void> {
+    if (accepted !== null && accepted.type === 'CLUB') return;
+    const typed = callsign.trim().toUpperCase();
+    if (typed === '') return;
+
+    const values: Record<string, string> = {};
+    if (accepted?.state !== undefined) values.state = accepted.state;
+    if (accepted?.licenseClass !== undefined) values.licenseClass = accepted.licenseClass;
+
+    // Which of these may be recorded as fetched is `callsignFillableFields`, so this screen and
+    // the profile editor cannot disagree about it — and neither can either of them disagree
+    // with core's schema, which is what the registry is asserted against. The callsign itself
+    // carries no marker: it is what the operator typed in, not what the lookup answered.
+    const fieldSources: Record<string, ProfileFieldSource> = {};
+    if (accepted !== null) {
+      for (const key of callsignFillableFields('student')) {
+        const value = values[key];
+        if (value === undefined) continue;
+        fieldSources[key] = {
+          source: accepted.provenance.source,
+          fetchedAt: accepted.provenance.fetchedAt,
+          value,
+        };
+      }
+    }
+
+    await apiSend('PUT', '/api/profiles/student', {
+      kind: 'student',
+      callsign: accepted?.callsign ?? typed,
+      ...values,
+      ...(Object.keys(fieldSources).length === 0 ? {} : { fieldSources }),
+    });
+  }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -125,6 +181,18 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
         password,
         ...(displayName.trim() === '' ? {} : { displayName: displayName.trim() }),
       });
+      // From here the account exists and this browser holds its session, so a failure below
+      // is no longer a failure to set the deployment up.
+      try {
+        await saveStarterProfile();
+      } catch (err) {
+        setStranded(
+          err instanceof ApiError && err.status !== 0
+            ? err.message
+            : 'The GrantSpotter API could not be reached.',
+        );
+        return;
+      }
       onAuthenticated();
     } catch (err) {
       setError(messageForBootstrap(err));
@@ -135,6 +203,22 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
     } finally {
       setBusy(false);
     }
+  }
+
+  if (stranded !== null) {
+    return (
+      <SignedOutPage>
+        <h1 style={{ marginBottom: 'var(--s-3)' }}>Administrator created</h1>
+        <p role="alert" style={{ marginBottom: 'var(--s-5)' }}>
+          The administrator account was created and this browser is signed in. The callsign was
+          not saved to a profile: {stranded} Nothing else was lost, and setup is finished — open
+          the Profile screen to enter it there.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={onAuthenticated}>
+          Continue to GrantSpotter
+        </button>
+      </SignedOutPage>
+    );
   }
 
   return (
@@ -192,6 +276,47 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           style={FIELD}
+        />
+
+        <label htmlFor="first-run-callsign" className="eyebrow">
+          Callsign (optional)
+        </label>
+        <input
+          id="first-run-callsign"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          aria-describedby="first-run-callsign-hint"
+          value={callsign}
+          onChange={(e) => {
+            setCallsign(e.target.value);
+            // A hand-edited callsign is no longer the one that was looked up, so the values
+            // that came with it stop applying. Keeping them would attach somebody else's
+            // state and licence class to a callsign nobody checked.
+            setAccepted(null);
+          }}
+          style={{ ...FIELD, marginBottom: 'var(--s-2)', textTransform: 'uppercase' }}
+        />
+        <p id="first-run-callsign-hint" style={HINT}>
+          The callsign you operate under. GrantSpotter starts a student profile with it, so the
+          first screen after setup already knows something about you — everything on it can be
+          changed later, and leaving this empty stores nothing at all.
+        </p>
+        <CallsignLookup
+          callsign={callsign}
+          target="student"
+          setupToken={token.trim()}
+          onAccept={(values) => {
+            setAccepted(values);
+            setCallsign(values.callsign);
+          }}
+          clubNotice={
+            'This is a club station licence. GrantSpotter keeps a club on an organization ' +
+            'profile, which cannot be stored without an entity type, and this screen does not ' +
+            'ask for one — so nothing from this record will be stored here. Create the ' +
+            'administrator, then open the Profile screen: the same lookup is on its ' +
+            'Organization tab.'
+          }
         />
 
         <label htmlFor="first-run-password" className="eyebrow">

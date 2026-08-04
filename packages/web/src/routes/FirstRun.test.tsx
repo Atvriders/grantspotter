@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { FirstRun, SignedOut } from './FirstRun.js';
+import type { CallsignLookupResult, CallsignRecord } from '../api/callsign.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -293,5 +294,208 @@ describe('losing the race for the first account', () => {
     // It did not appear to succeed: nothing signed anybody in.
     expect(onAuthenticated).not.toHaveBeenCalled();
     expect(screen.queryByRole('heading', { name: /set up grantspotter/i })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE LOOKUP ON THE SETUP SCREEN.
+ *
+ * The caller here has no session at all — the account does not exist yet — so the one-time
+ * setup token is the credential, and whatever the operator accepts has nowhere to be stored
+ * until the account is created a moment later. What matters is that the account is never
+ * held hostage to the profile: the administrator is created first, the starter profile is a
+ * separate write, and a failure of the second is reported as exactly that.
+ */
+
+const PERSON_RECORD: CallsignRecord = {
+  callsign: 'W8UM',
+  type: 'PERSON',
+  name: 'JANE Q OPERATOR',
+  operClass: 'GENERAL',
+  operClassRaw: 'GENERAL',
+  addressLine1: '1301 BEAL AVE',
+  city: 'ANN ARBOR',
+  state: 'MI',
+  zip: '48109',
+  isPoBox: false,
+  grantDate: '2019-04-04',
+  source: 'callook.info',
+  fetchedAt: '2026-08-04T12:00:00.000Z',
+};
+
+const CLUB_RECORD: CallsignRecord = {
+  callsign: 'W8UM',
+  type: 'CLUB',
+  name: 'UNIVERSITY OF MICHIGAN AMATEUR RADIO CLUB',
+  city: 'ANN ARBOR',
+  state: 'MI',
+  isPoBox: false,
+  source: 'callook.info',
+  fetchedAt: '2026-08-04T12:00:00.000Z',
+};
+
+/** One router, so each call this screen makes is answered as its own endpoint. */
+function stubFirstRun(options: { lookup?: CallsignLookupResult; profileFails?: boolean } = {}) {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (url === '/api/callsign/lookup') {
+      return Promise.resolve(
+        okResponse(options.lookup ?? { status: 'unavailable', message: 'No stub was supplied.' }),
+      );
+    }
+    if (url === '/api/auth/bootstrap') {
+      return Promise.resolve(
+        okResponse({ user: { id: 'u-1', email: 'admin@example.org', role: 'admin' } }, 201),
+      );
+    }
+    if (url === '/api/profiles/student') {
+      return Promise.resolve(
+        options.profileFails === true
+          ? errorResponse(422, 'validation_failed', 'Profile failed validation.')
+          : okResponse({ profile: JSON.parse(String(init?.body)), completenessFor: 'student' }),
+      );
+    }
+    return Promise.resolve(okResponse({}));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function putCalls(fetchMock: ReturnType<typeof stubFirstRun>): [string, RequestInit][] {
+  return fetchMock.mock.calls.filter(
+    (call) => (call[1] as RequestInit | undefined)?.method === 'PUT',
+  ) as [string, RequestInit][];
+}
+
+async function acceptLookup(callsign = 'w8um'): Promise<void> {
+  await userEvent.type(screen.getByLabelText(/^callsign/i), callsign);
+  await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+  await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+}
+
+describe('looking a callsign up during first-run setup', () => {
+  it('offers the lookup, and says the callsign is optional', () => {
+    stubFirstRun();
+    renderForm();
+    expect(screen.getByLabelText(/^callsign/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /look up this callsign/i })).toBeInTheDocument();
+  });
+
+  it('sends the setup token as its credential, because there is no session yet', async () => {
+    const fetchMock = stubFirstRun({ lookup: { status: 'found', record: PERSON_RECORD } });
+    renderForm();
+    await fillForm();
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'W8UM');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    const lookup = fetchMock.mock.calls.find((call) => call[0] === '/api/callsign/lookup');
+    expect(JSON.parse(String((lookup?.[1] as RequestInit).body))).toEqual({
+      callsign: 'W8UM',
+      setupToken: 'deadbeef',
+    });
+  });
+
+  it('creates the administrator first, then stores what was accepted', async () => {
+    const fetchMock = stubFirstRun({ lookup: { status: 'found', record: PERSON_RECORD } });
+    const { onAuthenticated } = renderForm();
+    await acceptLookup();
+    expect(screen.getByLabelText(/^callsign/i)).toHaveValue('W8UM');
+
+    await fillForm();
+    await submitForm();
+
+    const [profilePut] = putCalls(fetchMock);
+    expect(profilePut?.[0]).toBe('/api/profiles/student');
+    expect(JSON.parse(String(profilePut?.[1].body))).toEqual({
+      kind: 'student',
+      callsign: 'W8UM',
+      state: 'MI',
+      licenseClass: 'GENERAL',
+      // Stored as values this tool FETCHED, so the next screen to read this profile can still
+      // tell them from the ones the operator typed.
+      fieldSources: {
+        licenseClass: {
+          source: 'callook.info',
+          fetchedAt: '2026-08-04T12:00:00.000Z',
+          value: 'GENERAL',
+        },
+        state: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'MI' },
+      },
+    });
+    // The order is the point: the account exists before anything is written against it.
+    const order = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(order.indexOf('/api/auth/bootstrap')).toBeLessThan(order.indexOf('/api/profiles/student'));
+    await waitFor(() => {
+      expect(onAuthenticated).toHaveBeenCalled();
+    });
+  });
+
+  it('stores a callsign the operator typed and never looked up', async () => {
+    const fetchMock = stubFirstRun();
+    renderForm();
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'k5utd');
+    await fillForm();
+    await submitForm();
+
+    await waitFor(() => expect(putCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String(putCalls(fetchMock)[0]?.[1].body))).toEqual({
+      kind: 'student',
+      callsign: 'K5UTD',
+    });
+  });
+
+  it('writes no profile at all when the callsign box is left empty', async () => {
+    const fetchMock = stubFirstRun();
+    const { onAuthenticated } = renderForm();
+    await fillForm();
+    await submitForm();
+
+    await waitFor(() => {
+      expect(onAuthenticated).toHaveBeenCalled();
+    });
+    expect(putCalls(fetchMock)).toEqual([]);
+  });
+
+  /**
+   * A club station belongs on an organization profile, which cannot be stored without an
+   * entity type — and this screen does not ask for one. Inventing an entity to make the write
+   * succeed would file a club under a legal status nobody chose, so nothing is written and the
+   * panel says so before the account is created.
+   */
+  it('does not invent an organization profile for a club station', async () => {
+    const fetchMock = stubFirstRun({ lookup: { status: 'found', record: CLUB_RECORD } });
+    const { onAuthenticated } = renderForm();
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'W8UM');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    expect(await screen.findByText(/nothing from this record will be stored here/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    await fillForm();
+    await submitForm();
+
+    await waitFor(() => {
+      expect(onAuthenticated).toHaveBeenCalled();
+    });
+    expect(putCalls(fetchMock)).toEqual([]);
+  });
+
+  /**
+   * The administrator account is the one thing on this screen that cannot be created twice.
+   * If the starter profile fails after it exists, the operator must not be shown a setup form
+   * that can now only answer 409 — they are told what happened and handed the way onwards.
+   */
+  it('does not pretend setup failed when only the starter profile did', async () => {
+    stubFirstRun({ lookup: { status: 'found', record: PERSON_RECORD }, profileFails: true });
+    const { onAuthenticated } = renderForm();
+    await acceptLookup();
+    await fillForm();
+    await submitForm();
+
+    expect(await screen.findByRole('heading', { name: /administrator created/i })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/profile failed validation/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/setup is finished/i);
+    expect(onAuthenticated).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: /continue to grantspotter/i }));
+    expect(onAuthenticated).toHaveBeenCalled();
   });
 });

@@ -1,0 +1,161 @@
+/* The callsign lookup control and the record panel it opens.
+
+   Its own stylesheet rather than an addition to profile.css because the first-run screen
+   uses this control too and does not import profile.css — a shared control whose styles
+   live in one caller's file is a control that renders unstyled in the other.
+
+   Every class is `callsign-`-prefixed for the same reason profile.css prefixes its own:
+   these stylesheets are bundled together, and a generic name written here would restyle
+   another route's markup at a distance. Colours are semantic tokens only, so both themes
+   and the AA contrast invariant in `contrast.test.ts` apply without a hex value here. */
+
+.callsign-lookup {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+
+.callsign-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.callsign-hint {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  max-width: 66ch;
+}
+
+/* The live region. It is always in the DOM so assistive technology is already watching it
+   when an answer lands, and it is visually silent because the panel below says the same
+   thing on screen — this exists so the answer is ANNOUNCED, not so it is said twice. */
+.callsign-live {
+  margin: 0;
+  font-size: var(--fs-100);
+  color: var(--text-muted);
+  min-height: 1.2em;
+}
+
+.callsign-panel {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-3);
+}
+
+.callsign-panel h2 {
+  font-size: var(--fs-400);
+  margin: 0;
+}
+
+/* Not `found`. Same panel, quieter frame: `not_us` and `updating` are not failures and
+   must not be dressed as one. */
+.callsign-panel.callsign-quiet {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.callsign-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s-1) var(--s-3);
+  margin: 0;
+  font-size: var(--fs-200);
+}
+
+.callsign-facts dt {
+  color: var(--text-muted);
+}
+
+.callsign-facts dd {
+  margin: 0;
+  font-family: var(--font-data);
+}
+
+.callsign-address {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--s-3);
+  display: grid;
+  gap: var(--s-1);
+}
+
+.callsign-address address {
+  font-style: normal;
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  white-space: pre-line;
+}
+
+.callsign-note {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 66ch;
+}
+
+.callsign-source {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  margin: 0;
+  max-width: 66ch;
+}
+
+/* A choice GrantSpotter is deliberately not making for the user: a legacy operator class,
+   or a club station whose licence has no operator class at all. */
+.callsign-choose {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  margin: 0;
+  max-width: 66ch;
+}
+
+.callsign-fill {
+  display: grid;
+  gap: var(--s-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-3);
+}
+
+.callsign-fill-field {
+  display: grid;
+  gap: var(--s-1);
+  max-width: 34ch;
+}
+
+.callsign-fill-field label {
+  font-size: var(--fs-200);
+  font-weight: 560;
+}
+
+.callsign-fill-field input,
+.callsign-fill-field select {
+  padding: var(--s-2);
+  font: inherit;
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+}
+
+/* The mark on a form field whose value came from the lookup rather than from the person
+   sitting at the keyboard. An auto-filled field has to LOOK auto-filled, or the next
+   reader cannot tell which of their own answers they are looking at. */
+.callsign-filled {
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}

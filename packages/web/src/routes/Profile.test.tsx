@@ -4,6 +4,37 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Profile } from './Profile.js';
 import type { CompletenessReport, ProfileKind } from '../store/session.js';
+import type { CallsignLookupResult, CallsignRecord } from '../api/callsign.js';
+import { auditA11y } from '../test/a11y.js';
+
+const PERSON_RECORD: CallsignRecord = {
+  callsign: 'W8UM',
+  type: 'PERSON',
+  name: 'JANE Q OPERATOR',
+  operClass: 'GENERAL',
+  operClassRaw: 'GENERAL',
+  addressLine1: '1301 BEAL AVE',
+  city: 'ANN ARBOR',
+  state: 'MI',
+  zip: '48109',
+  isPoBox: false,
+  grantDate: '2019-04-04',
+  frn: '0012345678',
+  ulsUrl: 'https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=1234',
+  source: 'callook.info',
+  fetchedAt: '2026-08-04T12:00:00.000Z',
+};
+
+const CLUB_RECORD: CallsignRecord = {
+  callsign: 'W8UM',
+  type: 'CLUB',
+  name: 'UNIVERSITY OF MICHIGAN AMATEUR RADIO CLUB',
+  city: 'ANN ARBOR',
+  state: 'MI',
+  isPoBox: false,
+  source: 'callook.info',
+  fetchedAt: '2026-08-04T12:00:00.000Z',
+};
 
 const STUDENT_REPORT: CompletenessReport = {
   total: 5,
@@ -65,9 +96,16 @@ function stubFetch(
     get?: ProfilesBody;
     getFor?: Partial<Record<ProfileKind, ProfilesBody>>;
     putReport?: CompletenessReport;
+    /** The answer `POST /api/callsign/lookup` gives, for the tests that press the button. */
+    lookup?: CallsignLookupResult;
   } = {},
 ) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (url === '/api/callsign/lookup') {
+      return Promise.resolve(
+        jsonResponse(options.lookup ?? { status: 'unavailable', message: 'No stub was supplied.' }),
+      );
+    }
     if ((init?.method ?? 'GET') === 'PUT') {
       const sent = JSON.parse(String(init?.body)) as { kind: ProfileKind };
       return Promise.resolve(
@@ -706,5 +744,203 @@ describe('Profile', () => {
     await renderLoaded();
     await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/not accepted/i);
+  });
+});
+
+/**
+ * THE LOOKUP, ON THE SCREEN THAT STORES WHAT IT FINDS.
+ *
+ * The component's own suite proves what the panel says. These prove what the FORM does with
+ * it: that nothing moves until the user presses the button, that what moves is marked as
+ * something GrantSpotter read rather than something they said, and that the mark comes off
+ * the moment they take a field over.
+ */
+describe('filling the profile from the FCC record', () => {
+  async function lookUpAndAccept(): Promise<void> {
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+  }
+
+  it('offers the lookup beside the callsign field', async () => {
+    await renderLoaded();
+    expect(screen.getByRole('button', { name: /look up this callsign/i })).toBeInTheDocument();
+  });
+
+  it('changes nothing until the user accepts the record', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    await screen.findByRole('button', { name: /use these values/i });
+    // The record on screen says W8UM. The form still says what the user typed.
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('K5UTD');
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+
+    await userEvent.click(screen.getByRole('button', { name: /discard/i }));
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('K5UTD');
+  });
+
+  it('fills the fields it has somewhere to put, and marks every one of them', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('W8UM');
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('GENERAL');
+    // Never, from a grant date that resets on renewal.
+    expect(screen.getByLabelText(/licensed since/i)).toHaveValue('');
+
+    const banner = screen.getByText(/marked fields below were read from/i);
+    expect(banner).toHaveTextContent('callook.info');
+    expect(banner).toHaveTextContent('2026-08-04');
+    expect(screen.getByRole('link', { name: /check this record in the FCC ULS/i })).toHaveAttribute(
+      'href',
+      PERSON_RECORD.ulsUrl,
+    );
+
+    /**
+     * One mark per field the lookup ANSWERED, and each one is part of its input's description
+     * rather than decoration floating beside it. The callsign is not among them: it is the
+     * question the user asked rather than an answer this tool found, and core's
+     * `StudentFieldSources` has no room to store a marker for it — a mark shown here and
+     * stripped on save would be worse than none.
+     */
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(2);
+    expect(screen.getByLabelText(/^state$/i).getAttribute('aria-describedby')).toContain(
+      'field-state-lookup',
+    );
+    expect(screen.getByLabelText(/callsign/i).getAttribute('aria-describedby')).not.toContain(
+      'lookup',
+    );
+  });
+
+  /**
+   * The fields the FCC record has something adjacent to, and wrong, for. `licensedSince` feeds
+   * `heldMonthsMin` in the matcher and the record's date resets on every renewal; the record
+   * carries no county at all. Both sentences come from the field registry, so the editor and
+   * the schema cannot drift apart about which fields a lookup may fill.
+   */
+  it('says why it left the fields alone that it will never fill', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    // Nothing to explain before a lookup has happened.
+    expect(screen.queryByText(/not the date you were first licensed/i)).not.toBeInTheDocument();
+
+    await lookUpAndAccept();
+
+    expect(screen.getByText(/not the date you were first licensed/i)).toBeInTheDocument();
+    expect(screen.getByText(/no county at all/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/licensed since/i).getAttribute('aria-describedby')).toContain(
+      'field-licensedSince-lookup',
+    );
+  });
+
+  it('takes the mark off a field the moment the user edits it', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    await userEvent.clear(screen.getByLabelText(/^state$/i));
+    await userEvent.type(screen.getByLabelText(/^state$/i), 'CA');
+
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(1);
+    expect(screen.getByLabelText(/^state$/i).getAttribute('aria-describedby')).not.toContain(
+      'field-state-lookup',
+    );
+    // The licence class is still GrantSpotter's, so the banner stays.
+    expect(screen.getByText(/marked fields below were read from/i)).toBeInTheDocument();
+
+    // And the marker for the value the user typed over is not stored either: a stale marker in
+    // the database is a claim waiting to be read by something that does not check it.
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const sources = putBody(fetchMock).fieldSources as Record<string, unknown>;
+    expect(sources).toHaveProperty('licenseClass');
+    expect(sources).not.toHaveProperty('state');
+  });
+
+  /**
+   * The provenance is STORED, not a badge that lives for one minute in a component. A licence
+   * class a lookup wrote is still distinguishable from one the applicant typed on the next
+   * visit — which is the whole point of putting it in the profile rather than in a variable.
+   */
+  it('marks a value an earlier lookup wrote, on a profile loaded fresh from the server', async () => {
+    stubFetch({
+      get: {
+        student: {
+          ...SAVED_STUDENT,
+          fieldSources: {
+            licenseClass: {
+              source: 'callook.info',
+              fetchedAt: '2026-08-04T12:00:00.000Z',
+              value: 'GENERAL',
+            },
+          },
+        },
+        organization: null,
+        completenessFor: 'student',
+        completeness: STUDENT_REPORT,
+      },
+    });
+    await renderLoaded();
+
+    expect(screen.getByText(/marked fields below were read from/i)).toHaveTextContent('2026-08-04');
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(1);
+    // The state was typed by the applicant on that same profile, and stays theirs.
+    expect(screen.getByLabelText(/^state$/i).getAttribute('aria-describedby')).not.toContain(
+      'field-state-lookup',
+    );
+  });
+
+  it('saves the accepted values through the same Save button as any other edit', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    // Accepting saved nothing by itself.
+    expect(putCall(fetchMock)).toBeUndefined();
+
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const body = putBody(fetchMock);
+    expect(body).toMatchObject({
+      kind: 'student',
+      callsign: 'W8UM',
+      state: 'MI',
+      licenseClass: 'GENERAL',
+    });
+    // The street was on screen and is not in the payload, because there is nowhere for it to go.
+    expect(JSON.stringify(body)).not.toContain('BEAL');
+    expect(body).not.toHaveProperty('licensedSince');
+  });
+
+  it('puts a club station’s name on the organization profile', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: CLUB_RECORD } });
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'W8UM');
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/organization name/i)).toHaveValue(
+      'UNIVERSITY OF MICHIGAN AMATEUR RADIO CLUB',
+    );
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('W8UM');
+
+    // `entity` is still the user's to answer: a club licence does not say which kind of
+    // applicant this is, so the lookup does not pretend to know.
+    await userEvent.click(screen.getByRole('button', { name: /save organization profile/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/entity type/i);
+    expect(putCall(fetchMock)).toBeUndefined();
+  });
+
+  it('has no accessibility violations with the record on screen', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    const { container } = await renderLoaded();
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await screen.findByRole('button', { name: /use these values/i });
+    expect(auditA11y(container)).toEqual([]);
   });
 });
