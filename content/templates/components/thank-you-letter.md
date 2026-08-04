@@ -9,7 +9,7 @@ lengthTarget: 120-200 words
 
 ## What this section has to do
 
-Close the loop with a fact. Most thank-you letters are warmth carrying no information, and they are forgotten. A letter reporting one number is remembered at the next funding cycle.
+Close the loop with a fact. Most thank-you letters are warmth carrying no information. Put one number in yours, and the person who approved the award has something concrete to repeat to whoever asks them about it.
 
 It goes to a named person, over your name, so every figure in it has to be one you can show. Take the award name and the award amount off the award letter itself, not off your application: the two are not always the same number, and thanking a funder for money they did not give you is a hard first impression to undo.
 

@@ -44,7 +44,7 @@ Check the funder's published reporting requirement before you write. Some awards
 | | | | |
 | | | | |
 
-Fill one row per promised outcome, and fill the fourth column for every row. A target with no source behind its actual figure is the row a programme officer asks about.
+Fill one row per promised outcome, and fill the fourth column for every row. An actual figure with no source behind it is a number you cannot defend when somebody asks for the record it came from.
 
 **What happened.**
 
@@ -52,15 +52,17 @@ Fill one row per promised outcome, and fill the fourth column for every row. A t
 
 **Where we missed, and why.**
 
-> Report shortfalls plainly and say what you changed in response. Funders talk to each other; a candid report is an asset at the next cycle, and a silently missing number is the thing that ends a relationship. If every row came in at or above target, say which ones you were unsure of and why they held — that is more convincing than the numbers alone.
+> Report shortfalls plainly and say what you changed in response. A number you leave out is the number a programme officer asks about, and you would rather answer that question in your own words than in theirs. If every row came in at or above target, say which ones you were unsure of and why they held — that is more convincing than the counts alone.
 
 **Money.**
 
-> Budget line, awarded, spent, variance. Explain any variance over ten percent, and name what the money bought: model numbers, quantities, the vendor.
+> Budget line, awarded, spent, variance. Where the funder publishes a variance threshold, use theirs and say where you read it; where they publish none, explain anything past roughly ten percent and say that the threshold is your own. Name what the money bought: model numbers, quantities, the vendor.
 
 **Open obligations.**
 
-> Anything still owed: an on-air period still running, source code or documentation still to be published under {{project.openLicense}}, equipment still to be installed, a further report due and when.
+> Quote anything still owed from the funder's own published page or from your award letter, and give a link or a date for the document you are quoting. If you cannot find the obligation in writing, write that you could not find it rather than inferring it. An obligation nobody published is not an obligation, and reporting against an invented one tells a funder something untrue about their own program.
+
+> Where an obligation is published it takes a familiar shape — an operating period, a release of source or documentation under {{project.openLicense}}, equipment to keep in service, a further report and its due date. Which of those apply to you is the funder's statement to make, not this template's.
 
 ## Common failure
 

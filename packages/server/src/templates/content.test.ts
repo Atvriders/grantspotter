@@ -417,8 +417,13 @@ describe('component layer — correspondence and reporting', () => {
     //
     // The rule: a sentence is either fully self-contained (no slots, so nothing of the
     // applicant's renders beside it) or fully slotted (no invented specifics). Never a hybrid.
+    // Spelled quantities matter more than digits here. Task 4's real offending line —
+    // "Three of our members will run a four-session class" — spells every number as a word and
+    // sails straight past a `\d` scan, so the alternation is the load-bearing half of this test
+    // and the digit check is the cheap half. "twenty-four" is caught by `\btwenty\b` because a
+    // hyphen is a word boundary.
     const COUNT_WORD =
-      /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|hundred|dozen|several)\b/i;
+      /\b(?:a handful of|a couple of|couple|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|dozens?|several)\b/i;
     for (const id of CORRESPONDENCE) {
       for (const line of (byId(id)?.body ?? '').split('\n')) {
         if (!line.includes('{{')) continue;
@@ -453,6 +458,20 @@ describe('component layer — correspondence and reporting', () => {
     // The awarded figure is not the requested figure, and a report that prints one for the other
     // has told a funder they gave money they may not have given.
     expect(body).toMatch(/Copy the figure from the award letter/);
+  });
+
+  it('makes the applicant quote an obligation instead of letting the template infer one', () => {
+    const body = byId('interim-final-report')?.body ?? '';
+    // The Yaesu "12-month on-air" obligation appears ZERO times in that funder's real page. A
+    // report template that lists plausible obligations as though they applied reproduces that
+    // fabrication in the applicant's own reporting, addressed to the one reader who would know.
+    // An earlier draft of this very template did it — "an on-air period still running" — so the
+    // block now demands a quotation and a source, and says what to write when there is none.
+    expect(body).toMatch(/Quote anything still owed from the funder's own published page/);
+    expect(body).toMatch(/An obligation nobody published is not an obligation/);
+    // Same rule for a numeric threshold: it is the funder's to set, and ours to label as ours.
+    expect(body).toMatch(/Where the funder publishes a variance threshold, use theirs/);
+    expect(body).toMatch(/say that the threshold is your own/);
   });
 
   it('leaves every funder-specific requirement to the overlays', () => {
