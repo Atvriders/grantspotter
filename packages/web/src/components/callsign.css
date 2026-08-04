@@ -119,6 +119,27 @@
   max-width: 66ch;
 }
 
+/* The confirmation beside "Use these values" when the record found is for a DIFFERENT callsign
+   than the one that was typed. Its own class rather than `callsign-fill-field`, whose input rule
+   is written for a full-width text box and would stretch a checkbox across the panel. */
+.callsign-confirm {
+  max-width: 66ch;
+}
+
+.callsign-confirm label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+}
+
+.callsign-confirm input {
+  /* Aligns the box with the first line of the sentence rather than with the block. */
+  margin-top: 0.2em;
+  flex: none;
+}
+
 .callsign-fill {
   display: grid;
   gap: var(--s-2);

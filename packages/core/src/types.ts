@@ -318,8 +318,19 @@ export interface ProfileFieldSource {
   /** ISO. When the source was read — NOT when the record was granted or last updated. */
   fetchedAt: string;
   /**
-   * The value written into the field, exactly as it was stored. The marker describes the field
-   * only while the field still holds it.
+   * THE VALUE THE SOURCE ITSELF RETURNED, exactly as it was written into the field. The marker
+   * describes the field only while the field still holds it.
+   *
+   * "What the source returned" is narrower than "what was written into the field", and the gap is
+   * where this type gets misused. A lookup panel shows the record beside editable inputs, so a
+   * value can leave that panel having been TYPED OR CHOSEN BY THE APPLICANT seconds after the
+   * record was fetched — most often a licence class, because the three legacy classes map onto
+   * none of GrantSpotter's four and the panel deliberately makes the applicant pick one. Recording
+   * the applicant's own pick here prints "read from callook.info" over something callook.info never
+   * said, and eligibility then rests on a licence class no source stated. A value the applicant
+   * picked or typed gets NO marker at all. See `web/src/lib/callsignFill.ts`, which is the one
+   * place in this product that builds a marker, and which can only build one from a value carrying
+   * `origin: 'source'`.
    */
   value: string;
 }
@@ -358,8 +369,8 @@ export function profileValueOrigin(
  * WHICH profile fields a callsign lookup may fill, encoded as the shape of a type rather than as a
  * list somebody has to keep in step.
  *
- * A student's licence class and state are the only two the FCC record can support. Two absences
- * are load-bearing, and both are traps somebody will otherwise walk into:
+ * A student's callsign, licence class and state are the three the FCC record can support. Two
+ * absences are load-bearing, and both are traps somebody will otherwise walk into:
  *   - `licensedSince` is NOT here. callook's `grantDate` resets on every renewal and every vanity
  *     change, so it is not "date first licensed" — and `licensedSince` feeds `heldMonthsMin` in
  *     the matcher, where a wrong value produces a confidently wrong ELIGIBLE.
@@ -369,6 +380,17 @@ export function profileValueOrigin(
  * tool's own arithmetic.
  */
 export interface StudentFieldSources {
+  /**
+   * Present ONLY when the source answered with a DIFFERENT callsign than the applicant asked
+   * about, which is the one case where the callsign is an answer rather than the question.
+   *
+   * callook answers a lookup of a SUPERSEDED callsign with the licensee's CURRENT record — see the
+   * note beside `previous.callsign` in `server/src/callsign/callook.ts` — so accepting a record
+   * found for "K9OLD" can put "W5NEW" in this field. That value came from the source, the applicant
+   * never typed it, and without a marker it is stored exactly like a callsign they did. When the
+   * record's callsign IS the one they typed it is theirs, and carries no marker.
+   */
+  callsign?: ProfileFieldSource;
   licenseClass?: ProfileFieldSource;
   state?: ProfileFieldSource;
 }
@@ -380,6 +402,9 @@ export interface StudentFieldSources {
  */
 export interface OrgFieldSources {
   orgName?: ProfileFieldSource;
+  /** Same rule, same reason as {@link StudentFieldSources.callsign}: a club callsign is superseded
+   * exactly as an individual's is, and an organisation profile holds one too. */
+  callsign?: ProfileFieldSource;
   state?: ProfileFieldSource;
 }
 

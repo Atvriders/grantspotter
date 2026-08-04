@@ -6,6 +6,11 @@ import {
   type CallsignLookupResult,
   type CallsignRecord,
 } from '../api/callsign.js';
+import {
+  callsignFromRecord,
+  fromSource,
+  type AcceptedCallsign,
+} from '../lib/callsignFill.js';
 import { formatDate } from '../lib/trust.js';
 import './callsign.css';
 
@@ -18,56 +23,31 @@ import './callsign.css';
  *
  *  1. NOTHING IS FILLED IN UNTIL THE PERSON SAYS SO. The panel shows what was found and
  *     waits. There is no auto-fill on success.
- *  2. WHAT IT FILLS IN LOOKS FILLED IN. The values leave here with their provenance
- *     attached, and the host form marks every field that came from here until the person
- *     edits it themselves.
- *  3. IT SHOWS THE ADDRESS AND STORES NONE OF IT. The street is how a person recognises
+ *  2. WHAT THE SOURCE SAID LOOKS LIKE WHAT THE SOURCE SAID, AND NOTHING ELSE DOES. Every
+ *     value leaves here labelled with WHO STATED IT (`AcceptedValue.origin`), computed by
+ *     comparing what is in the input against what the record returned. This panel is an
+ *     editor as well as a report — rule 5 below exists to make the user change a value — so
+ *     a single shared "this came from callook.info" stamped over everything that leaves is
+ *     a lie about whichever field they just edited. `fillFromLookup` marks only the values
+ *     labelled `'source'`; the rest are the applicant's own, exactly as if typed on the form.
+ *  3. A RECORD FOR A DIFFERENT CALLSIGN IS SAID OUT LOUD, AND ON SCREEN AND IN THE LIVE
+ *     REGION ALIKE. callook answers a superseded callsign with the licensee's CURRENT
+ *     record, so asking about K9OLD can return W5NEW — usually the same operator, and never
+ *     a value to swap in under the person who typed the other one. The panel names both
+ *     callsigns and will not hand the record over until the user confirms it is theirs.
+ *  4. IT SHOWS THE ADDRESS AND STORES NONE OF IT. The street is how a person recognises
  *     their own record; it is not persisted, there is no column for it, and nothing reads
  *     it. Only the state leaves this panel, because eligibility rules use the state.
- *  4. IT NEVER GUESSES A LICENCE CLASS. An operator class that maps exactly onto core's
+ *  5. IT NEVER GUESSES A LICENCE CLASS. An operator class that maps exactly onto core's
  *     four arrives mapped. Advanced, Novice and Technician Plus map onto none of them, so
  *     the select opens UNSET and says why. Guessing upward manufactures a false ELIGIBLE,
  *     which is the one mistake this product refuses to make.
- *  5. IT NEVER FILLS "LICENSED SINCE". The record's grant date resets on every renewal and
+ *  6. IT NEVER FILLS "LICENSED SINCE". The record's grant date resets on every renewal and
  *     every vanity change, so it is not the date the licence was first held — and
  *     `licensedSince` feeds `heldMonthsMin` in the matcher, where a wrong value becomes a
  *     confident, wrong eligibility verdict. The date is shown, labelled for what it is,
  *     and goes no further.
  */
-
-/** Where a filled-in value came from, carried to the host so the field can say so. */
-export interface CallsignProvenance {
-  /**
-   * The source's own name, as the record reports it. Typed as the record's literal rather than
-   * as a string so a host can put it straight into core's `ProfileFieldSource`, whose `source`
-   * is that same literal — a widened type here would need a cast there, and a cast is where a
-   * second source would one day be mislabelled as this one.
-   */
-  source: CallsignRecord['source'];
-  /** ISO instant the record was fetched. */
-  fetchedAt: string;
-  /** The FCC's own page for this record, so the user can check us. */
-  ulsUrl?: string;
-}
-
-/**
- * What the user accepted. Only fields the profile actually stores appear here: there is no
- * street, no licensee name for a person, and no `licensedSince`.
- */
-export interface AcceptedCallsign {
-  callsign: string;
-  /**
-   * Whether the licence is a person's or a club station's. The host needs it because the two
-   * belong on different profiles, and a collegiate club station — the shape this product's
-   * primary audience holds — is a CLUB.
-   */
-  type: CallsignRecord['type'];
-  state?: string;
-  licenseClass?: LicenseClass;
-  /** Club stations only, and only where the host has somewhere to put an organisation name. */
-  orgName?: string;
-  provenance: CallsignProvenance;
-}
 
 export type CallsignTarget = 'student' | 'organization';
 
@@ -236,6 +216,20 @@ export function CallsignLookup({
   const answered = phase.kind === 'answered' ? phase.result : null;
   const record = answered?.status === 'found' ? (answered.record ?? null) : null;
 
+  /**
+   * WHAT THE LIVE REGION SAYS IS WHAT THE PANEL SAYS.
+   *
+   * Every branch here builds its sentence from the same value the visible heading does, because a
+   * screen-reader user and a sighted user must be told about the same record. The heading below is
+   * built from `record.callsign`; this used to build its own from the TYPED callsign, so a lookup
+   * of a superseded callsign announced "FCC record for K9OLD: ALEX Q EXAMPLE" over a panel showing
+   * W5NEW's record — the substitution this component now exists to surface, described to the one
+   * user who cannot see it happening.
+   *
+   * The same rule fixes a second mismatch beside it: `found` with no record renders as the
+   * `unavailable` panel (a record was not received, so nothing is claimed), and is now announced
+   * that way rather than as an FCC record that is not on screen.
+   */
   const announcement = ((): string => {
     switch (phase.kind) {
       case 'idle':
@@ -247,10 +241,21 @@ export function CallsignLookup({
       case 'failed':
         return `The lookup did not run. ${phase.message}`;
       case 'answered': {
-        const frame = frameFor(phase.result.status, typed);
-        return phase.result.record === undefined
-          ? frame.heading
-          : `${frame.heading}: ${phase.result.record.name}. Nothing has been filled in yet.`;
+        const found = phase.result.record;
+        if (found === undefined) {
+          return frameFor(
+            phase.result.status === 'found' ? 'unavailable' : phase.result.status,
+            typed,
+          ).heading;
+        }
+        const substituted =
+          found.callsign === typed
+            ? ''
+            : ` This record is for ${found.callsign}, not the ${typed} you asked about.`;
+        return (
+          `${frameFor('found', found.callsign).heading}: ${found.name}.${substituted}` +
+          ' Nothing has been filled in yet.'
+        );
       }
     }
   })();
@@ -312,6 +317,7 @@ export function CallsignLookup({
           key={`${record.callsign}:${record.fetchedAt}`}
           baseId={baseId}
           record={record}
+          typed={typed}
           target={target}
           clubNotice={clubNotice}
           onUse={(values) => {
@@ -380,6 +386,7 @@ function NonFoundPanel({
 function FoundPanel({
   baseId,
   record,
+  typed,
   target,
   clubNotice,
   onUse,
@@ -387,6 +394,8 @@ function FoundPanel({
 }: {
   baseId: string;
   record: CallsignRecord;
+  /** What the user asked about, normalised — which is not always what the record is for. */
+  typed: string;
   target: CallsignTarget;
   clubNotice?: ReactNode;
   onUse: (values: AcceptedCallsign) => void;
@@ -398,6 +407,14 @@ function FoundPanel({
   // what makes the user the one who decides.
   const [licenseClass, setLicenseClass] = useState<string>(record.operClass ?? '');
   const [orgName, setOrgName] = useState(record.type === 'CLUB' ? record.name : '');
+  /**
+   * The record found is for a callsign the user did not type. callook answers a lookup of a
+   * SUPERSEDED callsign with the licensee's current record, so this is usually the same person
+   * under a call they no longer hold — and it is also what a mistyped callsign that happens to be
+   * somebody else's looks like. Either way it is not a substitution to make on the user's behalf.
+   */
+  const substituted = record.callsign !== typed;
+  const [confirmed, setConfirmed] = useState(false);
 
   /** A licence class is a person's, and only the student profile has a field for one. */
   const offersLicenseClass = target === 'student' && record.type === 'PERSON';
@@ -410,15 +427,34 @@ function FoundPanel({
     record.zip,
   ].filter((line): line is string => line !== undefined && line !== '');
 
+  /**
+   * The values, each labelled with WHO STATED IT.
+   *
+   * `fromSource` compares what is in the input against what the record returned, which is the
+   * whole rule: the state box opens on the record's state, the class select opens on the record's
+   * class WHEN THAT CLASS MAPS, and anything else in either of them is the user's own answer. The
+   * licence class is where this matters most — the panel deliberately opens UNSET for the three
+   * legacy classes and asks the user to choose, so a choice made there is theirs by construction
+   * and `record.operClass` is `undefined` to compare against.
+   */
   function use(): void {
+    // The same condition the button is disabled on, enforced where it cannot be clicked around.
+    if (substituted && !confirmed) return;
     const trimmedState = state.trim().toUpperCase();
     const trimmedOrg = orgName.trim();
     onUse({
-      callsign: record.callsign,
+      callsign: callsignFromRecord(record.callsign, typed),
       type: record.type,
-      ...(trimmedState === '' ? {} : { state: trimmedState }),
-      ...(licenseClass !== '' && isLicenseClass(licenseClass) ? { licenseClass } : {}),
-      ...(offersOrgName && trimmedOrg !== '' ? { orgName: trimmedOrg } : {}),
+      ...(trimmedState === '' ? {} : { state: fromSource(record.state, trimmedState) }),
+      ...(licenseClass !== '' && isLicenseClass(licenseClass)
+        ? { licenseClass: fromSource(record.operClass, licenseClass) }
+        : {}),
+      // A club record's NAME is the organisation name; a person's name is not, and the day this
+      // panel offers `orgName` for a PERSON record is the day comparing against `record.name`
+      // would attribute somebody's own name to callook.info as an organisation's.
+      ...(offersOrgName && trimmedOrg !== ''
+        ? { orgName: fromSource(record.type === 'CLUB' ? record.name : undefined, trimmedOrg) }
+        : {}),
       provenance: {
         source: record.source,
         fetchedAt: record.fetchedAt,
@@ -430,6 +466,23 @@ function FoundPanel({
   return (
     <section className="callsign-panel" aria-labelledby={`${baseId}-found`}>
       <h2 id={`${baseId}-found`}>{frameFor('found', record.callsign).heading}</h2>
+
+      {/* THE RECORD IS NOT FOR THE CALLSIGN THAT WAS TYPED, AND THAT IS SAID BEFORE ANYTHING
+          ELSE ON THIS PANEL. The heading above already names the record's own callsign, but a
+          person who typed K9OLD reads "FCC record for W5NEW" as the answer to their question
+          unless the difference is pointed at. Accepting REPLACES the callsign on the form, so
+          this is the one thing here that changes a value the user typed themselves. */}
+      {substituted && (
+        <p className="callsign-choose">
+          You asked about <strong>{typed}</strong>. This record is for{' '}
+          <strong>{record.callsign}</strong>. The FCC database answers a lookup of a superseded
+          callsign with the licensee&rsquo;s current record, so this is usually the same operator
+          under a callsign they no longer hold — and it is also what a typo that lands on somebody
+          else&rsquo;s callsign looks like. GrantSpotter cannot tell those apart, so it will not
+          choose for you: check the licensee name and address below, and if this record is yours,
+          say so. Using it puts {record.callsign} in the callsign field in place of {typed}.
+        </p>
+      )}
 
       <dl className="callsign-facts">
         <dt>Licensee</dt>
@@ -545,8 +598,36 @@ function FoundPanel({
           </div>
         )}
 
+        {/* The decision, beside the button it governs. A record found under a different callsign
+            is the one answer this panel will not hand over unasked — and "Discard" is right
+            there, which is the other half of making it a choice rather than an obstacle. */}
+        {substituted && (
+          <div className="callsign-confirm">
+            <label htmlFor={`${baseId}-confirm`}>
+              <input
+                id={`${baseId}-confirm`}
+                type="checkbox"
+                checked={confirmed}
+                onChange={(event) => setConfirmed(event.target.checked)}
+              />
+              {/* Short, and about the DECISION rather than about the record: the paragraph at the
+                  top of the panel is where the explanation belongs, and a label that repeats it
+                  is a label nobody reads to the end. */}
+              <span>
+                Yes, this record is mine — use <strong>{record.callsign}</strong> in place of{' '}
+                {typed}.
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="callsign-actions">
-          <button type="button" className="btn btn-primary" onClick={use}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={use}
+            disabled={substituted && !confirmed}
+          >
             Use these values
           </button>
           <button type="button" className="btn" onClick={onDiscard}>

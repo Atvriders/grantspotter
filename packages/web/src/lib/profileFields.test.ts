@@ -159,13 +159,22 @@ describe('what a callsign lookup may fill', () => {
     },
   );
 
-  it('is exactly the three things an FCC record can supply, split by profile kind', () => {
-    // The licensee NAME (a club record's name IS the organisation name), the operator CLASS, and
-    // the STATE. Written out rather than derived, because this is the claim under review: if a
-    // fourth key appears here, somebody has decided the FCC record supports something new, and
-    // that decision should be visible in a diff.
-    expect(callsignFillableFields('student')).toEqual(['licenseClass', 'state']);
-    expect(callsignFillableFields('organization')).toEqual(['orgName', 'state']);
+  it('is exactly the four things an FCC record can supply, split by profile kind', () => {
+    // The licensee NAME (a club record's name IS the organisation name), the operator CLASS, the
+    // STATE — and the CALLSIGN. Written out rather than derived, because this is the claim under
+    // review: if a fifth key appears here, somebody has decided the FCC record supports something
+    // new, and that decision should be visible in a diff.
+    //
+    // `callsign` IS THAT DECISION, MADE ON 2026-08-04 AND VISIBLE IN THIS LINE. It was absent on
+    // the reasoning that a callsign is the question the user asked rather than an answer the tool
+    // found — true of every lookup except the one that matters: callook answers a SUPERSEDED
+    // callsign with the licensee's CURRENT record, so accepting a record found for K9OLD writes
+    // W5NEW into this field. That value is the source's answer and the applicant never typed it,
+    // so it needs somewhere to be recorded as one, and `StudentFieldSources.callsign` is it. The
+    // ordinary case is unaffected: `fillFromLookup` marks only values whose origin is `'source'`,
+    // and a record for the callsign the user typed is labelled `'user'` by `callsignFromRecord`.
+    expect(callsignFillableFields('student')).toEqual(['callsign', 'licenseClass', 'state']);
+    expect(callsignFillableFields('organization')).toEqual(['orgName', 'callsign', 'state']);
   });
 
   it('never offers to fill the two fields the record cannot honestly support', () => {

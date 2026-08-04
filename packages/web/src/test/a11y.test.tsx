@@ -398,12 +398,34 @@ const FANOUT = {
   notifications: { total: 12, unread: 1 },
 };
 
+/**
+ * A lookup that answers with a record for a DIFFERENT callsign than the one asked about, which is
+ * what callook does with a superseded call: it returns the licensee's CURRENT record. Only the
+ * test below presses the button, so this is inert for every other route.
+ */
+const CALLSIGN_LOOKUP = {
+  status: 'found',
+  record: {
+    callsign: 'W5NEW',
+    type: 'PERSON',
+    name: 'ALEX Q EXAMPLE',
+    operClass: 'GENERAL',
+    operClassRaw: 'GENERAL',
+    city: 'ANN ARBOR',
+    state: 'MI',
+    isPoBox: false,
+    source: 'callook.info',
+    fetchedAt: '2026-08-04T12:00:00.000Z',
+  },
+};
+
 /** One router, so every route sees the body its own component actually asks for. */
 function stubApi(): void {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       const body = ((): unknown => {
+        if (url === '/api/callsign/lookup') return CALLSIGN_LOOKUP;
         if (url.startsWith('/api/programs/')) return DETAIL;
         if (url.startsWith('/api/programs')) return BROWSE;
         if (url.startsWith('/api/calendar')) return CALENDAR;
@@ -645,6 +667,35 @@ describe('what the product says, said accessibly', () => {
     expect(panel).toHaveTextContent(/never ineligible/i);
     // "Waiting on", never "becomes an answer" — the matcher short-circuits per axis.
     expect(panel.textContent ?? '').not.toMatch(/becomes an answer|will resolve|resolves this/i);
+  });
+
+  /**
+   * The live region and the heading describe THE SAME RECORD.
+   *
+   * The callsign lookup is the only control in this product that puts a value about the user on
+   * screen without being told it, and callook answers a superseded callsign with the licensee's
+   * CURRENT record — so the panel can open on a record for a callsign nobody typed. The visible
+   * heading named that record; the announcement was built from the TYPED callsign, and told a
+   * screen-reader user "FCC record for K9OLD: ALEX Q EXAMPLE" about a record that is W5NEW's. A
+   * value swapped in under a user who cannot see the swap is the worst version of this product's
+   * one recurring failure.
+   */
+  it('announces the FCC record that is on screen, not the callsign that was typed', async () => {
+    const { container } = mount(<Profile />, '/profile');
+    // The stored profile, not the loading state: both render a "Completeness" heading, and typing
+    // into the form before it hydrates is typing into a box the response then overwrites.
+    const callsign = await screen.findByDisplayValue('W1AW');
+    await userEvent.clear(callsign);
+    await userEvent.type(callsign, 'K9OLD');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    const heading = await screen.findByRole('heading', { name: /FCC record for/i });
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    // Word for word: what is read out starts with what is on screen.
+    expect(live?.textContent ?? '').toContain(heading.textContent ?? '');
+    expect(live?.textContent ?? '').toMatch(/not the K9OLD you asked about/i);
+    expect(live?.textContent ?? '').not.toMatch(/FCC record for K9OLD/i);
   });
 
   it('announces a projected date as projected, everywhere one is rendered', async () => {

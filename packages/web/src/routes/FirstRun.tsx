@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { ProfileFieldSource } from '@grantspotter/core';
 import { apiSend, ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
-import { CallsignLookup, type AcceptedCallsign } from '../components/CallsignLookup.js';
-import { callsignFillableFields } from '../lib/profileFields.js';
+import { CallsignLookup } from '../components/CallsignLookup.js';
+import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
 import { Login, SignedOutPage } from './Login.js';
 
 /**
@@ -127,31 +126,19 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
     const typed = callsign.trim().toUpperCase();
     if (typed === '') return;
 
-    const values: Record<string, string> = {};
-    if (accepted?.state !== undefined) values.state = accepted.state;
-    if (accepted?.licenseClass !== undefined) values.licenseClass = accepted.licenseClass;
-
-    // Which of these may be recorded as fetched is `callsignFillableFields`, so this screen and
-    // the profile editor cannot disagree about it — and neither can either of them disagree
-    // with core's schema, which is what the registry is asserted against. The callsign itself
-    // carries no marker: it is what the operator typed in, not what the lookup answered.
-    const fieldSources: Record<string, ProfileFieldSource> = {};
-    if (accepted !== null) {
-      for (const key of callsignFillableFields('student')) {
-        const value = values[key];
-        if (value === undefined) continue;
-        fieldSources[key] = {
-          source: accepted.provenance.source,
-          fetchedAt: accepted.provenance.fetchedAt,
-          value,
-        };
-      }
-    }
+    // WHICH values are recorded as fetched is `fillFromLookup`'s decision, not this screen's, so
+    // the setup screen and the profile editor cannot disagree about it — and neither can disagree
+    // with core's schema, which the registry behind it is asserted against. It marks only the
+    // values the SOURCE stated: a licence class the operator picked for a legacy record is theirs,
+    // and so is the callsign they typed. A callsign the lookup ANSWERED with — callook returns the
+    // licensee's current record for a superseded call — is the source's, and is marked as such.
+    const fill = accepted === null ? null : fillFromLookup(accepted, 'student');
+    const fieldSources = fill?.fieldSources ?? {};
 
     await apiSend('PUT', '/api/profiles/student', {
       kind: 'student',
-      callsign: accepted?.callsign ?? typed,
-      ...values,
+      callsign: typed,
+      ...fill?.values,
       ...(Object.keys(fieldSources).length === 0 ? {} : { fieldSources }),
     });
   }
@@ -308,7 +295,9 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
           setupToken={token.trim()}
           onAccept={(values) => {
             setAccepted(values);
-            setCallsign(values.callsign);
+            // The record's own callsign, which is not always the one that was typed: the panel
+            // does not hand a substituted callsign over until the operator has confirmed it.
+            setCallsign(values.callsign.value);
           }}
           clubNotice={
             'This is a club station licence. GrantSpotter keeps a club on an organization ' +

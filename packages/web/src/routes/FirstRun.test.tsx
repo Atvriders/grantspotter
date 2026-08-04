@@ -429,6 +429,74 @@ describe('looking a callsign up during first-run setup', () => {
     });
   });
 
+  /**
+   * The starter profile is the FIRST thing this deployment stores about its operator, and it is
+   * written by a screen with no editor on it — so a licence class attributed to callook.info here
+   * is one nobody is going to come back and check. The panel opens UNSET for a legacy class and
+   * asks the operator to pick; what they pick is theirs.
+   */
+  it('stores a licence class the operator picked as the operator’s, not as callook’s', async () => {
+    const fetchMock = stubFirstRun({
+      lookup: {
+        status: 'found',
+        record: { ...PERSON_RECORD, operClass: undefined, operClassRaw: 'ADVANCED' },
+      },
+    });
+    renderForm();
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'w8um');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await userEvent.selectOptions(
+      await screen.findByLabelText(/license class to fill in/i),
+      'EXTRA',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    await fillForm();
+    await submitForm();
+
+    await waitFor(() => expect(putCalls(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String(putCalls(fetchMock)[0]?.[1].body))).toEqual({
+      kind: 'student',
+      callsign: 'W8UM',
+      state: 'MI',
+      licenseClass: 'EXTRA',
+      // The state is the record's. The class is not, and no marker claims otherwise.
+      fieldSources: {
+        state: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'MI' },
+      },
+    });
+  });
+
+  it('will not swap in a record found under another callsign until the operator says so', async () => {
+    const fetchMock = stubFirstRun({
+      lookup: { status: 'found', record: { ...PERSON_RECORD, callsign: 'W5NEW' } },
+    });
+    renderForm();
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'k9old');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    const use = await screen.findByRole('button', { name: /use these values/i });
+    expect(use).toBeDisabled();
+    // The box still holds what was typed, because nothing has been accepted.
+    expect(screen.getByLabelText(/^callsign/i)).toHaveValue('k9old');
+
+    await userEvent.click(screen.getByLabelText(/this record is mine/i));
+    await userEvent.click(use);
+    expect(screen.getByLabelText(/^callsign/i)).toHaveValue('W5NEW');
+
+    await fillForm();
+    await submitForm();
+
+    await waitFor(() => expect(putCalls(fetchMock)).toHaveLength(1));
+    // Stored as a value this tool READ: the operator asked about K9OLD and never typed W5NEW.
+    expect(JSON.parse(String(putCalls(fetchMock)[0]?.[1].body))).toMatchObject({
+      callsign: 'W5NEW',
+      fieldSources: {
+        callsign: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'W5NEW' },
+      },
+    });
+  });
+
   it('stores a callsign the operator typed and never looked up', async () => {
     const fetchMock = stubFirstRun();
     renderForm();

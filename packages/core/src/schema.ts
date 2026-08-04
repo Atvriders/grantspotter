@@ -372,12 +372,16 @@ export const profileFieldSourceSchema = z.object({
  * operator class.
  */
 export const studentFieldSourcesSchema = z.object({
+  // Storable because callook answers a superseded callsign with the licensee's CURRENT record, so
+  // the callsign in the field can be one the applicant never typed. See `StudentFieldSources`.
+  callsign: profileFieldSourceSchema.optional(),
   licenseClass: profileFieldSourceSchema.optional(),
   state: profileFieldSourceSchema.optional(),
 });
 
 export const orgFieldSourcesSchema = z.object({
   orgName: profileFieldSourceSchema.optional(),
+  callsign: profileFieldSourceSchema.optional(),
   state: profileFieldSourceSchema.optional(),
 });
 

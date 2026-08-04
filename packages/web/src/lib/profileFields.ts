@@ -47,7 +47,13 @@ export interface ProfileFieldMeta {
  * cannot know the kind, can never show kind-wrong copy.
  */
 export const PROFILE_FIELDS: ProfileFieldMeta[] = [
-  { key: 'callsign', kind: 'student', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.' },
+  // `fills`, and only for the one case in which the callsign is an ANSWER rather than the question:
+  // callook answers a lookup of a superseded callsign with the licensee's CURRENT record, so
+  // accepting a record found for K9OLD writes W5NEW here. That value came from the source and the
+  // applicant never typed it, so it must be storable as one — see `StudentFieldSources.callsign`.
+  // A record whose callsign IS the one they typed carries no marker: `fillFromLookup` marks only
+  // values whose origin is `'source'`, and `callsignFromRecord` labels that case `'user'`.
+  { key: 'callsign', kind: 'student', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.', callsignFill: { kind: 'fills' } },
   // The help text said "110 of the 111 ARRL catalog entries gate on it". Two things were wrong
   // with that. It was a census in copy nobody re-measures, which is the defect
   // `test/cycleCountCopy.test.ts` exists to stop — and it was also simply false: 110 is how many
@@ -97,7 +103,7 @@ export const PROFILE_FIELDS: ProfileFieldMeta[] = [
 
   { key: 'entity', kind: 'organization', label: 'Entity type', help: 'What kind of applicant you are: unincorporated club, 501(c)(3) club, club applying through a fiscal sponsor, school, university, university department, or IEEE Student Branch Chapter.' },
   { key: 'orgName', kind: 'organization', label: 'Organization name', help: 'The name that will appear on the application.', callsignFill: { kind: 'fills' } },
-  { key: 'callsign', kind: 'organization', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.' },
+  { key: 'callsign', kind: 'organization', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.', callsignFill: { kind: 'fills' } },
   { key: 'state', kind: 'organization', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.', callsignFill: { kind: 'fills' } },
   { key: 'lat', kind: 'organization', label: 'Latitude', help: 'Needed only for radius rules such as "within 250 miles of Seaford, Delaware".' },
   { key: 'lon', kind: 'organization', label: 'Longitude', help: 'Needed only for radius rules such as "within 70 miles of Schenectady, New York".' },

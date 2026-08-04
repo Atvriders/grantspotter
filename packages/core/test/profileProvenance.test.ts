@@ -59,6 +59,32 @@ describe('profile field provenance', () => {
     expect(orgProfileSchema.parse(profile)).toEqual(profile);
   });
 
+  /**
+   * The callsign is the one field whose value can change under the person who typed it: callook
+   * answers a lookup of a SUPERSEDED callsign with the licensee's CURRENT record, so a profile can
+   * end up holding a callsign the applicant never entered. Storable, therefore — and on both
+   * kinds, because a club callsign is superseded exactly as an individual's is.
+   */
+  it('round-trips a marker on a callsign the lookup answered with', () => {
+    const student: StudentProfile = makeStudent({
+      callsign: 'W5NEW',
+      fieldSources: { callsign: LOOKUP('W5NEW') },
+    });
+    expect(studentProfileSchema.parse(student)).toEqual(student);
+
+    const org: OrgProfile = makeOrg({ callsign: 'W5NEW', fieldSources: { callsign: LOOKUP('W5NEW') } });
+    expect(orgProfileSchema.parse(org)).toEqual(org);
+
+    // And it obeys the same self-invalidation as every other marker: typing over it makes it
+    // the applicant's again, and the marker is dropped on the way into storage.
+    const retyped: StudentProfile = makeStudent({
+      callsign: 'K9OLD',
+      fieldSources: { callsign: LOOKUP('W5NEW') },
+    });
+    expect(profileFieldOrigin(retyped, 'callsign')).toBe('typed');
+    expect(pruneFieldSources(retyped)).not.toHaveProperty('fieldSources');
+  });
+
   it('refuses to store a marker on a field the source cannot supply', () => {
     // `licensedSince` is the one that matters: callook's grant date resets on every renewal and
     // every vanity change, and `licensedSince` feeds `heldMonthsMin` in the matcher. `county` is

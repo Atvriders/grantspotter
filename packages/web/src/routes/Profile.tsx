@@ -15,13 +15,14 @@ import {
   PROFILE_FIELDS,
   type ProfileFieldMeta,
 } from '../lib/profileFields.js';
+import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
 import {
   profileValueOrigin,
   pruneFieldSources,
   type Profile as StoredProfile,
   type ProfileFieldSource,
 } from '@grantspotter/core';
-import { CallsignLookup, type AcceptedCallsign } from '../components/CallsignLookup.js';
+import { CallsignLookup } from '../components/CallsignLookup.js';
 import { formatDate } from '../lib/trust.js';
 import '../components/profile.css';
 
@@ -350,32 +351,25 @@ export function Profile(): JSX.Element {
    * costs nothing. The street address is not among these values and has nowhere to go — see
    * `CallsignLookup`, which shows it and drops it.
    *
-   * WHICH fields get a marker is `callsignFillableFields`, not "everything that was filled".
-   * The callsign itself is the question the user asked, not an answer this tool found, and
-   * core's `StudentFieldSources` / `OrgFieldSources` have no room to record one for it — a
-   * marker this form invented and the schema then stripped would show on screen and vanish on
-   * save, which is a worse lie than no marker at all.
+   * WHICH values get a marker is not this screen's decision to make, and it used to be: this
+   * function stamped the record's provenance onto every fillable field it wrote, including the
+   * ones the user had just edited inside the panel. `fillFromLookup` decides instead, from the
+   * origin each value carries — see `lib/callsignFill.ts`, which is the only place a marker is
+   * built, and which marks only what the source itself stated.
+   *
+   * The markers it does NOT return are removed rather than left alone. A value the user has now
+   * stated themselves must not keep an earlier lookup's attribution: `profileValueOrigin` compares
+   * strings, so a marker left over from a previous record that happens to hold the same string
+   * would go on reading as "filled from callook.info".
    */
-  function applyLookup(values: AcceptedCallsign): void {
-    const applied: FormValues = { callsign: values.callsign };
-    if (values.state !== undefined) applied.state = values.state;
-    if (values.licenseClass !== undefined) applied.licenseClass = values.licenseClass;
-    if (values.orgName !== undefined) applied.orgName = values.orgName;
+  function applyLookup(accepted: AcceptedCallsign): void {
+    const { values, fieldSources, unmarked } = fillFromLookup(accepted, kind);
+    const marks: Record<string, ProfileFieldSource> = { ...sources[kind], ...fieldSources };
+    for (const key of unmarked) delete marks[key];
 
-    const fillable = new Set(callsignFillableFields(kind));
-    const marks: Record<string, ProfileFieldSource> = { ...sources[kind] };
-    for (const [key, value] of Object.entries(applied)) {
-      if (!fillable.has(key)) continue;
-      marks[key] = {
-        source: values.provenance.source,
-        fetchedAt: values.provenance.fetchedAt,
-        value,
-      };
-    }
-
-    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...applied } }));
+    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...values } }));
     setSources((current) => ({ ...current, [kind]: marks }));
-    setUlsUrls((current) => ({ ...current, [kind]: values.provenance.ulsUrl }));
+    setUlsUrls((current) => ({ ...current, [kind]: accepted.provenance.ulsUrl }));
   }
 
   function toggleActivity(value: string, on: boolean): void {

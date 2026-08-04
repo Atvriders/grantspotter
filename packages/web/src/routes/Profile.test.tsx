@@ -25,6 +25,13 @@ const PERSON_RECORD: CallsignRecord = {
   fetchedAt: '2026-08-04T12:00:00.000Z',
 };
 
+/** One of the ~212k legacy licences: ADVANCED maps onto none of core's four, so `operClass` is absent. */
+const LEGACY_RECORD: CallsignRecord = {
+  ...PERSON_RECORD,
+  operClass: undefined,
+  operClassRaw: 'ADVANCED',
+};
+
 const CLUB_RECORD: CallsignRecord = {
   callsign: 'W8UM',
   type: 'CLUB',
@@ -934,6 +941,82 @@ describe('filling the profile from the FCC record', () => {
     await userEvent.click(screen.getByRole('button', { name: /save organization profile/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/entity type/i);
     expect(putCall(fetchMock)).toBeUndefined();
+  });
+
+  /**
+   * THE EDIT INSIDE THE PANEL IS THE APPLICANT'S, ALL THE WAY INTO THE DATABASE.
+   *
+   * A legacy licence class maps onto none of GrantSpotter's four, so the panel opens the select
+   * UNSET and asks the applicant to choose — and the value they choose used to be saved with
+   * callook.info's name on it. Nothing downstream could then tell an FCC-stated licence class from
+   * one the applicant picked, and eligibility is computed from that field. Measured over the
+   * 143-record publishable seed corpus (2026-08-04), the falsely attributed class moved 76 verdicts,
+   * 13 of them onto a hard `{ kind: 'eligible' }`.
+   */
+  it('does not put the source’s name on a licence class the applicant picked', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: LEGACY_RECORD } });
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    // The panel says the record's own word for the class, and chooses nothing from it.
+    expect(await screen.findByText(/nothing has been chosen for you/i)).toHaveTextContent(
+      'ADVANCED',
+    );
+    await userEvent.selectOptions(screen.getByLabelText(/license class to fill in/i), 'EXTRA');
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    // The value is on the form, and it is the applicant's own answer.
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('EXTRA');
+    expect(screen.getByLabelText(/license class/i).getAttribute('aria-describedby')).not.toContain(
+      'field-licenseClass-lookup',
+    );
+    // The state IS the record's, so exactly one field is marked and the banner still stands.
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const body = putBody(fetchMock);
+    expect(body.licenseClass).toBe('EXTRA');
+    expect(body.fieldSources).toEqual({
+      state: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'MI' },
+    });
+  });
+
+  /**
+   * A SUPERSEDED CALLSIGN IS A VALUE THE SOURCE SUPPLIED, AND IS STORED AS ONE.
+   *
+   * The panel refuses to hand it over until the applicant confirms it (proved in
+   * `CallsignLookup.test.tsx`). What this proves is the other half: once confirmed, the callsign in
+   * the field is marked as read rather than stated, so a reload still says where it came from.
+   */
+  it('marks a callsign the lookup substituted, and stores the mark', async () => {
+    const fetchMock = stubFetch({
+      lookup: { status: 'found', record: { ...PERSON_RECORD, callsign: 'W5NEW' } },
+    });
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/^callsign$/i));
+    await userEvent.type(screen.getByLabelText(/^callsign$/i), 'K9OLD');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+
+    // The panel names both callsigns, so the difference is on screen before anything moves.
+    // Matched on a sentence only the panel carries: the live region announces the substitution
+    // too, which is the point of C3 and would make a looser query ambiguous.
+    const notice = await screen.findByText(/GrantSpotter cannot tell those apart/i);
+    expect(notice).toHaveTextContent('K9OLD');
+    expect(notice).toHaveTextContent('W5NEW');
+    await userEvent.click(screen.getByLabelText(/this record is mine/i));
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    expect(screen.getByLabelText(/^callsign$/i)).toHaveValue('W5NEW');
+    expect(screen.getByLabelText(/^callsign$/i).getAttribute('aria-describedby')).toContain(
+      'field-callsign-lookup',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    expect(putBody(fetchMock).fieldSources).toMatchObject({
+      callsign: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'W5NEW' },
+    });
   });
 
   it('has no accessibility violations with the record on screen', async () => {

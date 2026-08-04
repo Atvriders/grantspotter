@@ -204,10 +204,12 @@ describe('accept, edit, dismiss', () => {
     await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
 
     expect(onAccept).toHaveBeenCalledWith({
-      callsign: 'W8UM',
+      // Every value carries WHO STATED IT. The state and the class are the record's own, untouched;
+      // the callsign is what the user typed, and the record merely agreed with it.
+      callsign: { value: 'W8UM', origin: 'user' },
       type: 'PERSON',
-      state: 'MI',
-      licenseClass: 'GENERAL',
+      state: { value: 'MI', origin: 'source' },
+      licenseClass: { value: 'GENERAL', origin: 'source' },
       provenance: {
         source: 'callook.info',
         fetchedAt: '2026-08-04T12:00:00.000Z',
@@ -217,7 +219,14 @@ describe('accept, edit, dismiss', () => {
     expect(liveRegion(container)).toHaveTextContent(/nothing has been saved yet/i);
   });
 
-  it('accepts what the user edited, not what the source said', async () => {
+  /**
+   * THE EDIT IS THE USER'S, AND IT LEAVES HERE SAYING SO.
+   *
+   * This panel is an editor, so a value can leave it having come from the person rather than from
+   * the record — and it used to leave carrying the record's provenance regardless. A host cannot
+   * tell the two apart from a bare string, so the origin travels with the value.
+   */
+  it('accepts what the user edited, and labels it as theirs rather than the source’s', async () => {
     stubResult({ status: 'found', record: PERSON });
     const { onAccept } = renderLookup();
     await lookUp();
@@ -228,7 +237,25 @@ describe('accept, edit, dismiss', () => {
     await userEvent.selectOptions(screen.getByLabelText(/license class to fill in/i), 'EXTRA');
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
 
-    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({ state: 'CA', licenseClass: 'EXTRA' });
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      state: { value: 'CA', origin: 'user' },
+      licenseClass: { value: 'EXTRA', origin: 'user' },
+    });
+  });
+
+  it('labels a value edited back to what the record said as the record’s again', async () => {
+    // The label is a comparison, not a "was this input touched" flag: callook DID say MI, and it
+    // says so however the box arrived back at MI.
+    stubResult({ status: 'found', record: PERSON });
+    const { onAccept } = renderLookup();
+    await lookUp();
+
+    const state = await screen.findByLabelText(/state to fill in/i);
+    await userEvent.clear(state);
+    await userEvent.type(state, 'mi');
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({ state: { value: 'MI', origin: 'source' } });
   });
 
   it('discards the record without filling anything in', async () => {
@@ -280,7 +307,7 @@ describe('what is shown and what is kept', () => {
     expect(accepted).not.toHaveProperty('zip');
     expect(accepted).not.toHaveProperty('name');
     // The one thing the address is mined for, because eligibility rules are written in states.
-    expect(accepted.state).toBe('MI');
+    expect(accepted.state).toEqual({ value: 'MI', origin: 'source' });
   });
 
   it('names the source and the day, and links the FCC’s own copy of the record', async () => {
@@ -332,10 +359,13 @@ describe('a club station, which is what a collegiate club holds', () => {
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
     expect(onAccept).toHaveBeenCalledWith(
       expect.objectContaining({
-        callsign: 'W8UM',
+        callsign: { value: 'W8UM', origin: 'user' },
         type: 'CLUB',
-        state: 'MI',
-        orgName: 'UNIVERSITY OF MICHIGAN AMATEUR RADIO CLUB',
+        state: { value: 'MI', origin: 'source' },
+        orgName: {
+          value: 'UNIVERSITY OF MICHIGAN AMATEUR RADIO CLUB',
+          origin: 'source',
+        },
       }),
     );
     expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('licenseClass');
@@ -370,18 +400,129 @@ describe('a legacy operator class, which maps onto nothing', () => {
     expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('licenseClass');
   });
 
-  it('takes the class the user picks for themselves', async () => {
-    stubResult({ status: 'found', record: LEGACY });
-    const { onAccept } = renderLookup();
+  /**
+   * THE CLASS THE USER PICKS IS THE USER'S, AND THIS IS THE CASE THE WHOLE `origin` LABEL EXISTS
+   * FOR.
+   *
+   * The panel opens UNSET for a legacy class and asks the applicant to choose — so a choice made
+   * here is theirs by construction, and there is nothing to compare it against: `operClass` is
+   * `undefined` for ADVANCED. It used to leave labelled `callook.info` all the same, which put an
+   * FCC attribution on a licence class the FCC record does not contain and made every eligibility
+   * verdict downstream rest on it.
+   */
+  it.each(['GENERAL', 'EXTRA'] as const)(
+    'takes %s as the user’s own answer, never as something ADVANCED implied',
+    async (chosen) => {
+      stubResult({ status: 'found', record: LEGACY });
+      const { onAccept } = renderLookup();
+      await lookUp();
+
+      await userEvent.selectOptions(
+        await screen.findByLabelText(/license class to fill in/i),
+        chosen,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+      expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+        licenseClass: { value: chosen, origin: 'user' },
+      });
+    },
+  );
+});
+
+/**
+ * A SUPERSEDED CALLSIGN, WHICH IS THE ONE ANSWER THAT CHANGES A VALUE THE USER TYPED.
+ *
+ * callook answers a lookup of a superseded callsign with the licensee's CURRENT record — the
+ * behaviour `callook.ts` documents beside `previous.callsign`. Accepting it used to turn K9OLD
+ * into W5NEW with nothing said and nothing marked.
+ */
+describe('a record found under a different callsign', () => {
+  const SUPERSEDED: CallsignRecord = { ...PERSON, callsign: 'W5NEW', name: 'ALEX Q EXAMPLE' };
+
+  it('says whose record this is, and will not hand it over until the user confirms', async () => {
+    stubResult({ status: 'found', record: SUPERSEDED });
+    const { onAccept } = renderLookup({ callsign: 'K9OLD' });
     await lookUp();
 
-    await userEvent.selectOptions(
-      await screen.findByLabelText(/license class to fill in/i),
-      'GENERAL',
-    );
-    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    const panel = await screen.findByRole('region', { name: /FCC record for W5NEW/i });
+    expect(panel).toHaveTextContent(/You asked about K9OLD/i);
+    expect(panel).toHaveTextContent(/This record is for W5NEW/i);
+    expect(panel).toHaveTextContent(/superseded callsign/i);
+    // Both readings are offered, because this component cannot tell them apart.
+    expect(panel).toHaveTextContent(/callsign they no longer hold/i);
+    expect(panel).toHaveTextContent(/typo/i);
 
-    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({ licenseClass: 'GENERAL' });
+    // The offer is not takeable yet.
+    const use = screen.getByRole('button', { name: /use these values/i });
+    expect(use).toBeDisabled();
+    await userEvent.click(use);
+    expect(onAccept).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByLabelText(/this record is mine/i));
+    expect(use).toBeEnabled();
+    await userEvent.click(use);
+
+    // ...and the callsign leaves as the SOURCE's answer, not as the user's question.
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      callsign: { value: 'W5NEW', origin: 'source' },
+    });
+  });
+
+  it('lets the user discard it instead, having changed nothing', async () => {
+    stubResult({ status: 'found', record: SUPERSEDED });
+    const { onAccept } = renderLookup({ callsign: 'K9OLD' });
+    await lookUp();
+    await userEvent.click(await screen.findByRole('button', { name: /discard/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /FCC record for/i })).not.toBeInTheDocument();
+    });
+    expect(onAccept).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing extra when the record is for the callsign that was typed', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    renderLookup({ callsign: 'W8UM' });
+    await lookUp();
+
+    await screen.findByRole('button', { name: /use these values/i });
+    expect(screen.getByRole('button', { name: /use these values/i })).toBeEnabled();
+    expect(screen.queryByLabelText(/this record is mine/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/You asked about/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * C3: the live region built its heading from the TYPED callsign while the visible heading used
+   * the record's, so a screen-reader user was told "FCC record for K9OLD: ALEX Q EXAMPLE" about a
+   * record that is W5NEW's — the substitution, described to the one user who cannot see it.
+   */
+  it('announces the record that is on screen, not the callsign that was typed', async () => {
+    stubResult({ status: 'found', record: SUPERSEDED });
+    const { container } = renderLookup({ callsign: 'K9OLD' });
+    await lookUp();
+
+    const heading = await screen.findByRole('heading', { name: /FCC record for/i });
+    const live = liveRegion(container);
+    await waitFor(() => {
+      expect(live).toHaveTextContent(/ALEX Q EXAMPLE/);
+    });
+    expect(live.textContent ?? '').toContain(heading.textContent ?? '');
+    expect(live).toHaveTextContent(/FCC record for W5NEW/i);
+    expect(live).toHaveTextContent(/not the K9OLD you asked about/i);
+    expect(live.textContent ?? '').not.toMatch(/FCC record for K9OLD/i);
+  });
+
+  it('does not announce a record when none was received', async () => {
+    // `found` with no record is framed on screen as `unavailable` — nothing was received, so
+    // nothing is claimed. The announcement has to say the same thing the panel does.
+    stubResult({ status: 'found' });
+    const { container } = renderLookup({ callsign: 'W8UM' });
+    await lookUp();
+
+    await screen.findByRole('region', { name: /did not get an answer/i });
+    expect(liveRegion(container)).toHaveTextContent(/did not get an answer/i);
+    expect(liveRegion(container).textContent ?? '').not.toMatch(/FCC record for/i);
   });
 });
 
@@ -396,6 +537,19 @@ describe('accessibility', () => {
     );
     await lookUp();
     await screen.findByRole('heading', { name: /FCC record for W8UM/i });
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  it('has no violations with a superseded-callsign confirmation on screen', async () => {
+    stubResult({ status: 'found', record: { ...PERSON, callsign: 'W5NEW' } });
+    const { container } = render(
+      <>
+        <h1>Profile</h1>
+        <CallsignLookup callsign="K9OLD" target="student" onAccept={() => undefined} />
+      </>,
+    );
+    await lookUp();
+    await screen.findByLabelText(/this record is mine/i);
     expect(auditA11y(container)).toEqual([]);
   });
 
