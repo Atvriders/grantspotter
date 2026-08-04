@@ -46,6 +46,22 @@ describe('prepLeadFor', () => {
   });
 
   /**
+   * FIXED (2026-08-04). This note used to state "carries a 12-month on-air obligation the club
+   * must agree to first" — a claim that appears zero times, case-insensitively, in the 145,639-
+   * byte Yaesu capture (`fixtures/yaesu-dr2x/00-systemfusion-yaesu-com.html`; see Task 9's audit
+   * and `content/templates/funders/funder-yaesu-dr2x.md`, which established the honest phrasing:
+   * the application is a fillable PDF this crawler never downloads, so any obligation it carries
+   * is unknown, not published). This is a calendar-tooltip string rendered straight to an
+   * applicant via `calendarRouter.ts`'s `prepNote`, so the fix belongs in the string itself, not
+   * only in a comment beside it.
+   */
+  it('never asserts a Yaesu on-air obligation the funder never published', () => {
+    const lead = prepLeadFor({ ...ardcGrants, funderId: 'yaesu' });
+    expect(lead.note).not.toMatch(/12 months|12-month|twelve months|on the air|on-air|remain/i);
+    expect(lead.note).toMatch(/unknown, not published/);
+  });
+
+  /**
    * ADDED BY TASK 11. `prepLeadFor` answers out of a module-level table, and the
    * calendar route calls it once per program and hands the result to a response
    * body. Returning the table row itself would let one mutated response rewrite

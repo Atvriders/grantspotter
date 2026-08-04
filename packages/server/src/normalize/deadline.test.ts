@@ -968,6 +968,24 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
     expect(RECURRENCE_BY_SOURCE['arrl-etp-grants']).toBeUndefined();
   });
 
+  /**
+   * FIXED (2026-08-04). The human prose half of this directive (after the first ` | `, which
+   * `parseRecurrence` never reads) used to state "at 12:00 PM Eastern" and "Moved from Jan 31" —
+   * neither is confirmed by any captured ARRL page (`12:00`, `noon`, `eastern` as a timezone, and
+   * `january 31`/`jan 31` all appear zero times across `fixtures/arrl-scholarship-program/`,
+   * `fixtures/arrl-scholarship-descriptions/` and `fixtures/arrl-summary-of-scholarship-
+   * requirements/`). This string reaches `Opportunity.tsx`'s `deadline.note` dd directly, so it
+   * is asserted here rather than left to a comment. The `RECUR` directive itself is untouched —
+   * `close=12:00` still drives calendar projection, pinned by the test above.
+   */
+  it('states no ARRL scholarship close time or "moved from" claim the captures do not carry', () => {
+    const prose = RECURRENCE_BY_SOURCE['arrl-scholarship-program'].split('|')[1];
+    expect(prose).not.toMatch(/12:00|\bnoon\b|eastern|\bEST\b/i);
+    expect(prose).not.toMatch(/january 31|jan 31|moved from/i);
+    expect(prose).toMatch(/Oct 30/);
+    expect(prose).toMatch(/Dec 30/);
+  });
+
   it('leaves ARDC alone: fixed DATES are not windows, and it takes proposals all year', () => {
     // n_fixed_dates means "graded on these days", not "closed between them". Reading its four
     // dates as windows would close a genuinely open programme for 361 days of the year.

@@ -129,23 +129,25 @@ export const RECURRENCE_BY_SOURCE: Readonly<Record<string, string>> = Object.fre
   'arrl-amateur-radio-grants':
     'RECUR n_fixed_windows tz=America/New_York windows=02-01..02-28,06-01..06-30,10-01..10-31 | ' +
     'Three windows a year. Generally not more than $3,000, up to $5,000 in 2026.',
-  // CAVEAT ON THE HUMAN HALF OF THIS ENTRY (the text after ` | `, which `parseRecurrence` never
-  // reads — see the note on `RECURRENCE_BY_SOURCE` above): "at 12:00 PM Eastern" and "Moved from
-  // Jan 31" are NOT confirmed by any captured ARRL page. Grepped case-insensitively across
-  // `fixtures/arrl-scholarship-program/`, `fixtures/arrl-scholarship-descriptions/` and
+  // FIXED (2026-08-04) — THE HUMAN HALF OF THIS ENTRY (the text after ` | `, which
+  // `parseRecurrence` never reads — see the note on `RECURRENCE_BY_SOURCE` above) used to state
+  // "at 12:00 PM Eastern" and "Moved from Jan 31", and neither is confirmed by any captured ARRL
+  // page. Grepped case-insensitively across `fixtures/arrl-scholarship-program/`,
+  // `fixtures/arrl-scholarship-descriptions/` and
   // `fixtures/arrl-summary-of-scholarship-requirements/`: `12:00`, `noon`, `eastern` (as a time
   // zone) and `january 31`/`jan 31` all appear zero times. The captures confirm only "opens Oct
   // 30" / "closes Dec 30" (arrl-scholarship-descriptions: "The 2026 scholarship cycle runs from
-  // October 30, 2025 to December 30, 2025."). The close TIME above traces to the synthetic
+  // October 30, 2025 to December 30, 2025."). The close TIME traced to the synthetic
   // `pathological.html` fixture written to exercise the parser, not to a live page — see
   // `packages/server/src/templates/content.test.ts`'s "states no scholarship deadline detail
-  // that no captured page carries" and docs/research/2026-08-02-grant-landscape.md §6.6. Left as
-  // shipped copy (this table's output reaches `Opportunity.tsx`'s `deadline.note` dd), not edited
-  // here — fixing the string is a product-content change outside a comments-only pass.
+  // that no captured page carries" and docs/research/2026-08-02-grant-landscape.md §6.6. This
+  // entry's prose now states only what the captures confirm. The `RECUR` directive itself
+  // (including `close=12:00`, which drives calendar projection) is untouched — see the comment
+  // on `KIND_BY_SOURCE['arrl-scholarship-program']` below for why that figure stays put.
   'arrl-scholarship-program':
     'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | ' +
-    'Opens about Oct 30 and closes Dec 30 at 12:00 PM Eastern. Moved from Jan 31 — never ' +
-    'hardcode the old date.',
+    'Opens about Oct 30 and closes Dec 30. ARRL publishes no closing time on either captured ' +
+    'page; do not assume one.',
 
   /* --------------------------------------------------------------------------------------------
    * THE THREE YEARLESS RULES (remediation 2026-08-03) — ONE WINDOW, AND TWO DEADLINES.

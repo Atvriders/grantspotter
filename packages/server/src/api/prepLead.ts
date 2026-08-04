@@ -81,8 +81,9 @@ const BY_FUNDER: Record<string, PrepLead> = {
   yaesu: {
     prepLeadDays: 21,
     note:
-      'The Yaesu DR-2X window is ad-hoc and short, and carries a 12-month on-air obligation the ' +
-      'club must agree to first.',
+      'The Yaesu DR-2X window is ad-hoc and short. The application is a fillable PDF ' +
+      'GrantSpotter deliberately never downloads, so whatever obligation it carries is ' +
+      'unknown, not published.',
   },
 };
 
