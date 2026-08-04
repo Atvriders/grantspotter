@@ -18,16 +18,24 @@ import { SOURCES } from './sources/registry.js';
 import { simplerAuthHeaders } from './federal/simplerGrants.js';
 import type { RouterDeps } from './api/deps.js';
 // Plan 4's four routers, added here with their mount lines below, exactly as
-// R25 prescribes: the import and the `a.use(...)` land in the same commit, so
+// R25 prescribes: the import and the mount call land in the same commit, so
 // the build never references a module that is not yet mounted or vice versa.
+// (Prose here deliberately does not spell the mount call out: Task 17 Step 6
+// and Task 23 §15 grep this file for it, and a comment that quotes one is
+// indistinguishable from a real mount to a grep.)
 import { createApplicationsRouter } from './api/applications.js';
 import { createTemplatesRouter } from './api/templates.js';
 import { createProseRouter } from './api/prose.js';
 import { createPromptsRouter } from './api/prompts.js';
+// Plan 5 Task 17: the built SPA and its history fallback, mounted last below.
+// `webDistRoot` is Plan 3's and lives in api/webDist.ts — imported here, never
+// re-declared in api/spa.ts (RESOLUTIONS R27).
+import { createSpaMiddleware } from './api/spa.js';
+import { webDistRoot } from './api/webDist.js';
 // NOTE (RESOLUTIONS R25): there are still deliberately NO imports here from
-// api/exports.ts, exports/dataSource.ts or api/spa.ts (Plan 5). That plan adds
-// its own import lines when it adds its own mount lines. Adding them now
-// breaks `npm run build`, and a broken build takes the e2e suite with it.
+// api/exports.ts or exports/dataSource.ts (Plan 5 Task 9). That task adds its
+// own import lines when it adds its own mount lines. Adding them now breaks
+// `npm run build`, and a broken build takes the e2e suite with it.
 //
 // DEVIATION FROM THE TASK BRIEF (2026-08-04): `createAiAssist` is imported from
 // ./crawl/index.js, NOT from the assist module directly as the brief's snippet
@@ -115,12 +123,13 @@ function main(): void {
   const verifyRunner = createVerifyRunner({ db, fetcher, sources: SOURCES, now });
 
   // THE SINGLE COMPOSITION SITE FOR THE WHOLE APPLICATION (RESOLUTIONS R5 /
-  // CONTRACT §10.3). createApp finishes with `deps.mountRoutes?.(app);
-  // app.use(notFoundHandler()); app.use(errorHandler(...));`, so a router
-  // registered after createApp returns is dead code that can never match.
-  // Every router from Plans 3, 4 and 5 is constructed inside the one
-  // mountRoutes callback below, and NO plan calls app.use(...) on the
-  // returned app.
+  // CONTRACT §10.3). createApp invokes deps.mountRoutes and then seals the app
+  // with the not-found handler and the error handler, so a router registered
+  // after createApp returns is dead code that can never match. Every router
+  // from Plans 3, 4 and 5 is constructed inside the one mountRoutes callback
+  // below, and NO plan mounts anything on the returned app. (Task 23 §15 greps
+  // this file for a mount on the returned app and expects zero hits, so this
+  // note describes the forbidden call rather than quoting it.)
   const app = createApp({
     db,
     config,
@@ -146,20 +155,25 @@ function main(): void {
       a.use('/api/prose', createProseRouter(routerDeps));
       a.use('/api/prompts', createPromptsRouter(routerDeps));
 
-      // Plan 5 Task 9 Step 9 adds, with an exportDeps satisfying ExportDeps and
-      // reading `req.auth?.id` (R22 — there is no express-session in this stack):
-      //     a.use('/api', createExportsRouter(exportDeps));
-      //     a.use('/',    createCalendarFeedRouter(exportDeps));
-      // Plan 5 Task 17 adds, ALWAYS LAST (R16), so client-side routes resolve on
-      // a hard refresh and nothing it would shadow is registered after it:
-      //     a.use(createSpaMiddleware(webDistRoot()));
-      // `webDistRoot` already exists, in api/webDist.ts. Import it there; do
-      // not write a second copy (RESOLUTIONS R27).
-      //
-      // ---------------------------------------------------------------------
-      // Plans 4 and 5 append their routers below. The SPA middleware (Plan 5
-      // Task 17) MUST remain the last statement. (RESOLUTIONS R25)
-      // ---------------------------------------------------------------------
+      // --- Plan 5 Task 9 Step 9 inserts its two export mounts HERE, in this
+      //     gap: the exports router under /api and the calendar feed router at
+      //     the root, both built from an exportDeps value constructed inline
+      //     and reading `req.auth?.id` (R22 — there is no express-session in
+      //     this stack). They go ABOVE the SPA middleware below, never after
+      //     it. (Deliberately described rather than quoted: a commented mount
+      //     line is indistinguishable from a real one to the grep gates in
+      //     Task 17 Step 6 and Task 23 §15.) ---
+
+      // --- The built SPA. THIS IS THE LAST STATEMENT IN THIS CALLBACK
+      //     (RESOLUTIONS R16, R25). Real files first, then index.html for any
+      //     GET the routers above did not claim, so /browse and /o/:id survive
+      //     a hard refresh. Registered after every router, so it can never
+      //     shadow /api or /calendar/:token; anything registered after IT would
+      //     be shadowed in turn. Without this line GET / reaches Plan 1's
+      //     notFoundHandler and the browser is handed a JSON 404 instead of the
+      //     application. `webDistRoot` is Plan 3's, from api/webDist.ts — it is
+      //     imported, never re-declared (RESOLUTIONS R27). ---
+      a.use(createSpaMiddleware(webDistRoot()));
     },
   });
 
