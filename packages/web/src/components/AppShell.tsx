@@ -40,8 +40,18 @@ export function AppShell({ children }: { children: ReactNode }): JSX.Element {
           {nav.map((item) => (
             <NavLink key={item.to} to={item.to} end={item.end}>
               <span>{item.label}</span>
+              {/*
+                `role="img"`, not a bare span. `<span aria-label>` maps to the `generic` role,
+                which does not support naming from the author, so the label was discarded and the
+                rail link read as "Watchlist 3" — a number with no unit. This is the same rule the
+                badge kit already follows, and `test/a11y.ts` now enforces it.
+              */}
               {item.to === '/watchlist' && unread > 0 && (
-                <span className="badge-count" aria-label={`${unread} unread notifications`}>
+                <span
+                  className="badge-count"
+                  role="img"
+                  aria-label={`${unread} unread notifications`}
+                >
                   {unread}
                 </span>
               )}

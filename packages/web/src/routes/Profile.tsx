@@ -371,7 +371,11 @@ export function Profile(): JSX.Element {
             role="tab"
             id={`tab-${tab}`}
             aria-selected={kind === tab}
-            aria-controls={`panel-${tab}`}
+            /* Only the SELECTED tab names a panel. One panel is in the DOM at a time, so the
+               unselected tab's `aria-controls` pointed at an id that did not exist — and a
+               dangling IDREF does not degrade to the element's text, it simply resolves to
+               nothing. Caught by the global audit in `test/a11y.test.tsx`. */
+            aria-controls={kind === tab ? `panel-${tab}` : undefined}
             tabIndex={kind === tab ? 0 : -1}
             onKeyDown={onTabKey}
             onClick={() => setKind(tab)}

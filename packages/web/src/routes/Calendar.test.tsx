@@ -214,13 +214,13 @@ describe('Calendar', () => {
   it('switches to the month grid', async () => {
     renderCalendar();
     await userEvent.click(await screen.findByRole('tab', { name: /month/i }));
-    expect(await screen.findByRole('grid')).toBeInTheDocument();
+    expect(await screen.findByRole('table')).toBeInTheDocument();
   });
 
   it('opens the month grid on the month containing "now"', async () => {
     renderCalendar();
     await userEvent.click(await screen.findByRole('tab', { name: /month/i }));
-    expect(await screen.findByRole('grid', { name: /August 2026/ })).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: /August 2026/ })).toBeInTheDocument();
   });
 
   it('steps forward and backward across a year boundary', async () => {
@@ -228,9 +228,9 @@ describe('Calendar', () => {
     await userEvent.click(await screen.findByRole('tab', { name: /month/i }));
     const next = screen.getByRole('button', { name: /next month/i });
     for (let i = 0; i < 5; i += 1) await userEvent.click(next);
-    expect(await screen.findByRole('grid', { name: /January 2027/ })).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: /January 2027/ })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /previous month/i }));
-    expect(await screen.findByRole('grid', { name: /December 2026/ })).toBeInTheDocument();
+    expect(await screen.findByRole('table', { name: /December 2026/ })).toBeInTheDocument();
   });
 
   /**

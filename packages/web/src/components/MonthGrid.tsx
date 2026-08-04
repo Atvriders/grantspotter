@@ -268,11 +268,32 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
 
   return (
     <div className="month-frame">
-      <table className="month-grid" role="grid" aria-label={title}>
+      {/*
+        A TABLE, not a `role="grid"`.
+
+        Task 20 put `role="grid"` here because its brief's queries asked for it, and flagged at
+        the time that `role="table"` was the honest answer. It is, and the reason is not
+        pedantry: `grid` is a COMPOSITE WIDGET role. It obliges the author to ship two-dimensional
+        arrow-key navigation over a roving tabindex, and it changes what assistive technology
+        tells the user — a thing to enter and drive, rather than a table to read. This month view
+        ships no such navigation and needs none: it is a static arrangement of dates whose only
+        interactive contents are ordinary links, which the browser already reaches with Tab.
+        `role="grid"` therefore advertised a keyboard contract that did not exist.
+
+        The `role` attributes are DELETED rather than replaced with `role="table"` / `"row"` /
+        `"columnheader"` / `"cell"`, because `<table>`, `<tr>`, `<th scope="col">` and `<td>`
+        already carry exactly those implicit roles. Restating them adds a second place for the
+        semantics to drift from the markup. `aria-label` stays: the month and year are the one
+        thing the element cannot name itself.
+
+        `test/a11y.test.tsx` fails any `role="grid"` with no focusable cell, so this cannot
+        quietly come back.
+      */}
+      <table className="month-grid" aria-label={title}>
         <thead>
-          <tr role="row">
+          <tr>
             {DOW.map(([short, long]) => (
-              <th key={short} className="dow" scope="col" role="columnheader">
+              <th key={short} className="dow" scope="col">
                 <abbr title={long}>{short}</abbr>
               </th>
             ))}
@@ -280,15 +301,11 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
         </thead>
         <tbody>
           {weeks.map((week, weekIndex) => (
-            <tr key={`week-${String(weekIndex)}`} role="row">
+            <tr key={`week-${String(weekIndex)}`}>
               {week.map((day, dayIndex) => {
                 if (day === null) {
                   return (
-                    <td
-                      key={`pad-${String(weekIndex)}-${String(dayIndex)}`}
-                      className="day pad"
-                      role="gridcell"
-                    />
+                    <td key={`pad-${String(weekIndex)}-${String(dayIndex)}`} className="day pad" />
                   );
                 }
                 const key = cellDay(day);
@@ -300,7 +317,6 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
                   <td
                     key={key}
                     className={`day${key === todayKey ? ' today' : ''}`}
-                    role="gridcell"
                     aria-label={label}
                   >
                     <span className="num">{day.getUTCDate()}</span>

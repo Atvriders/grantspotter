@@ -13,6 +13,7 @@ import { ProvenanceTable, type FieldProvenance } from '../components/ProvenanceT
 import { SourceLink } from '../components/SourceLink.js';
 import { VerifyButton } from '../components/VerifyButton.js';
 import { blockedHostFor } from '../lib/safety.js';
+import { profileFieldHelp, profileFieldHref, profileFieldLabel } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
 import '../components/detail.css';
 
@@ -221,6 +222,53 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
               product exists to break. */}
           {verdict?.kind === 'ineligible' && (
             <IneligibilityDrawer programName={program.name} reasons={verdict.reasons} />
+          )}
+
+          {/*
+            THE OTHER HALF OF THE SAME RULE, ADDED BY TASK 24'S ACCESSIBILITY PASS.
+
+            An `unknown` verdict rendered here was a badge and nothing else. The badge's "this is
+            a question, not a no" framing lived only in its `title`, which is an accessible
+            DESCRIPTION rather than a name: several screen readers never read it, a touch user
+            cannot hover it, and a keyboard user cannot reach it. Browse gets away with the badge
+            alone because its census paragraph says the sentence in real text above the table —
+            this page had no such sentence anywhere, so the one surface where a reader studies a
+            single programme was the surface that explained the state least.
+
+            The wording is `UnknownFields`' and `VerdictBadge`'s, deliberately: "waiting on", and
+            never "fill this in and you get an answer". The matcher short-circuits per axis, so
+            answering one field moves a verdict from one `unknown` to a DIFFERENT unknown as often
+            as it settles anything.
+          */}
+          {verdict?.kind === 'unknown' && (
+            <section className="panel card" aria-labelledby="unknown-verdict-heading">
+              <h2 id="unknown-verdict-heading">Why this verdict is unknown</h2>
+              <p>
+                Unknown is not a &ldquo;no&rdquo;. Something this program asks for could not be
+                answered from your profile, so the matcher stopped rather than ruling you out — an
+                unset field yields unknown, never ineligible.
+              </p>
+              {verdict.missingProfileFields.length > 0 && (
+                <ul>
+                  {verdict.missingProfileFields.map((field) => (
+                    <li key={field}>
+                      {/* No `kind` argument: the detail response does not say which profile the
+                          verdict was computed against, and guessing would send an organisation to
+                          the student editor. Four keys exist on both, and the copy is identical
+                          across them, so the kind-blind lookup is safe. */}
+                      <Link to={profileFieldHref(field)}>{profileFieldLabel(field)}</Link>
+                      {profileFieldHelp(field) !== '' && (
+                        <span className="unstated"> {profileFieldHelp(field)}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p>
+                This program stops at the first thing it cannot work out about you, so answering
+                one of these may reveal the next question rather than a final verdict.
+              </p>
+            </section>
           )}
 
           {program.fundingRestrictions.length > 0 && (

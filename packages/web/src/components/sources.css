@@ -1,0 +1,114 @@
+/* Sources page. Every colour here is an existing semantic token: the contrast invariant derives
+   66 pairs per theme from the token grammar and the tightest surviving pair has 0.22 of headroom,
+   so a new hex added for one page would very likely ship below AA in one of the two themes. */
+
+.health-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--s-2);
+  border-radius: var(--r-1);
+  border-left: 3px solid currentColor;
+  font-size: var(--fs-200);
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.health-healthy { color: var(--ok); background: var(--ok-soft); }
+.health-idle { color: var(--unk); background: var(--unk-soft); }
+.health-yield_dropped { color: var(--warn); background: var(--warn-soft); }
+.health-failing { color: var(--no); background: var(--no-soft); }
+.health-stale { color: var(--warn); background: var(--warn-soft); }
+.health-never_polled { color: var(--unk); background: var(--unk-soft); }
+
+.fleet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border-left: 3px solid var(--accent);
+  margin-bottom: var(--s-4);
+}
+
+.fleet-figure {
+  font-family: var(--font-data);
+  font-size: var(--fs-600);
+  font-weight: 700;
+}
+
+.sources-lede { max-width: 76ch; }
+
+.sources-table-wrap { overflow-x: auto; }
+
+/* An unset minimum is rendered as words, never as the number 0 beside a yield: "0 / 0" reads as a
+   threshold that has been met, and the one source that most needs an alarm is the one nobody has
+   configured yet. */
+.yield-unset {
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: var(--fs-200);
+}
+
+/* Admin-only column. Members never render it, so it costs them nothing. */
+.source-config {
+  display: grid;
+  gap: var(--s-2);
+  min-width: 240px;
+}
+
+.source-config input[type="number"] {
+  width: 6.5rem;
+  padding: var(--s-1) var(--s-2);
+  font-family: var(--font-data);
+}
+
+.source-config label { font-size: var(--fs-200); }
+
+.source-config-hint {
+  font-size: var(--fs-200);
+  color: var(--warn);
+}
+
+/* A paused source is still shown — deleting the row would hide the decision. */
+.source-paused td { opacity: 0.62; }
+
+.crawl-result:not(:empty) {
+  display: block;
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  border-left: 3px solid var(--ok);
+  background: var(--ok-soft);
+  color: var(--text);
+}
+
+.sources-panel {
+  padding: var(--s-4) var(--s-5);
+  margin: var(--s-5) 0;
+  max-width: 76ch;
+}
+
+.blocked-host-list {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.blocked-host-list li {
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  padding: 1px var(--s-2);
+  border-radius: var(--r-1);
+  background: var(--no-soft);
+  color: var(--no);
+}
+
+.readonly-note {
+  max-width: 76ch;
+  padding: var(--s-3) var(--s-4);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}

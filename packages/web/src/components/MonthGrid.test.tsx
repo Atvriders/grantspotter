@@ -168,12 +168,12 @@ describe('monthMatrix', () => {
 describe('MonthGrid', () => {
   it('renders a labelled grid for the month', () => {
     renderGrid();
-    expect(screen.getByRole('grid', { name: /December 2026/ })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: /December 2026/ })).toBeInTheDocument();
   });
 
   it('places a deadline on its day', () => {
     renderGrid();
-    const cell = screen.getByRole('gridcell', { name: /30 December 2026/ });
+    const cell = screen.getByRole('cell', { name: /30 December 2026/ });
     expect(within(cell).getByText(/ARRL Foundation Scholarship/)).toBeInTheDocument();
   });
 
@@ -192,7 +192,7 @@ describe('MonthGrid', () => {
 
   it('shows a start-preparing marker on the prep start day, even when the deadline is in another month', () => {
     renderGrid();
-    const cell = screen.getByRole('gridcell', { name: /16 December 2026/ });
+    const cell = screen.getByRole('cell', { name: /16 December 2026/ });
     expect(within(cell).getByText(/start preparing/i)).toBeInTheDocument();
     expect(within(cell).getByText(/NCDXF Grants/)).toBeInTheDocument();
     // One December prep start in the fixture, so one marker on the whole grid.
@@ -202,7 +202,7 @@ describe('MonthGrid', () => {
   it('marks the day a funder-published window opens', () => {
     renderGrid();
     // Anchored: /7 December 2026/ also matches the 17th and the 27th.
-    const cell = screen.getByRole('gridcell', { name: /^7 December 2026$/ });
+    const cell = screen.getByRole('cell', { name: /^7 December 2026$/ });
     expect(within(cell).getByText(/opens/i)).toBeInTheDocument();
     expect(within(cell).getByText(/ARISS Contact Proposals/)).toBeInTheDocument();
   });
@@ -234,7 +234,7 @@ describe('MonthGrid', () => {
         <MonthGrid year={2027} month={2} entries={[late]} now={NOW} />
       </MemoryRouter>,
     );
-    const feb = screen.getByRole('gridcell', { name: /28 February 2027/ });
+    const feb = screen.getByRole('cell', { name: /28 February 2027/ });
     expect(within(feb).getByText(/ARRL Amateur Radio Grants/)).toBeInTheDocument();
     unmount();
 
@@ -248,7 +248,7 @@ describe('MonthGrid', () => {
 
   it('pads with empty cells rather than with a neighbouring month’s days', () => {
     renderGrid();
-    const cells = screen.getAllByRole('gridcell');
+    const cells = screen.getAllByRole('cell');
     expect(cells).toHaveLength(35); // December 2026 fits in five Monday-first weeks.
     expect(cells.filter((c) => c.getAttribute('aria-label') !== null)).toHaveLength(31);
     for (const cell of cells) {
@@ -363,7 +363,7 @@ describe('MonthGrid — a day 113 entries deep', () => {
   }
 
   function decemberThirtieth(): HTMLElement {
-    return screen.getByRole('gridcell', { name: /^30 December 2026$/ });
+    return screen.getByRole('cell', { name: /^30 December 2026$/ });
   }
 
   it('shows the owner’s own deadline as a chip and folds the 112 that ride it', () => {
@@ -435,7 +435,7 @@ describe('MonthGrid — a day 113 entries deep', () => {
         <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} />
       </MemoryRouter>,
     );
-    const cell = screen.getByRole('gridcell', { name: /^30 November 2026$/ });
+    const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
     expect(cell.querySelectorAll(':scope > a.prep-mark')).toHaveLength(1);
     expect(within(cell).getByText(/112 programmes ride/i)).toBeInTheDocument();
     expect(cell.querySelectorAll('a[href^="/o/"]')).toHaveLength(113);
@@ -468,7 +468,7 @@ describe('MonthGrid — a day 113 entries deep', () => {
         />
       </MemoryRouter>,
     );
-    const cell = screen.getByRole('gridcell', { name: /^30 December 2026$/ });
+    const cell = screen.getByRole('cell', { name: /^30 December 2026$/ });
 
     const projected = within(cell).getByRole('link', {
       name: /Rider Scholarship 100: 2026-12-30/,

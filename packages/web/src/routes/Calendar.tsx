@@ -122,6 +122,17 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
   });
   const { data, loading, error } = useApi<CalendarResponse>(`/api/calendar?${params.toString()}`);
 
+  /**
+   * Left/Right move between the two tabs, which is what `role="tab"` promises a keyboard user.
+   * Two tabs, so either arrow toggles; `preventDefault` stops the browser scrolling the page
+   * sideways under the widget.
+   */
+  function onTabKey(event: React.KeyboardEvent<HTMLButtonElement>): void {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    setView((current) => (current === 'agenda' ? 'month' : 'agenda'));
+  }
+
   function step(delta: number): void {
     setCursor((c) => {
       const raw = c.month + delta;
@@ -146,27 +157,35 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
       <p className="eyebrow">Deadlines and lead time</p>
       <h1 style={{ marginBottom: 'var(--s-4)' }}>Calendar</h1>
 
+      {/*
+        A REAL tabs widget, not two buttons wearing `role="tab"`.
+
+        `role="tab"` is a promise: assistive technology announces "tab 1 of 2", and a keyboard user
+        is entitled to expect arrow keys to move between the tabs while Tab moves PAST them into
+        the panel. This tablist shipped with none of that — no roving `tabindex`, no arrow keys,
+        no `aria-controls`, and no `tabpanel` for either tab to control — so the announcement was
+        the only part of the pattern that was true. It now matches the profile editor's tabs,
+        which got this right, and the audit in `test/a11y.test.tsx` keeps the `aria-controls`
+        honest: it names a panel only while that panel is the one in the DOM.
+      */}
       <div className="cal-tabs" role="tablist" aria-label="Calendar view">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'agenda'}
-          onClick={() => {
-            setView('agenda');
-          }}
-        >
-          Agenda
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'month'}
-          onClick={() => {
-            setView('month');
-          }}
-        >
-          Month
-        </button>
+        {(['agenda', 'month'] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            id={`cal-tab-${tab}`}
+            aria-selected={view === tab}
+            aria-controls={view === tab ? 'cal-panel' : undefined}
+            tabIndex={view === tab ? 0 : -1}
+            onKeyDown={onTabKey}
+            onClick={() => {
+              setView(tab);
+            }}
+          >
+            {tab === 'agenda' ? 'Agenda' : 'Month'}
+          </button>
+        ))}
       </div>
 
       <section className="legend card" aria-label="Legend">
@@ -220,48 +239,50 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
         </p>
       )}
 
-      {data !== null && view === 'agenda' && <AgendaList entries={data.entries} now={nowISO} />}
+      <div id="cal-panel" role="tabpanel" aria-labelledby={`cal-tab-${view}`}>
+        {data !== null && view === 'agenda' && <AgendaList entries={data.entries} now={nowISO} />}
 
-      {data !== null && view === 'month' && (
-        <>
-          <div className="cal-nav">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                step(-1);
-              }}
-            >
-              Previous month
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                step(1);
-              }}
-            >
-              Next month
-            </button>
-            <span className="cal-month-name">{monthTitle}</span>
-          </div>
+        {data !== null && view === 'month' && (
+          <>
+            <div className="cal-nav">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  step(-1);
+                }}
+              >
+                Previous month
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  step(1);
+                }}
+              >
+                Next month
+              </button>
+              <span className="cal-month-name">{monthTitle}</span>
+            </div>
 
-          {outsideWindow && (
-            <p className="cal-notice">
-              {monthTitle} is outside the window this page asked the API for (
-              {formatDate(data.from)} to {formatDate(data.to)}). An empty grid here means nobody
-              asked, not that no funder has a date that month.
-            </p>
-          )}
+            {outsideWindow && (
+              <p className="cal-notice">
+                {monthTitle} is outside the window this page asked the API for (
+                {formatDate(data.from)} to {formatDate(data.to)}). An empty grid here means nobody
+                asked, not that no funder has a date that month.
+              </p>
+            )}
 
-          <MonthGrid
-            year={cursor.year}
-            month={cursor.month}
-            entries={data.entries}
-            now={nowISO}
-          />
-        </>
-      )}
+            <MonthGrid
+              year={cursor.year}
+              month={cursor.month}
+              entries={data.entries}
+              now={nowISO}
+            />
+          </>
+        )}
+      </div>
 
       {data !== null && data.undated.length > 0 && (
         <section className="cal-panel card" aria-label="Programs with no dated cycle">

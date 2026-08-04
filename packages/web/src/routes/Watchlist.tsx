@@ -403,12 +403,19 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
                             survives every future edit is that this page opens nothing outbound. */}
                         <Link to={`/o/${row.program.id}`}>{row.program.name}</Link>
                         <span className="wl-funder">{row.funderName}</span>
+                        {/*
+                          `role="note"` and a real sentence, matching the browse row.
+
+                          This shipped as a bare `<span>` whose only explanation was a `title`.
+                          A `title` is not reachable by touch or keyboard and is announced by
+                          screen readers inconsistently and only as a description, so the one row
+                          on this page that carries an instruction not to visit a domain was the
+                          row whose reason was least likely to be heard.
+                        */}
                         {row.program.tags.includes(SAFETY_WARNING_TAG) && (
-                          <span
-                            className="wl-safety"
-                            title="This record exists to intercept an instruction to apply at a domain that no longer belongs to the funder. GrantSpotter links to no such host, here or anywhere."
-                          >
-                            Safety warning — do not apply
+                          <span className="wl-safety" role="note" aria-label="Safety warning">
+                            Safety warning — do not apply at this funder&rsquo;s former domain. It
+                            no longer belongs to them. Open the record for where to apply instead.
                           </span>
                         )}
                       </span>
