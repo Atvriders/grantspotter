@@ -234,6 +234,59 @@ describe('watchlist API', () => {
     }
   });
 
+  /**
+   * ADDED 2026-08-04, not in the brief. THE EXISTENCE ORACLE.
+   *
+   * `POST /api/watches` tested existence with `SELECT 1 FROM programs`, so a
+   * suppressed id answered `201 {watched:true}` while a bogus id answered 404.
+   * Two requests and a status code therefore enumerated all ~553 records the
+   * product refuses to show — the same set the detail route, browse, the
+   * calendar and the watchlist all go to some trouble to hide — and the star it
+   * minted was inert: `loadRows` drops it through `isDoNotPublish`, so nothing
+   * ever rendered it and no change event was ever announced for it. The 201 said
+   * nothing except "this id is real", which is the one fact being withheld.
+   *
+   * The distinguishing signal is the whole defect, so the assertion is that the
+   * two answers are the SAME, not merely that one of them is a 404.
+   */
+  describe('the suppression boundary on POST', () => {
+    const SUPPRESSED_ID = 'ardc-grants--past-award-2019-already-paid';
+
+    beforeEach(() => {
+      createProgramRepo(db).upsert({
+        ...ardcGrants,
+        id: SUPPRESSED_ID,
+        name: 'ARDC — 2019 grant, already awarded and paid',
+        tags: [...ardcGrants.tags, 'past_award', DO_NOT_PUBLISH_TAG],
+      });
+      reindexBrowse(db, NOW);
+    });
+
+    it('answers a suppressed id exactly as a nonexistent one, and stars neither', async () => {
+      const app = buildApp(db);
+      const suppressed = await request(app).post('/api/watches').send({ programId: SUPPRESSED_ID });
+      const absent = await request(app).post('/api/watches').send({ programId: 'no-such-program' });
+
+      expect(suppressed.status).toBe(404);
+      expect(suppressed.status).toBe(absent.status);
+      expect(suppressed.body.error.code).toBe(absent.body.error.code);
+      // Same sentence too, once the id inside it is normalised away.
+      expect(suppressed.body.error.message.replace(SUPPRESSED_ID, 'X'))
+        .toBe(absent.body.error.message.replace('no-such-program', 'X'));
+
+      // No row was written for EITHER. A `watches` row would be a second, slower
+      // oracle for anyone who can read back their own watchlist.
+      expect(watchedProgramIds(db, 'u-member')).toEqual([]);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM watches').get()).toEqual({ n: 0 });
+    });
+
+    it('still stars the publishable sibling — this is suppression, not breakage', async () => {
+      const res = await request(buildApp(db)).post('/api/watches').send({ programId: 'ardc-grants' });
+      expect(res.status).toBe(201);
+      expect(watchedProgramIds(db, 'u-member')).toEqual(['ardc-grants']);
+    });
+  });
+
   it('leaves the funder of a watched programme intact for display', async () => {
     // `funderName` comes from the projection when it is fresh and from `funders`
     // when it is not; both paths must name the same funder.

@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import type Database from 'better-sqlite3';
-import type { FetchRequest, FetchedPayload, RawOpportunity, SourceModule } from '@grantspotter/core';
+import type {
+  FetchRequest, FetchedPayload, Program, RawOpportunity, SourceModule,
+} from '@grantspotter/core';
 import { openTestDb } from '../test/testDb.js';
-import { seedFixtureCorpus, starProgram } from '../test/fixtures/programs.js';
+import { arrlScholarship, seedFixtureCorpus, starProgram } from '../test/fixtures/programs.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
+import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
 import { reindexBrowse } from './reindex.js';
 import { recordProvenance } from './provenanceStore.js';
 import { createVerifyRunner, checkVerifyRateLimit, MAX_VERIFY_REQUESTS } from './verify.js';
@@ -33,6 +36,47 @@ const AFTER: RawOpportunity = {
   rawFields: { 'Award Amount': '$500 - $25,000', Deadline: 'December 30, 12:00 PM EST' },
   rawText: 'Award Amount: $500 - $25,000 • Deadline: December 30, 12:00 PM EST',
 };
+
+/**
+ * A stored-but-unpublishable record, and the raw entry a refetch of its page
+ * would return for it.
+ *
+ * Modelled on the real thing: the ARRL club-grant page carries ~37 already-funded
+ * clubs beside the one live programme, and `ardc-award-tables`, `nsf-awards` and
+ * `usaspending` are entirely past awards. ~553 of the 703 records the corpus
+ * stores carry `do_not_publish` for exactly this reason.
+ *
+ * `recipient` is the field that makes it evidence rather than an opportunity, and
+ * it is what the assertions below look for in the response body: on a live server
+ * at HEAD this route answered 200 with `{"label":"recipient",…}` in `diffs`.
+ */
+const SUPPRESSED_ID = 'arrl-club-grant--past-award-radio-club-of-example-city';
+const SUPPRESSED_NAME = 'ARRL Club Grant — 2024 award to the Radio Club of Example City';
+const SUPPRESSED_RECIPIENT = 'Radio Club of Example City';
+
+const SUPPRESSED_RAW: RawOpportunity = {
+  sourceId: 'arrl-scholarship-descriptions',
+  externalKey: SUPPRESSED_NAME,
+  name: SUPPRESSED_NAME,
+  rawFields: { recipient: SUPPRESSED_RECIPIENT, 'Award Amount': '$2,500', year: '2024' },
+  sourceUrl: 'http://www.arrl.org/club-grant-program',
+  rawText: `recipient: ${SUPPRESSED_RECIPIENT} • Award Amount: $2,500`,
+};
+
+/**
+ * Seed it. No provenance is recorded, so every field reads as newly appeared —
+ * which is what makes an ungated refetch write a `change_events` row per field
+ * AND hand the caller the record's values in `diffs`.
+ */
+function seedSuppressed(db: Database.Database): void {
+  const suppressed: Program = {
+    ...arrlScholarship,
+    id: SUPPRESSED_ID,
+    name: SUPPRESSED_NAME,
+    tags: [...arrlScholarship.tags, 'past_award', DO_NOT_PUBLISH_TAG],
+  };
+  createProgramRepo(db).upsert(suppressed);
+}
 
 /** A different entry off the same catalog page. Used to prove a REAL disappearance. */
 const SOMEONE_ELSE: RawOpportunity = {
@@ -494,5 +538,112 @@ describe('POST /api/programs/:id/verify', () => {
       .prepare('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?')
       .get('u-member') as { n: number };
     expect(n.n).toBe(1);
+  });
+
+  /**
+   * ADDED 2026-08-04, not in the brief. THE FOURTH SUPPRESSION LEAK.
+   *
+   * The brief's existence test was `SELECT 1 FROM programs`, which knows nothing
+   * about suppression, so this route answered 200 for every one of the ~553
+   * `do_not_publish` records. Measured against a live `dist` server on the
+   * seeded 703-record database, before the fix:
+   *
+   *   member: 6/6 suppressed ids answered 200, 4 performed a live refetch
+   *   admin:  6/6 suppressed ids answered 200, 4 performed a live refetch
+   *   change_events joined to do_not_publish programs afterwards: 21 of 21
+   *
+   * and the 200s carried the hidden records' own parsed fields —
+   * `{"label":"recipient",…}` for the ARRL past award, `adjacencyHits` /
+   * `adjacencyScore` for `usaspending--2045755`, `recordType: crosscheck` for the
+   * ARRL summary table.
+   *
+   * Three of the four preceding leaks (the `:id` detail route, the corpus
+   * profiler, the completeness meter) were each one read path that skipped the
+   * shared predicate. This one is worse because it also WRITES and because it
+   * turns unrate-limited admin verification into an amplifier aimed at ~25 small
+   * volunteer-run sites. Every assertion below therefore pins the ABSENCE of the
+   * side effect, not merely the status code.
+   */
+  describe('the suppression gate', () => {
+    function verifyAttempts(): number {
+      return (db.prepare('SELECT COUNT(*) AS n FROM verify_attempts').get() as { n: number }).n;
+    }
+    function changeEvents(): number {
+      return (db.prepare('SELECT COUNT(*) AS n FROM change_events').get() as { n: number }).n;
+    }
+    function suppressedSource() {
+      return fakeSource([BEFORE, SUPPRESSED_RAW]);
+    }
+
+    beforeEach(() => {
+      seedSuppressed(db);
+    });
+
+    it.each([
+      ['a member', MEMBER],
+      ['an admin', ADMIN],
+    ])('refuses %s on a do_not_publish record, with no refetch and no write', async (_who, user) => {
+      const fetcher = fakeFetcher();
+      const res = await request(buildApp(user, [suppressedSource()], fetcher))
+        .post(`/api/programs/${SUPPRESSED_ID}/verify`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('not_found');
+      // NOTHING was aimed at the funder's server. This is the half a status-code
+      // assertion misses, and it is the half that hits somebody else's hosting.
+      expect(fetcher.fetch).not.toHaveBeenCalled();
+      // The refusal leaves no trace in either table this route writes: no ledger
+      // row to charge, and no change event to pollute the stream the watchlist
+      // and the inbox both read.
+      expect(verifyAttempts()).toBe(0);
+      expect(changeEvents()).toBe(0);
+      // And the record's own content never reaches the caller.
+      expect(JSON.stringify(res.body)).not.toContain(SUPPRESSED_RECIPIENT);
+    });
+
+    it('answers a suppressed id exactly as it answers an id that does not exist', async () => {
+      const app = buildApp(ADMIN, [suppressedSource()]);
+      const suppressed = await request(app).post(`/api/programs/${SUPPRESSED_ID}/verify`);
+      const absent = await request(app).post(`/api/programs/${SUPPRESSED_ID}-not-a-real-id/verify`);
+
+      expect(suppressed.status).toBe(absent.status);
+      // Same envelope, same sentence — only the id in it and the per-request id
+      // differ. A `forbidden`, a different message or a different status would
+      // each confirm the id exists, which is the whole thing being withheld.
+      const shape = (body: { error: { code: string; message: string } }) => ({
+        code: body.error.code,
+        message: body.error.message.replace(SUPPRESSED_ID, '<id>').replace('-not-a-real-id', ''),
+      });
+      expect(shape(suppressed.body)).toEqual(shape(absent.body));
+    });
+
+    it('leaves the publishable sibling verifiable — this is suppression, not breakage', async () => {
+      const fetcher = fakeFetcher();
+      const res = await request(buildApp(MEMBER, [fakeSource([AFTER, SUPPRESSED_RAW])], fetcher))
+        .post('/api/programs/arrl-foundation-scholarship/verify');
+      expect(res.status).toBe(200);
+      expect(res.body.changed).toBe(true);
+      expect(fetcher.fetch).toHaveBeenCalled();
+    });
+
+    it('refuses inside the runner too, so no other caller can reach the refetch', async () => {
+      // The router is the gate a REQUEST meets; the runner is what turns an id
+      // into a request against somebody else's server and into change_events
+      // rows. A script, an admin tool or a retry queue calling verify() directly
+      // must hit the same wall — one caller skipping the predicate is precisely
+      // how this boundary has now leaked four times.
+      const fetcher = fakeFetcher();
+      const runner = createVerifyRunner({
+        db, fetcher, sources: [suppressedSource()], now: () => NOW,
+      });
+      const result = await runner.verify(SUPPRESSED_ID);
+
+      expect(result.ok).toBe(false);
+      expect(fetcher.fetch).not.toHaveBeenCalled();
+      expect(result.diffs).toEqual([]);
+      expect(result.changeEventIds).toEqual([]);
+      expect(changeEvents()).toBe(0);
+      expect(JSON.stringify(result)).not.toContain(SUPPRESSED_RECIPIENT);
+    });
   });
 });

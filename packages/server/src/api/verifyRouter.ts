@@ -5,6 +5,8 @@ import { AppError } from './errors.js';
 import { checkVerifyRateLimit, type VerifyRunner } from './verify.js';
 import { drainChangeEvents } from './notify.js';
 import { reindexBrowse } from './reindex.js';
+import { createProgramRepo } from '../db/repositories/programs.js';
+import { isDoNotPublish } from '../normalize/index.js';
 
 /**
  * `POST /api/programs/:id/verify` — spec §8's "Verify now", open to admin and
@@ -27,8 +29,46 @@ export function createVerifyRouter(deps: RouterDeps, runner: VerifyRunner): Rout
       const programId = req.params.id;
       const nowISO = deps.now();
 
-      const exists = deps.db.prepare('SELECT 1 FROM programs WHERE id = ?').get(programId);
-      if (exists === undefined) {
+      /**
+       * THE SUPPRESSION GATE, and it is the FIRST thing this route does.
+       *
+       * Until 2026-08-04 the existence test here was `SELECT 1 FROM programs`,
+       * which knows nothing about suppression, so this route answered 200 for
+       * every one of the ~553 `do_not_publish` records the corpus stores. That
+       * was three separate failures at once, measured against a live server on
+       * the seeded 703-record database:
+       *
+       *  - A READ LEAK. A successful refetch returns the hidden record's own
+       *    parsed fields in `diffs` — the ARRL club-grant past award came back
+       *    with `{"label":"recipient",…}`, `usaspending--2045755` with its
+       *    `adjacencyHits`/`adjacencyScore`, the ARRL summary table with
+       *    `recordType: crosscheck`. Six suppressed ids across six sources
+       *    answered 200 and four of them performed a live refetch, to a member
+       *    and to an admin alike.
+       *  - AN AMPLIFIER. Admin verification is deliberately unrate-limited
+       *    (`checkVerifyRateLimit` returns immediately for `admin`), so the id
+       *    space of records the product refuses to show became an unmetered way
+       *    to aim requests at the ~25 small volunteer-run sites behind them.
+       *  - A WRITE. The refetch drains change events; afterwards 21 of the
+       *    database's 21 `change_events` joined to `do_not_publish` programs.
+       *
+       * The gate runs BEFORE the rate-limit check and before the
+       * `verify_attempts` insert, so a refused id leaves no row anywhere — the
+       * refusal must not be observable in the ledger either.
+       *
+       * `not_found`, not `forbidden`, and the same sentence an unknown id gets:
+       * a suppressed record is not a resource this user may not see, it is not
+       * published at all, and a distinguishable refusal turns the route into an
+       * existence oracle over the 553.
+       *
+       * The predicate is IMPORTED, never reimplemented — the same
+       * `isDoNotPublish` that `programDetail`, `reindexBrowse`, the watchlist,
+       * the calendar, the corpus profiler and the approve path call. A new
+       * suppressed record type classified in `normalize/index.ts` starts 404ing
+       * here in the same commit.
+       */
+      const program = createProgramRepo(deps.db).get(programId);
+      if (program === undefined || isDoNotPublish(program)) {
         next(new AppError('not_found', `No program with id "${programId}".`));
         return;
       }

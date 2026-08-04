@@ -21,11 +21,13 @@
  * middleware; these do not, because `/api` is Plan 3's own surface and is complete today.
  */
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import Database from 'better-sqlite3';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   ARRL_CATALOG_SOURCE_ID,
   ARRL_SCHOLARSHIP_NAME,
+  DB_PATH,
   insertChangeEvent,
   MEMBER_EMAIL,
   MEMBER_PASSWORD,
@@ -34,6 +36,46 @@ import {
   programIdByName,
   suppressedProgramIds,
 } from './helpers.js';
+
+/**
+ * A read-only look at the database the running server is using.
+ *
+ * The suppression test below asserts the ABSENCE of side effects — no verification ledger row, no
+ * change event, no advanced `last_verified_at` — and none of those is visible over HTTP by
+ * design: a route that refuses correctly returns exactly the same 404 as one that refuses after
+ * having already refetched somebody else's page. Only the file can tell those apart.
+ */
+function queryDb<T>(read: (db: Database.Database) => T): T {
+  const db = new Database(DB_PATH, { readonly: true });
+  try {
+    return read(db);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * One suppressed id per source that emits any.
+ *
+ * `suppressedProgramIds` takes the first few by id order, which in this corpus are all
+ * `ardc-award-tables`. The four suppressing sources normalise very differently and the leak
+ * showed a different shape through each — a `recipient` for the ARRL past award, an
+ * `adjacencyScore` for `usaspending`, `recordType: crosscheck` for the ARRL summary table — so
+ * the routes are exercised against one of each rather than four of one.
+ */
+function suppressedIdOfEachSource(): string[] {
+  return queryDb((db) =>
+    (
+      db
+        .prepare(
+          `SELECT MIN(id) AS id FROM programs
+            WHERE tags LIKE '%do_not_publish%'
+            GROUP BY source_id ORDER BY source_id`,
+        )
+        .all() as Array<{ id: string }>
+    ).map((r) => r.id),
+  );
+}
 
 interface ErrorBody {
   error: { code: string; message: string; details?: { unknownFields?: string[] } };
@@ -360,6 +402,32 @@ test('a projected date is never presented as one the funder published', async ({
   expect(september.undated).toHaveLength(28);
 });
 
+/**
+ * EVERY route, and the title is now a promise this test keeps.
+ *
+ * It used to check browse and `GET /:id` and call that "by any route", and the gap between the
+ * name and the body is how the same defect got shipped FOUR times: the detail route answering 200
+ * for all 553, the corpus profiler counting 742 instead of 197, the completeness meter scoring
+ * 58 of 703 instead of 58 of 150, and then `POST /:id/verify` — which not only served the hidden
+ * record's parsed fields back in `diffs` but REFETCHED the funder's page to get them, unmetered
+ * for an admin, and wrote a `change_events` row per field (21 of 21 events in this database
+ * joined to `do_not_publish` programmes when it was measured).
+ *
+ * So this enumerates the surface instead of sampling it. Every route that takes a program id:
+ *   GET  /api/programs               (browse)
+ *   GET  /api/programs/:id           (detail)
+ *   POST /api/programs/:id/verify    (verify now)
+ *   POST /api/watches                (star)
+ *   DELETE /api/watches/:programId   (unstar)
+ * and every route that RENDERS one:
+ *   GET  /api/watches                (watchlist)
+ *   GET  /api/calendar               (deadline wall)
+ *   GET  /api/notifications          (change digest)
+ *   GET  /api/inbox                  (review queue)
+ *
+ * A route added to `mount.ts` that takes a program id and is not listed here has not been tested,
+ * whatever this test is called.
+ */
 test('suppressed records never surface, to anyone, by any route', async ({ request }) => {
   await signIn(request, MEMBER_EMAIL, MEMBER_PASSWORD);
 
@@ -371,21 +439,154 @@ test('suppressed records never surface, to anyone, by any route', async ({ reque
   const browse = (await (await request.get('/api/programs?pageSize=200')).json()) as BrowseBody;
   expect(browse.total).toBe(150);
 
-  const hidden = suppressedProgramIds(5);
-  expect(hidden).toHaveLength(5);
-  for (const id of hidden) {
-    expect(browse.rows.some((r) => r.program.id === id)).toBe(false);
-    // 404, not 403: a suppressed record is not a resource this user may not see, it is not
-    // published at all, and 403 would confirm the id exists. This route once answered 200 with
-    // the full record — including an "apply here" that was a grant recipient's Facebook page.
-    const detail = await request.get(`/api/programs/${id}`);
-    expect(detail.status(), id).toBe(404);
-    expect(((await detail.json()) as ErrorBody).error.code).toBe('not_found');
+  // Five by id order, plus one per distinct source, because the four suppressing sources normalise
+  // very differently — the ARRL past award carries a `recipient`, `usaspending` an
+  // `adjacencyScore`, the ARRL summary table `recordType: crosscheck` — and a leak that shows one
+  // shows them all.
+  const hidden = [...new Set([...suppressedProgramIds(5), ...suppressedIdOfEachSource()])];
+  expect(hidden.length).toBeGreaterThanOrEqual(6);
+
+  /** The one change event this test writes on purpose, declared here so `sideEffects` can skip it. */
+  const suppressedEventId = 'e2e-api-suppressed-change';
+
+  /**
+   * What a refetch would move, read straight out of the database. `verify_attempts` is the ledger
+   * the route writes BEFORE it fetches, `change_events` is what a successful diff writes after,
+   * and `last_verified_at` only ever advances on a page that actually read. All three staying
+   * still is the evidence that no request left this machine — which is the half of the defect a
+   * status-code assertion cannot see, and the half that lands on ~25 volunteer-run servers.
+   */
+  const sideEffects = () =>
+    queryDb((db) => ({
+      verifyAttempts: (db.prepare('SELECT COUNT(*) AS n FROM verify_attempts').get() as { n: number }).n,
+      // `suppressedEventId` below is one this test writes ON PURPOSE, to prove the digest refuses
+      // to announce it; it is excluded here so it cannot mask a row a route filed by accident.
+      suppressedChangeEvents: (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM change_events ce JOIN programs p ON p.id = ce.program_id
+              WHERE p.tags LIKE '%do_not_publish%' AND ce.id <> ?`,
+          )
+          .get(suppressedEventId) as { n: number }
+      ).n,
+      watches: (db.prepare('SELECT COUNT(*) AS n FROM watches').get() as { n: number }).n,
+      lastVerified: (
+        db
+          .prepare(
+            `SELECT id, last_verified_at FROM programs WHERE tags LIKE '%do_not_publish%' ORDER BY id`,
+          )
+          .all() as Array<{ id: string; last_verified_at: string }>
+      )
+        .map((r) => `${r.id}=${r.last_verified_at}`)
+        .join('\n'),
+    }));
+
+  const before = sideEffects();
+
+  async function refusesEveryIdRoute(who: string): Promise<void> {
+    for (const id of hidden) {
+      // 404, not 403: a suppressed record is not a resource this user may not see, it is not
+      // published at all, and 403 would confirm the id exists. This route once answered 200 with
+      // the full record — including an "apply here" that was a grant recipient's Facebook page.
+      const detail = await request.get(`/api/programs/${id}`);
+      expect(detail.status(), `${who} detail ${id}`).toBe(404);
+      expect(((await detail.json()) as ErrorBody).error.code).toBe('not_found');
+
+      // Verify now. The gate runs before the rate limiter and before the ledger insert, so this
+      // costs a member none of their ten-an-hour and an admin — who has no limit at all — no
+      // request against the funder.
+      const verify = await request.post(`/api/programs/${id}/verify`);
+      expect(verify.status(), `${who} verify ${id}`).toBe(404);
+      const verifyBody = (await verify.json()) as ErrorBody & { diffs?: unknown; ok?: boolean };
+      expect(verifyBody.error.code).toBe('not_found');
+      // No `diffs`, no `ok`, no `lastVerifiedAt`: the refusal envelope, not a verification result.
+      expect(verifyBody.diffs).toBeUndefined();
+      expect(verifyBody.ok).toBeUndefined();
+
+      // Starring. `201 {watched:true}` here was an existence oracle over all 553.
+      const star = await request.post('/api/watches', { data: { programId: id } });
+      expect(star.status(), `${who} star ${id}`).toBe(404);
+      expect(((await star.json()) as ErrorBody).error.code).toBe('not_found');
+    }
   }
 
-  // Admin is not an exception. Suppression is about what the record IS, not about who is asking.
+  await refusesEveryIdRoute('member');
+
+  // A suppressed id and an id that was never real must be INDISTINGUISHABLE. Same status, same
+  // code, same sentence once the id inside it is normalised away — anything else is the oracle.
+  const bogusId = 'no-such-program-id-at-all';
+  const [onSuppressed, onBogus] = await Promise.all([
+    request.post('/api/watches', { data: { programId: hidden[0] } }),
+    request.post('/api/watches', { data: { programId: bogusId } }),
+  ]);
+  expect(onSuppressed.status()).toBe(onBogus.status());
+  const normalise = (body: ErrorBody, id: string) => ({
+    code: body.error.code,
+    message: body.error.message.replace(id, '<id>'),
+  });
+  expect(normalise((await onSuppressed.json()) as ErrorBody, hidden[0])).toEqual(
+    normalise((await onBogus.json()) as ErrorBody, bogusId),
+  );
+  // Unstarring is blind by construction — it deletes by (user, program) and reports 204 either
+  // way — so it says nothing about existence. Pinned, because a future "no such star" 404 here
+  // would rebuild the oracle on the other verb.
+  expect((await request.delete(`/api/watches/${hidden[0]}`)).status()).toBe(204);
+  expect((await request.delete(`/api/watches/${bogusId}`)).status()).toBe(204);
+
+  // Nothing rendered any of them either. The watchlist, the deadline wall and the review queue
+  // are separate projections and each has its own copy of the filter.
+  const rendered = await Promise.all([
+    request.get('/api/watches'),
+    request.get('/api/calendar?from=2026-08-02T00:00:00.000Z&to=2028-02-02T00:00:00.000Z'),
+    request.get('/api/inbox'),
+  ]);
+  for (const res of rendered) {
+    expect(res.status()).toBe(200);
+    const text = await res.text();
+    for (const id of hidden) expect(text, res.url()).not.toContain(id);
+    expect(text, res.url()).not.toContain('do_not_publish');
+  }
+
+  // A change event ABOUT a suppressed record is never announced. The row is written exactly as
+  // the nightly crawl writes it; `drainChangeEvents` runs inside the server on the next read of
+  // the digest and is what has to refuse it.
+  insertChangeEvent({
+    id: suppressedEventId,
+    sourceId: ARRL_CATALOG_SOURCE_ID,
+    programId: hidden[0],
+    kind: 'deadline_changed',
+    before: 'January 31',
+    after: 'December 30',
+    detectedAt: new Date().toISOString(),
+    fieldPath: 'deadline.note',
+  });
+  const digest = await request.get('/api/notifications');
+  expect(digest.status()).toBe(200);
+  const digestText = await digest.text();
+  for (const id of hidden) expect(digestText).not.toContain(id);
+  // And the server says so in its own bookkeeping rather than merely having produced nothing.
+  const fanout = queryDb(
+    (db) =>
+      db
+        .prepare('SELECT recipient_count, suppressed_reason FROM change_event_fanout WHERE change_event_id = ?')
+        .get(suppressedEventId) as { recipient_count: number; suppressed_reason: string } | undefined,
+  );
+  expect(fanout?.recipient_count).toBe(0);
+  expect(fanout?.suppressed_reason).toBe('not_publishable');
+
+  // Admin is not an exception. Suppression is about what the record IS, not about who is asking —
+  // and the admin is the dangerous case, because `checkVerifyRateLimit` returns immediately for
+  // an admin, so an ungated verify route was an unmetered request amplifier pointed at the ~25
+  // small organisations behind these records.
   await signIn(request, ADMIN_EMAIL, ADMIN_PASSWORD);
-  expect((await request.get(`/api/programs/${hidden[0]}`)).status()).toBe(404);
+  await refusesEveryIdRoute('admin');
+  const adminInbox = await request.get('/api/inbox');
+  const adminInboxText = await adminInbox.text();
+  for (const id of hidden) expect(adminInboxText).not.toContain(id);
+
+  // Not one of those requests refetched anything, charged anything, starred anything or filed a
+  // change event. This is the assertion the status codes above do not make.
+  expect(sideEffects()).toEqual(before);
 });
 
 test('the farweb.org record is a safety warning, and never a link', async ({ request }) => {

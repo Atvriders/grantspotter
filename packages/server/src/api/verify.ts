@@ -4,6 +4,7 @@ import type {
 import type { Db } from '../db/migrate.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { hasFollowUp, resolveRequests } from '../sources/types.js';
+import { isDoNotPublish } from '../normalize/index.js';
 import { fieldPathForLabel, loadProvenance, recordProvenance } from './provenanceStore.js';
 
 /** PLAN-LOCAL to Plan 3. */
@@ -186,7 +187,23 @@ export function createVerifyRunner(opts: VerifyRunnerOptions): VerifyRunner {
       // RESOLUTIONS R1: read through Plan 1's repository, which reassembles the
       // record from the normalized columns and validates it with programSchema.
       const program = programs.get(programId);
-      if (program === undefined) {
+      /**
+       * A suppressed record is treated exactly as an absent one, and the check
+       * sits here — above the fetch — as well as in `verifyRouter`.
+       *
+       * The router is the gate a request meets; THIS is the layer that turns a
+       * programId into a request against somebody else's server and into
+       * `change_events` rows. Anything that ever calls `runner.verify` directly
+       * (a script, a future admin tool, a retry queue) would otherwise refetch
+       * and diff a record the product refuses to publish, and the diff carries
+       * that record's own field values. One route skipping the shared predicate
+       * is how this boundary has now leaked four times; the runner refusing on
+       * its own account means the next caller cannot repeat it.
+       *
+       * Same shape as "not found" deliberately: the caller learns nothing about
+       * whether the id exists, and no `lastVerifiedAt` is disclosed.
+       */
+      if (program === undefined || isDoNotPublish(program)) {
         return {
           programId, attemptedAt, ok: false, error: 'program not found',
           changed: false, diffs: [], lastVerifiedAt: '', changeEventIds: [],

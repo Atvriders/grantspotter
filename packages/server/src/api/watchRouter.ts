@@ -136,8 +136,29 @@ export function createWatchRouter(deps: RouterDeps): Router {
       next(new AppError('bad_request', 'A non-empty "programId" is required.'));
       return;
     }
-    const exists = deps.db.prepare('SELECT 1 FROM programs WHERE id = ?').get(programId);
-    if (exists === undefined) {
+    /**
+     * A suppressed id and an id that does not exist must be INDISTINGUISHABLE
+     * here.
+     *
+     * Until 2026-08-04 this test was `SELECT 1 FROM programs`, so starring one
+     * of the ~553 `do_not_publish` records answered `201 {watched:true}` while a
+     * bogus id answered 404 — an existence oracle over exactly the set of
+     * records the product refuses to show, readable by anyone with an account,
+     * one request per id. The star it created was inert besides: `loadRows`
+     * drops the row through the same `isDoNotPublish` below, so the watchlist
+     * never rendered it and the fan-out in `notify.ts` never announced it. The
+     * only thing the 201 ever conveyed was "this id is real".
+     *
+     * Same code, same sentence, same status as a nonexistent id, and no row is
+     * written — a `watches` row would be a second, slower oracle for anyone who
+     * could read their own watchlist ordering.
+     *
+     * An ALREADY-starred record that later becomes suppressed keeps its row:
+     * that is `loadRows`' business, not this route's, and dropping it would
+     * destroy a subscription the user is entitled to get back.
+     */
+    const program = createProgramRepo(deps.db).get(programId);
+    if (program === undefined || isDoNotPublish(program)) {
       next(new AppError('not_found', `No program with id "${programId}".`));
       return;
     }
