@@ -1,0 +1,92 @@
+/* The keel: a 3px coloured bar on the leading edge. Colour is never the only
+   signal - every badge also carries a word and an aria-label. Every colour here
+   is a semantic token from tokens.css, whose 66-pair contrast invariant already
+   asserts each of these foreground/background pairs at AA in both themes. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px var(--s-2) 2px var(--s-1);
+  border-radius: var(--r-1);
+  border-left: 3px solid currentColor;
+  font-size: var(--fs-200);
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+button.badge {
+  font-family: inherit;
+  cursor: pointer;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.verdict-eligible { color: var(--ok); background: var(--ok-soft); }
+.verdict-preferred { color: var(--pref); background: var(--pref-soft); }
+.verdict-ineligible { color: var(--no); background: var(--no-soft); }
+.verdict-unknown { color: var(--unk); background: var(--unk-soft); }
+
+/* No profile at all. Shares the unknown palette because it is equally not-a-no,
+   but the dashed keel says at a glance that nothing was computed here: the
+   matcher never ran, as against running and finding a question. */
+.verdict-none {
+  color: var(--unk);
+  background: var(--unk-soft);
+  border-left-style: dashed;
+}
+
+.badge .badge-rank {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* "+2" — the missing fields the badge has no room to name. Never omitted
+   silently; the full list is in the title. */
+.badge .badge-more {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.trust {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+.trust .trust-date {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.trust-unverified {
+  color: var(--warn);
+  background: var(--warn-soft);
+  padding: 2px var(--s-2);
+  border-radius: var(--r-1);
+  font-weight: 620;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--s-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+
+.status-open { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.status-unknown { color: var(--unk); border-color: var(--unk); background: var(--unk-soft); }
+.status-discontinued { color: var(--no); border-color: var(--no); background: var(--no-soft); }
