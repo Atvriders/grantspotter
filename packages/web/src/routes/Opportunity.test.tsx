@@ -253,6 +253,22 @@ describe('Opportunity detail', () => {
     expect(screen.getByText(/20%/)).toBeInTheDocument();
   });
 
+  /**
+   * The only path from finding an opportunity to writing for it. All three parameters are
+   * load-bearing: `selectTemplates` picks the overlay whose frontmatter `programIds` contains
+   * `programId` (or whose `funderId` matches) and narrows the components on `klass`, so a link
+   * that drops one produces no error — just an empty "Funder overlays" group on the draft screen,
+   * which is the funder-specific guidance the whole writing desk exists to show.
+   */
+  it('deep-links into a draft for this program, carrying programId, klass and funderId', async () => {
+    renderDetail();
+    const link = await screen.findByRole('link', { name: /start an application for this program/i });
+    expect(link).toHaveAttribute(
+      'href',
+      '/applications?programId=arrl-club-grant&klass=ham_grant&funderId=arrl-foundation',
+    );
+  });
+
   it('shows rawOtherText verbatim in its own block', async () => {
     renderDetail();
     const block = await screen.findByRole('region', { name: /unstructured requirements/i });

@@ -41,6 +41,8 @@ describe('AppShell', () => {
     expect(within(nav).getByRole('link', { name: /browse/i })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: /calendar/i })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: /watchlist/i })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: /templates/i })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: /applications/i })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: /inbox/i })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: /sources/i })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: /profile/i })).toBeInTheDocument();

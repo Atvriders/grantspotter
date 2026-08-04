@@ -1,0 +1,79 @@
+import type { TemplateSummaryDTO } from '../api/writing.js';
+import { linkRefusal } from '../lib/safety.js';
+import './writing.css';
+
+interface Props {
+  heading: string;
+  templates: TemplateSummaryDTO[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+  /** What an empty group MEANS. A blank space would imply the group does not exist. */
+  emptyMessage: string;
+}
+
+/**
+ * One group of templates, as a list of buttons plus each template's cited sources.
+ *
+ * The sources are not decoration. Every funder requirement in an overlay is pinned to a quoted
+ * capture by `funderCaptures.test.ts`, and this is where an applicant checks it against the
+ * funder's own page. They are rendered through `linkRefusal` for the same reason every other
+ * render site in this SPA is: a `javascript:` scheme parses with an empty hostname and a
+ * protocol-relative `//www.farweb.org/…` throws, so both read as "not blocked" to anything that
+ * only asks about hosts.
+ */
+export function TemplatePicker({
+  heading,
+  templates,
+  selectedId,
+  onSelect,
+  emptyMessage,
+}: Props): JSX.Element {
+  return (
+    <section className="template-group" aria-label={heading}>
+      <h2>{heading}</h2>
+      {templates.length === 0 ? (
+        <p className="muted">{emptyMessage}</p>
+      ) : (
+        <ul className="template-list">
+          {templates.map((t) => (
+            <li key={t.id} className={t.id === selectedId ? 'selected' : undefined}>
+              <button
+                type="button"
+                onClick={() => {
+                  onSelect(t.id);
+                }}
+                aria-current={t.id === selectedId ? 'true' : undefined}
+              >
+                {t.title}
+                {t.lengthTarget !== undefined && t.lengthTarget !== '' ? (
+                  <span className="length-target"> · {t.lengthTarget}</span>
+                ) : null}
+              </button>
+              {t.sources.length > 0 ? (
+                <ul className="template-sources">
+                  {t.sources.map((s) => {
+                    const refusal = linkRefusal(s.url);
+                    return (
+                      <li key={s.url}>
+                        {refusal === null ? (
+                          <a href={s.url} target="_blank" rel="noopener noreferrer">
+                            {s.label}
+                          </a>
+                        ) : (
+                          // Shown, never linked. The address is still information.
+                          <span className="muted">
+                            {s.label} — {s.url}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}

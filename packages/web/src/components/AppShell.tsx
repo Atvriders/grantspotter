@@ -15,6 +15,8 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Browse', end: true },
   { to: '/calendar', label: 'Calendar', end: false },
   { to: '/watchlist', label: 'Watchlist', end: false },
+  { to: '/templates', label: 'Templates', end: false },
+  { to: '/applications', label: 'Applications', end: false },
   { to: '/inbox', label: 'Inbox', end: false },
   { to: '/sources', label: 'Sources', end: false },
   { to: '/profile', label: 'Profile', end: false },

@@ -273,6 +273,23 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
         >
           {isWatched ? 'Stop watching this program' : 'Watch this program'}
         </button>
+        {/*
+          The one path from finding an opportunity to writing for it. Without it a user who has
+          found a program has no route into a draft for it at all.
+
+          All three parameters are load-bearing. `selectTemplates` picks the overlay whose
+          frontmatter `programIds` contains `programId` (for `ardc-grants`, `funder-ardc`) or whose
+          `funderId` matches, and narrows the components on `klass`. A `programId` that differs
+          from the overlay's by one character produces no error and no warning — just an empty
+          "Funder overlays" group — which is why the ids in the seed corpus are the ones the
+          overlays name, and never the other way round.
+        */}
+        <Link
+          className="btn"
+          to={`/applications?programId=${encodeURIComponent(program.id)}&klass=${encodeURIComponent(program.klass)}&funderId=${encodeURIComponent(program.funderId)}`}
+        >
+          Start an application for this program
+        </Link>
         <VerifyButton programId={program.id} onVerified={reload} />
       </div>
 

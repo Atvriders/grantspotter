@@ -10,6 +10,7 @@ import { Inbox } from './routes/Inbox.js';
 import { Profile } from './routes/Profile.js';
 import { Sources } from './routes/Sources.js';
 import { Admin } from './routes/Admin.js';
+import { TemplatesScreen } from './routes/Templates.js';
 
 /**
  * An unrecognised path inside the shell would otherwise render an empty `main`,
@@ -46,6 +47,25 @@ function Authenticated(): JSX.Element {
         <Route path="/o/:programId" element={<Opportunity />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/watchlist" element={<Watchlist />} />
+        {/*
+          The writing desk. `TemplatesScreen` is the query-string-aware wrapper; `TemplatesRoute`
+          stays prop-driven so component tests can render it without a router.
+
+          THE SECOND HALF OF THIS PAIR IS MISSING ON PURPOSE, AND IT IS NOT OPTIONAL.
+          `AppShell`'s rail links to `/applications` and the opportunity screen deep-links to it,
+          but `routes/Applications.tsx` is created by Plan 4 Task 19 — importing it here before it
+          exists fails to resolve and takes the whole web suite down, so the line below cannot be
+          written yet:
+
+            <Route path="/applications" element={<ApplicationsScreen />} />
+
+          Task 19 adds it, with the matching import. Until then `/applications` renders NotFound,
+          and `routes/Templates.test.tsx` ("every rail entry has a route") holds it in a
+          self-cleaning PENDING list: the day the route lands, that test says so and the exemption
+          has to be deleted. A rail entry with no route is a working link to a wrong-address page,
+          which no test of either file alone can see.
+        */}
+        <Route path="/templates" element={<TemplatesScreen />} />
         <Route path="/inbox" element={<Inbox />} />
         <Route path="/sources" element={<Sources />} />
         <Route path="/profile" element={<Profile />} />
