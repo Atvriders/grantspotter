@@ -36,6 +36,37 @@ import '../components/applications.css';
  * is a real editing action rather than a deep-link accident. `programId: null` detaches. */
 type DraftPatch = Parameters<typeof patchApplication>[1];
 
+/**
+ * THE SAME FOUR-WAY BREAKDOWN `assertExportReady` throws as a 409, rendered BEFORE the click so
+ * the refusal is never a surprise. Every clause is conditional on its own count: an applicant
+ * blocked by a lone raw `{{slot}}` placeholder must not read "0 unconfirmed" first and go hunting
+ * for a fact that was never the problem — a wrong explanation is worse than a bare failure.
+ *
+ * Stale gets its own clause rather than folding into the unconfirmed count for the same reason the
+ * server splits them: the applicant DID confirm that item, then the text under it changed, and
+ * calling that "unconfirmed" reads as though the earlier work was thrown away.
+ */
+function describeExportBlockers(readiness: ExportReadinessDTO): string {
+  const stale = readiness.items.filter((item) => item.staleConfirmation).length;
+  const neverConfirmed = readiness.unconfirmed - stale;
+
+  const clauses: string[] = [];
+  if (neverConfirmed > 0) {
+    clauses.push(`${neverConfirmed} unconfirmed`);
+  }
+  if (readiness.openTodos > 0) {
+    clauses.push(`${readiness.openTodos} open [TODO: …] marker(s)`);
+  }
+  if (readiness.rawSlots > 0) {
+    const slots = readiness.rawSlotPaths.map((path) => `{{${path}}}`).join(', ');
+    clauses.push(`${readiness.rawSlots} unfilled template placeholder(s) (${slots})`);
+  }
+  if (stale > 0) {
+    clauses.push(`${stale} confirmation(s) gone stale — the value changed since you confirmed it`);
+  }
+  return clauses.join(', ');
+}
+
 /** Only the fields this screen reads off a Program; the whole record goes to the prompt composer. */
 interface ProgramLike {
   id?: string;
@@ -353,9 +384,10 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
               </div>
               {readiness && !readiness.ready && (
                 <p className="export-note">
-                  Exports are blocked until every item in the fact checklist below is confirmed and
-                  every <code>[TODO: …]</code> marker is resolved: {readiness.unconfirmed} unconfirmed,{' '}
-                  {readiness.openTodos} open. That rule is enforced on the server, not just here.
+                  Exports are blocked until every item in the fact checklist below is confirmed,
+                  every <code>[TODO: …]</code> marker is resolved, and no raw{' '}
+                  <code>{'{{slot}}'}</code> placeholder is left in the draft: {describeExportBlockers(readiness)}.
+                  That rule is enforced on the server, not just here.
                 </p>
               )}
 

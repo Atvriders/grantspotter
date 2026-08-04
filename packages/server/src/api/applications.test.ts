@@ -357,8 +357,9 @@ describe('a confirmation cannot survive an edit to the value it confirms', () =>
     expect(callsign.confirmed).toBe(true);
     expect(callsign.staleConfirmation).toBe(false);
 
-    // And the gate agrees with the screen.
-    expect(() => assertExportReady(db, id, 'user-1')).toThrow(/unconfirmed/i);
+    // And the gate agrees with the screen — worded as a stale confirmation, not a plain
+    // "unconfirmed" one, since the applicant did confirm this fact before the edit.
+    expect(() => assertExportReady(db, id, 'user-1')).toThrow(/no longer apply/i);
   });
 
   it('still drops it when the client sent no fingerprint at all', async () => {
@@ -702,7 +703,100 @@ describe('assertExportReady', () => {
     const money = stale.body.items.find((i: { kind: string }) => i.kind === 'money');
     expect(money.confirmed).toBe(false);
     expect(money.staleConfirmation).toBe(true);
-    expect(() => assertExportReady(db, id, 'user-1')).toThrow(/unconfirmed/i);
+    // Stale gets its own wording, never "unconfirmed": the applicant DID confirm this fact, and
+    // the value changed underneath the tick, which is a different event from "nobody looked".
+    expect(() => assertExportReady(db, id, 'user-1')).toThrow(/no longer apply/i);
+    expect(() => assertExportReady(db, id, 'user-1')).not.toThrow(/unconfirmed factual assertion/i);
+  });
+});
+
+/**
+ * THE GAP THIS CLOSES: the refusal used to always recite "N unconfirmed and M open [TODO: …]"
+ * regardless of which of the four causes actually fired, so a raw-`{{slot}}`-only or
+ * stale-only refusal told the applicant to go hunt for unconfirmed facts that did not exist. A
+ * WRONG EXPLANATION IS WORSE THAN A BARE FAILURE — each test below drives ONE cause in isolation
+ * through the real router and a real sqlite-backed draft, and asserts both that its own clause
+ * appears AND that the other three do not, plus a control proving the fix did not turn the gate
+ * into "always refuse".
+ */
+describe('assertExportReady names only the causes that are actually true', () => {
+  const draftWith = async (bodyMarkdown: string): Promise<string> => {
+    const id = await draft('names-only');
+    await json(`/api/applications/${id}`, { method: 'PATCH', body: JSON.stringify({ bodyMarkdown }) });
+    return id;
+  };
+
+  const messageFor = (id: string): string => {
+    try {
+      assertExportReady(db, id, 'user-1');
+      throw new Error('expected assertExportReady to throw');
+    } catch (e) {
+      if (e instanceof AppError) return e.message;
+      throw e;
+    }
+  };
+
+  it('an unconfirmed factual assertion, alone: names only that', async () => {
+    const id = await draftWith('W8UM spent $1,099 this year.');
+    const message = messageFor(id);
+    expect(message).toMatch(/unconfirmed factual assertion/i);
+    expect(message).not.toMatch(/\[TODO: …\] marker/);
+    expect(message).not.toMatch(/raw template placeholder/i);
+    expect(message).not.toMatch(/no longer apply/i);
+  });
+
+  it('an open [TODO: …] marker, alone: names only that', async () => {
+    const id = await draftWith('Our club [TODO: club.callsign — the club’s callsign] applies.');
+    const message = messageFor(id);
+    expect(message).toMatch(/1 unresolved \[TODO: …\] marker\(s\)/);
+    expect(message).not.toMatch(/unconfirmed factual assertion/i);
+    expect(message).not.toMatch(/raw template placeholder/i);
+    expect(message).not.toMatch(/no longer apply/i);
+  });
+
+  it('a raw {{slot}} placeholder, alone: names only that, and names the slot path', async () => {
+    const id = await draftWith('Our club {{club.callsign}} applies.');
+    const message = messageFor(id);
+    expect(message).toMatch(/1 raw template placeholder\(s\)/);
+    expect(message).toContain('{{club.callsign}}');
+    expect(message).not.toMatch(/unconfirmed factual assertion/i);
+    expect(message).not.toMatch(/\[TODO: …\] marker/);
+    expect(message).not.toMatch(/no longer apply/i);
+  });
+
+  it('a confirmation gone stale, alone: names only that, and never says "unconfirmed"', async () => {
+    const id = await draftWith('W8UM spent $1,450 this year.');
+    const before = await json(`/api/applications/${id}/export-readiness`);
+    await json(`/api/applications/${id}/facts`, {
+      method: 'PUT',
+      body: JSON.stringify({ confirmations: confirmAll(before.body.items, 'checked the invoice') }),
+    });
+    // Same character width, so the id is reused and only the fingerprint catches it.
+    await json(`/api/applications/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bodyMarkdown: 'W8UM spent $9,999 this year.' }),
+    });
+    const message = messageFor(id);
+    expect(message).toMatch(/1 confirmation\(s\) that no longer apply/);
+    expect(message).toMatch(/value changed/i);
+    expect(message).not.toMatch(/unconfirmed factual assertion/i);
+    expect(message).not.toMatch(/\[TODO: …\] marker/);
+    expect(message).not.toMatch(/raw template placeholder/i);
+  });
+
+  /**
+   * THE CONTROL. Without this, a gate that refuses every draft unconditionally would also pass
+   * every test above — each of them only ever checks the REFUSAL. This is the one that would fail
+   * if the fix over-corrected into "always refuse".
+   */
+  it('control: a clean, fully-confirmed draft with no gaps still exports', async () => {
+    const id = await draftWith('W8UM spent $1,099 this year.');
+    const readiness = await json(`/api/applications/${id}/export-readiness`);
+    await json(`/api/applications/${id}/facts`, {
+      method: 'PUT',
+      body: JSON.stringify({ confirmations: confirmAll(readiness.body.items, 'checked the invoice') }),
+    });
+    expect(() => assertExportReady(db, id, 'user-1')).not.toThrow();
   });
 });
 

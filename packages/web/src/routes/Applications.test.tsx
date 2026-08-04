@@ -429,6 +429,8 @@ const READINESS = {
   ready: false,
   unconfirmed: 2,
   openTodos: 1,
+  rawSlots: 0,
+  rawSlotPaths: [] as string[],
   items: [
     {
       id: 'money:21',
@@ -480,7 +482,9 @@ interface Call {
 }
 
 /** One fetch stub for the whole screen, recording every call so a test can assert what was sent. */
-function stubScreenFetch(options: { putStatus?: number; exportStatus?: number } = {}): Call[] {
+function stubScreenFetch(
+  options: { putStatus?: number; exportStatus?: number; readiness?: unknown } = {},
+): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
     'fetch',
@@ -521,7 +525,7 @@ function stubScreenFetch(options: { putStatus?: number; exportStatus?: number } 
           items: [{ ...READINESS.items[0]!, confirmed: true }, READINESS.items[1]!],
         });
       }
-      if (url.endsWith('/export-readiness')) return json(READINESS);
+      if (url.endsWith('/export-readiness')) return json(options.readiness ?? READINESS);
       if (url.startsWith('/api/exports/draft.')) {
         if (options.exportStatus !== undefined && options.exportStatus !== 200) {
           return json(
@@ -700,6 +704,60 @@ describe('downloading the draft', () => {
     expect(screen.getByText(/exports are blocked until every item in the fact checklist below/i)).toBeTruthy();
     expect(screen.getByText(/2 unconfirmed/i)).toBeTruthy();
     expect(screen.getByText(/1 open/i)).toBeTruthy();
+  });
+
+  /**
+   * THE GAP THIS CLOSES. Before `ExportReadinessDTO` carried `rawSlots` / `rawSlotPaths`, a draft
+   * blocked only by a raw `{{club.callsign}}` placeholder rendered this same panel with no mention
+   * of it — the static breakdown "knew about" only the two causes the server used to name. The
+   * blocker must appear here, above the checklist, naming the slot path — not just a bare count —
+   * so the applicant knows where to go fix it before the click, not after a 409.
+   */
+  it('names a raw {{slot}} placeholder in the static breakdown above the checklist, by path', async () => {
+    stubScreenFetch({
+      readiness: {
+        ready: false,
+        unconfirmed: 0,
+        openTodos: 0,
+        rawSlots: 1,
+        rawSlotPaths: ['club.callsign'],
+        items: [],
+      },
+    });
+    renderScreen();
+    await openTheDraft();
+
+    const note = screen.getByText(/exports are blocked until every item in the fact checklist below/i);
+    expect(note.textContent).toMatch(/1 unfilled template placeholder/i);
+    expect(note.textContent).toContain('{{club.callsign}}');
+    // Nothing else fired: no unconfirmed fact and no open TODO, so neither is named.
+    expect(note.textContent).not.toMatch(/unconfirmed/i);
+    expect(note.textContent).not.toMatch(/open \[TODO/i);
+  });
+
+  /**
+   * A stale confirmation is not the same event as an item nobody ever confirmed, and the panel
+   * above the checklist must say so distinctly rather than folding it into "unconfirmed" — the
+   * applicant DID confirm this fact; the text under it changed after.
+   */
+  it('names a stale confirmation in the static breakdown, distinctly from "unconfirmed"', async () => {
+    stubScreenFetch({
+      readiness: {
+        ready: false,
+        unconfirmed: 1,
+        openTodos: 0,
+        rawSlots: 0,
+        rawSlotPaths: [],
+        items: [{ ...READINESS.items[0]!, confirmed: false, staleConfirmation: true }],
+      },
+    });
+    renderScreen();
+    await openTheDraft();
+
+    const note = screen.getByText(/exports are blocked until every item in the fact checklist below/i);
+    expect(note.textContent).toMatch(/1 confirmation\(s\) gone stale/i);
+    expect(note.textContent).toMatch(/value changed since you confirmed it/i);
+    expect(note.textContent).not.toMatch(/\d+ unconfirmed/i);
   });
 });
 

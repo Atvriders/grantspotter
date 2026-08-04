@@ -359,14 +359,32 @@ export function applicationReadiness(db: Db, app: ApplicationRow): ExportReadine
  *
  * Every funder policy reviewed makes the human, not the tool, accountable for
  * the content, so this throws while ANY of these is true:
- *   1. any extracted factual assertion is still unconfirmed
- *      (exportReadiness().unconfirmed > 0), or
+ *   1. any extracted factual assertion has never been confirmed
+ *      (readiness.unconfirmed > 0, once the stale ones below are set aside), or
  *   2. any `[TODO: …]` marker remains in the draft body
  *      (exportReadiness().openTodos > 0), or
  *   3. any raw, unfilled `{{slot.path}}` template placeholder remains in the
  *      draft body (exportReadiness().rawSlots > 0) — the shape left behind
  *      when template markdown reaches the editor without going through
- *      `fillTemplate`, so no `[TODO: …]` marker was ever written for it.
+ *      `fillTemplate`, so no `[TODO: …]` marker was ever written for it, or
+ *   4. a fact WAS confirmed and then its text changed underneath the tick —
+ *      `readiness.items[].staleConfirmation` — so the earlier confirmation no
+ *      longer applies to what the draft now says.
+ *
+ * THE MESSAGE NAMES ONLY WHAT IS ACTUALLY TRUE. Each of the four gets its own
+ * clause, with its own count, and a clause is omitted entirely when its count
+ * is zero — a message that always recited "N unconfirmed and M open TODOs"
+ * regardless of which gate actually fired sent a raw-`{{slot}}` refusal or a
+ * stale-only refusal to a user who then went looking for unconfirmed facts
+ * that did not exist. A WRONG EXPLANATION IS WORSE THAN A BARE FAILURE.
+ *
+ * Case 4 gets its own wording rather than folding into case 1's count.
+ * `readiness.unconfirmed` counts a stale item as unconfirmed too — correct for
+ * the boolean gate — but the applicant DID confirm it, then edited the value;
+ * calling that "unconfirmed" reads as though the earlier work was thrown away.
+ * Case 1 below is therefore `readiness.unconfirmed` with the stale ones
+ * subtracted out, so the two clauses partition the same underlying count
+ * rather than double-naming the same items two different ways.
  *
  * It throws AppError('conflict', …) — HTTP **409** through Plan 1's
  * errorHandler — for an ungated draft, and AppError('not_found', …) — HTTP 404
@@ -389,22 +407,43 @@ export function assertExportReady(db: Db, applicationId: string, userId: string)
   if (!app) throw new AppError('not_found', 'No draft with that id belongs to you.');
   const readiness = applicationReadiness(db, app);
   if (!readiness.ready) {
-    let message =
-      `This draft is not ready to export: ${readiness.unconfirmed} unconfirmed factual assertion(s) and ` +
-      `${readiness.openTodos} unresolved [TODO: …] marker(s) must be handled first.`;
-    // Named separately, and only when present: a raw `{{slot.path}}` has no vocabulary hint the
-    // way a `[TODO: …]` marker does, so the message has to say which slot belongs there and where
-    // to go fix it — the template — or the applicant is left staring at a brace pair with no clue
-    // what it means.
-    if (readiness.rawSlots > 0) {
-      const slots = readiness.rawSlotPaths.map((path) => `{{${path}}}`).join(', ');
-      message +=
-        ` This draft also contains ${readiness.rawSlots} raw template placeholder(s) that were ` +
-        `never filled in (${slots}) — go back to the template for this slot and fill it in, or ` +
-        `replace the placeholder with real text.`;
+    const staleConfirmations = readiness.items.filter((item) => item.staleConfirmation).length;
+    // `unconfirmed` already counts a stale item (buildFactChecklist forces `confirmed: false` on
+    // one), so subtracting gives the count of facts nobody has EVER confirmed — the two clauses
+    // below partition `unconfirmed`, they do not add a fifth number.
+    const neverConfirmed = readiness.unconfirmed - staleConfirmations;
+
+    const clauses: string[] = [];
+    if (neverConfirmed > 0) {
+      clauses.push(`${neverConfirmed} unconfirmed factual assertion(s)`);
     }
+    if (readiness.openTodos > 0) {
+      clauses.push(`${readiness.openTodos} unresolved [TODO: …] marker(s)`);
+    }
+    if (readiness.rawSlots > 0) {
+      // A raw `{{slot.path}}` has no vocabulary hint the way a `[TODO: …]` marker does, so the
+      // message has to say which slot belongs there and where to go fix it — the template — or
+      // the applicant is left staring at a brace pair with no clue what it means.
+      const slots = readiness.rawSlotPaths.map((path) => `{{${path}}}`).join(', ');
+      clauses.push(
+        `${readiness.rawSlots} raw template placeholder(s) that were never filled in (${slots}) — ` +
+          `go back to the template for this slot and fill it in, or replace the placeholder with real text`,
+      );
+    }
+    if (staleConfirmations > 0) {
+      // Never call this "unconfirmed": the applicant DID confirm it. Say what actually happened —
+      // the value under the tick changed, so the earlier confirmation no longer covers it.
+      clauses.push(
+        `${staleConfirmations} confirmation(s) that no longer apply, because the value changed ` +
+          `after you confirmed it — re-read the new text and confirm it again`,
+      );
+    }
+
+    const message = `This draft is not ready to export: ${clauses.join('; ')}.`;
     throw new AppError('conflict', message, {
       unconfirmed: readiness.unconfirmed,
+      neverConfirmed,
+      staleConfirmations,
       openTodos: readiness.openTodos,
       rawSlots: readiness.rawSlots,
       rawSlotPaths: readiness.rawSlotPaths,

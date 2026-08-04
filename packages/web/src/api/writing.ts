@@ -173,6 +173,16 @@ export interface ExportReadinessDTO {
   ready: boolean;
   unconfirmed: number;
   openTodos: number;
+  /**
+   * Occurrences of a raw, unfilled `{{slot.path}}` placeholder — the shape left behind when a
+   * slot has no value AND was never routed through `fillTemplate` at all, as when an applicant
+   * pastes raw template markdown straight into the draft editor. Without this, the server's own
+   * gate blocks export over something the UI has no way to show: the message names a slot the
+   * checklist below never carried.
+   */
+  rawSlots: number;
+  /** Every distinct slot path found by `rawSlots`, sorted — what the export-blocked message names. */
+  rawSlotPaths: string[];
   items: FactItemDTO[];
 }
 
