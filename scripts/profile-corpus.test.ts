@@ -39,14 +39,26 @@ describe('scripts/profile-corpus — the corpus is what the product would show',
     // The whole point: not one suppressed record survives into the measured corpus.
     expect(programs.filter((p) => isDoNotPublish(p))).toEqual([]);
 
-    // Real counts, from the committed fixtures. 747 records normalize; 553 are suppressed as
-    // past awards / cross-check rows and 45 more fall under the adjacency gate, leaving 149 the
+    // Real counts, from the committed fixtures. 748 records normalize; 553 are suppressed as
+    // past awards / cross-check rows and 45 more fall under the adjacency gate, leaving 150 the
     // product would actually show. These move when fixtures land — update them, do not soften
     // them, and check WHICH source moved: `loaded` carries the split per source.
+    //
+    // 149 -> 150 on 2026-08-03: `ardc-grants` gained the apply leg (fixtures/ardc-grants/
+    // 02-apply.html + 03-apply-instructions.html, captured live at HTTP 200). ARDC's eight year
+    // archives stay suppressed — `suppressed` is unchanged at 553 — and the one record added is
+    // the application itself, which is the only thing this funder has ever had to offer and which
+    // no source fetched until then.
     expect(suppressed).toBe(553);
     expect(belowAdjacency).toBe(45);
-    expect(programs).toHaveLength(149);
-    expect(programs.length + suppressed + belowAdjacency).toBe(747);
+    expect(programs).toHaveLength(150);
+    expect(programs.length + suppressed + belowAdjacency).toBe(748);
+    expect(loaded.find((e) => e.sourceId === 'ardc-grants')).toEqual({
+      sourceId: 'ardc-grants',
+      programs: 1,
+      suppressed: 8,
+      belowAdjacency: 0,
+    });
 
     // The canonical case from the do_not_publish fix: the ARRL club-grant page yields the ONE
     // real ARRL Club Grant Program plus 37 clubs that have already RECEIVED money.
@@ -171,6 +183,10 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     expect(open.map((p) => p.name).sort()).toEqual([
       'ARRL Amateur Radio Grants',
       'ARRL Club Grant Program',
+      // ARDC's own <h1>, on https://www.ardc.net/apply/ — the application page the pipeline did
+      // not fetch until 2026-08-03, which is why the largest funder in this corpus was reachable
+      // by nobody while its eight year-archives were (correctly) suppressed.
+      'Apply for a Grant',
       // Both added by the applicant-entity remediation in normalize/index.ts, and both were
       // reachable by NOBODY before it. NCDXF's grant guidelines name their own audience —
       // "individuals and groups who use amateur radio communications…" — and had no
