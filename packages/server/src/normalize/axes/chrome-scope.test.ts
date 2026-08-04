@@ -93,18 +93,23 @@ describe('the five constraints that came off a navigation menu', () => {
     expect(await gone('ieee-student-branch-rebate::ieee-student-branch-rebate', 'age_stage')).toEqual([]);
   });
 
-  it('IEEE MTT-S now quotes the page, not the menu', async () => {
-    // Not one of the five: this one keeps a requirement, but the evidence it shows the applicant
-    // changes from "com · Books · Digital Products · Conferences · Conference Calendar · …" to the
-    // sentence the funder actually wrote.
-    const { programs } = await corpus();
-    const p = programs.find((program) => keyOf(program) === 'ieee-mtts::ieee-mtts-chapter-support');
-    if (p === undefined) throw new Error('ieee-mtts-chapter-support is missing from the corpus');
-    const reco = p.constraints.filter((c) => c.spec.axis === 'recommendation');
-    expect(reco).toHaveLength(1);
-    expect(reco[0].rawText).toBe(
-      'A sponsorship request usually requires a detailed description and mandatory post-event reporting.',
-    );
+  it('IEEE MTT-S asks for no recommendation — re-anchoring it only moved the fabrication', async () => {
+    // SUPERSEDED, one round later. This case was first fixed by RE-ANCHORING: the evidence shown
+    // to the applicant moved off "com · Books · Digital Products · Conferences · Conference
+    // Calendar · …" and onto the sentence the funder actually wrote, and the constraint was kept —
+    //
+    //     "A sponsorship request usually requires a detailed description and mandatory post-event
+    //      reporting."
+    //
+    // Reading that as a recommendation requirement is a WORD-SENSE defect that better provenance
+    // cannot see: the applicant here is the party REQUESTING sponsorship — that is the award
+    // itself — not somebody being vouched for. The sentence does state real obligations (a
+    // description, post-event reporting); neither is a letter about anybody, and this is the wrong
+    // axis to publish them on. See `recommendation.ts`'s NOT_A_LETTER_SENSE.
+    //
+    // Kept as a test rather than deleted, because "the rawText is now the funder's own prose" is
+    // exactly the check that would have declared this fixed while the fabrication stood.
+    expect(await gone('ieee-mtts::ieee-mtts-chapter-support', 'recommendation')).toEqual([]);
   });
 });
 

@@ -1,5 +1,10 @@
 import type { Citizenship, Constraint, RawOpportunity } from '@grantspotter/core';
 import { candidateTexts, findClause, splitClauses } from './clauses.js';
+// The shared "a link label is not a sentence" filter. Imported from the axis whose defect forced
+// it to be written, never re-derived: a second copy of a rule about what counts as eligibility
+// text is how the two drift. `recommendation.ts` and `ageStage.ts` already import it for the same
+// reason, and this axis carried the sixth constraint it was written to remove.
+import { withoutSiteChrome } from './hamActivity.js';
 import { makeConstraint } from './preference.js';
 
 const WORD_MONTHS: Record<string, number> = { one: 1, two: 2, three: 3, six: 6, twelve: 12 };
@@ -44,11 +49,35 @@ function isWorldwideClause(clause: string): boolean {
   return OPEN_WORLDWIDE.test(clause) || (US_STATUS.test(clause) && NOT_REQUIRED.test(clause));
 }
 
+/**
+ * SITE CHROME IS NOT ELIGIBILITY TEXT — ON THIS AXIS TOO.
+ *
+ * `candidateTexts` falls back to `raw.rawText`, and for a source filing no `Other` / `Region` /
+ * `eligibility` field that is the WHOLE FLATTENED PAGE. `CITIZEN` is a single word, and on
+ * nasa.gov it is a TOPIC LINK: the ONLY occurrence of "citizen" anywhere in the CubeSat Launch
+ * Initiative capture is the nav item
+ *
+ *     Citizen Science
+ *
+ * sitting between "STEM Multimedia" and "View All Topics A-Z" in NASA's global menu. That one link
+ * published `citizenship` HARD `{allowed: ["US_CITIZEN"]}` on the CSLI programme, quoting 1,500
+ * characters of NASA's masthead back to the applicant as the funder's own eligibility words. NASA
+ * does state a US-institution requirement for CSLI, but it says nothing about the CITIZENSHIP of
+ * anyone, and a fabricated `US_CITIZEN` bar hides the programme from every non-US applicant with
+ * no signal at all.
+ *
+ * Applied to every candidate, not only the `rawText` fallback, for the same reason `ageStage.ts`
+ * and `recommendation.ts` do: a labelled field is not immune to a page whose flattener folded a
+ * menu into it, and on a labelled field the filter is a no-op (a run of FOUR consecutive lines
+ * carrying neither "." nor ":" is what it takes to drop anything, and only a menu produces that).
+ */
 export function extractCitizenship(raw: RawOpportunity): Constraint[] {
   const candidates = candidateTexts(
     [raw.rawFields.Other, raw.rawFields.Region, raw.rawFields.eligibility],
     raw.rawText,
-  );
+  )
+    .map(withoutSiteChrome)
+    .filter((t) => t.trim() !== '');
   const text = candidates.join('\n');
   const worldwideClause = candidates.flatMap(splitClauses).find(isWorldwideClause);
   if (!CITIZEN.test(text) && worldwideClause === undefined) return [];

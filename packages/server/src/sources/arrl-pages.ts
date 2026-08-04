@@ -234,6 +234,84 @@ const CONFIGS: SinglePageConfig[] = [
   },
 ];
 
+/**
+ * AN AWARD-HISTORY ROLL IS NOT ELIGIBILITY TEXT.
+ *
+ * The Special Funds page publishes, in the middle of its prose, the Bill Orr W6SAI Technical
+ * Writing Award's list of past winners — 23 lines under a bare "Winners:" label:
+ *
+ *     Winners:
+ *     2002 Ian Poole, G3YWX, for "Understanding Solar Indices"
+ *     …
+ *     2024 Carl Luetzelschwab, K9LA, for "Worldwide Fun with 100 W and a Dipole"
+ *
+ * That block reached every axis, because `makeSinglePageSource` files the whole flattened page as
+ * `rawText` and this source labels only a `summary`. Two things follow from its SHAPE that no
+ * downstream text rule can undo:
+ *
+ *  - It carries no sentence terminator for 23 lines, so `splitClauses` cannot break it. The
+ *    citizenship, ham-activity and recommendation constraints on this programme all quoted a
+ *    ~1,200-character slab beginning "Winners:\n2002 Ian Poole, G3YWX, …" as the funder's stated
+ *    eligibility wording.
+ *  - `withoutSiteChrome` cannot reach it either, and a previous round measured exactly why: the
+ *    quoted ARTICLE TITLES contain colons ("Lightning: Understand It or Suffer the Consequences")
+ *    and the contributors' initials contain periods, so the roll never stands four label-shaped
+ *    lines deep. That round tightened `isChromeLine`, measured that it removed NEITHER constraint,
+ *    and reverted rather than ship a complication that did nothing.
+ *
+ * The separator is PROVENANCE, not wording. A roll of past recipients is a different KIND of block
+ * from a statement of terms: it records who has already won, not who may apply. This file already
+ * makes exactly that judgement one config up — `parseClubGrantRecipients` lifts the Club Grant
+ * page's recipient list out of the programme record because a funder's award history is its own
+ * kind of evidence, not part of the programme's rules.
+ *
+ * WHAT IT REMOVED. `citizenship` HARD `{allowed: ["ANY"]}`, minted because `OPEN_WORLDWIDE` found
+ * the word "Worldwide" — inside the 2024 winner's ARTICLE TITLE, "Worldwide Fun with 100 W and a
+ * Dipole". The ARRL Foundation says nothing whatever about nationality on that page. The
+ * `ham_activity` and `recommendation` constraints keep matching, but now quote the funder's actual
+ * sentence about the Victor C. Clark Youth Incentive Fund instead of two decades of QST bylines.
+ *
+ * WHY THE RECOGNISER IS THE SHAPE AND NOT THE WORD "Winners". A label line on its own is just a
+ * label; what makes this a roll is the RUN of year-led entries beneath it. Requiring four
+ * consecutive lines that each begin with a 4-digit year is what keeps it off ordinary prose: a
+ * sentence beginning "2026 applications open…" stands alone and is never inside a run, and no
+ * eligibility statement in this corpus is a column of years. The same discipline as
+ * `withoutSiteChrome`'s `CHROME_RUN_MIN`, for the same reason — a run is what a human eye reads as
+ * a table, and a table of past winners is not a rule.
+ */
+const AWARD_ROLL_LABEL = /^(?:winners|recipients|awardees|past (?:winners|recipients|awardees))\s*:$/i;
+const AWARD_ROLL_ENTRY = /^(?:19|20)\d{2}\b/;
+const AWARD_ROLL_MIN = 4;
+
+export function withoutAwardHistory(text: string): string {
+  const lines = text.split('\n');
+  const keep = lines.map(() => true);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!AWARD_ROLL_LABEL.test(lines[i].trim())) continue;
+    let end = i + 1;
+    while (end < lines.length && AWARD_ROLL_ENTRY.test(lines[end].trim())) end += 1;
+    if (end - (i + 1) >= AWARD_ROLL_MIN) for (let j = i; j < end; j += 1) keep[j] = false;
+  }
+  return lines.filter((_, i) => keep[i]).join('\n');
+}
+
+/**
+ * Applied to the whole ARRL page family rather than to Special Funds alone: the roll shape is what
+ * identifies it, so a config that grows one later is covered without a second edit, and a config
+ * that has none — all five others today — is provably untouched because `withoutAwardHistory`
+ * returns its input unchanged when no run of four year-led lines follows a roll label.
+ */
+function withoutAwardHistoryInRawText(module: SourceModule): SourceModule {
+  const inner = module.parse.bind(module);
+  return {
+    ...module,
+    parse: (payloads) =>
+      inner(payloads).map((raw) =>
+        raw.rawText === undefined ? raw : { ...raw, rawText: withoutAwardHistory(raw.rawText) },
+      ),
+  };
+}
+
 function withCrosscheckTag(module: SourceModule): SourceModule {
   const inner = module.parse.bind(module);
   return {
@@ -246,7 +324,9 @@ function withCrosscheckTag(module: SourceModule): SourceModule {
   };
 }
 
-const [amateur, club, etp, special, program, summary] = CONFIGS.map(makeSinglePageSource);
+const [amateur, club, etp, special, program, summary] = CONFIGS.map(makeSinglePageSource).map(
+  withoutAwardHistoryInRawText,
+);
 
 export const arrlAmateurRadioGrants = amateur;
 export const arrlClubGrant = club;
