@@ -171,7 +171,11 @@ describe('the shipped secret is not a secret, and the server knows it', () => {
     const config = loadConfig({
       ...envEntries,
       SESSION_SECRET: 'f'.repeat(64),
-      CONTACT_URL: 'https://www.example.org/grantspotter',
+      // Was `https://www.example.org/grantspotter` — the string the CONTACT_URL error message
+      // used to offer as its worked example, which this assertion then certified as acceptable.
+      // Both are gone: reserved documentation domains are refused, and the message no longer
+      // hands out an address at all.
+      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
     });
     expect(config.port).toBe(3030);
     expect(config.dataDir).toBe('/data');

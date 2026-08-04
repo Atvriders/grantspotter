@@ -10,7 +10,19 @@ export interface BootstrapState {
   consume(candidate: string): boolean;
 }
 
-function banner(token: string): string {
+/**
+ * The block printed to the container log on a boot with no accounts.
+ *
+ * EXPORTED so `deploy/readme.test.ts` can run the README's own "read the token out of the log"
+ * command against the real thing. The README used to say `grep -A4 'first-run setup'`, which was
+ * true when this array was five lines long and silently stopped printing the token when three
+ * lines were added above it — the failure mode of every fixed-line-count grep. The documented
+ * command now brackets the banner by its delimiters instead of counting, and that test is what
+ * keeps the two in step if this array grows again.
+ *
+ * The first and last lines are the delimiters that command matches. Keep them.
+ */
+export function firstRunBanner(token: string): string {
   return [
     '============================================================',
     ' GrantSpotter first-run setup',
@@ -42,7 +54,7 @@ export function createBootstrapState(
   let token: string | null = null;
   if (userCount() === 0) {
     token = randomBytes(24).toString('hex');
-    log(banner(token));
+    log(firstRunBanner(token));
   }
 
   return {

@@ -35,7 +35,7 @@ export default defineConfig({
       // e2e/seed.ts just wrote. There is no DB-path env var; DATA_DIR is it.
       DATA_DIR,
       SESSION_SECRET: 'e2e-session-secret-not-a-real-secret',
-      CONTACT_URL: 'https://example.com/grantspotter',
+      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
       // No nightly scheduler in the e2e process: the manual crawl button and
       // the injected change_events row are the only things that move data.
       CRAWL_ENABLED: 'false',

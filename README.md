@@ -320,7 +320,9 @@ is no password reset for the first administrator, so store it somewhere you can 
 If you would rather do it over the API:
 
 ```bash
-docker compose logs grantspotter | grep -A4 'first-run setup'
+# Brackets the banner by its own `====` delimiters rather than counting lines: this printed
+# nothing useful for a while, because it was `grep -A4` and the banner had grown past four.
+docker compose logs grantspotter | awk '/GrantSpotter first-run setup/,/====$/'
 curl -X POST http://127.0.0.1:3030/api/auth/bootstrap \
   -H 'content-type: application/json' \
   -d '{"token":"<the token from the log>","email":"you@example.org","password":"<a long passphrase>"}'
@@ -341,6 +343,16 @@ that example file no longer exists. Compose still reads a `.env` beside the comp
 `HOST_PORT` still comes from it — but a literal in `docker-compose.yml` beats it, so the
 `SESSION_SECRET` in your old `.env` is now ignored and the server will refuse to start until you
 paste it into `docker-compose.yml`.
+
+**If you keep your copy of this repository under git — a fork you push — note what that means for
+the file you just pasted a secret into.** `docker-compose.yml` is tracked and is not in
+`.gitignore`; a `git add -A && git push` publishes your session secret, which is the same accident
+the placeholder refusal exists to prevent, arriving from the other direction. Deploying from an
+untracked download, or from a clone you never push, and it does not arise. If it does, the escape
+hatch is the `.env` that is still ignored: change the `SESSION_SECRET:` line so the value is
+interpolated from the environment — written exactly the way the `HOST_PORT` line above it is
+written — and keep the secret in `.env` beside the compose file. That is the two-file arrangement
+this layout was meant to be rid of, so it is the answer for a tracked fork rather than the default.
 
 **CI note:** a freshly created or forked repository sometimes will not run its first push-triggered
 workflow. The build workflow includes `workflow_dispatch` for exactly that case — trigger it once by
@@ -365,12 +377,19 @@ Both required variables fail loudly on startup, and that is deliberate:
 - **`SESSION_SECRET` has no default because a shipped default session secret is a shared secret,
   which is not a secret.** Generate one with `openssl rand -hex 32`. The value in
   `docker-compose.yml` is a placeholder that the server rejects on sight — including if you paste
-  yours *beside* it rather than over it, which is the mistake a hurried operator actually makes.
+  yours *beside* it rather than over it, and including if you delete the `CHANGE_ME_` prefix and
+  leave the rest, which is just as natural an edit and just as published. The rule is that no
+  eight-character run of the shipped placeholder may appear in your value; `openssl rand -hex 32`
+  emits `[0-9a-f]` only and the placeholder's longest all-hex run is two characters, so a secret
+  generated that way can never trip it.
 - **`CONTACT_URL` has no default because an anonymous crawler is one nobody can ask to stop.** It
   goes into the crawler's User-Agent. Most of the ~25 sources this polls are small, volunteer-run
   organisations — club sites, a foundation run by retirees, a scholarship page maintained by one
-  person — and they should be able to see who is polling them and get in touch. Use a page you
-  control, for example `https://www.example.org/grantspotter`.
+  person — and they should be able to see who is polling them and get in touch. Use an `http(s)`
+  page you control and can be reached through. The reserved documentation domains are rejected
+  (`example.com`, `example.net`, `example.org`, and the `.invalid`, `.test` and `.example` TLDs):
+  they exist precisely so that they reach nobody, and a crawler identifying itself with one is
+  anonymous while looking identified.
 
 ---
 

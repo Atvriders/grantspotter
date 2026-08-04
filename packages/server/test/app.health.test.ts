@@ -7,7 +7,7 @@ import { createTestDb, type TestDb } from './helpers/tempDb.js';
 
 const config = loadConfig({
   SESSION_SECRET: 'x'.repeat(32),
-  CONTACT_URL: 'https://example.org/grantspotter',
+  CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
   NODE_ENV: 'test',
 });
 

@@ -25,8 +25,7 @@ grantspotter/
 ├── vitest.workspace.ts
 ├── playwright.config.ts
 ├── Dockerfile
-├── docker-compose.yml
-├── .env.example
+├── docker-compose.yml              # carries the deployment config inline; there is no .env.example
 ├── .github/workflows/build.yml
 ├── packages/
 │   ├── core/                       # PURE. No I/O. No node: imports. No deps but zod.

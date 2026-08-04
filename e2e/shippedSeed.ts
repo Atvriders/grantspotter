@@ -158,7 +158,7 @@ export async function bootShippedServer(options: {
       // The server opens `${DATA_DIR}/grantspotter.sqlite`. There is no DB-path env var.
       DATA_DIR: options.dataDir,
       SESSION_SECRET: 'e2e-shipped-session-secret-not-a-real-secret',
-      CONTACT_URL: 'https://example.com/grantspotter',
+      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
       CRAWL_ENABLED: 'false',
     },
   });

@@ -53,9 +53,12 @@ async function bootAndStop(dataDir: string, port: number): Promise<string> {
       PORT: String(port),
       DATA_DIR: dataDir,
       // No default exists for either of these and none may be added: the server refuses to start
-      // without them. RFC 2606 / example.com, never a real host.
+      // without them. This used to be an example.com contact URL; `loadConfig` refuses the RFC
+      // 2606 documentation domains now, so it is loopback — which is where this process is anyway
+      // and is equally not a stranger's host. The secret names itself as a test value on purpose;
+      // see the reasoning in deploy/compose.test.ts.
       SESSION_SECRET: 'first-run-test-session-secret-not-a-real-secret',
-      CONTACT_URL: 'https://example.com/grantspotter',
+      CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
       // A crawl would reach the network, and would also be the thing that duplicates the corpus
       // if the import were wired in after the scheduler.
       CRAWL_ENABLED: 'false',

@@ -931,7 +931,7 @@ describe('admin backup and restore', () => {
       db: harness,
       config: loadConfig({
         SESSION_SECRET: 'x'.repeat(32),
-        CONTACT_URL: 'https://example.org/grantspotter',
+        CONTACT_URL: 'http://127.0.0.1:3030/grantspotter',
         NODE_ENV: 'test',
       }),
       // The real guards, through the one mount seam: an anonymous caller must be refused by

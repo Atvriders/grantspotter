@@ -59,7 +59,18 @@ function readConfig(): AppConfig {
   } catch (err) {
     if (err instanceof ConfigError) {
       console.error(`[config] ${err.message}`);
-      console.error('[config] Refusing to start. Edit docker-compose.yml.');
+      // Not "Edit docker-compose.yml." full stop. This line prints on EVERY ConfigError, and one
+      // of the two ways this process is started is `npm run dev`, where no compose file is read
+      // and the advice would name a file that has nothing to do with the failure. There is no
+      // reliable way to tell the two apart from inside the process — NODE_ENV, DATA_DIR and PORT
+      // are all set to the same things by a developer as by the image — so the message names the
+      // one thing that is true either way (the environment this process was handed) and then
+      // names where that environment comes from in each case.
+      console.error(
+        '[config] Refusing to start. These values come from the environment this process was ' +
+          'given: the environment: block of docker-compose.yml if you started it with docker ' +
+          'compose, or your shell if you started it with npm run dev.',
+      );
       process.exit(1);
     }
     throw err;
