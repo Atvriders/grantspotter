@@ -1,10 +1,30 @@
 export type ProfileFieldKind = 'student' | 'organization';
 
+/**
+ * What a callsign lookup is allowed to do with this field.
+ *
+ * ABSENT is the third state and the common one: the FCC record has no bearing on the field at all,
+ * and nobody would expect it to (`gpa`, `stage`, `memberCount`). The two states below are for the
+ * fields where the answer is not obvious, and `'refused'` exists because those are exactly the
+ * fields somebody will otherwise fill from something that looks close enough. Carrying the reason
+ * as DATA rather than as a comment is the point: a comment can be deleted by the person who
+ * disagrees with it, and the sentence here is one the editor can show the applicant when they ask
+ * why the lookup left a field blank.
+ */
+export type CallsignFill =
+  | { kind: 'fills' }
+  | { kind: 'refused'; because: string };
+
 export interface ProfileFieldMeta {
   key: string;
   kind: ProfileFieldKind;
   label: string;
   help: string;
+  /**
+   * The registry's half of the rule; `StudentFieldSources`/`OrgFieldSources` in core are the
+   * schema's half, and `profileFields.test.ts` asserts the two agree in both directions.
+   */
+  callsignFill?: CallsignFill;
 }
 
 /**
@@ -34,10 +54,28 @@ export const PROFILE_FIELDS: ProfileFieldMeta[] = [
   // catalog entries carry an INSTITUTION constraint. Every one of the 111 carries a licence one
   // (measured over `data/seed/` by constraint axis). The qualitative claim is what the field
   // actually needs to convey, and it cannot go stale.
-  { key: 'licenseClass', kind: 'student', label: 'License class', help: 'NONE, TECH, GENERAL or EXTRA. These rank in that order, and most awards here gate on it — including every entry in the ARRL scholarship catalog.' },
-  { key: 'licensedSince', kind: 'student', label: 'Licensed since', help: 'The date you were first licensed. Several awards require the licence to be held for a minimum period.' },
-  { key: 'state', kind: 'student', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.' },
-  { key: 'county', kind: 'student', label: 'County', help: 'Some club scholarships name specific counties, for example seven counties around Austin, Texas.' },
+  { key: 'licenseClass', kind: 'student', label: 'License class', help: 'NONE, TECH, GENERAL or EXTRA. These rank in that order, and most awards here gate on it — including every entry in the ARRL scholarship catalog.', callsignFill: { kind: 'fills' } },
+  {
+    key: 'licensedSince', kind: 'student', label: 'Licensed since',
+    help: 'The date you were first licensed. Several awards require the licence to be held for a minimum period.',
+    // The trap this annotation exists to close: the FCC record does carry a date, it is right
+    // beside the licence class, and it is the WRONG date. `licensedSince` feeds `heldMonthsMin`,
+    // so filling it from the grant date would turn a renewal into a confidently wrong ELIGIBLE.
+    callsignFill: {
+      kind: 'refused',
+      because:
+        'The FCC record grants a date, but it is not the date you were first licensed — it resets on every renewal and every vanity callsign change. Only you can say when you were first licensed.',
+    },
+  },
+  { key: 'state', kind: 'student', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.', callsignFill: { kind: 'fills' } },
+  {
+    key: 'county', kind: 'student', label: 'County',
+    help: 'Some club scholarships name specific counties, for example seven counties around Austin, Texas.',
+    callsignFill: {
+      kind: 'refused',
+      because: 'The FCC record carries a mailing city and state, and no county at all.',
+    },
+  },
   { key: 'lat', kind: 'student', label: 'Latitude', help: 'Needed only for radius rules such as "within 250 miles of Seaford, Delaware".' },
   { key: 'lon', kind: 'student', label: 'Longitude', help: 'Needed only for radius rules such as "within 70 miles of Schenectady, New York".' },
   { key: 'callDistrict', kind: 'student', label: 'Call district', help: 'The single digit in your callsign, for example 5 in K5UTD. A few awards are scoped to a call district.' },
@@ -58,9 +96,9 @@ export const PROFILE_FIELDS: ProfileFieldMeta[] = [
   { key: 'gender', kind: 'student', label: 'Gender', help: 'Used by exactly one funder, YLRL, whose awards are for female licensed operators.' },
 
   { key: 'entity', kind: 'organization', label: 'Entity type', help: 'What kind of applicant you are: unincorporated club, 501(c)(3) club, club applying through a fiscal sponsor, school, university, university department, or IEEE Student Branch Chapter.' },
-  { key: 'orgName', kind: 'organization', label: 'Organization name', help: 'The name that will appear on the application.' },
+  { key: 'orgName', kind: 'organization', label: 'Organization name', help: 'The name that will appear on the application.', callsignFill: { kind: 'fills' } },
   { key: 'callsign', kind: 'organization', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.' },
-  { key: 'state', kind: 'organization', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.' },
+  { key: 'state', kind: 'organization', label: 'State', help: 'Two-letter US state. Used for state, ARRL Division and ARRL Section rules — an ARRL Section is an ARRL-defined region that does not line up with state borders, so GrantSpotter resolves it for you.', callsignFill: { kind: 'fills' } },
   { key: 'lat', kind: 'organization', label: 'Latitude', help: 'Needed only for radius rules such as "within 250 miles of Seaford, Delaware".' },
   { key: 'lon', kind: 'organization', label: 'Longitude', help: 'Needed only for radius rules such as "within 70 miles of Schenectady, New York".' },
   { key: 'ein', kind: 'organization', label: 'EIN', help: 'Your federal employer identification number, if you have one.' },
@@ -111,4 +149,32 @@ export function profileFieldHref(key: string, kind?: ProfileFieldKind): string {
   const field = lookup(key, kind);
   if (field === undefined) return '/profile';
   return `/profile?kind=${field.kind}&focus=${field.key}#field-${field.key}`;
+}
+
+/**
+ * The fields of one profile kind a callsign lookup may write, in registry order.
+ *
+ * This is the list the editor iterates when a lookup comes back; every other field it holds is the
+ * applicant's to type. It is asserted equal to `Object.keys(studentFieldSourcesSchema.shape)` —
+ * core's zod mirror, which is what actually decides whether a marker survives a save — so a field
+ * cannot become fillable in the form without becoming storable in the schema, or the reverse.
+ */
+export function callsignFillableFields(kind: ProfileFieldKind): string[] {
+  return PROFILE_FIELDS.filter((f) => f.kind === kind && f.callsignFill?.kind === 'fills').map(
+    (f) => f.key,
+  );
+}
+
+/**
+ * Why a lookup will never fill this field — a sentence to show the applicant, or `undefined` when
+ * there is nothing to explain.
+ *
+ * Only the fields somebody would reasonably expect a lookup to fill carry one. Silence here means
+ * "the FCC record has nothing to do with this", not "we have not thought about it": the fields
+ * where the record holds something adjacent and wrong are annotated, and `profileFields.test.ts`
+ * pins which ones those are.
+ */
+export function callsignFillRefusal(key: string, kind?: ProfileFieldKind): string | undefined {
+  const fill = lookup(key, kind)?.callsignFill;
+  return fill?.kind === 'refused' ? fill.because : undefined;
 }

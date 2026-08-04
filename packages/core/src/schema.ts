@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import type { Constraint, Cycle, Funder, Profile, Program } from './types.js';
+import type {
+  Constraint,
+  Cycle,
+  Funder,
+  Profile,
+  ProfileFieldSource,
+  Program,
+} from './types.js';
 
 export const licenseClassSchema = z.enum(['NONE', 'TECH', 'GENERAL', 'EXTRA']);
 export const degreeLevelSchema = z.enum(['CERT', 'ASSOC', 'BACH', 'GRAD']);
@@ -338,6 +345,42 @@ export const programSchema = z.object({
   tags: z.array(z.string()),
 });
 
+/**
+ * The profile-side provenance marker. See the `ProfileFieldSource` doc comment in types.ts for why
+ * it stores the filled VALUE rather than a bare "was auto-filled" flag.
+ *
+ * `source` is a literal, not a free string: it is rendered to the applicant as the name of who
+ * said so, and an unvalidated one would let a client store any attribution it liked under a key a
+ * later reader trusts. A second source is a `z.union` of two literals, added deliberately.
+ */
+export const profileFieldSourceSchema = z.object({
+  source: z.literal('callook.info'),
+  fetchedAt: z.string(),
+  value: z.string(),
+});
+
+/**
+ * WHICH fields a lookup may be recorded as having filled — enforced by the shape of the object,
+ * not by a comment or a runtime allowlist.
+ *
+ * `z.object` strips every key it does not declare, exactly as `programSchema` does for the rest of
+ * the profile (see the note in `api/profileRouter.ts` on persisting `parsed.data` rather than
+ * `req.body`). So a client that posts `fieldSources: { licensedSince: … }` or
+ * `fieldSources: { gpa: … }` does not get it stored: `licensedSince` cannot be honestly derived
+ * from an FCC record at all, and no lookup supplies a GPA. The two spellings differ by profile
+ * kind because the source's answer does — a club record has an organisation name and an empty
+ * operator class.
+ */
+export const studentFieldSourcesSchema = z.object({
+  licenseClass: profileFieldSourceSchema.optional(),
+  state: profileFieldSourceSchema.optional(),
+});
+
+export const orgFieldSourcesSchema = z.object({
+  orgName: profileFieldSourceSchema.optional(),
+  state: profileFieldSourceSchema.optional(),
+});
+
 export const studentProfileSchema = z.object({
   kind: z.literal('student'),
   callsign: z.string().optional(),
@@ -363,6 +406,7 @@ export const studentProfileSchema = z.object({
   cwWpm: z.number().optional(),
   financialNeed: z.boolean().optional(),
   gender: z.enum(['female', 'male', 'other', 'prefer_not_to_say']).optional(),
+  fieldSources: studentFieldSourcesSchema.optional(),
 });
 
 export const orgProfileSchema = z.object({
@@ -379,6 +423,7 @@ export const orgProfileSchema = z.object({
   arrlAffiliated: z.boolean().optional(),
   memberCount: z.number().optional(),
   institutionName: z.string().optional(),
+  fieldSources: orgFieldSourcesSchema.optional(),
 });
 
 export const profileSchema = z.discriminatedUnion('kind', [
@@ -397,6 +442,13 @@ const _constraintIsInferredConstraint: z.infer<typeof constraintSchema> =
   null as unknown as Constraint;
 const _inferredProfileIsProfile: Profile = null as unknown as z.infer<typeof profileSchema>;
 const _profileIsInferredProfile: z.infer<typeof profileSchema> = null as unknown as Profile;
+// The per-kind maps are covered transitively by the `Profile` pair above; the leaf gets its own so
+// that a drifted marker fails to compile HERE, naming itself, rather than as a mismatch buried
+// three levels inside a discriminated union.
+const _inferredFieldSourceIsFieldSource: ProfileFieldSource =
+  null as unknown as z.infer<typeof profileFieldSourceSchema>;
+const _fieldSourceIsInferredFieldSource: z.infer<typeof profileFieldSourceSchema> =
+  null as unknown as ProfileFieldSource;
 const _inferredCycleIsCycle: Cycle = null as unknown as z.infer<typeof cycleSchema>;
 const _cycleIsInferredCycle: z.infer<typeof cycleSchema> = null as unknown as Cycle;
 const _inferredFunderIsFunder: Funder = null as unknown as z.infer<typeof funderSchema>;
@@ -407,6 +459,8 @@ void _inferredConstraintIsConstraint;
 void _constraintIsInferredConstraint;
 void _inferredProfileIsProfile;
 void _profileIsInferredProfile;
+void _inferredFieldSourceIsFieldSource;
+void _fieldSourceIsInferredFieldSource;
 void _inferredCycleIsCycle;
 void _cycleIsInferredCycle;
 void _inferredFunderIsFunder;

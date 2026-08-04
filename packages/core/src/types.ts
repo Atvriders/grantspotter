@@ -290,6 +290,112 @@ export interface Program {
 }
 
 // ---------- profiles ----------
+
+/**
+ * A value this tool FETCHED and wrote into a profile field, with the source that stated it and the
+ * moment it was read.
+ *
+ * The product's whole premise is that a value it derived is never indistinguishable from a value
+ * somebody stated. `field_provenance` already does that job for programs, but it is `program_id`
+ * -keyed and says nothing about a profile — so without this type a licence class a lookup wrote is
+ * stored in exactly the same shape as one the applicant typed, and nothing downstream can tell
+ * them apart. That is the same silence-as-assertion defect as `costShareRequired` defaulting to
+ * `false`, pointed the other way: the profile is what the matcher reasons over, and "the applicant
+ * told us they are a General" carries a confidence that "callook.info said so on 4 August, and
+ * nobody has checked it" does not.
+ *
+ * `value` is what makes the marker self-invalidating, and it is the reason this is not a bare
+ * boolean flag. A flag has to be CLEARED by whichever code path edits the field, and a path that
+ * forgets leaves a "from the FCC record" badge sitting on a value the user typed over it — the
+ * precise misattribution this exists to prevent. Holding the filled value instead means an edit
+ * invalidates the marker by arithmetic rather than by remembering: see {@link profileValueOrigin}.
+ * It is the same device as `FactConfirmation.fingerprint` in `server/src/prose/facts.ts`, which
+ * drops a stored confirmation when the text under it changes.
+ */
+export interface ProfileFieldSource {
+  /** The only lookup source that exists today. A second one is an added member, not a rewrite. */
+  source: 'callook.info';
+  /** ISO. When the source was read — NOT when the record was granted or last updated. */
+  fetchedAt: string;
+  /**
+   * The value written into the field, exactly as it was stored. The marker describes the field
+   * only while the field still holds it.
+   */
+  value: string;
+}
+
+/**
+ * WHERE the value now in a profile field came from — with the case where there is no value.
+ *
+ * `'typed'` is not a weaker `'looked_up'`: it is the applicant's own assertion, which is the
+ * strongest thing this tool ever holds. `'looked_up'` means a source said it and nobody has
+ * confirmed it, which is what a renderer must be able to say out loud.
+ */
+export type ProfileValueOrigin = 'typed' | 'looked_up' | 'unset';
+
+/**
+ * The ONLY sanctioned way to read a profile field's provenance. Renderers, exporters and the
+ * profile editor call this instead of testing the marker's presence, because
+ * `if (profile.fieldSources?.state)` reports "filled from callook.info" for a value the applicant
+ * has since typed over — a fetched-value badge on a stated value, which is the one mistake this
+ * product refuses.
+ *
+ * A `switch` on the returned union is exhaustiveness-checked by tsc, so a consumer that forgets an
+ * arm fails to compile rather than shipping the wrong attribution.
+ */
+export function profileValueOrigin(
+  value: unknown,
+  source: ProfileFieldSource | undefined,
+): ProfileValueOrigin {
+  if (value === undefined || value === null) return 'unset';
+  if (source === undefined) return 'typed';
+  // An edit makes the value the applicant's. Equality against the filled value is what makes that
+  // true without any code path having to remember to clear the marker.
+  return source.value === String(value) ? 'looked_up' : 'typed';
+}
+
+/**
+ * WHICH profile fields a callsign lookup may fill, encoded as the shape of a type rather than as a
+ * list somebody has to keep in step.
+ *
+ * A student's licence class and state are the only two the FCC record can support. Two absences
+ * are load-bearing, and both are traps somebody will otherwise walk into:
+ *   - `licensedSince` is NOT here. callook's `grantDate` resets on every renewal and every vanity
+ *     change, so it is not "date first licensed" — and `licensedSince` feeds `heldMonthsMin` in
+ *     the matcher, where a wrong value produces a confidently wrong ELIGIBLE.
+ *   - `county` is NOT here. The record carries a city and a state and no county at all.
+ * `callDistrict` is absent for a third reason: it is DERIVED from the callsign by
+ * `callDistrictFromCallsign`, so attributing it to callook.info would credit a source for this
+ * tool's own arithmetic.
+ */
+export interface StudentFieldSources {
+  licenseClass?: ProfileFieldSource;
+  state?: ProfileFieldSource;
+}
+
+/**
+ * The organisation half. A club station's record has an ORGANISATION NAME and an EMPTY operator
+ * class — a collegiate club station is exactly that shape — so `orgName` is fillable here and
+ * there is no licence class to fill.
+ */
+export interface OrgFieldSources {
+  orgName?: ProfileFieldSource;
+  state?: ProfileFieldSource;
+}
+
+/**
+ * Keys of a stored profile that are NOT fields an applicant fills in: the discriminant, and the
+ * provenance map that describes the other keys.
+ *
+ * Exported because `web/src/lib/profileFields.test.ts` asserts the profile-field registry against
+ * `Object.keys(studentProfileSchema.shape)` in BOTH directions — a field added to the contract
+ * must arrive in the registry with a label and a help sentence, and a registry entry naming a
+ * field that no longer exists must fail. That assertion needs to know which keys are not fields,
+ * and a `k !== 'kind'` in the test file is a second place for that answer to live. Anything added
+ * here is invisible to the registry check, so `profileProvenance.test.ts` pins the list.
+ */
+export const PROFILE_NON_FIELD_KEYS = ['kind', 'fieldSources'] as const;
+
 export interface StudentProfile {
   kind: 'student';
   callsign?: string;
@@ -315,6 +421,8 @@ export interface StudentProfile {
   cwWpm?: number;
   financialNeed?: boolean;
   gender?: 'female' | 'male' | 'other' | 'prefer_not_to_say';
+  /** Read it with {@link profileFieldOrigin}, never by testing a key's presence. */
+  fieldSources?: StudentFieldSources;
 }
 
 export interface OrgProfile {
@@ -331,9 +439,64 @@ export interface OrgProfile {
   arrlAffiliated?: boolean;
   memberCount?: number;
   institutionName?: string;
+  /** Read it with {@link profileFieldOrigin}, never by testing a key's presence. */
+  fieldSources?: OrgFieldSources;
 }
 
 export type Profile = StudentProfile | OrgProfile;
+
+/**
+ * `profileValueOrigin` for a field of a whole profile — what a renderer actually holds.
+ *
+ * `field` is a plain string because callers pass the matcher's own `missingProfileFields` names
+ * and the profile-field registry's keys, neither of which is typed per profile kind. A field that
+ * cannot carry a marker at all (`gpa`, `callDistrict`, `licensedSince`) answers `'typed'` whenever
+ * it holds a value, which is the truth: nothing but the applicant can have put it there.
+ */
+export function profileFieldOrigin(profile: Profile, field: string): ProfileValueOrigin {
+  // One cast, here, rather than at every call site: `Profile` is a union of interfaces, and an
+  // interface gets no index signature, so neither half can be read by a computed key without it.
+  const record = profile as unknown as {
+    [key: string]: unknown;
+    fieldSources?: Record<string, ProfileFieldSource | undefined>;
+  };
+  return profileValueOrigin(record[field], record.fieldSources?.[field]);
+}
+
+/**
+ * The profile as it should be STORED: every marker that no longer describes the value beside it is
+ * dropped.
+ *
+ * {@link profileValueOrigin} already makes a stale marker inert to anything that reads it
+ * correctly, so this is the second half of the same guarantee rather than the first — it stops a
+ * marker for a value the applicant typed over from sitting in the database, where the next reader
+ * (a report, an export, a migration, a future agent's `if (fieldSources.state)`) has to be trusted
+ * to discount it. A marker whose field is empty goes too: provenance for a value that is not there
+ * describes nothing.
+ *
+ * Call it on the way IN to storage, not on the way out — dropping it on read would leave the
+ * stored record disagreeing with every rendering of it.
+ */
+export function pruneFieldSources(profile: Profile): Profile {
+  const record = profile as unknown as {
+    [key: string]: unknown;
+    fieldSources?: Record<string, ProfileFieldSource | undefined>;
+  };
+  if (record.fieldSources === undefined) return profile;
+
+  const kept: Record<string, ProfileFieldSource> = {};
+  for (const [field, source] of Object.entries(record.fieldSources)) {
+    if (source === undefined) continue;
+    if (profileValueOrigin(record[field], source) === 'looked_up') kept[field] = source;
+  }
+
+  const next: Record<string, unknown> = { ...record };
+  // An empty map is deleted rather than stored as `{}`: "no field was filled by a lookup" and
+  // "this profile predates provenance" are the same statement, and they should serialise the same.
+  if (Object.keys(kept).length === 0) delete next.fieldSources;
+  else next.fieldSources = kept;
+  return next as unknown as Profile;
+}
 
 // ---------- matcher ----------
 export type Verdict =

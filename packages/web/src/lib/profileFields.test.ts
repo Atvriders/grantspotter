@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { orgProfileSchema, studentProfileSchema } from '@grantspotter/core';
 import {
+  orgFieldSourcesSchema,
+  orgProfileSchema,
+  PROFILE_NON_FIELD_KEYS,
+  studentFieldSourcesSchema,
+  studentProfileSchema,
+} from '@grantspotter/core';
+import {
+  callsignFillableFields,
+  callsignFillRefusal,
   PROFILE_FIELDS,
   profileFieldHelp,
   profileFieldHref,
@@ -17,9 +25,20 @@ import {
  * registry carries a label and a help sentence for it, and a registry entry naming a field that
  * no longer exists fails too.
  */
+/**
+ * `PROFILE_NON_FIELD_KEYS` rather than a local `k !== 'kind'`: the exclusion list is core's, and it
+ * is pinned to exactly two entries by `core/test/profileProvenance.test.ts`, so this assertion
+ * cannot be widened from here. `kind` is the discriminant; `fieldSources` is the provenance map,
+ * which describes the other keys instead of being one of them — it has no input in the editor, no
+ * label and no help sentence, and the matcher can never report it as a missing profile field.
+ */
 const SCHEMA_KEYS = {
-  student: Object.keys(studentProfileSchema.shape).filter((k) => k !== 'kind'),
-  organization: Object.keys(orgProfileSchema.shape).filter((k) => k !== 'kind'),
+  student: Object.keys(studentProfileSchema.shape).filter(
+    (k) => !(PROFILE_NON_FIELD_KEYS as readonly string[]).includes(k),
+  ),
+  organization: Object.keys(orgProfileSchema.shape).filter(
+    (k) => !(PROFILE_NON_FIELD_KEYS as readonly string[]).includes(k),
+  ),
 } as const;
 
 describe('profile field registry', () => {
@@ -116,5 +135,96 @@ describe('profile field registry', () => {
 
   it('exposes help text for a registered field', () => {
     expect(profileFieldHelp('gpa')).toMatch(/2\.5/);
+  });
+});
+
+/**
+ * WHICH fields a callsign lookup may fill is a fact with two homes — this registry, which the
+ * editor reads, and `StudentFieldSources`/`OrgFieldSources` in core, which is what actually
+ * decides whether a marker survives a save. A field that is fillable in the form but not in the
+ * schema loses its provenance silently at the next PUT, and the applicant is left with a fetched
+ * value that reads exactly like one they typed. So the two are asserted equal in both directions,
+ * the same way the registry itself is asserted against the profile schemas above.
+ */
+const FILLABLE_BY_SCHEMA = {
+  student: Object.keys(studentFieldSourcesSchema.shape),
+  organization: Object.keys(orgFieldSourcesSchema.shape),
+} as const;
+
+describe('what a callsign lookup may fill', () => {
+  it.each(['student', 'organization'] as const)(
+    'agrees with core about the %s fields — no gaps, no ghosts',
+    (kind) => {
+      expect(callsignFillableFields(kind).sort()).toEqual([...FILLABLE_BY_SCHEMA[kind]].sort());
+    },
+  );
+
+  it('is exactly the three things an FCC record can supply, split by profile kind', () => {
+    // The licensee NAME (a club record's name IS the organisation name), the operator CLASS, and
+    // the STATE. Written out rather than derived, because this is the claim under review: if a
+    // fourth key appears here, somebody has decided the FCC record supports something new, and
+    // that decision should be visible in a diff.
+    expect(callsignFillableFields('student')).toEqual(['licenseClass', 'state']);
+    expect(callsignFillableFields('organization')).toEqual(['orgName', 'state']);
+  });
+
+  it('never offers to fill the two fields the record cannot honestly support', () => {
+    expect(callsignFillableFields('student')).not.toContain('licensedSince');
+    expect(callsignFillableFields('student')).not.toContain('county');
+
+    // And says why, in words an applicant can read — a comment would not survive the next person
+    // who notices that the record does carry a date.
+    expect(callsignFillRefusal('licensedSince')).toMatch(/renewal/i);
+    expect(callsignFillRefusal('licensedSince')).toMatch(/vanity/i);
+    expect(callsignFillRefusal('county')).toMatch(/no county/i);
+  });
+
+  it('leaves a field the record has nothing to do with unannotated rather than refused', () => {
+    // Silence is the third state. Annotating `gpa` would say the question had been considered and
+    // answered, which would make the annotations on `licensedSince` and `county` ordinary rather
+    // than pointed.
+    expect(callsignFillRefusal('gpa')).toBeUndefined();
+    expect(callsignFillRefusal('memberCount')).toBeUndefined();
+    expect(callsignFillRefusal('somethingNew')).toBeUndefined();
+  });
+
+  it('can record every fillable value as the string a marker holds', () => {
+    // `ProfileFieldSource.value` is a string, and comparing it to the stored value is what makes
+    // an edit clear the marker. A number-, boolean- or array-valued field could not be compared
+    // that way, so no such field may be fillable.
+    for (const [kind, schema] of [
+      ['student', studentProfileSchema],
+      ['organization', orgProfileSchema],
+    ] as const) {
+      for (const key of callsignFillableFields(kind)) {
+        const field = (schema.shape as Record<string, { safeParse(v: unknown): { success: boolean } }>)[key];
+        expect(field, `${kind}.${key} is not a field of the profile schema`).toBeDefined();
+        for (const notAString of [1, true, ['a'], { a: 1 }]) {
+          expect(
+            field?.safeParse(notAString).success,
+            `${kind}.${key} accepts ${JSON.stringify(notAString)}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('gives a field held by both kinds the same answer, so a lookup by key alone cannot mislead', () => {
+    // Same reason the label and help text must match: Tasks 18 and 22 look entries up by key
+    // alone. A `state` that fills for a student and refuses for an organisation would answer
+    // whichever kind happened to be listed first.
+    for (const key of ['state', 'lat', 'lon', 'callsign']) {
+      const entries = PROFILE_FIELDS.filter((f) => f.key === key);
+      expect(new Set(entries.map((f) => JSON.stringify(f.callsignFill ?? null))).size, key).toBe(1);
+    }
+  });
+
+  it('never marks a field both fillable and refused', () => {
+    for (const field of PROFILE_FIELDS) {
+      if (field.callsignFill?.kind !== 'refused') continue;
+      expect(field.callsignFill.because.length, `${field.key} refuses without a reason`)
+        .toBeGreaterThan(20);
+      expect(callsignFillableFields(field.kind)).not.toContain(field.key);
+    }
   });
 });
