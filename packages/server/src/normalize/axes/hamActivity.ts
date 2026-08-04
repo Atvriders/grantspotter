@@ -1,5 +1,5 @@
 import type { ActivityKind, Constraint, RawOpportunity } from '@grantspotter/core';
-import { candidateTexts, firstClause } from './clauses.js';
+import { candidateTexts, firstClause, splitClauses } from './clauses.js';
 import { makeConstraint } from './preference.js';
 
 const CW_WPM = /\b(\d{1,3})\s*(?:wpm|words per minute)\b/i;
@@ -100,10 +100,84 @@ export function withoutSiteChrome(text: string): string {
   return lines.filter((_, i) => keep[i]).join('\n');
 }
 
-export function extractHamActivity(raw: RawOpportunity): Constraint[] {
+/**
+ * AN UNLABELLED PAGE IS NOT AN ELIGIBILITY FIELD.
+ *
+ * `withoutSiteChrome` removes the MENU. It cannot remove the rest of a marketing page, because
+ * marketing prose is punctuated exactly like eligibility prose. The Austin Amateur Radio Club is
+ * the case: austinhams.org/scholarships/ files no `Other` and no `eligibility`, so this axis was
+ * handed the whole flattened page, and the only clause on it that matched any kind was the HERO
+ * STRAPLINE under the headline —
+ *
+ *     "Supporting Central Texas students who are building the future of technology, public
+ *      service, and community."
+ *
+ * — which published `activityKinds: ["public_service"]` as a HARD bar. `spec.activityKinds` is an
+ * allow-list, so that one strapline excluded ALL FIVE individual profiles from a club scholarship
+ * whose own "Who can apply" section says "Students pursuing higher education or skilled trades".
+ * The club states no amateur-radio activity requirement anywhere on the page; the phrase occurs
+ * three more times and every occurrence is a coordinate item in a list of STUDY FIELDS or civic
+ * abstractions ("engineering, computer science, public service, healthcare, and more"), never
+ * something the applicant must have done.
+ *
+ * WHY THE OBVIOUS RULES ALL FAILED, and what separates this from the one it kept breaking. A
+ * previous round tried to characterise the TEXT — "this is a list, not a requirement", "this
+ * sentence is about the funder" — and every such rule also swallowed the ARDC Scholarships'
+ *
+ *     "Examples: membership in a local or regional club, participation in amateur radio emergency
+ *      activities, teaching amateur radio classes, on-the-air activities, …"
+ *
+ * which is a genuine, funder-stated list of acceptable proof on the largest programme in the
+ * corpus, and is ALSO a comma-separated list with no modal verb in it. Lexically the two are the
+ * same shape. They differ in PROVENANCE:
+ *
+ *   - ARDC's sentence is the value of the ARRL catalogue's `Other:` field — a field whose whole
+ *     purpose is "the additional things this funder requires of you". Everything in it is
+ *     eligibility text by construction, whatever its grammar.
+ *   - Austin ARC's strapline came from `candidateTexts`' LAST-RESORT fallback to `raw.rawText`,
+ *     which for a source filing no eligibility field is the entire flattened page: masthead, hero,
+ *     brochure copy, how-to-apply steps and footer. Nothing in that blob is labelled as anything.
+ *
+ * So the rule is scoped by provenance, not by wording. When the funder labelled the field, every
+ * clause in it is read exactly as before — ARDC, CARA, CWops, MARCO, York, MMARSI and YASME are
+ * untouched by this, by construction. When there is NO labelled field and this axis is reading a
+ * whole page, a clause may contribute a kind only if it ASSERTS SOMETHING OF THE APPLICANT: it
+ * carries an obligation or an eligibility verdict. "Applicant must show proof of on-the-air
+ * activity." does; "Supporting Central Texas students who are building the future of technology,
+ * public service, and community." does not, and neither does any other clause on that page.
+ *
+ * This is not a blanket "ignore rawText" — that would lose YLRL-shaped pages, whose real
+ * requirements are bullets in exactly this position and which say "Applicant must …". It is the
+ * same judgement `ageStage.ts` already makes with FOREIGN_LABEL: an axis may only read out of a
+ * surface that is actually about its question.
+ *
+ * DIRECTION OF ERROR. On an allow-list axis, dropping a kind WIDENS who qualifies. A clause this
+ * gate wrongly rejects costs an applicant a requirement they will read on the funder's page
+ * anyway; a clause it wrongly accepts hides the award from them with no signal at all. That
+ * asymmetry is why the gate is deliberately strict on the unlabelled surface and does not exist
+ * on the labelled one.
+ */
+const APPLICANT_REQUIREMENT =
+  /\b(?:must|shall|requir\w*|eligib\w*|qualif\w*|prerequisite)\b|\bopen (?:only )?to\b|\bapplicants?\s+(?:should|need|needs)\b/i;
+
+/**
+ * The text this axis is allowed to read a kind out of, chrome already removed. Labelled fields are
+ * returned whole (the funder said these are the rules); a whole-page fallback is returned as the
+ * subset of its clauses that state a rule.
+ */
+function eligibilityTexts(raw: RawOpportunity): string[] {
+  const labelled = [raw.rawFields.Other, raw.rawFields.eligibility].some(
+    (f) => typeof f === 'string' && f.trim() !== '',
+  );
   const candidates = candidateTexts([raw.rawFields.Other, raw.rawFields.eligibility], raw.rawText)
     .map(withoutSiteChrome)
     .filter((t) => t.trim() !== '');
+  if (labelled) return candidates;
+  return candidates.flatMap(splitClauses).filter((c) => APPLICANT_REQUIREMENT.test(c));
+}
+
+export function extractHamActivity(raw: RawOpportunity): Constraint[] {
+  const candidates = eligibilityTexts(raw);
   const text = candidates.join('\n');
   const activityKinds = KIND_PATTERNS.filter(([, re]) => re.test(text)).map(([kind]) => kind);
   const cw = CW_WPM.exec(text);

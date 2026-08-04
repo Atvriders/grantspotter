@@ -533,16 +533,68 @@ describe('the licence detector actually sees the class', () => {
     expect(licenceFloorOf(base)).toBeUndefined();
   });
 
+  /**
+   * THE VACUITY GUARD — and why it is no longer a number somebody has to lower.
+   *
+   * This assertion was `expect(programs.length).toBeGreaterThan(150)`, then `>140`. Both were the
+   * same instrument: a hand-set floor under the total record count. During this plan alone that
+   * total went 178 → 742 → 197 → 152 → 149 as real fixtures landed, as `do_not_publish` was
+   * applied to the loader, and as the adjacency gate beside it was applied too. Not one of those
+   * moves was a defect, and EVERY one of them moved the number DOWN, so every one of them ended in
+   * an edit to this line. A threshold that is only ever lowered converges on asserting nothing —
+   * which is precisely the trap `NO_FLOOR_KNOWN_DEFECTS` above documents, where an entry marked
+   * "known defect" was simultaneously propping up a metric somebody was reading as evidence.
+   *
+   * It is also the wrong INSTRUMENT for the thing it guards. What would make RULE A and RULE B
+   * vacuous is a source that silently stops producing records: a moved fixture, a parser that
+   * throws, a `requests()` list that no longer lines up with the captured files. The ARRL
+   * Foundation catalogue is 111 of the 149, so EVERY other source in the registry could go
+   * completely silent and a total-count threshold would never notice — the total stays
+   * comfortably above any figure a reviewer would dare set. The count cannot see the failure it
+   * was written to catch.
+   *
+   * So the guard now asserts the SHAPE of the load instead, and every claim is scale-free:
+   *
+   *   1. NO LOADED SOURCE IS SILENT. `loadCorpus` already accounts for all three fates of a
+   *      normalized record — published, `do_not_publish`-suppressed, adjacency-gated — so
+   *      "produced nothing at all" is expressible without a single magic number, per source. This
+   *      is the assertion that actually fails when a fixture moves or a parser breaks, and it does
+   *      not move when a funder adds or removes awards.
+   *   2. THE LOADER REALLY WALKED THE REGISTRY, rather than returning an empty plan that would
+   *      make claim 1 pass over an empty list. Stated as a source COUNT, which changes only when
+   *      somebody deliberately adds or removes a source module — never as data drifts.
+   *   3. THE POPULATION RULE B SCANS IS REAL, stated against the size of this file's own
+   *      allow-list: reviewed exceptions must stay a small minority of individual-facing programs.
+   *      It rescales itself if the allow-list ever legitimately grows.
+   *   4. THE PREDICATE IS NOT BLIND, stated as a SHARE of that population rather than as a count.
+   *      A corpus that doubles or halves passes unchanged; `licenceFloorOf` losing the axis, or
+   *      `preference.ts` re-softening every floor, collapses it.
+   *
+   * A genuinely empty or collapsed load fails all four at once. Proven by deliberate break: with
+   * `loadCorpus` returning no programs, claims 1–4 fail together and name the empty load.
+   */
   it('reads a corpus that is actually populated, and finds licence floors in it', async () => {
-    const { programs } = await corpus();
-    // Was >150. The publishable corpus is 149 since close-out review B8: ardc-grants' three
-    // records were "2025 Grants"/"2026 Grants"/a funded project — pages of grants already made,
-    // now recordType past_award and suppressed like every other award history.
-    expect(programs.length).toBeGreaterThan(140);
+    const { programs, loaded } = await corpus();
+
+    // 1 — every source that loaded produced at least one record, on any of its three fates.
+    const silent = loaded
+      .filter((e) => e.programs + e.suppressed + e.belowAdjacency === 0)
+      .map((e) => e.sourceId)
+      .sort();
+    expect(silent).toEqual([]);
+
+    // 2 — and there were sources to be silent about. `SOURCES` holds 26 modules today; this is a
+    // deliberate-change tripwire, not a data threshold.
+    expect(loaded.length).toBeGreaterThanOrEqual(20);
+
+    // 3 — RULE B's population dwarfs the reviewed exceptions it is allowed to skip.
+    const individual = programs.filter((p) => p.applicantEntities.includes('individual'));
+    expect(individual.length).toBeGreaterThan(ALLOWED.size * 4);
+
+    // 4 — and the floors are found. A share, not a count: the ARRL catalogue supplies most of
+    // them, and every catalogue entry but North Fulton carries one.
     const withFloor = programs.filter((p) => licenceFloorOf(p) !== undefined);
-    // The ARRL catalog alone contributes over a hundred; a corpus that stopped parsing, or a
-    // predicate that stopped recognising the axis, would collapse this to nothing.
-    expect(withFloor.length).toBeGreaterThan(100);
+    expect(withFloor.length).toBeGreaterThan(individual.length / 2);
     expect(new Set(withFloor.map((p) => licenceFloorOf(p)))).toEqual(new Set(['TECH', 'GENERAL']));
   });
 

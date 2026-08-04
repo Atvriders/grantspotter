@@ -256,10 +256,7 @@ describe('no ham-activity bar in this corpus is read off site chrome', () => {
   });
 
   /**
-   * The eight programmes B4 named, pinned by name and outcome. Five lose the constraint outright
-   * (it was chrome end to end); three keep a narrowed one read from real page prose — and those
-   * remainders are a DIFFERENT defect (prose that mentions an activity without requiring it of
-   * the applicant), tracked, not fixed here.
+   * The eight programmes B4 named, pinned by name and outcome.
    */
   it('pins the eight programmes whose activity kinds came off a menu', async () => {
     const { programs } = await corpus();
@@ -274,9 +271,112 @@ describe('no ham-activity bar in this corpus is read off site chrome', () => {
     expect(kindsFor('arrl-scholarship-program::scholarship-program')).toEqual([]);
     expect(kindsFor('ieee-student-branch-rebate::ieee-student-branch-rebate')).toEqual([]);
     expect(kindsFor('ylrl::ylrl-scholarships')).toEqual([]);
-    // Narrowed to what the page's own prose says, with the menu gone.
-    expect(kindsFor('arrl-etp-grants::etp-grants')).toEqual([['teaching', 'public_service']]);
+    // …and the three that survived the menu rule with a kind read from page PROSE. That remainder
+    // was a second defect — prose that MENTIONS an activity without requiring it of the applicant —
+    // and `eligibilityTexts` is the fix for it. Austin ARC loses its bar entirely (see below);
+    // arrl.org's mega-footer link "Public Service Resources / Public Service Honor Roll" stops
+    // being an ETP requirement; the ARRL Foundation Special Funds' `club_member` survives because
+    // the page's award-history roll ("Winners: 2008 Larry Scheff, W4QEJ, for …") interleaves
+    // punctuated lines and never stands four label-shaped lines deep. It is org-facing and
+    // tracked, not fixed here.
+    expect(kindsFor('arrl-etp-grants::etp-grants')).toEqual([['teaching']]);
     expect(kindsFor('arrl-foundation-special-funds::foundation-special-funds')).toEqual([['club_member']]);
-    expect(kindsFor('austin-arc::austin-arc-scholarships')).toEqual([['public_service']]);
+    expect(kindsFor('austin-arc::austin-arc-scholarships')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------- provenance
+
+/**
+ * AUSTIN ARC vs ARDC — the pair that defeated the previous round.
+ *
+ * Both texts are comma-separated lists with no modal verb in them, so no rule about the WORDING
+ * separates them. They differ in where they came from: ARDC's is the value of the ARRL catalogue's
+ * `Other:` field, which by construction holds what the funder requires; Austin ARC's is the hero
+ * strapline of a page that files no eligibility field at all, reached only through
+ * `candidateTexts`' last-resort fallback to the whole flattened page.
+ */
+describe('an unlabelled page is not an eligibility field', () => {
+  it('Austin ARC states its counties and asks for references — and bars nobody on activity', async () => {
+    const { programs } = await corpus();
+    const austin = programs.find((p) => keyOf(p) === 'austin-arc::austin-arc-scholarships');
+    if (austin === undefined) throw new Error('austin-arc-scholarships is missing from the corpus');
+    // The funder's whole published rule set, from the real capture of austinhams.org/scholarships/.
+    // No ham_activity constraint appears, because the club states no activity requirement anywhere.
+    expect(
+      austin.constraints.map((c) => ({ axis: c.spec.axis, hard: c.hard, spec: c.spec })),
+    ).toEqual([
+      {
+        axis: 'geography',
+        hard: true,
+        spec: {
+          axis: 'geography',
+          geo: {
+            type: 'county',
+            values: ['Travis', 'Bastrop', 'Blanco', 'Burnet', 'Caldwell', 'Hays', 'Williamson'],
+          },
+        },
+      },
+      {
+        axis: 'recommendation',
+        hard: true,
+        spec: { axis: 'recommendation', recommenderType: 'any', count: 1 },
+      },
+    ]);
+    // No individual profile is barred on this axis any more. A recommendation constraint changes
+    // no verdict, and the county rule leaves an applicant who has not stated a county UNKNOWN —
+    // "we cannot tell without your county", which is the honest answer — rather than excluded.
+    expect(activityOf(austin)).toEqual([]);
+    expect(matchProgram(licensedFemale, austin, NOW).kind).toBe('unknown');
+  });
+
+  it('reads the strapline and the field-of-study list off the page and keeps neither', () => {
+    // Verbatim from fixtures/austin-arc/. Four occurrences of "public service" on one page, none
+    // of them a requirement: a hero strapline, two brochure sentences, and the "Who can apply"
+    // list of STUDY FIELDS. The first was published as `activityKinds: ["public_service"]`, which
+    // on an allow-list axis barred every individual applicant.
+    const page = [
+      'Investing in the Next Generation',
+      'Club Scholarships',
+      'Supporting Central Texas students who are building the future of technology, public service, and community.',
+      'Apply Now →',
+      'Eligibility & Dates',
+      'Amateur Radio develops practical skills that extend far beyond the radio itself — including',
+      'engineering, problem solving, emergency communications, public service, leadership, and lifelong',
+      'learning.',
+      'Who can apply',
+      'Students pursuing higher education or skilled trades — engineering, computer science,',
+      'public service, healthcare, and more.',
+    ].join('\n');
+    expect(extractHamActivity(raw({}, page))).toEqual([]);
+    // …and the same page with a real requirement on it still produces one. The gate is about
+    // whether a clause states a rule, not about which page it is on.
+    const withRequirement = `${page}\nApplicants must be active in a local radio club.`;
+    const cs = extractHamActivity(raw({}, withRequirement));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].spec).toMatchObject({ activityKinds: ['club_member'] });
+    expect(cs[0].rawText).toBe('Applicants must be active in a local radio club.');
+  });
+
+  it('keeps the ARDC list, which the same page-shaped rules would have swallowed', () => {
+    // The exact sentence, verbatim from the ARRL catalogue's `Other:` field. It is a list, it has
+    // no modal, and it is introduced by the word "Examples" — every property a wording-based rule
+    // would reject. It survives because it was LABELLED as eligibility by the funder.
+    const examples =
+      'Examples: membership in a local or regional club, participation in amateur radio emergency ' +
+      'activities, teaching amateur radio classes, on-the-air activities, participation in college ' +
+      'radio clubs, and any similar activities which illustrate his/her interest and participation ' +
+      'with the amateur radio avocation.';
+    const cs = extractHamActivity(
+      raw({
+        Other: `2) Applicant must show proof of amateur radio activity during the previous year. ${examples}`,
+      }),
+    );
+    expect(cs).toHaveLength(1);
+    expect(cs[0].spec).toMatchObject({ activityKinds: ['club_member', 'teaching', 'on_air'] });
+    expect(cs[0].rawText).toBe(examples);
+    // Word for word the SAME sentence, reached through the whole-page fallback instead of a
+    // labelled field, is not read as a requirement — this is the whole distinction, in one pair.
+    expect(extractHamActivity(raw({}, `Club Scholarships\nApply Now →\n${examples}`))).toEqual([]);
   });
 });

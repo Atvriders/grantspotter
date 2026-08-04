@@ -1,5 +1,8 @@
 import type { Constraint, RawOpportunity, Stage } from '@grantspotter/core';
 import { candidateTexts, firstClause, splitClauses } from './clauses.js';
+// The shared "a link label is not a sentence" filter — see the comment on `stageClauses` below and
+// the rule's own derivation in hamActivity.ts. Imported, never re-derived.
+import { withoutSiteChrome } from './hamActivity.js';
 import { makeConstraint } from './preference.js';
 
 const RANGE = /\b(\d{2})\s*(?:to|through|[-–])\s*(\d{2})\b/;
@@ -69,13 +72,24 @@ function stagesFrom(texts: string[]): Stage[] {
 
 /**
  * The clauses this axis is allowed to read: every structured field that describes the applicant,
- * plus the flattened record's own clauses minus the ones another axis owns (see FOREIGN_LABEL).
+ * plus the flattened record's own clauses minus the ones another axis owns (see FOREIGN_LABEL) and
+ * minus the site's navigation.
+ *
+ * SITE CHROME IS NOT ELIGIBILITY TEXT here either, and `spec.stages` is an ALLOW-list, so a stage
+ * matched off a menu is a HARD BAR that admits only that one stage. The IEEE Student Branch Rebate
+ * carried exactly that: ieee.org's masthead and mega-footer run "Submit Your Student Branch Annual
+ * Plan - IEEE Students · Renew Membership · Join IEEE Today! · Skip to content · IEEE.org · … ·
+ * Graduate Students · …", and the record published `stages: ["GRAD"]` — barring every
+ * undergraduate, high-school and returning-adult applicant from a student-branch rebate on the
+ * strength of a link label. FOREIGN_LABEL could not see it: a menu carries no label at all.
  */
 function stageClauses(raw: RawOpportunity): string[] {
   const fields = candidateTexts(
     [raw.rawFields.Other, raw.rawFields.eligibility, raw.rawFields.Institution],
     raw.rawText,
-  );
+  )
+    .map(withoutSiteChrome)
+    .filter((t) => t.trim() !== '');
   return fields.flatMap(splitClauses).filter((c) => !FOREIGN_LABEL.test(c));
 }
 
