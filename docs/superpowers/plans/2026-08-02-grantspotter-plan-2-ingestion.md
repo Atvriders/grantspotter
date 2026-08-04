@@ -16,7 +16,7 @@
 
 Copy these verbatim into your working memory before Task 1. Every one of them is asserted by a test somewhere in this plan.
 
-- Node **v20.11.0**, npm **10.2.4**. `export PATH="/home/kasm-user/.local/node/bin:$PATH"` before every command in this plan.
+- Node **v20.11.0**, npm **10.2.4**. `export PATH="/path/to/node20/bin:$PATH"` before every command in this plan.
 - TypeScript **strict**, `"module": "NodeNext"`, `"target": "ES2022"`. Relative imports inside `packages/server` carry the `.js` extension (NodeNext ESM), even though the files on disk are `.ts`.
 - **`packages/core` stays pure.** Plan 2 adds nothing to it. No `node:` import, no I/O, no dependency but `zod` may enter `core`.
 - **The fetcher is the only network egress path.** No `sources/*`, `normalize/*`, `diff/*`, or `review/*` module may call `fetch`, `https`, or read the network. A test in Task 6 greps for this.
@@ -243,8 +243,8 @@ describe('the blocklist has no configuration escape hatch', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/blocklist.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/blocklist.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./blocklist.js" from "packages/server/src/fetcher/blocklist.test.ts". Does the file exist?`
@@ -343,14 +343,14 @@ export function assertNotBlocked(url: string): void {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/blocklist.test.ts && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/blocklist.test.ts && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/fetcher/blocklist.ts packages/server/src/fetcher/blocklist.test.ts
 git commit -m "feat(fetcher): hard domain blocklist with no configuration escape hatch"
 ```
@@ -508,8 +508,8 @@ describe('robotsFromResponse', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/robots.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/robots.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./robots.js"`.
@@ -674,14 +674,14 @@ export function isPathAllowed(rules: RobotsRules, pathWithQuery: string): boolea
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/robots.test.ts && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/robots.test.ts && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/fetcher/robots.ts packages/server/src/fetcher/robots.test.ts
 git commit -m "feat(fetcher): robots.txt parser honouring Crawl-delay and treating 4xx as allow-all"
 ```
@@ -816,8 +816,8 @@ describe('HostQueue', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/hostQueue.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/hostQueue.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./hostQueue.js"`.
@@ -892,14 +892,14 @@ export class HostQueue {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/hostQueue.test.ts && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/hostQueue.test.ts && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/fetcher/hostQueue.ts packages/server/src/fetcher/hostQueue.test.ts
 git commit -m "feat(fetcher): per-host serial queue with injectable clock"
 ```
@@ -1233,8 +1233,8 @@ describe('createFetcher POST and snapshots', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/index.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/index.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./index.js" from "packages/server/src/fetcher/index.test.ts"`.
@@ -1498,14 +1498,14 @@ export function createFetcher(opts: FetchOptions): Fetcher {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/fetcher/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/fetcher/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/fetcher/index.ts packages/server/src/fetcher/index.test.ts
 git commit -m "feat(fetcher): polite blocklist-enforcing fetcher with robots, backoff and snapshots"
 ```
@@ -1757,8 +1757,8 @@ describe('parseDateRange', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/util/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/util/
 ```
 
 Expected failure: `Failed to resolve import "./text.js"` and `Failed to resolve import "./dates.js"`.
@@ -1768,8 +1768,8 @@ Expected failure: `Failed to resolve import "./text.js"` and `Failed to resolve 
 Install cheerio:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npm install cheerio@^1.0.0 --workspace @grantspotter/server
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npm install cheerio@^1.0.0 --workspace @grantspotter/server
 ```
 
 Create `packages/server/src/sources/util/text.ts`:
@@ -2026,14 +2026,14 @@ export function requirePayload(payloads: FetchedPayload[], urlPart: string): Fet
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/util/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/util/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/util packages/server/package.json package-lock.json
 git commit -m "feat(sources): shared flattening, loose-label, date and id utilities"
 ```
@@ -2214,8 +2214,8 @@ export function fixturePayload(
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/registry.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/registry.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./registry.js"` and `Failed to resolve import "./types.js"`.
@@ -2305,8 +2305,8 @@ export function getSource(id: string): SourceModule {
 Create the fixtures root so the directory is tracked:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && mkdir -p fixtures && touch fixtures/.gitkeep
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && mkdir -p fixtures && touch fixtures/.gitkeep
 ```
 
 Create `scripts/capture-fixture.ts`:
@@ -2408,21 +2408,21 @@ Add the script to the root `package.json` `scripts` block:
 If `tsx` is not already a root devDependency (Plan 1 needs it for `verify-sources`), install it:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npm ls tsx >/dev/null 2>&1 || npm install -D tsx@^4.19.0
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npm ls tsx >/dev/null 2>&1 || npm install -D tsx@^4.19.0
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/registry.test.ts && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/registry.test.ts && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/registry.ts packages/server/src/sources/types.ts \
   packages/server/src/sources/registry.test.ts packages/server/test/fixtures.ts \
   scripts/capture-fixture.ts fixtures/.gitkeep package.json package-lock.json
@@ -2739,8 +2739,8 @@ describe.skipIf(!hasFixture(SOURCE_ID, LIVE))('against the captured live page', 
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/arrl-scholarship-descriptions.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/arrl-scholarship-descriptions.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./arrl-scholarship-descriptions.js"`.
@@ -2885,15 +2885,15 @@ const MODULES: SourceModule[] = [arrlScholarshipDescriptions];
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Capture the live fixture (network; skip if unreachable)**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 CONTACT_URL=https://grantspotter.example.test/about npm run capture-fixture -- arrl-scholarship-descriptions
 npx vitest run packages/server/src/sources/arrl-scholarship-descriptions.test.ts
 ```
@@ -2903,7 +2903,7 @@ Expected console output ends with `parsed 111 record(s); expectedMinRecords=100`
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/arrl-scholarship-descriptions.ts \
   packages/server/src/sources/arrl-scholarship-descriptions.test.ts \
   packages/server/src/sources/registry.ts fixtures/arrl-scholarship-descriptions
@@ -3260,8 +3260,8 @@ describe('arrl-summary-of-scholarship-requirements', () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/util/singlePage.test.ts packages/server/src/sources/arrl-pages.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/util/singlePage.test.ts packages/server/src/sources/arrl-pages.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./singlePage.js"` and `Failed to resolve import "./arrl-pages.js"`.
@@ -3560,15 +3560,15 @@ const MODULES: SourceModule[] = [arrlScholarshipDescriptions, ...ARRL_PAGE_SOURC
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Capture the live fixtures (network; skip if unreachable)**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 for s in arrl-amateur-radio-grants arrl-club-grant arrl-etp-grants \
          arrl-foundation-special-funds arrl-scholarship-program \
          arrl-summary-of-scholarship-requirements; do
@@ -3581,7 +3581,7 @@ arrl.org publishes `Crawl-delay: 5`, so this loop takes about half a minute. Tha
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/util/singlePage.ts packages/server/src/sources/util/singlePage.test.ts \
   packages/server/src/sources/arrl-pages.ts packages/server/src/sources/arrl-pages.test.ts \
   packages/server/src/sources/registry.ts fixtures/arrl-amateur-radio-grants \
@@ -3744,8 +3744,8 @@ describe('ardcGrants source module', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ardc-grants.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ardc-grants.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./ardc-grants.js"`.
@@ -3869,14 +3869,14 @@ Register in `registry.ts`: `import { ardcGrants } from './ardc-grants.js';` and 
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/ardc-grants.ts packages/server/src/sources/ardc-grants.test.ts \
   packages/server/src/sources/registry.ts fixtures/ardc-grants
 git commit -m "feat(sources): ARDC WordPress REST source with runtime parent-page resolution"
@@ -4024,8 +4024,8 @@ describe('ardcAwardTables source module', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ardc-award-tables.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ardc-award-tables.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./ardc-award-tables.js"`.
@@ -4141,14 +4141,14 @@ Register in `registry.ts`.
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/ardc-award-tables.ts packages/server/src/sources/ardc-award-tables.test.ts \
   packages/server/src/sources/registry.ts fixtures/ardc-award-tables
 git commit -m "feat(sources): ARDC per-year award tables with verbatim TBD amounts"
@@ -4399,8 +4399,8 @@ describe('parseNsfFeed', () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/util/rss.test.ts packages/server/src/sources/arrl-news-rss.test.ts packages/server/src/federal/nsf.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/util/rss.test.ts packages/server/src/sources/arrl-news-rss.test.ts packages/server/src/federal/nsf.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./rss.js"`, `"./arrl-news-rss.js"`, `"./nsf.js"`.
@@ -4575,14 +4575,14 @@ Register `arrlNewsRss` and `nsfFundingRss` in `registry.ts`.
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/util/rss.ts packages/server/src/sources/util/rss.test.ts \
   packages/server/src/sources/arrl-news-rss.ts packages/server/src/sources/arrl-news-rss.test.ts \
   packages/server/src/sources/nsf-funding-rss.ts packages/server/src/federal/nsf.ts \
@@ -4767,8 +4767,8 @@ describe('the group', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/tier-c-a.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/tier-c-a.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./tier-c-a.js"`.
@@ -4917,14 +4917,14 @@ Register `...TIER_C_A_SOURCES` in `registry.ts`.
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/tier-c-a.ts packages/server/src/sources/tier-c-a.test.ts \
   packages/server/src/sources/registry.ts fixtures/qcwa fixtures/ylrl fixtures/austin-arc fixtures/sara
 git commit -m "feat(sources): QCWA, YLRL, Austin ARC and SARA parsers"
@@ -5146,8 +5146,8 @@ describe('the group', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/tier-c-b.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/tier-c-b.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./tier-c-b.js"`.
@@ -5346,14 +5346,14 @@ Register `...TIER_C_B_SOURCES` in `registry.ts`.
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/tier-c-b.ts packages/server/src/sources/tier-c-b.test.ts \
   packages/server/src/sources/registry.ts fixtures/ncdxf-grants fixtures/ncdxf-scholarships \
   fixtures/ariss fixtures/ieee-mtts fixtures/ieee-student-branch-rebate fixtures/nasa-csli
@@ -5499,8 +5499,8 @@ describe('yaesuDr2x', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/yaesu-dr2x.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/yaesu-dr2x.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./yaesu-dr2x.js"`.
@@ -5626,14 +5626,14 @@ Register in `registry.ts`.
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/yaesu-dr2x.ts packages/server/src/sources/yaesu-dr2x.test.ts \
   packages/server/src/sources/registry.ts fixtures/yaesu-dr2x
 git commit -m "feat(sources): Yaesu DR-2X window dates read from the dated PDF title"
@@ -5801,8 +5801,8 @@ describe('the non-aggregatable guided-workflow records', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/manual-tier-d.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/manual-tier-d.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./manual-tier-d.js"`.
@@ -6072,14 +6072,14 @@ Register in `registry.ts`. At this point the registry holds all 24 modules; re-r
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/manual-tier-d.ts packages/server/src/sources/manual-tier-d.test.ts \
   packages/server/src/sources/registry.ts
 git commit -m "feat(sources): manual Tier D records, verified negatives and the FAR safety warning"
@@ -6702,8 +6702,8 @@ describe('the resulting Program is complete', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/
 ```
 
 Expected failure: `Failed to resolve import "./index.js" from "packages/server/src/normalize/index.test.ts"`.
@@ -7174,14 +7174,14 @@ export function extractConstraints(_raw: RawOpportunity): Constraint[] {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/normalize
 git commit -m "feat(normalize): RawOpportunity to Program with deadline inheritance and populated disputed claims"
 ```
@@ -7603,8 +7603,8 @@ describe('normalize/ is pure', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/axes/part1.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/axes/part1.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./geography.js"` and `Failed to resolve import "./axes/radiusCenters.js"`, plus assertion failures from the Task 16 stub returning `[]`.
@@ -7932,14 +7932,14 @@ export function extractConstraints(raw: RawOpportunity): Constraint[] {
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/normalize/axes packages/server/src/normalize/purity.test.ts \
   data/reference/radius-centers.json
 git commit -m "feat(normalize): license, geography, field-of-study, institution and GPA axis extractors"
@@ -8246,8 +8246,8 @@ describe('extractConstraints with all thirteen axes wired', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/axes/part2.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/axes/part2.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./ageStage.js"` and seven sibling resolution failures.
@@ -8564,14 +8564,14 @@ export const AXIS_EXTRACTORS: AxisExtractor[] = [
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/normalize/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/normalize/axes
 git commit -m "feat(normalize): membership, recommendation, citizenship, age/stage, activity, need, gender and other axes"
 ```
@@ -8789,8 +8789,8 @@ describe('shouldSuppressVanished', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/diff/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/diff/
 ```
 
 Expected failure: `Failed to resolve import "./index.js" from "packages/server/src/diff/index.test.ts"`.
@@ -8951,14 +8951,14 @@ export function shouldSuppressVanished(nextCount: number, expectedMinRecords: nu
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/diff/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/diff/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/diff
 git commit -m "feat(diff): change detection over parsed entries emitting all seven ChangeKinds"
 ```
@@ -9435,8 +9435,8 @@ describe('audit log', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/db/repositories/ingestion.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/db/repositories/ingestion.test.ts
 ```
 
 Expected failure: `Failed to resolve import "../ingestSchema.js"`.
@@ -9880,14 +9880,14 @@ export function listAuditLog(
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/db/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/db/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/db
 git commit -m "feat(db): idempotent ingestion schema and repositories for snapshots, events, review and health"
 ```
@@ -10211,8 +10211,8 @@ describe('listInbox', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/review/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/review/
 ```
 
 Expected failure: `Failed to resolve import "./index.js" from "packages/server/src/review/index.test.ts"`.
@@ -10428,14 +10428,14 @@ export function provenanceFor(
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/review/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/review/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/review
 git commit -m "feat(review): inbox with reject memory, provenance trail and approve-only publishing"
 ```
@@ -10693,8 +10693,8 @@ describe('toRawOpportunity', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/federal/grantsGov.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/federal/grantsGov.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./grantsGov.js"`.
@@ -10896,14 +10896,14 @@ export function toRawOpportunity(hit: GrantsGovHit, detail?: GrantsGovDetail): R
 - [ ] **Step 5: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/federal/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/federal/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/federal/grantsGov.ts packages/server/src/federal/grantsGov.test.ts \
   fixtures/grants-gov-federal
 git commit -m "feat(federal): Grants.gov search2 and fetchOpportunity with literal-none money handling"
@@ -11065,8 +11065,8 @@ describe('scoreAdjacency', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/federal/adjacency.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/federal/adjacency.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./adjacency.js"`.
@@ -11208,14 +11208,14 @@ export function isAdjacent(text: string): boolean {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/federal/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/federal/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/federal/adjacency.ts packages/server/src/federal/adjacency.test.ts
 git commit -m "feat(federal): weighted adjacency vocabulary scorer with negative false-positive terms"
 ```
@@ -11550,8 +11550,8 @@ describe('Simpler.Grants.gov is optional (spec §7.5)', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/grants-gov-federal.test.ts \
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/grants-gov-federal.test.ts \
   packages/server/src/federal/simplerGrants.test.ts
 ```
 
@@ -11827,14 +11827,14 @@ it('holds all 24 source modules registered so far', () => {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/sources/grants-gov-federal.ts \
   packages/server/src/sources/grants-gov-federal.test.ts \
   packages/server/src/federal/simplerGrants.ts packages/server/src/federal/simplerGrants.test.ts \
@@ -12376,8 +12376,8 @@ describe('runCrawl honours sources.enabled — RESOLUTIONS R20', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/crawl/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/crawl/
 ```
 
 Expected failure: `Failed to resolve import "./scheduler.js"` and `"./runner.js"`.
@@ -12727,14 +12727,14 @@ process.on('SIGTERM', () => crawlScheduler.stop());
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck && npm run build
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck && npm run build
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/crawl packages/server/src/index.ts packages/server/src/normalize/index.ts
 git commit -m "feat(crawl): serial nightly runner with source health and a jittered cron scheduler"
 ```
@@ -12880,8 +12880,8 @@ describe('the script is never a CI gate', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/crawl/verifySources.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/crawl/verifySources.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./verify.js"`.
@@ -13070,23 +13070,23 @@ const fetcher = createFetcher({
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/crawl/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/crawl/ && npm run typecheck
 ```
 
 - [ ] **Step 5: Interim verification** (the full end-of-plan verification is Task 29 Step 6)
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run typecheck && npm run build && npm test
 ```
 
 All three must be green. Then, optionally and only if this machine has network access, run the live check — it is expected to take a few minutes because arrl.org publishes `Crawl-delay: 5`:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 CONTACT_URL=https://grantspotter.example.test/about npm run verify-sources
 ```
 
@@ -13095,7 +13095,7 @@ Read the output. Warnings are information, not failures. If `arrl-scholarship-de
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add scripts/verify-sources.ts packages/server/src/crawl/verify.ts \
   packages/server/src/crawl/verifySources.test.ts package.json
 git commit -m "feat(crawl): live warn-only verify-sources check that never gates a build"
@@ -13373,8 +13373,8 @@ describe('usaSpending module', () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/nsf-awards.test.ts \
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/nsf-awards.test.ts \
   packages/server/src/sources/usaspending.test.ts
 ```
 
@@ -13672,14 +13672,14 @@ Register both in `registry.ts`: `import { nsfAwards } from './nsf-awards.js';`, 
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/federal/nsf.ts packages/server/src/federal/usaSpending.ts \
   packages/server/src/sources/nsf-awards.ts packages/server/src/sources/usaspending.ts \
   packages/server/src/sources/nsf-awards.test.ts packages/server/src/sources/usaspending.test.ts \
@@ -13831,8 +13831,8 @@ console.log(`wrote ${zip.length} bytes of ZIP as base64`);
 Run it once:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && node scripts/make-extract-fixture.mjs
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && node scripts/make-extract-fixture.mjs
 ```
 
 - [ ] **Step 2: Write the failing test**
@@ -13960,8 +13960,8 @@ describe('grantsGovExtract module', () => {
 - [ ] **Step 3: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/sources/grants-gov-extract.test.ts
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/sources/grants-gov-extract.test.ts
 ```
 
 Expected failure: `Failed to resolve import "../federal/grantsGovExtract.js"`.
@@ -14154,14 +14154,14 @@ it('holds all 27 source modules', () => {
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/federal/grantsGovExtract.ts \
   packages/server/src/sources/grants-gov-extract.ts \
   packages/server/src/sources/grants-gov-extract.test.ts \
@@ -14402,8 +14402,8 @@ describe('the assist is never on a read path', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ai/
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ai/
 ```
 
 Expected failure: `Failed to resolve import "./assist.js"`.
@@ -14750,14 +14750,14 @@ it('behaves identically with a disabled assist and with none at all — spec §9
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/ && npm run typecheck && npm run build
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter && npx vitest run packages/server/src/ && npm run typecheck && npm run build
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/ai packages/server/src/review/index.ts \
   packages/server/src/review/index.test.ts packages/server/src/crawl/runner.ts \
   packages/server/src/crawl/runner.test.ts packages/server/src/index.ts \
@@ -14781,13 +14781,13 @@ git commit -m "feat(ai): strictly-optional Anthropic parse assist and review pre
 - [ ] **Pausing a source actually pauses it** (RESOLUTIONS R20). `runCrawl` filters out every id with `sources.enabled = 0`, including one named explicitly in `sourceIds`, so a paused source gets no fetch, no `sources.last_polled_at` update and no `snapshots` row; `enabled` is in `REQUIRED_COLUMNS.sources`; and `recordPollStart` never overwrites the flag. Verify with:
 
 ```bash
-cd /home/kasm-user/grantspotter && grep -n "enabled = 0" packages/server/src/crawl/runner.ts
+cd /path/to/grantspotter && grep -n "enabled = 0" packages/server/src/crawl/runner.ts
 ```
 
 - [ ] **No index name is declared twice** (RESOLUTIONS R23). `ensureIngestionSchema` adds only `idx_audit_entity`; `idx_snapshots_source` belongs to Plan 1's `001-init.sql` and Plan 2 does not re-declare it under a different definition. Verify with:
 
 ```bash
-cd /home/kasm-user/grantspotter && grep -rn "CREATE INDEX.*idx_snapshots_source" packages/server/src \
+cd /path/to/grantspotter && grep -rn "CREATE INDEX.*idx_snapshots_source" packages/server/src \
   | grep -v "db/migrations/001-init.sql"
 ```
 
@@ -14802,7 +14802,7 @@ cd /home/kasm-user/grantspotter && grep -rn "CREATE INDEX.*idx_snapshots_source"
 - [ ] **Every commit is local. `git log origin/master..HEAD` is non-empty and nothing has been pushed.** Verify with:
 
 ```bash
-cd /home/kasm-user/grantspotter && git log --oneline -30 && git status --short
+cd /path/to/grantspotter && git log --oneline -30 && git status --short
 ```
 
 Plan 3 consumes from here: `SOURCES`, `runCrawl`, `runSource`, `listSourceHealth`, `listInbox`, `approveReviewItem`, `rejectReviewItem`, `editReviewItem`, `provenanceFor`, `listChangeEvents`, `listProgramsBySource`, `normalizeRaw`, `contextForSource`, `diffPrograms`, `scoreAdjacency`.

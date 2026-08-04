@@ -14,8 +14,8 @@
 
 ## Global Constraints
 
-- Node **v20.11.0**, npm **10.2.4**. Every shell command in this plan assumes `export PATH="/home/kasm-user/.local/node/bin:$PATH"` has been run in the shell first. Run it once per shell session.
-- Repo root is `/home/kasm-user/grantspotter`. All paths in this plan are relative to that root unless written absolute.
+- Node **v20.11.0**, npm **10.2.4**. Every shell command in this plan assumes `export PATH="/path/to/node20/bin:$PATH"` has been run in the shell first. Run it once per shell session.
+- Repo root is `/path/to/grantspotter`. All paths in this plan are relative to that root unless written absolute.
 - TypeScript **strict**, `"module": "NodeNext"`, `"target": "ES2022"`. Relative imports inside `packages/server` therefore carry a `.js` extension (`./csv.js`), even though the source file is `.ts`.
 - `packages/core` stays **pure**: no I/O, no `node:` imports, no dependency but `zod`. Nothing in this plan adds code to `packages/core`.
 - `SESSION_SECRET` has **no default**. The server refuses to start without it. `CONTACT_URL` likewise. Never add a fallback value anywhere, including `.env.example`.
@@ -115,7 +115,7 @@ You do not need to know amateur radio to execute this plan, but the seed records
 - [ ] **Step 1: Install the three export libraries**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 npm install --workspace @grantspotter/server exceljs@^4.4.0 docx@^9.5.0 fflate@^0.8.2
 ```
 
@@ -249,7 +249,7 @@ describe('programsToCsv', () => {
 - [ ] **Step 4: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/csv.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/csv.test.ts
 ```
 
 Expected failure: `Failed to resolve import "./csv.js"` / `Cannot find module './csv.js'`.
@@ -339,7 +339,7 @@ export function programsToCsv(
 - [ ] **Step 6: Run the CSV test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/csv.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/csv.test.ts
 ```
 
 Expected: 7 passing tests.
@@ -428,7 +428,7 @@ describe('parseExportFilter', () => {
 - [ ] **Step 8: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/filter.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/filter.test.ts
 ```
 
 Expected failure: `Cannot find module './filter.js'`.
@@ -542,7 +542,7 @@ export function applyExportFilter(
 - [ ] **Step 10: Run both test files and watch them pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/
 ```
 
 Expected: 17 passing tests across `csv.test.ts` and `filter.test.ts`.
@@ -550,7 +550,7 @@ Expected: 17 passing tests across `csv.test.ts` and `filter.test.ts`.
 - [ ] **Step 11: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports packages/server/package.json package-lock.json
 git commit -m "feat(exports): CSV writer with RFC 4180 quoting, formula-injection guard, and export filter"
 ```
@@ -627,7 +627,7 @@ describe('programsToXlsx', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/xlsx.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/xlsx.test.ts
 ```
 
 Expected failure: `Cannot find module './xlsx.js'`.
@@ -705,7 +705,7 @@ export async function programsToXlsx(
 - [ ] **Step 4: Run it and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/xlsx.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/xlsx.test.ts
 ```
 
 Expected: 4 passing tests.
@@ -713,7 +713,7 @@ Expected: 4 passing tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): XLSX workbook with Opportunities and Provenance sheets"
 ```
@@ -955,7 +955,7 @@ describe('buildIcsCalendar', () => {
 - [ ] **Step 3: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/ics.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/ics.test.ts
 ```
 
 Expected failure: `Cannot find module './ics.js'`.
@@ -1151,7 +1151,7 @@ export function buildIcsCalendar(input: IcsCalendarInput): string {
 - [ ] **Step 5: Run it and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/ics.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/ics.test.ts
 ```
 
 Expected: 17 passing tests.
@@ -1159,7 +1159,7 @@ Expected: 17 passing tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): RFC 5545 ICS generation with VTIMEZONE, exclusive DTEND, and estimated-cycle marking"
 ```
@@ -1293,7 +1293,7 @@ describe('draftToDocx', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/docx.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/docx.test.ts
 ```
 
 Expected failure: `Cannot find module './draft.js'`.
@@ -1504,7 +1504,7 @@ export async function draftToDocx(draft: DraftDocument): Promise<Buffer> {
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/docx.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/docx.test.ts
 ```
 
 Expected: 8 passing tests. If the `docx` named imports fail to resolve at runtime under NodeNext ESM, switch the import line to `import * as docxLib from 'docx';` plus `const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = docxLib;` — the namespace form resolves under both CJS and ESM.
@@ -1512,7 +1512,7 @@ Expected: 8 passing tests. If the `docx` named imports fail to resolve at runtim
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): DOCX application draft via the docx library, with highlighted TODO markers"
 ```
@@ -1679,7 +1679,7 @@ describe('buildApplicationPacket', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/zip.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/zip.test.ts
 ```
 
 Expected failure: `Cannot find module './zip.js'`.
@@ -1872,7 +1872,7 @@ export async function buildApplicationPacket(input: PacketInput): Promise<Uint8A
 - [ ] **Step 5: Run it and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/zip.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/zip.test.ts
 ```
 
 Expected: 9 passing tests. If the byte-stability test fails, confirm `mtime: 0` is passed to `zipSync` and that `draftToDocx` is not embedding a wall-clock timestamp (the `docx` library writes a fixed `created` date unless one is supplied).
@@ -1880,7 +1880,7 @@ Expected: 9 passing tests. If the byte-stability test fails, confirm `mtime: 0` 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): application packet ZIP with budget worksheet, requirements checklist and source links"
 ```
@@ -2021,7 +2021,7 @@ describe('restoreBackup', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/json.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/json.test.ts
 ```
 
 Expected failure: `Cannot find module './json.js'`.
@@ -2140,7 +2140,7 @@ export function restoreBackup(db: Database, raw: unknown): { tablesRestored: str
 - [ ] **Step 4: Run it and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/json.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/json.test.ts
 ```
 
 Expected: 12 passing tests.
@@ -2148,7 +2148,7 @@ Expected: 12 passing tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): schema-agnostic JSON backup and restore, sessions excluded"
 ```
@@ -2315,7 +2315,7 @@ describe('renderEligibilityReportHtml', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/eligibility.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/eligibility.test.ts
 ```
 
 Expected failure: `Cannot find module './eligibility.js'`.
@@ -2561,7 +2561,7 @@ ${rows}
 - [ ] **Step 6: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/eligibility.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/eligibility.test.ts
 ```
 
 Expected: 11 passing tests.
@@ -2569,7 +2569,7 @@ Expected: 11 passing tests.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/exports
 git commit -m "feat(exports): eligibility report as CSV and a standalone printable HTML page"
 ```
@@ -2724,7 +2724,7 @@ describe('print.css', () => {
 - [ ] **Step 2: Run them and watch them fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src/components/PrintButton.test.tsx packages/web/src/styles/print.test.ts
+cd /path/to/grantspotter && npx vitest run packages/web/src/components/PrintButton.test.tsx packages/web/src/styles/print.test.ts
 ```
 
 Expected failure: `Cannot find module './PrintButton.js'` and `ENOENT ... print.css`.
@@ -2949,7 +2949,7 @@ name — the assertion is the point, not the helper.
 - [ ] **Step 7: Run the tests and watch them pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src/components/PrintButton.test.tsx packages/web/src/styles/print.test.ts packages/web/src/routes/Opportunity.test.tsx
+cd /path/to/grantspotter && npx vitest run packages/web/src/components/PrintButton.test.tsx packages/web/src/styles/print.test.ts packages/web/src/routes/Opportunity.test.tsx
 ```
 
 Expected: 11 passing tests here (4 `PrintButton`, 7 `print.css`) plus Plan 3's Opportunity suite
@@ -2958,7 +2958,7 @@ with one more assertion in it. If the `.tsx` test fails to resolve JSX, confirm 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/web/src/styles packages/web/src/components/PrintButton.tsx packages/web/src/components/PrintButton.test.tsx packages/web/src/main.tsx packages/web/src/routes/Opportunity.tsx packages/web/src/routes/Opportunity.test.tsx
 git commit -m "feat(web): print stylesheet against real class names, plus a reachable Print / Save as PDF control"
 ```
@@ -3075,7 +3075,7 @@ describe('hashIcsToken', () => {
 - [ ] **Step 3: Run it, watch it fail, then implement `token.ts`**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/exports/token.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/exports/token.test.ts
 ```
 
 Expected failure: `Cannot find module './token.js'`. Now create `packages/server/src/exports/token.ts`:
@@ -3509,7 +3509,7 @@ describe('admin backup and restore', () => {
 - [ ] **Step 6: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/api/exports.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/api/exports.test.ts
 ```
 
 Expected failure: `Cannot find module './exports.js'`.
@@ -3820,7 +3820,7 @@ export function createCalendarFeedRouter(deps: ExportDeps): Router {
 - [ ] **Step 8: Run the route test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/api/exports.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/api/exports.test.ts
 ```
 
 Expected: 22 passing tests.
@@ -3903,7 +3903,7 @@ in yourself — the position it reserves is what keeps the SPA fallback from sha
 Run all three gates:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 grep -n "createExportsRouter(exportDeps)\|createCalendarFeedRouter(exportDeps)" packages/server/src/index.ts
 grep -n "a\.use(" packages/server/src/index.ts
 ! grep -rnE "req\.session\b" packages/server/src && echo "no express-session references — correct"
@@ -3933,7 +3933,7 @@ The unit suite mounts the routers itself, so it cannot see a missing mount line.
 entrypoint once and ask it:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 npm run build
 export GS_TMP="$(mktemp -d)"
 SESSION_SECRET="$(node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))")" \
@@ -3954,7 +3954,7 @@ JSON 404 at this point; that is correct until Task 17 lands.
 - [ ] **Step 11: Typecheck the whole repo, then commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run typecheck && npx vitest run packages/server/src
+cd /path/to/grantspotter && npm run typecheck && npx vitest run packages/server/src
 ```
 
 A typecheck error naming `createProgramRepo`, `createFunderRepo`, `createProfileRepo`,
@@ -3962,7 +3962,7 @@ A typecheck error naming `createProgramRepo`, `createFunderRepo`, `createProfile
 a different path — fix the import line in `dataSource.ts` or `api/exports.ts` and nothing else.
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/api packages/server/src/exports packages/server/src/db/migrations packages/server/src/index.ts
 git commit -m "feat(api): gated export routes plus a hashed-token subscribable ICS feed"
 ```
@@ -4146,7 +4146,7 @@ describe('restoreFromBackup', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src/api/exports.test.ts
+cd /path/to/grantspotter && npx vitest run packages/web/src/api/exports.test.ts
 ```
 
 Expected failure: `Failed to load url ./exports.js`.
@@ -4285,7 +4285,7 @@ constructor signature survives R11.
 - [ ] **Step 4: Run the client test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src/api/exports.test.ts
+cd /path/to/grantspotter && npx vitest run packages/web/src/api/exports.test.ts
 ```
 
 Expected: 11 passing tests.
@@ -4381,7 +4381,7 @@ describe('ExportsRoute', () => {
 - [ ] **Step 6: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src/routes/Exports.test.tsx
+cd /path/to/grantspotter && npx vitest run packages/web/src/routes/Exports.test.tsx
 ```
 
 Expected failure: `Failed to load url ./Exports.js`.
@@ -4586,7 +4586,7 @@ declaration.
 Verify the insert did not eat anything:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 grep -c "  { to: '/" packages/web/src/components/AppShell.tsx    # expect 10
 grep -n "NAV: NavItem\[\]\|adminOnly: true\|'/templates'\|'/applications'\|'/exports'" \
   packages/web/src/components/AppShell.tsx
@@ -4724,7 +4724,7 @@ control.
 - [ ] **Step 11: Run the whole web suite, typecheck, and build**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/web/src && npm run typecheck && npm run build
+cd /path/to/grantspotter && npx vitest run packages/web/src && npm run typecheck && npm run build
 ```
 
 Expected: the new suites green (11 in `api/exports.test.ts`, 7 in `routes/Exports.test.tsx`) and
@@ -4734,7 +4734,7 @@ asserting the exact `NAV` length is a real signal — update that assertion to i
 - [ ] **Step 12: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): Exports route, browse export menu, draft downloads and admin backup/restore"
 ```
@@ -4986,7 +4986,7 @@ describe('crawler identity (sourceKey)', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
 ```
 
 Expected failure: `Cannot find module './load.js'`.
@@ -5276,7 +5276,7 @@ projecting from a stale page is exactly the confident-wrong-date failure this ap
 - [ ] **Step 6: Run the seed test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
 ```
 
 Expected: 18 passing tests. A zod failure here prints the offending file and the exact field path — fix the JSON, not the schema. A failure in the RECUR block means a seed record lost its directive and its calendar entries silently vanished; a failure in the sourceKey block means two records are fighting over one crawler identity.
@@ -5284,7 +5284,7 @@ Expected: 18 passing tests. A zod failure here prints the offending file and the
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add data/seed packages/server/src/seed
 git commit -m "feat(seed): corpus loader with zod validation plus funders and the four anchor programs"
 ```
@@ -5587,7 +5587,7 @@ silently discarded instead of reported.
 - [ ] **Step 2: Run the seed test**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
 ```
 
 Expected: all 11 tests still pass, now over 16 programs. The blocklist, LAN-address, matcher and summary-length assertions all cover the new records automatically.
@@ -5595,7 +5595,7 @@ Expected: all 11 tests still pass, now over 16 programs. The blocklist, LAN-addr
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add data/seed/programs.ham-orgs.json
 git commit -m "feat(seed): twelve non-ARRL ham organisation records (YLRL, Austin ARC, Yasme, NCDXF, SARA, RCA)"
 ```
@@ -5804,7 +5804,7 @@ Create `data/seed/programs.institutional.json`:
 - [ ] **Step 2: Run the seed test**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/seed.test.ts
 ```
 
 Expected: 18 passing tests over 24 programs.
@@ -5812,7 +5812,7 @@ Expected: 18 passing tests over 24 programs.
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add data/seed/programs.institutional.json
 git commit -m "feat(seed): institutional and in-kind records plus the Space Grant and campus SGA playbooks"
 ```
@@ -5958,7 +5958,7 @@ describe('the Chicago FM Club stale-mirror record', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/negatives.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/negatives.test.ts
 ```
 
 Expected failure: `missing negative record arrl-cari-not-a-funding-program`.
@@ -6154,7 +6154,7 @@ Expected failure: `missing negative record arrl-cari-not-a-funding-program`.
 - [ ] **Step 4: Run both seed test files and watch them pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/
 ```
 
 Expected: 18 passing tests in `seed.test.ts` (now over 32 programs) and 8 in `negatives.test.ts`.
@@ -6184,7 +6184,7 @@ describe('the blocklist backs up the FAR record', () => {
 Re-run:
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/negatives.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/negatives.test.ts
 ```
 
 Expected: 10 passing tests. If `BLOCKED_HOSTS` stores hosts with a leading dot or a scheme, adjust the expectation to match Plan 2's actual representation — do not change Plan 2's blocklist to match this test.
@@ -6192,7 +6192,7 @@ Expected: 10 passing tests. If `BLOCKED_HOSTS` stores hosts with a leading dot o
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add data/seed/programs.negatives.json packages/server/src/seed/negatives.test.ts
 git commit -m "feat(seed): verified negatives, the FAR compromised-domain warning, and the disputed ARRL Club Grant"
 ```
@@ -6321,7 +6321,7 @@ describe('generated ARRL catalog seed', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/arrlCatalog.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/arrlCatalog.test.ts
 ```
 
 Expected failure: `expected 0 to be greater than or equal to 100`.
@@ -6688,15 +6688,15 @@ or CI:
 Then:
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run seed:arrl
+cd /path/to/grantspotter && npm run seed:arrl
 ```
 
-Expected: `Wrote 111 catalog records to /home/kasm-user/grantspotter/data/seed/programs.arrl-catalog.json` (a count between 100 and 114 is fine; the page carries 114 `li` elements of which 3 are stubs). If it throws about unrecognised labels, open `packages/server/src/sources/` and look at the keys that parser actually puts in `rawFields`, then extend `FIELD_ALIASES` with them — do not weaken the 90% assertion.
+Expected: `Wrote 111 catalog records to /path/to/grantspotter/data/seed/programs.arrl-catalog.json` (a count between 100 and 114 is fine; the page carries 114 `li` elements of which 3 are stubs). If it throws about unrecognised labels, open `packages/server/src/sources/` and look at the keys that parser actually puts in `rawFields`, then extend `FIELD_ALIASES` with them — do not weaken the 90% assertion.
 
 - [ ] **Step 5: Run the catalog test and the whole seed suite**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/
 ```
 
 Expected: 11 passing tests in `arrlCatalog.test.ts`, 18 in `seed.test.ts` (now over roughly 143 programs), 10 in `negatives.test.ts`.
@@ -6706,7 +6706,7 @@ If `never records the $100,000 endowment figure as an award ceiling` fails, that
 - [ ] **Step 6: Commit the script and the generated corpus together**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add scripts/generate-arrl-seed.ts data/seed/programs.arrl-catalog.json package.json packages/server/src/seed/arrlCatalog.test.ts
 git commit -m "feat(seed): generate the 111 ARRL Foundation catalog records from the committed fixture"
 ```
@@ -6833,7 +6833,7 @@ describe('importSeedIfEmpty', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/seed/import.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/seed/import.test.ts
 ```
 
 Expected failure: `Cannot find module './import.js'`.
@@ -6933,7 +6933,7 @@ The log line matters too: on a fresh container the operator sees the corpus size
 - [ ] **Step 5: Run the test and the whole server suite**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src
+cd /path/to/grantspotter && npx vitest run packages/server/src
 ```
 
 Expected: 9 passing tests in `import.test.ts` and no regressions elsewhere. A typecheck failure naming `createProgramRepo` or `createFunderRepo` means Plan 1 exports them from a different path — adjust the two imports in this file only. A SQL error on `source_id` means Plan 1's `001-init.sql` is missing the two RESOLUTIONS R9 columns; that is Plan 1's fix, not a reason to drop the UPDATE here.
@@ -6941,7 +6941,7 @@ Expected: 9 passing tests in `import.test.ts` and no regressions elsewhere. A ty
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/seed packages/server/src/index.ts
 git commit -m "feat(seed): idempotent first-run corpus import that never overwrites reviewed data"
 ```
@@ -7163,7 +7163,7 @@ describe('webDistRoot (Plan 3 owns it; this is the contract the middleware is ha
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/api/spa.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/api/spa.test.ts
 ```
 
 Expected failure: `Cannot find module './spa.js'`.
@@ -7233,7 +7233,7 @@ export function createSpaMiddleware(webDistDir: string): RequestHandler {
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/api/spa.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/api/spa.test.ts
 ```
 
 Expected: 12 passing tests.
@@ -7288,7 +7288,7 @@ returns, and no edit to `packages/server/src/api/index.ts`.
 - [ ] **Step 6: Prove the built SPA, the single implementation, and the mount ordering**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 npm run build && ls packages/web/dist/index.html
 grep -rn "express.static" packages/server/src --include='*.ts' | grep -v '\.test\.ts'
 grep -c "export function webDistRoot" packages/server/src/api/spa.ts
@@ -7313,7 +7313,7 @@ deleted, which the previous step requires.
 Then prove it on the real entrypoint rather than on a hand-built express app:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 export GS_TMP="$(mktemp -d)"
 SESSION_SECRET="$(node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))")" \
 CONTACT_URL="https://www.example.org/grantspotter" DATA_DIR="$GS_TMP" CRAWL_ENABLED=false PORT=3133 \
@@ -7335,14 +7335,14 @@ Expected, and these four are the assertions this task owns because no earlier pl
 - [ ] **Step 7: Run the whole server suite, typecheck, and commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src && npm run typecheck
+cd /path/to/grantspotter && npx vitest run packages/server/src && npm run typecheck
 ```
 
 Expected: green, with no regression in `api/exports.test.ts` — if an export route suddenly returns
 HTML, the middleware was registered before the routers instead of after them.
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add packages/server/src/api/spa.ts packages/server/src/api/spa.test.ts packages/server/src/index.ts
 git commit -m "feat(server): serve the built SPA with a history fallback that leaves /api alone"
 ```
@@ -7445,10 +7445,10 @@ describe('Dockerfile', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/dockerfile.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/dockerfile.test.ts
 ```
 
-Expected failure: `ENOENT: no such file or directory, open '/home/kasm-user/grantspotter/Dockerfile'`.
+Expected failure: `ENOENT: no such file or directory, open '/path/to/grantspotter/Dockerfile'`.
 
 - [ ] **Step 3: Write the `Dockerfile`**
 
@@ -7551,7 +7551,7 @@ docs
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/dockerfile.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/dockerfile.test.ts
 ```
 
 Expected: 10 passing tests.
@@ -7559,7 +7559,7 @@ Expected: 10 passing tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add Dockerfile .dockerignore packages/server/src/deploy
 git commit -m "build: multi-stage Dockerfile, non-root, healthcheck, no bundled browser"
 ```
@@ -7656,7 +7656,7 @@ describe('build workflow', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/workflow.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/workflow.test.ts
 ```
 
 Expected failure: `ENOENT ... .github/workflows/build.yml`.
@@ -7749,7 +7749,7 @@ jobs:
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/workflow.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/workflow.test.ts
 ```
 
 Expected: 10 passing tests.
@@ -7757,7 +7757,7 @@ Expected: 10 passing tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add .github/workflows/build.yml packages/server/src/deploy/workflow.test.ts
 git commit -m "ci: verify then publish a multi-arch image to ghcr.io/atvriders/grantspotter"
 ```
@@ -7855,7 +7855,7 @@ describe('.env.example', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/compose.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/compose.test.ts
 ```
 
 Expected failure: `ENOENT ... docker-compose.yml`.
@@ -7948,7 +7948,7 @@ SIMPLER_GRANTS_API_KEY=
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/compose.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/compose.test.ts
 ```
 
 Expected: 10 passing tests.
@@ -7956,7 +7956,7 @@ Expected: 10 passing tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add docker-compose.yml .env.example packages/server/src/deploy/compose.test.ts
 git commit -m "build: compose pulling the published image, plus a documented .env.example"
 ```
@@ -8057,7 +8057,7 @@ describe('README honesty surfaces', () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/readme.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/readme.test.ts
 ```
 
 Expected failure: `ENOENT ... README.md`.
@@ -8350,7 +8350,7 @@ Create `LICENSE` with the standard MIT text, `Copyright (c) 2026 Atvriders`.
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && npx vitest run packages/server/src/deploy/readme.test.ts
+cd /path/to/grantspotter && npx vitest run packages/server/src/deploy/readme.test.ts
 ```
 
 Expected: 10 passing tests.
@@ -8358,7 +8358,7 @@ Expected: 10 passing tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add README.md LICENSE packages/server/src/deploy/readme.test.ts
 git commit -m "docs: README that is honest about the corpus, the blocklist and the AI feature"
 ```
@@ -8490,14 +8490,14 @@ import { readFileSync } from 'node:fs';
 - [ ] **Step 3: Run the e2e suite**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run test:e2e
+cd /path/to/grantspotter && npm run test:e2e
 ```
 
 Expected: green, including Plan 3's and Plan 4's existing specs. If Playwright's browsers are not
 installed:
 
 ```bash
-cd /home/kasm-user/grantspotter && npx playwright install chromium
+cd /path/to/grantspotter && npx playwright install chromium
 ```
 
 Three failures worth naming in advance. `Exports` not found in the rail means Task 10's `NAV` entry
@@ -8551,7 +8551,7 @@ test('the single process serves the SPA on / and still answers JSON on /api', as
 ```
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run test:e2e
+cd /path/to/grantspotter && npm run test:e2e
 ```
 
 Expected: green. A `text/html` body on `/api/unknown` means the SPA middleware was registered
@@ -8560,7 +8560,7 @@ Expected: green. A `text/html` body on `/api/unknown` means the SPA middleware w
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git add e2e/flow.spec.ts playwright.config.ts
 git commit -m "test(e2e): the full spec §14 nine-step flow, including the ICS export"
 ```
@@ -8582,7 +8582,7 @@ Auth for the push: the working Atvriders credential is the **gh oauth token in
 - [ ] **Step 1: Typecheck**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run typecheck
+cd /path/to/grantspotter && npm run typecheck
 ```
 
 Expected: exits 0 with no output. Any error is a blocker; fix it and commit the fix before
@@ -8591,20 +8591,20 @@ continuing.
 - [ ] **Step 2: Build**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run build
+cd /path/to/grantspotter && npm run build
 ```
 
 Expected: exits 0, and `packages/core/dist`, `packages/server/dist` and `packages/web/dist`
 all exist. Confirm:
 
 ```bash
-cd /home/kasm-user/grantspotter && ls packages/core/dist packages/server/dist packages/web/dist >/dev/null && echo "all three dist trees present"
+cd /path/to/grantspotter && ls packages/core/dist packages/server/dist packages/web/dist >/dev/null && echo "all three dist trees present"
 ```
 
 - [ ] **Step 3: Unit and integration tests**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm test
+cd /path/to/grantspotter && npm test
 ```
 
 Expected: every workspace green, zero failures, zero skipped tests that were meant to run.
@@ -8613,7 +8613,7 @@ Record the total count — it goes in the final report.
 - [ ] **Step 4: End-to-end tests**
 
 ```bash
-cd /home/kasm-user/grantspotter && npm run test:e2e
+cd /path/to/grantspotter && npm run test:e2e
 ```
 
 Expected: green. All three specs run: Plan 3's `flow.spec.ts` (including the two tests Task 22
@@ -8623,7 +8623,7 @@ test asserting `/` and `/browse` return the same HTML shell while `/api/unknown`
 JSON), Plan 4's `writing.spec.ts`, and Plan 3's inbox and sources tests. If Playwright browsers are not installed on this host:
 
 ```bash
-cd /home/kasm-user/grantspotter && npx playwright install chromium
+cd /path/to/grantspotter && npx playwright install chromium
 ```
 
 - [ ] **Step 5: COMPLETENESS AUDIT — walk every section of the spec**
@@ -8689,7 +8689,7 @@ rather than quietly fixing it at this stage**, then decide explicitly whether it
       `page.goto('/')`. Prove it, do not assume it:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 grep -rn "express.static" packages/server/src --include='*.ts' | grep -v '\.test\.ts'
 grep -n "a\.use(" packages/server/src/index.ts
 grep -c "^[^/]*createSpaMiddleware(webDistRoot())" packages/server/src/index.ts
@@ -8722,7 +8722,7 @@ Run each of these and read the output. A warning in the log counts as a finding.
 **6a. It must refuse to start with no session secret.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 env -u SESSION_SECRET CONTACT_URL="https://www.example.org/grantspotter" DATA_DIR="$(mktemp -d)" \
   node packages/server/dist/index.js; echo "exit=$?"
 ```
@@ -8733,7 +8733,7 @@ blocker — fix it and commit before continuing.
 **6b. It must start with one, and log the seed import and the bootstrap token.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 export GS_DATA="$(mktemp -d)"
 SESSION_SECRET="$(node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))")" \
 CONTACT_URL="https://www.example.org/grantspotter" DATA_DIR="$GS_DATA" CRAWL_ENABLED=false PORT=3131 \
@@ -8755,7 +8755,7 @@ as a routing failure is the fastest way to "fix" a working mount.
 **6c-1. Exercise the unauthenticated flows over HTTP.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 curl -sS -o /dev/null -w 'liveness %{http_code}\n' http://127.0.0.1:3131/api/health || true
 curl -sS -o /dev/null -w 'root %{http_code} %{content_type}\n' http://127.0.0.1:3131/
 curl -sS http://127.0.0.1:3131/ | head -c 60; echo
@@ -8789,7 +8789,7 @@ each step feeds the next through shell variables, and shell variables do not sur
 tool calls:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 curl -sS -o /dev/null -w 'liveness     %{http_code}\n' http://127.0.0.1:3131/api/health || true
 # Plan 1's first-run banner prints the one-time token (48 hex characters) on its own
 # line, two lines below "…with this one-time token:". Take it from the log 6b wrote.
@@ -8836,7 +8836,7 @@ draft, put one unconfirmed money figure in it, and POST it straight at the expor
 UI entirely — again as one block, because the application id is carried in a shell variable:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 GS_APP_ID=$(curl -sS -b /tmp/gs-cookies -H 'content-type: application/json' \
   -d '{"title":"Audit draft","programId":"ardc-grants"}' \
   http://127.0.0.1:3131/api/applications \
@@ -8863,7 +8863,7 @@ request before the gate ever ran, so the check proved nothing: fix the id first 
 **6d. Prove the blocklist blocks.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 npx tsx -e "import('./packages/server/src/fetcher/blocklist.js').then(async (m)=>{ \
   for (const u of ['https://farweb.org/','http://www.farweb.org/apply','https://instrumentl.com/grants','https://grantwatch.com/']) { \
     try { m.assertNotBlocked(u); console.log('NOT BLOCKED (FAILURE):', u); process.exitCode = 1; } \
@@ -8875,7 +8875,7 @@ Expected: four `blocked ok` lines and exit 0. Anything else is a blocker.
 **6e. Prove seed validation fails the build on a malformed record.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 cp data/seed/programs.negatives.json /tmp/negatives.backup.json
 node -e "const f='data/seed/programs.negatives.json';const d=JSON.parse(require('fs').readFileSync(f,'utf8'));d.programs[0].klass='not_a_class';require('fs').writeFileSync(f,JSON.stringify(d,null,2))"
 npx vitest run packages/server/src/seed/seed.test.ts; echo "exit=$? (a NON-zero exit here is the correct result)"
@@ -8900,7 +8900,7 @@ Expected: no error on shutdown, no "unhandled" anything in the last lines.
 **6g. Confirm the working tree is clean and nothing secret is staged.**
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 git status --short
 git log --oneline | head -25
 grep -rniE '(192\.168|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|/home/[a-z0-9_-]+/|/mnt/user/|sk-ant-|gh[pous]_[A-Za-z0-9]{20,})' \
@@ -8950,7 +8950,7 @@ confirm the existing repository is public before continuing.
 a token-free remote:
 
 ```bash
-cd /home/kasm-user/grantspotter
+cd /path/to/grantspotter
 GH_TOKEN=$(grep -m1 'oauth_token:' ~/.config/gh/hosts.yml | sed 's/.*oauth_token:[[:space:]]*//')
 git branch --show-current    # expect: master
 git push "https://x-access-token:${GH_TOKEN}@github.com/Atvriders/grantspotter.git" master

@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- **Node v20.11.0 / npm 10.2.4.** Every shell in every step must start with `export PATH="/home/kasm-user/.local/node/bin:$PATH"`. Verified on this host.
+- **Node v20.11.0 / npm 10.2.4.** Every shell in every step must start with `export PATH="/path/to/node20/bin:$PATH"`. Verified on this host.
 - **No Docker on this host.** Local verification stops at `typecheck + build + test`. The image is Plan 5's problem and is built by GitHub Actions.
 - **`packages/core` is pure.** Zero `node:` imports, zero filesystem, zero network, zero `process.*`, and exactly one runtime dependency: `zod`. Task 1 installs a test that proves this and fails the suite if it ever stops being true. Allowed platform globals in core: `Date`, `Math`, `JSON`, `Intl`, `Number`, `String`, `Object`, `Array`, `Map`, `Set`, `RegExp`.
 - **Core gets SHA-256 from a vendored pure-TypeScript implementation** at `packages/core/src/sha256.ts`, not from `node:crypto` and not from a package. Rationale in Task 3. The purity allowlist therefore stays at exactly `['zod']` — **it is not amended by this plan**.
@@ -162,8 +162,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test
   ```
 
   Expected failure: `npm error Missing script: "test"` (there is no root `package.json` yet). That is the correct red state for a scaffold task.
@@ -449,8 +449,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 6: Install dependencies**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm install
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm install
   ```
 
   Expect roughly `added N packages`. `better-sqlite3` compiles from source via `node-gyp`; `python3`, `make` and `g++` are all present on this host and the compile was verified to succeed. `@node-rs/argon2` installs a prebuilt native binary (verified: it produced a `$argon2id$v=19$m=19456,t=2,p=1$…` hash and verified it).
@@ -458,8 +458,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect `Test Files 1 passed (1)` / `Tests 3 passed (3)`, then a clean typecheck, then `packages/core/dist/index.js` and `packages/server/dist/index.js` on disk.
@@ -467,7 +467,7 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add package.json package-lock.json tsconfig.base.json tsconfig.json vitest.workspace.ts .env.example packages
   git commit -m "chore: scaffold npm workspaces, toolchain, and the core purity gate"
   ```
@@ -573,8 +573,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test
   ```
 
   Expected failure: `Failed to resolve import "../src/schema.js"` — `packages/core/src/schema.ts` does not exist yet.
@@ -1436,8 +1436,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect `schema.test.ts` to report **7 passing tests**, the purity suite still green, and a clean typecheck.
@@ -1445,7 +1445,7 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): CONTRACT §3 domain types, zod mirrors, and shared test fixtures"
   ```
@@ -1617,8 +1617,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 2: Run tests to verify they fail**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test
   ```
 
   Expected failure: `Failed to resolve import "../src/sha256.js"` and `Failed to resolve import "../src/hash.js"`.
@@ -1807,8 +1807,8 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 6: Run tests to verify they pass**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **3 passing tests** in `sha256.test.ts` and **8** in `hash.test.ts`, the whole run green, and a clean typecheck. If the purity test fails here, the most likely cause is a doc comment mentioning `node:crypto` outside a `/* */` or `//` comment — the scanner strips comments before checking.
@@ -1816,7 +1816,7 @@ The deliverable is a workspace whose `core` package is *provably* pure. The puri
 - [ ] **Step 7: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): vendored pure SHA-256 and trust-excluding hashProgram"
   ```
@@ -1954,8 +1954,8 @@ Every case below was executed against this exact implementation before the plan 
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- amount
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- amount
   ```
 
   Expected failure: `Failed to resolve import "../src/amount.js"`.
@@ -2116,8 +2116,8 @@ Every case below was executed against this exact implementation before the plan 
 - [ ] **Step 5: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **12 passing tests** in `amount.test.ts`, the whole run green, and a clean typecheck.
@@ -2125,7 +2125,7 @@ Every case below was executed against this exact implementation before the plan 
 - [ ] **Step 6: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): parseAmount with endowment and cumulative-total discrimination"
   ```
@@ -2365,8 +2365,8 @@ RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | Opens 
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- recurrence
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- recurrence
   ```
 
   Expected failure: `Failed to resolve import "../src/deadline.js"`.
@@ -2625,8 +2625,8 @@ RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | Opens 
 - [ ] **Step 5: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **14 passing tests** in `recurrence.test.ts`, the whole run green, and a clean typecheck.
@@ -2634,7 +2634,7 @@ RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | Opens 
 - [ ] **Step 6: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): IANA-correct wall-time conversion, RECUR notation, deadline inheritance"
   ```
@@ -2895,8 +2895,8 @@ Every expected instant below was computed by running this algorithm on this host
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- cycles
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- cycles
   ```
 
   Expected failure: `"expandCycles" is not exported by "packages/core/src/deadline.ts"`.
@@ -3100,8 +3100,8 @@ Every expected instant below was computed by running this algorithm on this host
 - [ ] **Step 5: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **12 passing tests** in `cycles.test.ts`, the whole run green, and a clean typecheck.
@@ -3109,7 +3109,7 @@ Every expected instant below was computed by running this algorithm on this host
 - [ ] **Step 6: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): expandCycles projection across all ten DeadlineKind values"
   ```
@@ -3342,8 +3342,8 @@ Three radius constraints in the corpus are real and this task is built around th
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- geo
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- geo
   ```
 
   Expected failure: `Failed to resolve import "../src/arrlSections.js"`.
@@ -3472,8 +3472,8 @@ Three radius constraints in the corpus are real and this task is built around th
   Same data, same order. Generate it from the module rather than retyping it, then commit the generated file:
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && mkdir -p data/reference
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && mkdir -p data/reference
   npx tsx -e "
   import { ARRL_DIVISIONS, ARRL_SECTIONS } from './packages/core/src/arrlSections.js';
   import { writeFileSync } from 'node:fs';
@@ -3673,8 +3673,8 @@ Three radius constraints in the corpus are real and this task is built around th
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **20 passing tests** in `geo.test.ts`, the whole run green, and a clean typecheck.
@@ -3682,7 +3682,7 @@ Three radius constraints in the corpus are real and this task is built around th
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core data/reference/arrl-sections.json
   git commit -m "feat(core): ARRL Division/Section reference table, haversine radius, all five GeoSpec shapes"
   ```
@@ -4065,8 +4065,8 @@ Spec §4.5 enumerates thirteen eligibility axes derived from all 111 ARRL catalo
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- axes
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- axes
   ```
 
   Expected failure: `Failed to resolve import "../src/matcher.js"`.
@@ -4345,8 +4345,8 @@ Spec §4.5 enumerates thirteen eligibility axes derived from all 111 ARRL catalo
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **22 passing tests** in `axes.test.ts`, the whole run green, and a clean typecheck.
@@ -4354,7 +4354,7 @@ Spec §4.5 enumerates thirteen eligibility axes derived from all 111 ARRL catalo
 - [ ] **Step 5: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): four-valued evaluators for all thirteen eligibility axes"
   ```
@@ -4631,8 +4631,8 @@ Hard constraints returning `not_evaluable` are treated as passes (they cannot bl
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- matcher
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- matcher
   ```
 
   Expected failure: `"matchProgram" is not exported by "packages/core/src/matcher.ts"`.
@@ -4736,8 +4736,8 @@ Hard constraints returning `not_evaluable` are treated as passes (they cannot bl
 - [ ] **Step 5: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect **16 passing tests** in `matcher.test.ts`, the whole run green, a clean typecheck and a clean build.
@@ -4745,7 +4745,7 @@ Hard constraints returning `not_evaluable` are treated as passes (they cannot bl
 - [ ] **Step 6: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): matchProgram verdicts, applicant-entity gate, and the soft preference cascade"
   ```
@@ -4864,8 +4864,8 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- contract
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- contract
   ```
 
   Expected failure: at minimum `expect('sha256Hex' in core).toBe(false)` passes but the barrel is currently assembled from eight separate append steps; the test surfaces any name that was missed. If everything happens to be present, rewrite `index.ts` as in Step 3 anyway — the consolidated form is the deliverable.
@@ -4928,8 +4928,8 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect **5 passing tests** in `contract.test.ts`, the whole run green, a clean typecheck, and `packages/core/dist/index.d.ts` containing all nine CONTRACT §4 signatures.
@@ -4937,7 +4937,7 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 5: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/core
   git commit -m "feat(core): consolidate the public barrel and assert CONTRACT §4 conformance"
   ```
@@ -5072,8 +5072,8 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- config
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- config
   ```
 
   Expected failure: `Failed to resolve import "../src/config.js"`.
@@ -5204,8 +5204,8 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 4: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **11 passing tests** in `config.test.ts`, the whole run green, and a clean typecheck.
@@ -5213,7 +5213,7 @@ Plans 2–5 import from `@grantspotter/core`. This task makes the barrel the *co
 - [ ] **Step 5: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): environment configuration with a mandatory SESSION_SECRET and CONTACT_URL"
   ```
@@ -5583,8 +5583,8 @@ The DDL below was executed against `better-sqlite3` on this host: all fifteen ta
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- migrate
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- migrate
   ```
 
   Expected failure: `Failed to resolve import "../src/db/migrate.js"`.
@@ -5900,8 +5900,8 @@ The DDL below was executed against `better-sqlite3` on this host: all fifteen ta
 - [ ] **Step 5: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect **7 passing tests** in `migrate.test.ts`, the whole run green, a clean typecheck, and `[copy-sql] copied …` in the build output with `packages/server/dist/db/migrations/001-init.sql` on disk.
@@ -5909,7 +5909,7 @@ The DDL below was executed against `better-sqlite3` on this host: all fifteen ta
 - [ ] **Step 6: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): CONTRACT §6 SQLite schema, WAL connection, and the migration runner"
   ```
@@ -6228,8 +6228,8 @@ Thin, hand-written repositories. No ORM (CONTRACT §6). Three rules that Plans 2
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- repositories.corpus
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- repositories.corpus
   ```
 
   Expected failure: `Failed to resolve import "../src/db/repositories/constraints.js"`.
@@ -6666,8 +6666,8 @@ Thin, hand-written repositories. No ORM (CONTRACT §6). Three rules that Plans 2
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect **14 passing tests** in `repositories.corpus.test.ts`, the whole run green, a clean typecheck and a clean build.
@@ -6675,7 +6675,7 @@ Thin, hand-written repositories. No ORM (CONTRACT §6). Three rules that Plans 2
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): funder, program, constraint and cycle repositories with zod-validated reads"
   ```
@@ -6914,8 +6914,8 @@ Parameters are the OWASP 2024 baseline for Argon2id: **m = 19456 KiB (19 MiB), t
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- accounts
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- accounts
   ```
 
   Expected failure: `Failed to resolve import "../src/auth/password.js"`.
@@ -7286,8 +7286,8 @@ Parameters are the OWASP 2024 baseline for Argon2id: **m = 19456 KiB (19 MiB), t
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **13 passing tests** in `accounts.test.ts`, the whole run green, and a clean typecheck.
@@ -7295,7 +7295,7 @@ Parameters are the OWASP 2024 baseline for Argon2id: **m = 19456 KiB (19 MiB), t
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): argon2id password hashing and user, session and profile repositories"
   ```
@@ -7571,8 +7571,8 @@ invoked on the line **immediately above** `app.use(notFoundHandler());`.
 - [ ] **Step 2: Run tests to verify they fail**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- errors app.health
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- errors app.health
   ```
 
   Expected failure: `Failed to resolve import "../src/api/errors.js"`.
@@ -7779,8 +7779,8 @@ invoked on the line **immediately above** `app.use(notFoundHandler());`.
 - [ ] **Step 6: Run tests to verify they pass**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **7 passing tests** in `errors.test.ts` and **5** in `app.health.test.ts` (two health, three `mountRoutes`), the whole run green, and a clean typecheck.
@@ -7788,7 +7788,7 @@ invoked on the line **immediately above** `app.use(notFoundHandler());`.
 - [ ] **Step 7: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): JSON error envelope, request ids, health endpoint, and the mountRoutes hook"
   ```
@@ -8003,8 +8003,8 @@ Members see the Inbox read-only on purpose: knowing a deadline change is *pendin
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- session
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- session
   ```
 
   Expected failure: `Failed to resolve import "../src/auth/session.js"`.
@@ -8202,8 +8202,8 @@ Members see the Inbox read-only on purpose: knowing a deadline change is *pendin
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck
   ```
 
   Expect **10 passing tests** in `session.test.ts`, the whole run green, and a clean typecheck. If TypeScript reports `Property 'auth' does not exist on type 'Request'`, `api/types.ts` is not being imported anywhere — `auth/middleware.ts` must import `AuthedUser` from it for the module augmentation to load.
@@ -8211,7 +8211,7 @@ Members see the Inbox read-only on purpose: knowing a deadline change is *pendin
 - [ ] **Step 8: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): HMAC-signed opaque sessions, auth middleware, and the spec §12 role matrix"
   ```
@@ -8495,8 +8495,8 @@ Spec §12: *"First-run admin bootstrap via a one-time token printed to the conta
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- api.auth
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- api.auth
   ```
 
   Expected failure: `Failed to resolve import "../src/auth/bootstrap.js"`.
@@ -8884,8 +8884,8 @@ Spec §12: *"First-run admin bootstrap via a one-time token printed to the conta
 - [ ] **Step 9: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test && npm run typecheck && npm run build
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test && npm run typecheck && npm run build
   ```
 
   Expect **14 passing tests** in `api.auth.test.ts`, the whole run green, a clean typecheck and a clean build. The login rate-limit test performs six argon2 verifications and is given a 20-second timeout for that reason.
@@ -8893,8 +8893,8 @@ Spec §12: *"First-run admin bootstrap via a one-time token printed to the conta
 - [ ] **Step 10: Prove the refusal to start, by hand**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter
   SESSION_SECRET= CONTACT_URL=https://example.org/gs DATA_DIR=./.tmp-data \
     node packages/server/dist/index.js; echo "exit=$?"
   ```
@@ -8904,7 +8904,7 @@ Spec §12: *"First-run admin bootstrap via a one-time token printed to the conta
 - [ ] **Step 11: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add packages/server
   git commit -m "feat(server): first-run bootstrap, rate-limited login, logout, me, and the entrypoint"
   ```
@@ -9035,8 +9035,8 @@ Plan 3 builds the real SPA. This task delivers only what Plans 2–5 need to exi
 - [ ] **Step 2: Run test to verify it fails**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- client
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- client
   ```
 
   Expected failure: no `web` project exists yet, so vitest reports `No test files found` (or fails to resolve `../src/api/client.js` once the project is registered).
@@ -9411,15 +9411,15 @@ Plan 3 builds the real SPA. This task delivers only what Plans 2–5 need to exi
   Then install the new workspace's dependencies:
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm install
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm install
   ```
 
 - [ ] **Step 7: Run test to verify it passes**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter && npm test -- client
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter && npm test -- client
   ```
 
   Expect `Tests 5 passed (5)` in the `web` project.
@@ -9427,8 +9427,8 @@ Plan 3 builds the real SPA. This task delivers only what Plans 2–5 need to exi
 - [ ] **Step 8: Run the full Plan 1 verification**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter
   npm run typecheck && npm test && npm run build
   ```
 
@@ -9440,8 +9440,8 @@ Plan 3 builds the real SPA. This task delivers only what Plans 2–5 need to exi
 - [ ] **Step 9: Smoke-test the running server by hand**
 
   ```bash
-  export PATH="/home/kasm-user/.local/node/bin:$PATH"
-  cd /home/kasm-user/grantspotter
+  export PATH="/path/to/node20/bin:$PATH"
+  cd /path/to/grantspotter
   SESSION_SECRET="$(openssl rand -hex 32)" CONTACT_URL=https://example.org/grantspotter \
     DATA_DIR=./.tmp-smoke PORT=3031 CRAWL_ENABLED=false \
     node packages/server/dist/index.js &
@@ -9458,7 +9458,7 @@ Plan 3 builds the real SPA. This task delivers only what Plans 2–5 need to exi
 - [ ] **Step 10: Commit**
 
   ```bash
-  cd /home/kasm-user/grantspotter
+  cd /path/to/grantspotter
   git add package.json package-lock.json vitest.workspace.ts packages/web
   git commit -m "feat(web): workspace stub and the typed API client encoding the error envelope"
   ```

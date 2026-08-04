@@ -10,7 +10,7 @@ Spec: [`../specs/2026-08-02-grantspotter-design.md`](../specs/2026-08-02-grantsp
 
 ## 1. Toolchain (verified on this host)
 
-- Node **v20.11.0**, npm **10.2.4** (`export PATH="/home/kasm-user/.local/node/bin:$PATH"`)
+- Node **v20.11.0**, npm **10.2.4** (`export PATH="/path/to/node20/bin:$PATH"`)
 - TypeScript strict, `"module": "NodeNext"`, `"target": "ES2022"`
 - Vitest for unit/integration, Playwright for e2e
 - **No Docker on this host.** The image is built and verified by GitHub Actions, not locally.

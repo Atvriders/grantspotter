@@ -4,8 +4,9 @@ Two audits (spec-coverage, cross-plan type-consistency) produced 37 findings: 9 
 8 major, 20 minor. This file records the **canonical decision** for every conflict that spans
 more than one plan file. Fix agents own disjoint files and follow these decisions verbatim.
 
-Raw findings: `/tmp/claude-1000/-home-kasm-user/5ba96b47-3326-422f-b287-d959c0c99b04/scratchpad/coverageAudit.json`
-and `.../typeAudit.json`.
+Raw findings were written to two scratch files, `coverageAudit.json` and `typeAudit.json`, in the
+session scratchpad. They are not committed: they are machine-local temporary output, and the
+decisions they produced are recorded below, which is the part worth keeping.
 
 ---
 

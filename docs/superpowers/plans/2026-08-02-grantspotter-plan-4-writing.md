@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Node **v20.11.0**, npm **10.2.4**. Every command in this plan begins with `export PATH="/home/kasm-user/.local/node/bin:$PATH"`.
-- Repo root is `/home/kasm-user/grantspotter`. All paths in this plan are repo-relative unless shown absolute.
+- Node **v20.11.0**, npm **10.2.4**. Every command in this plan begins with `export PATH="/path/to/node20/bin:$PATH"`.
+- Repo root is `/path/to/grantspotter`. All paths in this plan are repo-relative unless shown absolute.
 - TypeScript **strict**. `"module": "NodeNext"` means every relative import in server code carries an explicit `.js` extension even though the source is `.ts`.
 - `packages/core` stays **pure** and is **not modified by this plan**. Import direction is one-way: `server → core`, `web → core`. `packages/web` never imports server code — DTO shapes are re-declared web-side and that duplication is deliberate.
 - `packages/server/src/prose/` is **PURE: zero I/O, zero network, no API key, no `node:` imports.** It is unit-tested against passages written into this plan.
@@ -190,7 +190,7 @@ describe('parseFrontmatter', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/frontmatter.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/frontmatter.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./frontmatter.js" from "packages/server/src/templates/frontmatter.test.ts". Does the file exist?`
@@ -327,7 +327,7 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/frontmatter.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/frontmatter.test.ts
 ```
 
 All six assertions pass.
@@ -464,7 +464,7 @@ describe('loadTemplates and selectTemplates', () => {
 - [ ] **Step 6: Run the loader test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/load.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/load.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./load.js"`.
@@ -657,7 +657,7 @@ export function selectTemplates(all: TemplateDoc[], q: TemplateQuery): TemplateS
 - [ ] **Step 8: Create the content directories and run both tests**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   mkdir -p content/templates/components content/templates/funders content/prompts && \
   touch content/templates/components/.gitkeep content/templates/funders/.gitkeep && \
   npx vitest run packages/server/src/templates/frontmatter.test.ts packages/server/src/templates/load.test.ts
@@ -668,7 +668,7 @@ Both files pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/templates content/templates && \
   git commit -m "feat(templates): frontmatter parser and template loader with derived slots"
 ```
@@ -814,7 +814,7 @@ describe('buildSlotContext', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/slots.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/slots.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./slots.js"`.
@@ -1001,13 +1001,13 @@ export function buildSlotContext(input: SlotContextInput): Record<string, unknow
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/slots.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/slots.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/templates/slots.ts packages/server/src/templates/slots.test.ts && \
   git commit -m "feat(templates): slot vocabulary and profile-to-context builder"
 ```
@@ -1118,7 +1118,7 @@ describe('fillTemplate', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/fill.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/fill.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./fill.js"`.
@@ -1212,13 +1212,13 @@ export function fillTemplate(templateMarkdown: string, ctx: Record<string, unkno
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/fill.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/fill.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/templates/fill.ts packages/server/src/templates/fill.test.ts && \
   git commit -m "feat(templates): fillTemplate renders explicit TODO markers, never plausible filler"
 ```
@@ -1334,7 +1334,7 @@ describe('component layer', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected 0 to be greater than 0` from the first `it` (no templates exist yet), followed by `expected undefined to contain 'club.name'` in the component-layer block.
@@ -1518,7 +1518,7 @@ Passive voice hiding the absence of a person: "materials will be procured", "ses
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 All assertions pass: four components load, every slot is in the vocabulary, no banned phrase appears.
@@ -1526,7 +1526,7 @@ All assertions pass: four components load, every slot is in the vocabulary, no b
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/components packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): need statement, project description, outcomes and timeline components"
 ```
@@ -1591,7 +1591,7 @@ describe('component layer — budget, sustainability, evaluation, capacity', () 
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected undefined to be defined` in "ships all four".
@@ -1785,13 +1785,13 @@ Describing the hobby instead of the club. A reviewer already knows amateur radio
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/components packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): budget, sustainability, evaluation and capacity components"
 ```
@@ -1865,7 +1865,7 @@ describe('component layer — correspondence and reporting', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected 8 to be 13`.
@@ -2091,7 +2091,7 @@ Reporting activity instead of outcomes, because activity is easier to describe. 
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 `components.length` is now 13.
@@ -2099,7 +2099,7 @@ cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/components packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): letter of inquiry, scholarship essay, recommendation, thank-you and report components"
 ```
@@ -2208,7 +2208,7 @@ describe('funder layer — ARDC and ARRL Amateur Radio Grants', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected 0 to be greater than 0` in "cites at least one live https source for every overlay", then `expected undefined to be defined` for `funder-ardc`.
@@ -2340,13 +2340,13 @@ This is a small-grant program serving clubs and schools. The strongest applicati
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/funders packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): ARDC and ARRL Amateur Radio Grants funder overlays"
 ```
@@ -2414,7 +2414,7 @@ describe('funder layer — ARRL Club Grant and ARRL Foundation Scholarship', () 
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected undefined to be defined` for `funder-arrl-club-grant`.
@@ -2536,13 +2536,13 @@ Both the Club Grant page and the Grant Application Form PDF were read in full du
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/funders packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): ARRL Club Grant and ARRL Foundation Scholarship overlays"
 ```
@@ -2612,7 +2612,7 @@ describe('funder layer — ARISS, IEEE MTT-S, Yaesu DR-2X', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected undefined to be defined` for `funder-ariss`.
@@ -2779,13 +2779,13 @@ Windows are ad-hoc, roughly two to four a year. The window verified on 2026-08-0
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/funders packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): ARISS, IEEE MTT-S and Yaesu DR-2X funder overlays"
 ```
@@ -2857,7 +2857,7 @@ describe('funder layer — campus SGA playbook', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected undefined to be defined`.
@@ -2968,13 +2968,13 @@ The six-week lead time is the number that most often catches clubs. A Field Day 
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/templates/funders/funder-campus-sga.md packages/server/src/templates/content.test.ts && \
   git commit -m "feat(templates): campus SGA playbook with the capital-equipment reframe"
 ```
@@ -3049,7 +3049,7 @@ describe('pickConsortium', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/consortia.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/consortia.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./consortia.js"`.
@@ -3189,7 +3189,7 @@ export function pickConsortium(state: string, root?: string): SpaceGrantConsorti
 - [ ] **Step 5: Run the consortium test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/consortia.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/consortia.test.ts
 ```
 
 - [ ] **Step 6: Write the failing overlay test**
@@ -3222,7 +3222,7 @@ describe('funder layer — NASA State Space Grant', () => {
 - [ ] **Step 7: Run it, watch it fail, then write the overlay**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/templates/content.test.ts
 ```
 
 Expected failure: `AssertionError: expected undefined to be defined`.
@@ -3290,7 +3290,7 @@ State the student involvement in headcounts and hours. Consortia report to NASA 
 - [ ] **Step 8: Run both tests and commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npx vitest run packages/server/src/templates/ && \
   git add content/templates/funders/funder-nasa-space-grant.md data/reference/space-grant-consortia.json packages/server/src/templates && \
   git commit -m "feat(templates): NASA Space Grant overlay with an unverified-by-design 52-consortium picker"
@@ -3440,7 +3440,7 @@ describe('countFigures and variance', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/features.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/features.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./features.js"`.
@@ -3721,13 +3721,13 @@ export function variance(values: number[]): number {
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/features.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/features.test.ts
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/prose && \
   git commit -m "feat(prose): sentence, token, style-lexicon and referent-density primitives"
 ```
@@ -3906,7 +3906,7 @@ describe('analyzeProse — document level', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/index.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/index.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./index.js"`.
@@ -4087,7 +4087,7 @@ export function analyzeProse(text: string): ProseReport {
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/index.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/index.test.ts
 ```
 
 If a verdict assertion fails, do **not** move a threshold to make the test green — re-count the paragraph by hand first with `paragraphDensities`, because the thresholds are the specification and the passages were written against them.
@@ -4095,7 +4095,7 @@ If a verdict assertion fails, do **not** move a threshold to make the test green
 - [ ] **Step 5: Assert the module is genuinely pure and commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   ! grep -rE "from 'node:|require\(|process\.env|fetch\(" packages/server/src/prose/index.ts packages/server/src/prose/features.ts packages/server/src/prose/lexicon.ts && \
   echo "prose/ is pure" && \
   git add packages/server/src/prose && \
@@ -4220,7 +4220,7 @@ describe('buildFactChecklist and exportReadiness', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/facts.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/facts.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./facts.js"`.
@@ -4352,13 +4352,13 @@ export function exportReadiness(
 - [ ] **Step 4: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prose/facts.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prose/facts.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/prose/facts.ts packages/server/src/prose/facts.test.ts && \
   git commit -m "feat(prose): fact checklist extractor and export readiness gate"
 ```
@@ -4603,7 +4603,7 @@ describe('composePrompt', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prompts/compose.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prompts/compose.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./compose.js"`.
@@ -4972,13 +4972,13 @@ export function composePrompt(ctx: PromptContext): string {
 - [ ] **Step 5: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/prompts/compose.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/prompts/compose.test.ts
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add content/prompts packages/server/src/prompts && \
   git commit -m "feat(prompts): style ruleset fragments, disclosure generator and composePrompt"
 ```
@@ -5319,7 +5319,7 @@ describe('assertApplicationSchema (assert, never create)', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/api/applications.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/api/applications.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./applications.js"`.
@@ -5329,7 +5329,7 @@ Expected failure: `Error: Failed to resolve import "./applications.js"`.
 **RESOLUTIONS R24. Do not create `packages/server/src/db/migrations/040-application-writing.sql`, and do not edit `001-init.sql`.** Plan 1 Task 12 declares both tables with exactly the column list the repository below expects. Run this gate instead — it proves the shape is there before a line of repository code is written, and it fails if an earlier draft of this plan left a second migration behind:
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   INIT=packages/server/src/db/migrations/001-init.sql && \
   echo "-- Plan 1 declares both tables --" && \
   grep -q "CREATE TABLE applications" "$INIT" && \
@@ -5582,7 +5582,7 @@ export function assertExportReady(db: Database, applicationId: string, userId: s
 Add `zod` to the server workspace:
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npm install -w @grantspotter/server zod
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npm install -w @grantspotter/server zod
 ```
 
 Create `packages/server/src/api/applications.ts`:
@@ -5734,13 +5734,13 @@ export function createApplicationsRouter(deps: RouterDeps): Router {
 - [ ] **Step 6: Run the test and watch it pass**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/api/applications.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/api/applications.test.ts
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/server/src/db packages/server/src/api packages/server/package.json package-lock.json && \
   git commit -m "feat(api): application drafts with a fact-checklist export gate"
 ```
@@ -6020,7 +6020,7 @@ describe('prompts router', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/server/src/api/writingRouters.test.ts
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/server/src/api/writingRouters.test.ts
 ```
 
 Expected failure: `Error: Failed to resolve import "./prompts.js"`.
@@ -6334,7 +6334,7 @@ Three things must **not** happen here: no `app.use(...)` after `createApp` retur
 Now verify:
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   echo "-- the app is composed through the mountRoutes hook --" && \
   grep -q "mountRoutes" packages/server/src/index.ts && \
   echo "-- the callback calls router factories, whatever the deps variable is named --" && \
@@ -6377,7 +6377,7 @@ If a `MISSING MOUNT` line prints after you have edited the file, you edited the 
 - [ ] **Step 6: Run the test and the typecheck, then commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npx vitest run packages/server/src/api/ && npm run typecheck && npm run build && \
   git add packages/server/src/api packages/server/src/index.ts && \
   git commit -m "feat(api): templates, prose and prompts routers, mounted through mountRoutes"
@@ -6407,7 +6407,7 @@ The SPA re-declares the DTO shapes it consumes. That duplication is intentional 
 - [ ] **Step 1: Install the component-test toolchain**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npm install -w @grantspotter/web -D @testing-library/react jsdom
 ```
 
@@ -6507,7 +6507,7 @@ describe('TemplatesScreen', () => {
 - [ ] **Step 3: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/web/src/routes/Templates.test.tsx
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/web/src/routes/Templates.test.tsx
 ```
 
 Expected failure: `Error: Failed to resolve import "./Templates.js"`.
@@ -6944,7 +6944,7 @@ The `*Screen` wrappers are the query-string-aware versions; `TemplatesRoute` and
 After the insert the array has **nine** entries and the rail reads Browse · Calendar · Watchlist · Templates · Applications · Inbox · Sources · Profile, plus Admin for admins only. Verify before moving on:
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   SHELL_TSX=packages/web/src/components/AppShell.tsx && \
   echo "-- the array is still typed --" && \
   grep -q "const NAV: NavItem\[\] = \[" "$SHELL_TSX" && \
@@ -6984,7 +6984,7 @@ expect(within(nav).getByRole('link', { name: /applications/i })).toBeInTheDocume
 - [ ] **Step 7: Run the test and commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npx vitest run packages/web/src/routes/Templates.test.tsx && \
   git add packages/web/src package.json package-lock.json && \
   git commit -m "feat(web): writing API client, template picker and Templates route"
@@ -7252,7 +7252,7 @@ describe('ApplicationsScreen deep link', () => {
 - [ ] **Step 2: Run the test and watch it fail**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && npx vitest run packages/web/src/routes/Applications.test.tsx
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && npx vitest run packages/web/src/routes/Applications.test.tsx
 ```
 
 Expected failure: `Error: Failed to resolve import "../components/CopyPromptButton.js"`.
@@ -7852,14 +7852,14 @@ A failed profile or program read is swallowed on purpose: neither is required to
 - [ ] **Step 5: Run the tests, typecheck and build**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npx vitest run packages/web/src && npm run typecheck && npm run build
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add packages/web/src && \
   git commit -m "feat(web): applications draft editor with prose panel, fact checklist and copy-prompt button"
 ```
@@ -8035,7 +8035,7 @@ test.describe('writing tools', () => {
 - [ ] **Step 2: Run the e2e spec and watch it fail for the right reason**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npx playwright test e2e/writing.spec.ts; echo "playwright exit=$?"
 ```
 
@@ -8050,8 +8050,8 @@ see the note at the top of this task). That is the expected failure. It usually 
 Confirm the shape of it before writing any code:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run build && npm run e2e:seed
 PORT=3131 DATA_DIR=e2e/.tmp CRAWL_ENABLED=false \
   SESSION_SECRET=e2e-session-secret-not-a-real-secret \
@@ -8100,7 +8100,7 @@ The hard gate. All three must be green before the commit, from a clean checkout,
 imports anywhere** — this plan forward-references no Plan 5 module (R25):
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   npm run typecheck && npm run build && npm test
 ```
 
@@ -8109,8 +8109,8 @@ reason set out at the top of this task, so it is run on its own line and its exi
 rather than chained:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run test:e2e; echo "test:e2e exit=$?"
 ```
 
@@ -8123,8 +8123,8 @@ Plan 1's JSON 404 envelope instead of `index.html`. Prove that everything undern
 the build, the migrations, the seed, the mount hook, this plan's own four routes:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run build && npm run e2e:seed
 PORT=3131 DATA_DIR=e2e/.tmp CRAWL_ENABLED=false \
   SESSION_SECRET=e2e-session-secret-not-a-real-secret \
@@ -8151,11 +8151,11 @@ There is no Docker on this host, so local verification stops here; the image is 
 - [ ] **Step 5: Confirm Plan 4's stated done-criteria and the no-leak rules**
 
 ```bash
-cd /home/kasm-user/grantspotter && export PATH="/home/kasm-user/.local/node/bin:$PATH" && \
+cd /path/to/grantspotter && export PATH="/path/to/node20/bin:$PATH" && \
   echo "-- every funder overlay cites a source --" && \
   [ -z "$(grep -L '^sources:' content/templates/funders/*.md)" ] && \
   echo "-- no private hosts, no compromised domain --" && \
-  ! grep -rniE "192\.168\.|10\.[0-9]+\.[0-9]+\.|farweb\.org|kasm-user" content/ data/reference/ packages/server/src/prose packages/server/src/prompts packages/server/src/templates && \
+  ! grep -rniE "192\.168\.|10\.[0-9]+\.[0-9]+\.|farweb\.org|/home/[a-z0-9_.-]+/" content/ data/reference/ packages/server/src/prose packages/server/src/prompts packages/server/src/templates && \
   echo "-- prose/ is pure --" && \
   ! grep -rE "from 'node:|process\.env|fetch\(" packages/server/src/prose/*.ts && \
   echo "-- contract copy string is exact --" && \
@@ -8203,7 +8203,7 @@ The first `grep -L` must print nothing: it lists overlay files with no `sources:
 - [ ] **Step 6: Commit — and do not push**
 
 ```bash
-cd /home/kasm-user/grantspotter && \
+cd /path/to/grantspotter && \
   git add e2e/writing.spec.ts && \
   git commit -m "test(e2e): template library, slot filling, prose check and copy-prompt flow"
 ```

@@ -423,10 +423,16 @@ describe('the rules that catch a record nobody typed on purpose', () => {
   });
 
   it.each([
-    ['a private LAN address', 'The club runs a server at 192.168.1.43.'],
+    // These fixtures must keep the SHAPE the patterns match — a 192.168 address, a real
+    // /home/<name>/ path — while naming no machine and no account that exists. They are the
+    // inputs to the rule that keeps host detail out of a public repository, and this file
+    // ships in that same public repository: a fixture quoting a real LAN address or a real
+    // home directory would be the exact leak the rule exists to stop, committed by the test
+    // that proves the rule works.
+    ['a private LAN address', 'The club runs a server at 192.168.0.1.'],
     ['a loopback address', 'Reachable on 127.0.0.1 only.'],
     ['a carrier-grade private range', 'Behind 172.16.4.9.'],
-    ['a host filesystem path', 'Captured to /home/kasm-user/grantspotter/fixtures.'],
+    ['a host filesystem path', 'Captured to /home/operator/grantspotter/fixtures.'],
   ])('REJECTS %s', (_label, text) => {
     expect(rulesFor([record(makeProgram({ rawOtherText: text }))])).toEqual(['private-host-detail']);
   });

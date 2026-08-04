@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Node **v20.11.0**, npm **10.2.4**. Every command in this plan is preceded by `export PATH="/home/kasm-user/.local/node/bin:$PATH"`.
+- Node **v20.11.0**, npm **10.2.4**. Every command in this plan is preceded by `export PATH="/path/to/node20/bin:$PATH"`.
 - TypeScript **strict**, `"module": "NodeNext"`, `"target": "ES2022"` (web package uses `"module": "ESNext"`, `"moduleResolution": "Bundler"` — Vite's requirement; this is the one documented deviation and it does not affect `core` or `server`).
 - `packages/core` stays **pure**: zero I/O, zero `node:` imports, zero runtime deps but `zod`. Plan 3 never adds code to `core`.
 - Import direction is one-way: `web → core`, `server → core`. Plan 3 never imports `server` from `web`.
@@ -281,8 +281,8 @@ describe.each([
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/lib/contrast.test.ts
 ```
 
@@ -804,8 +804,8 @@ Delete Plan 1's starter stylesheet, now that nothing imports it — an orphaned 
 a maintenance trap:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git rm packages/web/src/styles/index.css
 grep -rn "styles/index.css" packages/web/src || echo "no remaining imports — correct"
 ```
@@ -850,16 +850,16 @@ Modify the root `package.json` scripts. Three surgical changes to Plan 1's block
 Install:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm install
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/lib/contrast.test.ts
 npm run build -w @grantspotter/web
 ```
@@ -872,8 +872,8 @@ above keeps it in scope. If it is missing from the reporter output, the include 
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web vitest.workspace.ts package.json package-lock.json
 git commit -m "feat(web): design system over Plan 1's web scaffold, with contrast tests"
 ```
@@ -1105,8 +1105,8 @@ describe('reindexBrowse', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/db/schemaConformance.test.ts packages/server/src/api/reindex.test.ts
 ```
 
@@ -1718,8 +1718,8 @@ export function reindexBrowse(db: Database.Database, nowISO: string): number {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/db/schemaConformance.test.ts packages/server/src/api/reindex.test.ts
 ```
 
@@ -1728,8 +1728,8 @@ Expected: all conformance rows green and 6 reindex assertions green. **If a conf
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/030-browse-projection.sql \
         packages/server/src/api/browseTypes.ts \
         packages/server/src/api/reindex.ts \
@@ -1907,8 +1907,8 @@ describe('hydratePrograms', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/browseQuery.test.ts
 ```
 
@@ -2094,8 +2094,8 @@ export function hydratePrograms(
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/browseQuery.test.ts
 ```
 
@@ -2104,8 +2104,8 @@ Expected: 15 assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/browseQuery.ts packages/server/src/api/browseQuery.test.ts
 git commit -m "feat(api): indexed browse query with facet, amount, window and text filters"
 ```
@@ -2335,8 +2335,8 @@ describe('GET /api/programs', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm install --save-dev supertest @types/supertest -w @grantspotter/server
 npx vitest run packages/server/src/api/programsRouter.test.ts
 ```
@@ -2708,8 +2708,8 @@ function db_watchedIds(deps: RouterDeps, userId: string): string[] {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/programsRouter.test.ts packages/server/src/db/schemaConformance.test.ts
 ```
 
@@ -2718,8 +2718,8 @@ Expected: 13 router assertions plus the extended conformance map green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/deps.ts packages/server/src/api/profileStore.ts \
         packages/server/src/api/programsRouter.ts \
         packages/server/src/api/programsRouter.test.ts \
@@ -2954,8 +2954,8 @@ describe('GET /api/programs/:id', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/provenanceStore.test.ts packages/server/src/api/programDetail.test.ts
 ```
 
@@ -3144,8 +3144,8 @@ which is the only thing in this repository that writes an error body (RESOLUTION
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/provenanceStore.test.ts packages/server/src/api/programDetail.test.ts packages/server/src/db/schemaConformance.test.ts
 ```
 
@@ -3154,8 +3154,8 @@ Expected: 5 provenance assertions + 9 detail assertions + conformance green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/031-field-provenance.sql \
         packages/server/src/api/provenanceStore.ts \
         packages/server/src/api/provenanceStore.test.ts \
@@ -3404,8 +3404,8 @@ describe('GET /api/me', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/completeness.test.ts packages/server/src/api/profileRouter.test.ts
 ```
 
@@ -3572,8 +3572,8 @@ export function createMeRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/completeness.test.ts packages/server/src/api/profileRouter.test.ts
 ```
 
@@ -3582,8 +3582,8 @@ Expected: 5 completeness + 9 profile/me assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/completeness.ts packages/server/src/api/completeness.test.ts \
         packages/server/src/api/profileRouter.ts packages/server/src/api/profileRouter.test.ts
 git commit -m "feat(api): profile editor endpoints and matcher-derived completeness meter"
@@ -3736,8 +3736,8 @@ describe('watchlist API', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/watchRouter.test.ts
 ```
 
@@ -3920,8 +3920,8 @@ export function createWatchRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/watchRouter.test.ts packages/server/src/db/schemaConformance.test.ts
 ```
 
@@ -3934,8 +3934,8 @@ disabling the pragma.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/033-watches.sql \
         packages/server/src/api/watchRouter.ts packages/server/src/api/watchRouter.test.ts \
         packages/server/src/db/schemaConformance.test.ts
@@ -4223,8 +4223,8 @@ describe('notifications API', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/notify.test.ts packages/server/src/api/notificationRouter.test.ts
 ```
 
@@ -4508,8 +4508,8 @@ export function createNotificationRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/notify.test.ts packages/server/src/api/notificationRouter.test.ts
 ```
 
@@ -4518,8 +4518,8 @@ Expected: 9 fan-out + 5 router assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/034-notifications.sql \
         packages/server/src/api/notify.ts packages/server/src/api/notify.test.ts \
         packages/server/src/api/notificationRouter.ts \
@@ -4698,8 +4698,8 @@ describe('deliverExternal', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/channels.test.ts
 ```
 
@@ -4921,8 +4921,8 @@ export function createChannelRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/channels.test.ts
 ```
 
@@ -4931,8 +4931,8 @@ Expected: 14 assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/035-notification-channels.sql \
         packages/server/src/api/channels.ts packages/server/src/api/channels.test.ts \
         packages/server/src/api/channelRouter.ts
@@ -5282,8 +5282,8 @@ describe('POST /api/programs/:id/verify', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/verify.test.ts
 ```
 
@@ -5652,8 +5652,8 @@ export function createVerifyRouter(deps: RouterDeps, runner: VerifyRunner): Rout
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/verify.test.ts
 ```
 
@@ -5662,8 +5662,8 @@ Expected: 8 runner + 6 rate-limit + 5 route assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/db/migrations/036-verify-attempts.sql \
         packages/server/src/api/verify.ts packages/server/src/api/verify.test.ts \
         packages/server/src/api/verifyRouter.ts
@@ -5859,8 +5859,8 @@ describe('GET /api/calendar', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/prepLead.test.ts packages/server/src/api/calendarRouter.test.ts
 ```
 
@@ -6063,8 +6063,8 @@ export function createCalendarRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/prepLead.test.ts packages/server/src/api/calendarRouter.test.ts
 ```
 
@@ -6073,8 +6073,8 @@ Expected: 7 prep-lead + 8 calendar assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/prepLead.ts packages/server/src/api/prepLead.test.ts \
         packages/server/src/api/calendarRouter.ts packages/server/src/api/calendarRouter.test.ts
 git commit -m "feat(api): calendar endpoint with prep-lead-time and decision-lag overlay"
@@ -6442,8 +6442,8 @@ describe('inbox API', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/inboxRouter.test.ts
 ```
 
@@ -6644,8 +6644,8 @@ export function createInboxRouter(deps: RouterDeps): Router {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/inboxRouter.test.ts
 ```
 
@@ -6657,8 +6657,8 @@ fails, the route has drifted back to re-implementing Plan 2 Task 21 instead of c
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/inboxRouter.ts packages/server/src/api/inboxRouter.test.ts
 git commit -m "feat(api): review inbox readable by members, decidable by admins"
 ```
@@ -6907,8 +6907,8 @@ describe('/api/admin/users', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/adminUsersRouter.test.ts
 ```
 
@@ -7111,8 +7111,8 @@ style exactly:
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/adminUsersRouter.test.ts
 npm run typecheck
 ```
@@ -7123,8 +7123,8 @@ if it exceeds the default timeout, raise it to 20 seconds exactly as Plan 1's `a
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/adminUsersRouter.ts \
         packages/server/src/api/adminUsersRouter.test.ts \
         packages/server/src/db/repositories/users.ts
@@ -7708,8 +7708,8 @@ describe('mountRoutes composition', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server/src/api/sourcesRouter.test.ts packages/server/src/api/mount.test.ts
 ```
 
@@ -8206,8 +8206,8 @@ its user field is `req.auth?.id` (RESOLUTIONS R22).
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/server
 npm run typecheck
 npm run build
@@ -8225,8 +8225,8 @@ Then prove the mount hook is wired the way R5 and R25 require, because a router 
 would be shadowed by Plan 5's SPA middleware later without ever failing a test:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 # 1. every mount site, including the ones that are only quoted inside comments
 grep -n "app\.use(\|a\.use(" packages/server/src/index.ts
 # 2. a bare app.use AFTER createApp returned - must print nothing, in every plan
@@ -8272,8 +8272,8 @@ Six things must hold:
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/server/src/api/sourcesRouter.ts packages/server/src/api/sourcesRouter.test.ts \
         packages/server/src/api/mount.ts packages/server/src/api/mount.test.ts \
         packages/server/src/api/webDist.ts packages/server/src/index.ts
@@ -8622,8 +8622,8 @@ describe('Login', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -8670,8 +8670,8 @@ Now fold and delete Plan 1's separate test file, and narrow the two config inclu
 it:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git rm packages/web/test/client.test.ts
 rmdir packages/web/test 2>/dev/null || true
 ```
@@ -9196,8 +9196,8 @@ createRoot(el).render(
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 npm run build -w @grantspotter/web
 ```
@@ -9208,8 +9208,8 @@ build emits `dist/`. `packages/web/test/` no longer exists and no suite referenc
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add -A packages/web
 git commit -m "feat(web): apiGet/apiSend over Plan 1's client, session store, app shell and login"
 ```
@@ -9457,8 +9457,8 @@ describe('StatusPill', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/lib packages/web/src/components
 ```
 
@@ -9786,8 +9786,8 @@ export function StatusPill({ status }: { status: ProgramStatus }) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -9796,8 +9796,8 @@ Expected: 8 trust + 6 registry + 6 verdict + 6 trust/status component assertions
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src/lib packages/web/src/components
 git commit -m "feat(web): verdict, trust and status badge kit with profile-field registry"
 ```
@@ -10042,8 +10042,8 @@ describe('Browse', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/lib/filterState.test.ts packages/web/src/routes/Browse.test.tsx
 ```
 
@@ -10650,8 +10650,8 @@ import { Browse } from './routes/Browse.js';
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -10660,8 +10660,8 @@ Expected: 5 filter-state + 12 Browse assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): browse route with server-side filters and verdict census"
 ```
@@ -10824,8 +10824,8 @@ describe('UnknownFields', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/components/IneligibilityDrawer.test.tsx packages/web/src/components/UnknownFields.test.tsx
 ```
 
@@ -11108,8 +11108,8 @@ import { UnknownFields } from '../components/UnknownFields.js';
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -11118,8 +11118,8 @@ Expected: 7 drawer + 5 unknown-field assertions green, and the Task 17 Browse su
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): per-program ineligibility explainer and jump-to-profile ladder"
 ```
@@ -11414,8 +11414,8 @@ describe('Opportunity detail', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Opportunity.test.tsx
 ```
 
@@ -11924,8 +11924,8 @@ import { Opportunity } from './routes/Opportunity.js';
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -11934,8 +11934,8 @@ Expected: 16 detail assertions green, all earlier web suites still green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): opportunity detail with provenance, disputes and Verify now"
 ```
@@ -12194,8 +12194,8 @@ describe('Calendar', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/components/MonthGrid.test.tsx packages/web/src/routes/Calendar.test.tsx
 ```
 
@@ -12602,8 +12602,8 @@ import { Calendar } from './routes/Calendar.js';
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -12612,8 +12612,8 @@ Expected: 6 month-grid + 8 calendar assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): calendar with month grid, agenda and prep-lead-time overlay"
 ```
@@ -12840,8 +12840,8 @@ describe('Watchlist', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Watchlist.test.tsx
 ```
 
@@ -13174,8 +13174,8 @@ import { Watchlist } from './routes/Watchlist.js';
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -13184,8 +13184,8 @@ Expected: 11 watchlist assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): watchlist, change digest and optional delivery channels"
 ```
@@ -13367,8 +13367,8 @@ describe('Profile', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Profile.test.tsx
 ```
 
@@ -13690,8 +13690,8 @@ import { Profile } from './routes/Profile.js';
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -13700,8 +13700,8 @@ Expected: 11 profile assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): student and organization profile editors with completeness meter"
 ```
@@ -13872,8 +13872,8 @@ describe('Inbox as an admin', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Inbox.test.tsx
 ```
 
@@ -14101,8 +14101,8 @@ import { Inbox } from './routes/Inbox.js';
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 ```
 
@@ -14111,8 +14111,8 @@ Expected: 9 inbox assertions green.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): review inbox, read-only for members and decidable by admins"
 ```
@@ -14540,8 +14540,8 @@ describe('accessibility audit', () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Sources.test.tsx packages/web/src/test/a11y.test.tsx
 ```
 
@@ -14945,8 +14945,8 @@ import { Sources } from './routes/Sources.js';
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 npm run typecheck
 ```
@@ -14957,8 +14957,8 @@ suite green, typecheck clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): sources page with admin configuration and manual crawl, plus the a11y audit"
 ```
@@ -15257,8 +15257,8 @@ describe('Admin console — backup, restore and ICS tokens', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web/src/routes/Admin.test.tsx
 ```
 
@@ -15652,8 +15652,8 @@ to `stubEverything()` is needed.
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npx vitest run packages/web
 npm run typecheck
 ```
@@ -15664,8 +15664,8 @@ green, typecheck clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add packages/web/src
 git commit -m "feat(web): admin console for accounts, backup/restore and ICS-token revocation"
 ```
@@ -15915,8 +15915,8 @@ test('an admin manages users, configures a source, and triggers a crawl', async 
 - [ ] **Step 2: Run the e2e suite to verify it fails**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run test:e2e
 ```
 
@@ -16049,8 +16049,8 @@ depends on:
 Install the Playwright package and its Chromium build:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm install --save-dev @playwright/test@^1.47.2 tsx
 npx playwright install chromium
 ```
@@ -16064,8 +16064,8 @@ e2e/.tmp/
 - [ ] **Step 4: Run the full verification**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run typecheck
 npm run build
 npm test
@@ -16083,8 +16083,8 @@ Expected, and this is the plan's acceptance gate:
   failure you get and nothing else:
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 npm run build && npm run e2e:seed
 PORT=3131 DATA_DIR=e2e/.tmp CRAWL_ENABLED=false \
   SESSION_SECRET=e2e-session-secret-not-a-real-secret \
@@ -16104,8 +16104,8 @@ there.
 - [ ] **Step 5: Commit**
 
 ```bash
-export PATH="/home/kasm-user/.local/node/bin:$PATH"
-cd /home/kasm-user/grantspotter
+export PATH="/path/to/node20/bin:$PATH"
+cd /path/to/grantspotter
 git add playwright.config.ts e2e package.json package-lock.json .gitignore
 git commit -m "test(e2e): login to profile to browse to star to calendar to change-event flow"
 ```
