@@ -59,6 +59,7 @@ export interface UserRepo {
   recordLogin(id: string, atISO: string): void;
   setRole(id: string, role: Role): void;
   setDisabled(id: string, disabled: boolean): void;
+  setPasswordHash(id: string, passwordHash: string): void;
 }
 
 interface UserRow {
@@ -106,6 +107,7 @@ export function createUserRepo(db: Db): UserRepo {
   const loginStmt = db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?');
   const roleStmt = db.prepare('UPDATE users SET role = ? WHERE id = ?');
   const disabledStmt = db.prepare('UPDATE users SET disabled = ? WHERE id = ?');
+  const passwordHashStmt = db.prepare('UPDATE users SET password_hash = ? WHERE id = ?');
 
   return {
     create(input) {
@@ -148,6 +150,10 @@ export function createUserRepo(db: Db): UserRepo {
     },
     setDisabled(id, disabled) {
       disabledStmt.run(disabled ? 1 : 0, id);
+    },
+    /** Callers pass an argon2id hash from `auth/password.ts` — never a plaintext. */
+    setPasswordHash(id, passwordHash) {
+      passwordHashStmt.run(passwordHash, id);
     },
   };
 }
