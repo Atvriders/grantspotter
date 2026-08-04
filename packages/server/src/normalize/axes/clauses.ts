@@ -19,9 +19,23 @@
  * The logic is the one gpa.ts introduced and membership.ts/institution.ts each re-derived, with
  * three additions this corpus forced (see ABBREVIATIONS, the tight-abbreviation rule, and the
  * bullet boundary below). It lives here so the six axes share ONE implementation instead of
- * adding a seventh private copy. gpa.ts, membership.ts, institution.ts and fieldOfStudy.ts still
- * carry their own copies — collapsing those onto this module is a mechanical follow-up,
- * deliberately not bundled with a behavioural fix.
+ * adding a seventh private copy.
+ *
+ * gpa.ts and membership.ts have since been collapsed onto this module too: both called
+ * `splitClauses`/`findClause` with exactly this idiom's shape (DOT safety + numbered-list
+ * marker, gpa.ts also had its own field-label rule), so they now import `splitClauses`,
+ * `findClause` and `candidateTexts` directly.
+ *
+ * institution.ts and fieldOfStudy.ts (`splitSentences`) were NOT collapsed the same way: both
+ * deliberately split on more than this module does — institution.ts on every ";" and "\n"
+ * (unconditionally, not just list-marker/bullet/field-label-shaped ones), because its
+ * degree-level matching wants much finer-grained clauses than the other axes' free-text
+ * sentences — and this module explicitly does NOT split on ";" at all (see below). Importing
+ * `splitClauses` wholesale there would have silently dropped that granularity. Instead they
+ * import `sentenceEndBoundaries` — the DOT-only half of this idiom, which IS identical across
+ * all four files and is the actual duplication risk described above — and layer their own
+ * additional boundaries on top of it, so the abbreviation/decimal safety logic still lives in
+ * exactly one place without changing either file's broader splitting behaviour.
  */
 
 /**
@@ -58,19 +72,15 @@ const ABBREVIATIONS = new Set([
 ]);
 
 /**
- * Splits `text` into clauses on:
- *  - a "." only when it is a genuine sentence end — never a decimal point ("2.5", "4.0"), never an
- *    initial or an abbreviation ("U.S.", "Ph.D.", "St. Louis", "etc.");
- *  - a "1)"/"2)"-style numbered-list marker ("Other:\n1) U.S. citizen\n2) Financial need");
- *  - a "\n· " bullet marker (several entries are bulleted lists with no terminating periods);
- *  - a "\nLabel:" field boundary — this corpus's `rawText` is a flattened "Label: value\nLabel:
- *    value\n..." record, and without this boundary a fallback search over the whole record lets a
- *    DIFFERENT field's content bleed into the extracted clause.
- * Deliberately does NOT split on ";": several real entries state one requirement across a
- * semicolon ("Applicant must be a US citizen; open only to graduating high school seniors and
- * undergraduate students"), and splitting there would truncate it.
+ * The positions right after every "." in `text` that is a genuine sentence end — never a decimal
+ * point ("2.5", "4.0"), never an initial or an abbreviation ("U.S.", "Ph.D.", "St. Louis", "etc.").
+ * Exported on its own (not just as a private step inside `splitClauses`) so a splitter with
+ * different higher-level boundary rules — institution.ts splits additionally on every ";" and
+ * "\n", fieldOfStudy.ts's `splitSentences` splits on nothing else at all — can still share this
+ * one DOT-safety implementation instead of re-deriving it, which is exactly the kind of duplicate
+ * that drifted before (see the file header).
  */
-export function splitClauses(text: string): string[] {
+export function sentenceEndBoundaries(text: string): Set<number> {
   const boundaries = new Set<number>();
   const DOT = /\./g;
   for (let m = DOT.exec(text); m !== null; m = DOT.exec(text)) {
@@ -96,6 +106,23 @@ export function splitClauses(text: string): string[] {
       boundaries.add(m.index + 1);
     }
   }
+  return boundaries;
+}
+
+/**
+ * Splits `text` into clauses on:
+ *  - a "." only when it is a genuine sentence end (see `sentenceEndBoundaries`);
+ *  - a "1)"/"2)"-style numbered-list marker ("Other:\n1) U.S. citizen\n2) Financial need");
+ *  - a "\n· " bullet marker (several entries are bulleted lists with no terminating periods);
+ *  - a "\nLabel:" field boundary — this corpus's `rawText` is a flattened "Label: value\nLabel:
+ *    value\n..." record, and without this boundary a fallback search over the whole record lets a
+ *    DIFFERENT field's content bleed into the extracted clause.
+ * Deliberately does NOT split on ";": several real entries state one requirement across a
+ * semicolon ("Applicant must be a US citizen; open only to graduating high school seniors and
+ * undergraduate students"), and splitting there would truncate it.
+ */
+export function splitClauses(text: string): string[] {
+  const boundaries = sentenceEndBoundaries(text);
   const LIST_MARKER = /\n(?=\d+\))/g;
   for (let m = LIST_MARKER.exec(text); m !== null; m = LIST_MARKER.exec(text)) boundaries.add(m.index);
   const BULLET = /\n(?=[·•▪‣]\s)/g;

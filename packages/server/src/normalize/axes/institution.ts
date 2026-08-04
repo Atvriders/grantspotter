@@ -1,4 +1,5 @@
 import type { Constraint, DegreeLevel, RawOpportunity } from '@grantspotter/core';
+import { sentenceEndBoundaries } from './clauses.js';
 import { makeConstraint } from './preference.js';
 
 /**
@@ -33,28 +34,20 @@ import { makeConstraint } from './preference.js';
 /**
  * Splits `text` into clauses on a genuine sentence end, a ";" or a newline — never on a decimal
  * point ("GPA 3.0 or higher", "a 4.0 scale") and never on an abbreviation's period ("U.S.
- * Department of Education", which is real corpus text). This is the same safe splitter gpa.ts
- * introduced to replace the naive `[^.]*\.` sentence idiom; a `[^.]*\.` here would cut
- * "2 year Associate's degree" style text at the wrong places and, worse, silently truncate the
- * clause a level is read from.
+ * Department of Education", which is real corpus text).
+ *
+ * The sentence-end half of this (decimal/abbreviation safety) used to be a private copy of the
+ * idiom gpa.ts introduced; it now comes from clauses.ts's `sentenceEndBoundaries`, which is the
+ * one place that logic lives for all four axes that need it. This function does NOT import
+ * clauses.ts's `splitClauses` wholesale, though: that function deliberately never splits on ";"
+ * (several OTHER axes' free-text sentences state one requirement across a semicolon and would be
+ * truncated by splitting there), while degree-level matching here wants exactly the opposite —
+ * finer-grained clauses than a sentence, so "2 or 4-year college; graduate studies permitted"
+ * reads as two separate degree statements rather than one blended one. So the ";"/newline split
+ * stays local to this file, layered on top of the shared sentence-end boundaries.
  */
 function splitClauses(text: string): string[] {
-  const boundaries = new Set<number>();
-  const DOT = /\./g;
-  for (let m = DOT.exec(text); m !== null; m = DOT.exec(text)) {
-    const before = text[m.index - 1];
-    const beforeBefore = text[m.index - 2];
-    const after = text[m.index + 1];
-    const isDecimalPoint =
-      before !== undefined && after !== undefined && /\d/.test(before) && /\d/.test(after);
-    // A single capital letter preceded by whitespace/start-of-string or another period is an
-    // initial ("U.S.", "U.S.A."), not a sentence end.
-    const isAbbreviation =
-      before !== undefined &&
-      /[A-Z]/.test(before) &&
-      (beforeBefore === undefined || beforeBefore === '.' || /\s/.test(beforeBefore));
-    if (!isDecimalPoint && !isAbbreviation) boundaries.add(m.index + 1);
-  }
+  const boundaries = sentenceEndBoundaries(text);
   for (const m of text.matchAll(/[;\n]/g)) boundaries.add(m.index + 1);
   const cuts = [0, ...[...boundaries].sort((a, b) => a - b), text.length];
   const clauses: string[] = [];

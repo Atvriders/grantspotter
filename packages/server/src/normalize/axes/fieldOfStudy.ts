@@ -1,4 +1,5 @@
 import type { Constraint, RawOpportunity } from '@grantspotter/core';
+import { sentenceEndBoundaries } from './clauses.js';
 import { isPreferenceText, makeConstraint } from './preference.js';
 
 const EXCEPT = /\bexcept(?:\s+for)?\b\s*(.+)$/i;
@@ -137,22 +138,17 @@ function stripListIntro(text: string): string {
  * "... or Radiology technician. Preference will be given to undergraduate students and those in
  * certificate programs, but graduate students may apply." Without sentence-level separation,
  * splitFields ran on the whole value and every comma in BOTH sentences became a fake field.
+ *
+ * The decimal/abbreviation safety used to be a private copy of the idiom gpa.ts introduced; it
+ * now comes from clauses.ts's `sentenceEndBoundaries`, the one shared place that logic lives.
+ * Deliberately still not the shared `splitClauses` itself — this function only ever wants
+ * sentence-level (".") boundaries, never clauses.ts's numbered-list/bullet/field-label rules
+ * (this axis reads a single already-isolated `Field of Study` value, not a flattened multi-field
+ * record, so none of those apply here), and the separate `splitClauses` below it in this same
+ * file already owns ";" splitting for a reason specific to field lists (see its own comment).
  */
 function splitSentences(text: string): string[] {
-  const boundaries: number[] = [];
-  const DOT = /\./g;
-  for (let m = DOT.exec(text); m !== null; m = DOT.exec(text)) {
-    const before = text[m.index - 1];
-    const beforeBefore = text[m.index - 2];
-    const after = text[m.index + 1];
-    const isDecimalPoint =
-      before !== undefined && after !== undefined && /\d/.test(before) && /\d/.test(after);
-    const isAbbreviation =
-      before !== undefined &&
-      /[A-Z]/.test(before) &&
-      (beforeBefore === undefined || beforeBefore === '.' || /\s/.test(beforeBefore));
-    if (!isDecimalPoint && !isAbbreviation) boundaries.push(m.index + 1);
-  }
+  const boundaries = [...sentenceEndBoundaries(text)].sort((a, b) => a - b);
   const cuts = [0, ...boundaries, text.length];
   const sentences: string[] = [];
   for (let i = 0; i < cuts.length - 1; i += 1) sentences.push(text.slice(cuts[i], cuts[i + 1]).trim());
