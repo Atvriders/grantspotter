@@ -1,0 +1,360 @@
+/* The writing desk.
+   Every colour here is an existing semantic token from `styles/tokens.css` — no literal is
+   introduced, so `lib/contrast.test.ts`, which derives its 66 pairs per theme from the token
+   grammar, still covers every pair this screen can paint. The two themes come for free. */
+
+.applications-route .muted,
+.applications-route .slot-hint,
+.applications-route .fact-context {
+  color: var(--text-muted);
+  font-size: var(--fs-200);
+}
+
+.applications-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+  margin-top: var(--s-4);
+}
+
+@media (max-width: 900px) {
+  .applications-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.deep-link-context {
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+}
+
+.draft-list,
+.gap-list,
+.fact-items,
+.blockers,
+.prose-document-stats {
+  list-style: none;
+  margin: 0 0 var(--s-4);
+  padding: 0;
+}
+
+.draft-list li.selected > button {
+  font-weight: 640;
+  color: var(--accent);
+}
+
+.draft-editor label {
+  display: block;
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-top: var(--s-4);
+  margin-bottom: var(--s-1);
+}
+
+.draft-editor input[type='text'],
+.draft-editor textarea {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-text);
+  font-size: var(--fs-300);
+}
+
+.draft-editor textarea {
+  font-family: var(--font-data);
+  line-height: var(--lh-loose);
+  resize: vertical;
+}
+
+/* ---- the copy-prompt block ---------------------------------------------------------------- */
+
+.prompt-block {
+  margin-top: var(--s-5);
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+
+.disclosure-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--fs-300);
+  color: var(--text);
+}
+
+.copy-prompt-button {
+  margin-top: var(--s-3);
+}
+
+.copy-prompt-subtitle {
+  margin-top: var(--s-2);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  max-width: 68ch;
+}
+
+/* The honesty note is not fine print. It is the same size as the subtitle, ruled against the
+   accent so it reads as part of the button rather than as a disclaimer bolted underneath. */
+.copy-prompt-honesty {
+  margin-top: var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 3px solid var(--accent);
+  font-size: var(--fs-200);
+  color: var(--text);
+  max-width: 68ch;
+}
+
+.copy-prompt [role='status'] {
+  color: var(--ok);
+  font-size: var(--fs-200);
+}
+
+.copy-prompt [role='alert'] {
+  color: var(--no);
+  font-size: var(--fs-200);
+}
+
+/* ---- prose check -------------------------------------------------------------------------- */
+
+.prose-check,
+.slot-form {
+  margin-top: var(--s-5);
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+
+.prose-warning {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-200);
+}
+
+.prose-paragraphs tr.verdict-generic th[scope='row'] {
+  color: var(--warn);
+}
+
+.prose-paragraphs tr.verdict-specific th[scope='row'] {
+  color: var(--ok);
+}
+
+.prose-hit-line .hit {
+  display: inline-block;
+  margin-right: var(--s-2);
+  padding: 0 var(--s-2);
+  border-radius: var(--r-1);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+}
+
+.prose-paragraph-detail {
+  padding-left: var(--s-5);
+}
+
+/* ---- before you export: two panels that must never be read as one ------------------------- */
+
+.before-export {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: var(--s-5);
+  align-items: start;
+  margin-top: var(--s-5);
+}
+
+@media (max-width: 900px) {
+  .before-export {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Amber, bracketed, monospaced: a gap is an empty slot in the document. */
+.draft-gaps {
+  padding: var(--s-4);
+  background: var(--warn-soft);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--r-2);
+}
+
+.draft-gaps h3 {
+  color: var(--warn);
+}
+
+.gap-list > li {
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.gap-marker {
+  display: block;
+  font-size: var(--fs-200);
+  color: var(--text);
+  word-break: break-word;
+}
+
+.gap-slot {
+  display: inline-block;
+  margin-top: var(--s-1);
+  font-size: var(--fs-100);
+  color: var(--warn);
+}
+
+.gap-hint {
+  margin: var(--s-1) 0 0;
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/* Neutral surface with tick boxes: a checklist item is a claim awaiting a signature. */
+.fact-checklist {
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-2);
+}
+
+.fact-checklist .checklist-scope {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-2);
+}
+
+.blockers > li {
+  color: var(--warn);
+  font-size: var(--fs-200);
+}
+
+.fact-checklist .ready,
+.draft-gaps .ready {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.fact-items > li {
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.fact-items > li.confirmed {
+  border-left: 3px solid var(--ok);
+  padding-left: var(--s-3);
+}
+
+.fact-items > li.unconfirmed {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--s-3);
+}
+
+.fact-items label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  font-size: var(--fs-300);
+}
+
+.fact-kind {
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-muted);
+}
+
+.fact-text {
+  font-weight: 640;
+}
+
+.fact-origin {
+  margin: var(--s-1) 0 0;
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.origin-profile,
+.origin-answer {
+  color: var(--accent);
+}
+
+.origin-program {
+  color: var(--pref);
+}
+
+.origin-unattributed {
+  color: var(--unk);
+}
+
+.fact-provenance {
+  margin: var(--s-1) 0 0;
+}
+
+.fact-stale,
+.fact-stale-summary,
+.stale-notice {
+  color: var(--no);
+  background: var(--no-soft);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-200);
+}
+
+.fact-items input[type='text'] {
+  margin-top: var(--s-2);
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--fs-200);
+}
+
+.slot-form ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.slot-form li {
+  margin-bottom: var(--s-3);
+}
+
+.slot-form label {
+  display: block;
+  font-size: var(--fs-200);
+  color: var(--text);
+}
+
+.slot-form input {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  font-size: var(--fs-300);
+}
+
+.template-group {
+  margin-top: var(--s-4);
+}

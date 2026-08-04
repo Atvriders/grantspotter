@@ -202,11 +202,12 @@ describe('TemplatesScreen', () => {
  * "No GrantSpotter screen answers to that address" — a working link to a wrong-address page,
  * which no component test of either file can see, because neither file is wrong on its own.
  *
- * `/applications` is in PENDING because Task 19 creates `routes/Applications.tsx`; App.tsx cannot
- * import it before it exists. PENDING is self-cleaning: a path that IS routed fails the second
- * assertion, so the day Task 19 adds the route, this test says so and the entry has to go.
+ * `/applications` was in PENDING because Task 19 creates `routes/Applications.tsx`; App.tsx could
+ * not import it before it existed. PENDING is self-cleaning: a path that IS routed fails the
+ * second assertion, so when Task 19 added the route this test said so and the entry was removed.
+ * The list is empty and should stay that way — an exemption is a debt, not a category.
  */
-const PENDING_ROUTES: readonly string[] = ['/applications'];
+const PENDING_ROUTES: readonly string[] = [];
 
 describe('every rail entry has a route', () => {
   /**
