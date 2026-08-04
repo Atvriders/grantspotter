@@ -14,7 +14,11 @@
   /* ---- text ---- */
   --text: #14181f;
   --text-muted: #5a6371;
-  --text-faint: #6b7482;
+  /* Was #6b7482, which cleared AA against --surface (pure white) and NOTHING else — including
+     --bg, the page background. The hand-written pair list only ever tested it on --surface, so
+     the one passing background was the one being checked. Now derived: every text ink is
+     asserted against every neutral surface, and --surface-3 is the worst case for all of them. */
+  --text-faint: #5d6674;
 
   /* ---- accent: deep teal. Cool on purpose, so amber and red read as signals ---- */
   --accent: #0f6f7a;
