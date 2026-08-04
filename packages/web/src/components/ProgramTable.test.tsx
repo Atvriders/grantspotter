@@ -71,11 +71,12 @@ describe('ProgramTable deadlines', () => {
 
 describe('ProgramTable estimated flag', () => {
   /**
-   * `nextIsEstimated` is `false` on exactly 4 of the corpus's 244 cycles — those four are windows
-   * the funder actually published. The other 240 are projected from a recurrence rule. A projected
-   * date shown as authoritative is the failure this project spent the most effort eliminating, so
-   * BOTH states are marked: absence of a mark would be indistinguishable from a mark nobody
-   * thought to add.
+   * `nextIsEstimated` is `false` only where the funder published that window, and that is the rare
+   * case: on `data/seed/`, the corpus a fresh install gets, the browse projection resolves a next
+   * close date for 121 of 143 programs and 2 of those are funder-published today — 0 from
+   * 2026-10-01, when the ARISS and Yaesu windows close. A projected date shown as authoritative is
+   * the failure this project spent the most effort eliminating, so BOTH states are marked: absence
+   * of a mark would be indistinguishable from a mark nobody thought to add.
    */
   it('marks a projected deadline as an estimate, announced not just titled', () => {
     renderTable([ARRL_GRANTS_ROW]);

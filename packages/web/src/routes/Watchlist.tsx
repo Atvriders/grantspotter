@@ -16,7 +16,18 @@ interface WatchRow {
   funderName: string;
   nextOpensAt: string | null;
   nextClosesAt: string | null;
-  /** `false` on only 4 of 244 cycles: the funder published that window. `true` is a projection. */
+  /**
+   * `false` means the FUNDER published that window; `true` means GrantSpotter projected it from a
+   * recurrence rule. Only meaningful when `nextClosesAt` is non-null — the server sends `false`
+   * with a null date, which is the absence of a claim, not a funder-published one.
+   *
+   * No count here on purpose. Three different totals for "how many are funder-published" were
+   * committed across this tree at once, and on the corpus that ships the answer is a function of
+   * the wall clock: `data/seed/` holds 3 records that declare a funder-published window, of which
+   * 2 still resolve to a future deadline on 2026-08-04 and 0 from 2026-10-01, once the ARISS and
+   * Yaesu windows close. The census under `Watched programs` counts the rows it is holding
+   * instead, so it cannot say something the table contradicts.
+   */
   nextIsEstimated: boolean;
   /** IANA zone the instants above are expressed in. `null` = not recorded, never "assume local". */
   nextTimezone: string | null;
@@ -104,7 +115,7 @@ function DeadlineCell({ row }: { row: WatchRow }): JSX.Element {
         title={
           row.nextIsEstimated
             ? 'Projected from a recurrence rule, not published by the funder for this cycle. ' +
-              'Only 4 of the corpus’s 244 cycles are funder-published. Confirm before you rely on it.'
+              'Confirm before you rely on it.'
             : 'The funder published this window. It is still worth confirming on their own page.'
         }
       >
@@ -350,6 +361,23 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
   const digestRows = notifications.data?.rows ?? [];
   const channelHealth = channels.data?.health ?? [];
 
+  // COUNTED FROM THE ROWS ON SCREEN, never from a figure typed into the source.
+  //
+  // The sentence this replaces lived in a `title` on every projected row and read "Only 4 of the
+  // corpus's 244 cycles are funder-published". It was wrong three ways at once: the tree carried
+  // 243 and 244 for the same claim, the shipping corpus is neither, and a `title` is unreachable
+  // by touch and keyboard and is announced inconsistently by screen readers — so the one number
+  // that told a reader how much of this table to distrust was both false and hard to hear.
+  // Derived from `watchRows`, it is true for whatever corpus is installed, on whatever day.
+  //
+  // `nextIsEstimated` is only a claim when a date exists: the server sends `false` alongside a
+  // null `nextClosesAt`, so an undated row counted as funder-published would invent 22 published
+  // deadlines on a fresh install. Undated rows get their own tally instead of being hidden.
+  const datedRows = watchRows.filter((row) => row.nextClosesAt !== null);
+  const funderPublishedCount = datedRows.filter((row) => !row.nextIsEstimated).length;
+  const projectedCount = datedRows.length - funderPublishedCount;
+  const undatedCount = watchRows.length - datedRows.length;
+
   return (
     <>
       <p className="eyebrow">Subscriptions</p>
@@ -374,6 +402,17 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
           <p className="wl-empty">
             You are not watching anything yet. Open any record and choose{' '}
             <strong>Watch this program</strong>.
+          </p>
+        )}
+
+        {/* `wl-lede` rather than a class of its own: `components/watchlist.css` belongs to another
+            pass and this needs no styling that muted 70ch prose does not already give it. */}
+        {watchRows.length > 0 && (
+          <p className="wl-lede">
+            {`Close dates below: ${String(funderPublishedCount)} funder-published, ` +
+              `${String(projectedCount)} projected, ${String(undatedCount)} with no close date ` +
+              'recorded. A projected date was worked out from the recurrence this program has ' +
+              'followed; the funder has not announced it, so confirm it before you plan around it.'}
           </p>
         )}
 

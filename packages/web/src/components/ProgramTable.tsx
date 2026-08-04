@@ -40,9 +40,17 @@ const SAFETY_WARNING_TAG = 'safety_warning';
 const COLUMN_COUNT = 6;
 
 /**
- * `nextIsEstimated` is `false` on exactly 4 of the corpus's 244 cycles — those four windows the
- * funder actually published. The other 240 are projected from a recurrence rule, and a projected
- * date presented as authoritative is the failure this project spent the most effort eliminating.
+ * `nextIsEstimated` is `false` only where the FUNDER published that window; everywhere else the
+ * date is projected from a recurrence rule, and a projected date presented as authoritative is the
+ * failure this project spent the most effort eliminating.
+ *
+ * Almost every row is a projection, and the size of "almost" is not a constant this comment can
+ * hold. On the corpus a fresh install gets (`data/seed/`), the browse projection resolves a next
+ * close date for 121 of 143 publishable programs, of which 2 are funder-published on 2026-08-04
+ * and 0 from 2026-10-01 — the ARISS and Yaesu windows are the only two open, and they close.
+ * Measured with `expandCycles` + `observedCycles` over `publishableSeedPrograms`, at
+ * `reindex.ts`'s own 550-day horizon and its tie-break. A literal here would be false by October
+ * without anybody touching the file, which is how the 243/244/252 contradiction got committed.
  *
  * BOTH states are marked, not just the projected one. An unmarked date is indistinguishable from
  * a date nobody got round to qualifying, and the reader cannot tell which they are looking at.

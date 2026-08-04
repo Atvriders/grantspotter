@@ -9,9 +9,10 @@
  *
  *   - a two-state obligation      148 records asserting "no cost share required" where no funder
  *                                 said so in words (`obligation-evidence`)
- *   - a projected date badged as  only 4 of 244 cycles are funder-published; the rest are
- *     funder-published            projections, and a projection presented as a published date is
- *                                 the confident-wrong-date failure (`dates-basis-consistency`)
+ *   - a projected date badged as  3 of the 143 records in `data/seed/` declare a window their
+ *     funder-published            funder published; the rest are projections, and a projection
+ *                                 presented as a published date is the confident-wrong-date
+ *                                 failure (`dates-basis-consistency`)
  *   - a deadline with no zone     a deadline is a 23:59 LOCAL wall time; without an IANA zone the
  *                                 UTC instant is off by hours and can be off by a day
  *                                 (`dates-basis-consistency`, via parseRecurrence)
@@ -22,12 +23,19 @@
  *   - a link to a hijacked domain 345 awards advertised the wrong "apply here"; farweb.org now
  *                                 301s to a gambling site (`blocked-host`, `blocked-host-in-prose`)
  */
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Program } from '@grantspotter/core';
 import { makeFunder, makeProgram } from '../exports/testFixtures.js';
 import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
+// `seedDir` resolves the real `data/seed/`, which is the corpus the harness's rarity figure is a
+// statement about. Recounting it here is the only thing that keeps that figure honest.
+import { seedDir } from './load.js';
 import {
   SAFETY_WARNING_TAG,
+  SEED_FUNDER_PUBLISHED_RECORDS,
+  SEED_RECORD_COUNT,
   publishableSeedPrograms,
   validateSeedFile,
   type SeedRuleId,
@@ -458,5 +466,62 @@ describe('funder records', () => {
       funders: [{ ...makeFunder(), website: 'https://www.example.org/' }],
     });
     expect(violations.map((v) => v.rule)).toEqual(['unknown-key']);
+  });
+});
+
+/**
+ * THE FIGURE IN THE MESSAGE IS RECOUNTED FROM THE CORPUS IT DESCRIBES.
+ *
+ * Two of this validator's messages quote how rare `funder_published` is, because a seed author
+ * about to badge a projection as a published window is exactly the reader who needs to know it is
+ * a claim almost nothing in the corpus makes. They used to quote "4 of 244 cycles". That was
+ * never a fact about `data/seed/` — it came from the fixture corpus — and it was committed
+ * alongside a "4 of 243" that contradicted it, in seven other places, with nothing anywhere able
+ * to notice. Nine sites, three totals, no test.
+ *
+ * So the number lives in one constant and this recomputes it from the files. If a batch lands, or
+ * a record changes basis, this fails and NAMES the new figures rather than leaving the harness
+ * quietly telling authors something untrue. A cycle count could not be pinned this way at all:
+ * it depends on the day it is taken, which is the deeper reason no user-facing string quotes one.
+ */
+describe('the rarity figure the harness quotes', () => {
+  function declaredBases(): string[] {
+    const dir = seedDir();
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.json'))
+      .flatMap((f) => {
+        const parsed: unknown = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+        const programs = (parsed as { programs?: Array<{ dates?: { basis?: string } }> }).programs;
+        return (programs ?? []).map((p) => p.dates?.basis ?? '(none)');
+      });
+  }
+
+  it('matches what data/seed actually declares, and says so when it stops matching', () => {
+    const bases = declaredBases();
+    const published = bases.filter((b) => b === 'funder_published').length;
+    expect(
+      { records: bases.length, funderPublished: published },
+      'data/seed changed: update SEED_RECORD_COUNT / SEED_FUNDER_PUBLISHED_RECORDS in validate.ts ' +
+        'to these values, so the two harness messages keep telling seed authors the truth',
+    ).toEqual({ records: SEED_RECORD_COUNT, funderPublished: SEED_FUNDER_PUBLISHED_RECORDS });
+  });
+
+  it('prints those figures in both messages an author can actually hit', () => {
+    const phrase = `${String(SEED_FUNDER_PUBLISHED_RECORDS)} of the ${String(SEED_RECORD_COUNT)} records in data/seed/`;
+
+    // A projection badged funder_published.
+    const badged = record(makeProgram(PROJECTED_ARDC), { dates: { basis: 'funder_published' } });
+    expect(messagesFor([badged])).toContain(phrase);
+
+    // A record with no basis declared at all.
+    const undeclared = { ...(makeProgram() as unknown as Record<string, unknown>) };
+    expect(messagesFor([undeclared])).toContain(phrase);
+  });
+
+  it('quotes RECORDS, never cycles — a cycle count is a fact about the day it was taken', () => {
+    const badged = record(makeProgram(PROJECTED_ARDC), { dates: { basis: 'funder_published' } });
+    const undeclared = { ...(makeProgram() as unknown as Record<string, unknown>) };
+    const text = `${messagesFor([badged])}\n${messagesFor([undeclared])}`;
+    expect(text).not.toMatch(/\d+\s+(?:of\s+[^.]{0,40}?)?cycles/i);
   });
 });

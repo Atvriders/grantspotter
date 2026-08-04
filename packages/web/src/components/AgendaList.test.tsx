@@ -143,11 +143,35 @@ describe('AgendaList', () => {
     expect(screen.getByText(/2026-07-01\s*–\s*2026-09-30 window/i)).toBeInTheDocument();
   });
 
-  /** The distinction this screen exists to preserve: 4 of 244 cycles are the funder's own. */
+  /**
+   * The distinction this screen exists to preserve. Almost nothing is the funder's own: `data/seed`
+   * holds 3 records declaring a published window, and how many are still a FUTURE cycle depends on
+   * the day — 2 on 2026-08-04, 0 from 2026-10-01.
+   */
   it('separates funder-published from projected in words', () => {
     renderAgenda([entry({ cycle: { ...entry().cycle, isEstimated: false }, isEstimated: false })]);
     expect(screen.getByText(/funder-published/i)).toBeInTheDocument();
     expect(screen.queryByText(/projected, not observed/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The `title` on that badge used to end "Four of the corpus's cycles are of this kind." It was a
+   * count nobody could check against anything on screen, it named no total at all while six files
+   * said 243 and six others said 244, and no version of it matched the shipping corpus. `Calendar`
+   * prints the split it counted from the entries it holds; a per-row tooltip repeated on every
+   * card is not a place a corpus statistic can be kept true.
+   */
+  it('states no cycle count in either provenance tooltip', () => {
+    const published = entry({ cycle: { ...entry().cycle, isEstimated: false }, isEstimated: false });
+    const projected = entry({
+      cycle: { ...entry().cycle, id: 'c-projected', isEstimated: true },
+      isEstimated: true,
+    });
+    renderAgenda([published, projected]);
+    const claim = /\b(?:\d{1,4}|one|two|three|four)\b[^.!?]{0,50}?\b(?:cycles|windows|deadlines)\b/i;
+    for (const badge of screen.getAllByTitle(/./)) {
+      expect(badge.getAttribute('title') ?? '').not.toMatch(claim);
+    }
   });
 
   it('marks a projected cycle as projected, and styles it apart', () => {

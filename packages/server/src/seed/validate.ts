@@ -114,6 +114,28 @@ export type DateBasis = 'projected' | 'funder_published' | 'unpublished';
 export const DATE_BASES: readonly DateBasis[] = ['projected', 'funder_published', 'unpublished'];
 
 /**
+ * How rare `funder_published` is IN THE CORPUS THIS FILE GUARDS, said once so the two messages
+ * below cannot disagree.
+ *
+ * The messages used to read "Only 4 of 244 cycles in this corpus are funder-published". Neither
+ * number described `data/seed/`: 4-of-243 and 4-of-244 were both committed for the same claim, and
+ * both were taken over the FIXTURE corpus (`scripts/profile-corpus.ts`), which is a different
+ * population from the records a seed author is editing when they read this. Worse, a CYCLE count
+ * is not a fact about the corpus at all — it is a fact about the corpus AND the day you ask, since
+ * a window that has closed stops resolving. Counting RECORDS instead gives the author the number
+ * that is actually true of the files in front of them, and holds still.
+ *
+ * `validate.test.ts` recomputes both figures from `data/seed/` and fails naming the new ones, so
+ * a batch that adds records cannot leave this sentence quietly wrong the way the last one was.
+ */
+export const SEED_RECORD_COUNT = 143;
+export const SEED_FUNDER_PUBLISHED_RECORDS = 3;
+
+const FUNDER_PUBLISHED_IS_RARE =
+  `Only ${String(SEED_FUNDER_PUBLISHED_RECORDS)} of the ${String(SEED_RECORD_COUNT)} records in ` +
+  'data/seed/ declare basis "funder_published"';
+
+/**
  * The six fields of `Obligations`. Enumerated rather than derived from a value, because a field
  * added to the type without a line here would ship unevidenced — which is how the removed 148
  * got in.
@@ -483,9 +505,9 @@ function checkDates(program: Program, sideCar: SeedSideCar | undefined, out: Col
       out.add(
         'dates-basis-consistency',
         'declares dates.basis = "funder_published" but deadline.note leads with a RECUR ' +
-          'directive, which is a rule we project forward — not a date the funder printed. Only 4 ' +
-          'of the 244 cycles in this corpus are funder-published; badging a projection as one is ' +
-          'the confident-wrong-date failure this product exists to avoid.',
+          `directive, which is a rule we project forward — not a date the funder printed. ` +
+          `${FUNDER_PUBLISHED_IS_RARE}; badging a projection as one is the confident-wrong-date ` +
+          'failure this product exists to avoid.',
       );
       return;
     }
@@ -743,9 +765,9 @@ export function validateSeedFile(
       out.add(
         path.startsWith('dates') || path === '' ? 'dates-basis' : 'schema',
         `${first.message} at ${path || 'dates'}. Every seed record must declare where its dates ` +
-          `came from: "dates": { "basis": "${DATE_BASES.join('" | "')}" }. Only 4 of 244 cycles in ` +
-          'this corpus are funder-published; a projection and a published date are different ' +
-          'claims and the record has to say which it is making.',
+          `came from: "dates": { "basis": "${DATE_BASES.join('" | "')}" }. ` +
+          `${FUNDER_PUBLISHED_IS_RARE}; a projection and a published date are different claims ` +
+          'and the record has to say which it is making.',
       );
     }
 

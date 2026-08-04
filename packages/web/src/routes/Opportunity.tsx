@@ -137,15 +137,17 @@ const REPORTING_UNSTATED =
  * The old sentence read "Dates shown in {zone}, the zone the funder published them in." Core
  * refuses that claim in terms: `observedCycles` hard-codes `timezone: 'UTC'` and its own
  * doc-comment says *"`timezone: 'UTC'` is that frame, not a claim about where the funder is"*. So
- * on the four funder-published cycles in this corpus — the exact rows the whole
- * published/projected distinction exists for — the page stated the opposite of what the data
- * layer knows. A zone that IS recorded is not a funder's claim either: it is what this pipeline
- * wrote down with the recurrence rule.
+ * on every funder-published cycle — the exact rows the whole published/projected distinction
+ * exists for — the page stated the opposite of what the data layer knows. A zone that IS recorded
+ * is not a funder's claim either: it is what this pipeline wrote down with the recurrence rule.
  *
  * Two arms, and neither says "the funder". `'UTC'` is read as UNRECORDED because a rendered
  * `'UTC'` and a defaulted `'UTC'` are indistinguishable here, and the safe reading of an
- * ambiguity is the one that claims less. Measured over the 150 publishable records: 250 cycles
- * resolve, 4 carry `UTC` (all four funder-published), 246 carry a recorded zone.
+ * ambiguity is the one that claims less. Measured over the FIXTURE corpus
+ * (`scripts/profile-corpus.ts`, 150 publishable records at its fixed 2026-08-02 clock): 250
+ * cycles resolve, 4 carry `UTC` (all four funder-published), 246 carry a recorded zone. That is a
+ * different population from the `data/seed/` corpus a fresh install gets, and the arms below hold
+ * on both because neither of them counts anything.
  *
  * `AgendaList`'s `zoneLabel` and `ProgramTable`'s `UTC` mark already held this line; this page
  * was the only deadline surface without it.
@@ -342,9 +344,13 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                     )}
                     <span className="data">{formatDate(cycle.closesAt, cycle.timezone)}</span>{' '}
                     {cycle.label}{' '}
-                    {/* Only 4 of the corpus's 243 cycles are windows a funder actually published.
-                        A projection printed without that word is a date the reader will plan
-                        around as if someone had promised it. */}
+                    {/* Nearly every window here is a projection: on `data/seed/`, the corpus a
+                        fresh install gets, 3 of the 143 records declare a window their funder
+                        published, and only 2 of those still resolve to a future cycle on
+                        2026-08-04 (0 from 2026-10-01, once ARISS and Yaesu close). A projection
+                        printed without that word is a date the reader will plan around as if
+                        someone had promised it. No literal total is quoted because the total
+                        moves with the wall clock — see `test/cycleCountCopy.test.ts`. */}
                     <span className={cycle.isEstimated ? 'cycle-projected' : 'cycle-published'}>
                       {cycle.isEstimated
                         ? 'Projected, not observed'

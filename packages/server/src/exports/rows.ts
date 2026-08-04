@@ -103,12 +103,25 @@ export const EXPORT_FIELD_LABELS: Readonly<Record<ExportField, string>> = Object
 });
 
 /**
- * What the `deadlineBasis` cell says. Only 4 of the 243 cycles the committed corpus projects are
- * dates a funder published; the other 239 are computed from a recurrence rule. Exported without
- * the distinction, a projection becomes an authoritative-looking deadline in a spreadsheet — and
- * an applicant plans around it. The projected wording names the source of the guess ON PURPOSE:
- * a bare "estimated" reads as a hedge, "estimated by GrantSpotter, not the funder" reads as an
- * instruction to go and check.
+ * What the `deadlineBasis` cell says. Almost every exported deadline is computed from a recurrence
+ * rule rather than published by its funder. Exported without the distinction, a projection becomes
+ * an authoritative-looking deadline in a spreadsheet — and an applicant plans around it. The
+ * projected wording names the source of the guess ON PURPOSE: a bare "estimated" reads as a hedge,
+ * "estimated by GrantSpotter, not the funder" reads as an instruction to go and check.
+ *
+ * THE TWO CORPORA, because "the committed corpus" used to stand here unqualified and meant
+ * whichever one the reader assumed:
+ *
+ *   - the FIXTURE corpus (`scripts/profile-corpus.ts` over `fixtures/`, fixed clock 2026-08-02):
+ *     243 cycles, 4 funder-published — the figure `exports/corpus.test.ts` asserts, and the one
+ *     every export byte-proof in this directory is measured against;
+ *   - the SEED corpus (`data/seed/`), which is what a fresh install actually serves: 3 of its 143
+ *     records declare a funder-published window, and through the ICS route's own two-year window
+ *     that is 252 cycles with 2 funder-published on 2026-08-04, 250 with 1 on 2026-10-01 and 248
+ *     with 0 on 2027-02-01.
+ *
+ * No count is quoted in any string a user reads, here or in `packages/web`, precisely because the
+ * second list moves on its own.
  */
 export const DEADLINE_BASIS_PUBLISHED = 'funder-published';
 export const DEADLINE_BASIS_PROJECTED = 'projected (estimated by GrantSpotter, not the funder)';

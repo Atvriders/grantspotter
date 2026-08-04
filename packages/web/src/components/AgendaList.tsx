@@ -45,8 +45,14 @@ export interface CalendarEntry {
   applicantEntities: ApplicantEntity[];
   /**
    * `false` means the FUNDER PUBLISHED this window; `true` means GrantSpotter projected it from a
-   * recurrence rule. Four of the corpus's 244 cycles are `false`, and telling the two apart is the
-   * entire reason this screen exists.
+   * recurrence rule. Telling the two apart is the entire reason this screen exists.
+   *
+   * The count that used to sit in this sentence ("four of the corpus's 244 cycles") is gone
+   * rather than corrected. `data/seed/` — the corpus a fresh install actually gets — holds 3
+   * records declaring a funder-published window, and how many of them are still a FUTURE cycle
+   * depends on the day you ask: 2 on 2026-08-04, 0 from 2026-10-01, when the ARISS and Yaesu
+   * windows have closed. `Calendar` derives the split from the entries it renders for exactly
+   * this reason.
    */
   isEstimated: boolean;
   /**
@@ -193,10 +199,20 @@ export function AgendaList({ entries, now }: AgendaListProps): JSX.Element {
               <span className="zone">Dates in {zoneLabel(entry.cycle.timezone)}</span>
               <span
                 className={`provenance ${entry.isEstimated ? 'projected' : 'published'}`}
+                /*
+                  "Four of the corpus's cycles are of this kind" used to close the second arm. The
+                  number was wrong for every corpus in the tree (243, 244 and 252 were all
+                  committed for the same claim), and on the corpus that ships it is not a constant
+                  at all: the three seed records that declare a funder-published window resolve to
+                  2 future cycles on 2026-08-04 and to 0 from 2026-10-01. `Calendar` prints the
+                  split it counted from the entries it is holding, one screen up, which is where a
+                  figure can be true for whatever is loaded; a per-row `title` repeated on every
+                  card is not that place.
+                */
                 title={
                   entry.isEstimated
                     ? 'GrantSpotter projected this date forward from a recurrence rule. The funder has not announced it.'
-                    : 'The funder published this window itself. Four of the corpus’s cycles are of this kind.'
+                    : 'The funder published this window itself. It is not projected from a recurrence rule.'
                 }
               >
                 {entry.isEstimated ? 'Projected, not observed' : 'Funder-published'}

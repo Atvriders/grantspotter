@@ -11,7 +11,8 @@ import { Opportunity } from './Opportunity.js';
  *
  *  - an obligation nobody stated never renders as "not required" (148 of 150 records),
  *  - an empty provenance list never renders as an empty table (all 150 records today),
- *  - a projected cycle never renders as a funder-published one (239 of 243 cycles),
+ *  - a projected cycle never renders as a funder-published one (all but a handful of them: the
+ *    shipping `data/seed/` corpus declares 3 funder-published windows across 143 records),
  *  - a deadline never renders in the wrong calendar day (every US deadline is a UTC instant
  *    of a 23:59 LOCAL wall time),
  *  - a blocklisted host never renders as a clickable link (farweb.org now 301s to a gambling
@@ -680,8 +681,9 @@ describe('Opportunity detail — a non-http(s) apply URL is refused, not linked'
 });
 
 /**
- * Deadlines are UTC instants of a LOCAL 23:59 wall time, and only 4 of the corpus's 243 cycles
- * are windows a funder actually published. Both facts are silent failures if the UI drops them.
+ * Deadlines are UTC instants of a LOCAL 23:59 wall time, and hardly any window here is one a
+ * funder actually published — `data/seed/` declares 3 across 143 records, of which 2 still resolve
+ * to a future cycle today. Both facts are silent failures if the UI drops them.
  */
 describe('Opportunity detail — cycles', () => {
   it("renders a close date in the funder's own calendar day, not UTC", async () => {
@@ -711,11 +713,13 @@ describe('Opportunity detail — cycles', () => {
    *
    * `observedCycles` (`core/src/deadline.ts:598`) hard-codes `timezone: 'UTC'`, and its own
    * doc-comment says in terms that this is "that frame, not a claim about where the funder is".
-   * The four funder-published cycles in the corpus are exactly the rows that carry it, so the old
-   * sentence — "the zone the funder published them in" — stated the opposite of what core knows on
-   * the four rows the whole published/projected distinction exists for. Measured over the 150
-   * publishable records: 250 cycles resolve, 4 carry `UTC` (all four funder-published) and 246
-   * carry a zone recorded with the recurrence.
+   * The funder-published cycles are exactly the rows that carry it, so the old sentence — "the zone
+   * the funder published them in" — stated the opposite of what core knows on the very rows the
+   * whole published/projected distinction exists for. Measured over the FIXTURE corpus
+   * (`scripts/profile-corpus.ts`, 150 publishable records at its fixed 2026-08-02 clock): 250
+   * cycles resolve, 4 carry `UTC` (all four funder-published) and 246 carry a zone recorded with
+   * the recurrence. `data/seed/`, the corpus a fresh install serves, is a different population;
+   * neither arm below counts anything, so both hold on either.
    *
    * A recorded zone is also not a funder's claim — it is what this pipeline wrote down — so
    * neither arm may say "the funder published".

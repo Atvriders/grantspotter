@@ -97,9 +97,15 @@ describe('buildExportRows', () => {
 });
 
 /**
- * Only 4 of the 243 cycles the committed corpus projects are dates the FUNDER published; the rest
- * are computed from a recurrence rule. A projected date exported without that distinction becomes
- * an authoritative-looking deadline in someone's spreadsheet.
+ * Almost every exported deadline is computed from a recurrence rule rather than published by its
+ * funder. A projected date exported without that distinction becomes an authoritative-looking
+ * deadline in someone's spreadsheet.
+ *
+ * The two corpora, because "the committed corpus" used to stand here and meant whichever one the
+ * reader assumed: the FIXTURE corpus projects 243 cycles of which 4 are funder-published at
+ * `profile-corpus.ts`'s fixed 2026-08-02 clock (asserted in `corpus.test.ts`), while `data/seed/`,
+ * which is what a fresh install serves, holds 3 records declaring a funder-published window — 2 of
+ * which still resolve to a future cycle today and none of which do from 2027.
  */
 describe('buildExportRows — projected dates are labelled as projected', () => {
   it('labels a funder-published cycle as published', () => {

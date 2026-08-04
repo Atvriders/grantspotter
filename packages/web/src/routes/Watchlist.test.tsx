@@ -55,8 +55,8 @@ const DISCONTINUED_WATCH = {
   },
   funderName: 'Amateur Radio Digital Communications',
   nextOpensAt: null,
-  // Funder-published (4 of 244 cycles), and with no zone recorded — two independent facts the
-  // cell has to state separately.
+  // Funder-published — the rare case; `data/seed/` holds 3 records that declare one — and with no
+  // zone recorded. Two independent facts the cell has to state separately.
   nextClosesAt: '2026-09-30T23:59:00.000Z',
   nextIsEstimated: false,
   nextTimezone: null,
@@ -268,6 +268,51 @@ describe('Watchlist — watched programs', () => {
       .toBeInTheDocument();
     expect(within(await rowFor('ARDC Grants')).getByText(/published by the funder/i))
       .toBeInTheDocument();
+  });
+
+  /**
+   * THE CENSUS IS COUNTED, NOT TYPED.
+   *
+   * The sentence it replaces lived in a `title` on every projected row and read "Only 4 of the
+   * corpus's 244 cycles are funder-published". Six files said 244 and six others said 243 for the
+   * same claim, and on the corpus that ships neither is right — 252 cycles with 2
+   * funder-published on 2026-08-04, 248 with 0 by 2027-02-01, because the three seed records that
+   * declare a funder-published window all close inside a year. A number the reader cannot check
+   * against the rows under it is the failure this product exists to avoid, so this one is derived
+   * from `watchRows`: change the stub and the sentence changes with it.
+   */
+  it('counts the provenance of the rows it is showing, rather than quoting a fixed total', async () => {
+    stubApi();
+    renderWatchlist();
+    await screen.findByRole('table', { name: /watched programs/i });
+    // ARDC is funder-published, the ARRL catalog row is projected, and the safety-warning record
+    // carries no close date at all — three rows, three different states.
+    expect(
+      screen.getByText(/1 funder-published, 1 projected, 1 with no close date recorded/i),
+    ).toBeInTheDocument();
+  });
+
+  it('recounts when the watchlist is different, so the sentence cannot be a constant', async () => {
+    stubApi({ watches: { rows: [ARRL_WATCH, { ...ARRL_WATCH, program: { ...ARRL_WATCH.program, id: 'p2', name: 'Second Projected' } }] } });
+    renderWatchlist();
+    await screen.findByRole('table', { name: /watched programs/i });
+    expect(
+      screen.getByText(/0 funder-published, 2 projected, 0 with no close date recorded/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * `nextIsEstimated` is only a claim when a date exists. The server sends `false` beside a null
+   * `nextClosesAt` — see SAFETY_WATCH — so a census that counted undated rows as funder-published
+   * would report the product's rarest state as its commonest one on a fresh install.
+   */
+  it('does not read an undated row as a funder-published one', async () => {
+    stubApi({ watches: { rows: [SAFETY_WATCH] } });
+    renderWatchlist();
+    await screen.findByRole('table', { name: /watched programs/i });
+    expect(
+      screen.getByText(/0 funder-published, 0 projected, 1 with no close date recorded/i),
+    ).toBeInTheDocument();
   });
 
   it('labels a deadline with no recorded zone as UTC instead of guessing the browser’s', async () => {
