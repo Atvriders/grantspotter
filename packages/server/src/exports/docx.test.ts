@@ -320,6 +320,95 @@ describe('draftToDocx', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The same document, written on a machine that is not this one
+// ---------------------------------------------------------------------------
+
+/**
+ * THE TEST ABOVE PROVED THE PACKAGE IS STABLE ON ONE MACHINE. IT WAS NOT STABLE BETWEEN TWO.
+ *
+ * `withStatedTimestamp` rewrites the package through fflate at a fixed mtime, and fflate packs the
+ * DOS stamp from `getHours()`, `getDate()` and friends — all LOCAL — applied to `new Date(mtime)`.
+ * The mtime was `new Date(Date.UTC(1980, 0, 2))`, one INSTANT, and one instant is a different wall
+ * clock in every zone. Measured on this draft before the fix: the stamp was 0x220000 under UTC,
+ * 0x219800 under America/New_York, 0x224800 under Asia/Tokyo, 0x216000 under Etc/GMT+12 and
+ * 0x217000 under Pacific/Kiritimati — which kept UTC-10 until 1994, so 1980-01-02T00:00Z fell on
+ * the 1st there and the DATE half of the stamp moved as well. Five zones, five different documents
+ * from one draft, and the packet that embeds this file inherited every one of them.
+ *
+ * Two runs of one suite share a timezone, which is the only reason this survived. So these tests
+ * run the writer in five, by setting `process.env.TZ` around it — the switch Node reads for every
+ * `Date` getter fflate calls. The five archives were checked byte for byte against five separate
+ * `TZ=... node` processes and are the same files.
+ *
+ * Only the stated-instant path is under test. Without `generatedAtISO` the `docx` library's own
+ * wall-clock stamp is kept and the bytes are meant to vary; `DocxOptions` says so in writing.
+ */
+const TIMEZONES = ['UTC', 'America/New_York', 'Asia/Tokyo', 'Etc/GMT+12', 'Pacific/Kiritimati'];
+
+/** Writes as a machine in `tz` would, and puts the zone back even if the writer throws. */
+async function inTimeZone<T>(tz: string, write: () => Promise<T>): Promise<T> {
+  const previous = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await write();
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+}
+
+/**
+ * 1980-01-02 00:00:00 packed the way ZIP stores it: date `((1980 - 1980) << 9) | (1 << 5) | 2` in
+ * the high half, midnight — zero — in the low half. It is a LOCAL wall clock, so a writer that has
+ * stopped depending on the machine packs this one number everywhere on earth.
+ *
+ * Read at offset 10, which is neither a guess nor a scan: the first local file header sits at byte
+ * 0 of every ZIP and carries its DOS stamp at +10. `PK\x03\x04` also occurs inside deflated
+ * payloads, so hunting for the later headers would find phantoms — the byte-identity test covers
+ * the rest of the entries, since a stamp that moved in any of them would move the bytes.
+ */
+const DOS_1980_01_02 = 0x0022_0000;
+
+describe('the DOCX is the same file on any machine, not merely on one machine twice', () => {
+  const draft = markdownToDraft(MD, META);
+  const opts = { generatedAtISO: '2026-08-02T12:00:00.000Z' };
+
+  it('writes identical bytes from UTC−12 to the far side of the date line', async () => {
+    const written = new Map<string, Buffer>();
+    for (const tz of TIMEZONES) {
+      written.set(tz, await inTimeZone(tz, () => draftToDocx(draft, opts)));
+    }
+    const reference = written.get('UTC') as Buffer;
+    for (const [tz, bytes] of written) {
+      expect(bytes.equals(reference), `${tz} writes a different document from UTC`).toBe(true);
+    }
+  });
+
+  it('stamps the package 1980-01-02 00:00 local, whatever local happens to mean', async () => {
+    for (const tz of TIMEZONES) {
+      const buf = await inTimeZone(tz, () => draftToDocx(draft, opts));
+      expect(buf.readUInt32LE(10), `${tz} packs a different DOS stamp`).toBe(DOS_1980_01_02);
+    }
+  });
+
+  /**
+   * A stamp outside 1980-2099 does not produce a wrong package, it produces NO package: fflate
+   * 0.8.3 throws "date not in range 1980-2099". Etc/GMT+12 and Pacific/Kiritimati are the zones
+   * that would drag 1 January 1980 back into 1979, which is why the fixed date is the 2nd.
+   */
+  it('is still a readable OPC package when it was written in the most distant zones', async () => {
+    for (const tz of ['Etc/GMT+12', 'Pacific/Kiritimati']) {
+      const buf = await inTimeZone(tz, () => draftToDocx(draft, opts));
+      const entries = parts(buf);
+      for (const required of ['[Content_Types].xml', '_rels/.rels', 'word/document.xml']) {
+        expect(Object.keys(entries), `${tz} produced an unreadable package`).toContain(required);
+      }
+      expect(documentXml(buf)).toContain('Need statement');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // THE EXPORT GATE (spec §10.4). Plan 4 owns it; this proves the export path
 // cannot render a draft that has not been through it.
 // ---------------------------------------------------------------------------

@@ -319,3 +319,93 @@ describe('buildApplicationPacket', () => {
     expect(readme).toContain('Verify each one before you submit.');
   });
 });
+
+// ---------------------------------------------------------------------------
+// The packet container, on a machine that is not this one
+// ---------------------------------------------------------------------------
+
+/**
+ * THE MACHINE'S TIMEZONE WAS PART OF THE PACKET'S BYTES, AND EVERY PROOF ABOVE HELD ONLY INSIDE
+ * ONE ZONE.
+ *
+ * fflate packs the DOS stamp from `getHours()`, `getDate()` and friends — all LOCAL — applied to
+ * `new Date(mtime)`. The fixed mtime was `new Date(Date.UTC(1980, 0, 2))`, one INSTANT, and one
+ * instant is a different wall clock in every zone. Measured on this corpus before the fix: the
+ * stamp was 0x220000 under UTC, 0x219800 under America/New_York, 0x224800 under Asia/Tokyo,
+ * 0x216000 under Etc/GMT+12 and 0x217000 under Pacific/Kiritimati — which kept UTC-10 until 1994,
+ * so 1980-01-02T00:00Z landed on the 1st there and the DATE half of the stamp moved too. Five
+ * zones, five different packets from one input.
+ *
+ * 'is byte-identical across two runs with the same input' could not see any of it: two runs of one
+ * suite share a timezone. So these tests do not stay in one. They set `process.env.TZ` around the
+ * writer, which is the switch Node reads for every `Date` getter fflate calls; the five archives
+ * that produces were checked byte for byte against five separate `TZ=... node` processes and are
+ * the same files.
+ */
+const TIMEZONES = ['UTC', 'America/New_York', 'Asia/Tokyo', 'Etc/GMT+12', 'Pacific/Kiritimati'];
+
+/** Builds as a machine in `tz` would, and puts the zone back even if the writer throws. */
+async function inTimeZone<T>(tz: string, build: () => Promise<T>): Promise<T> {
+  const previous = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await build();
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+}
+
+/**
+ * 1980-01-02 00:00:00 packed the way ZIP stores it: date `((1980 - 1980) << 9) | (1 << 5) | 2` in
+ * the high half, midnight — zero — in the low half. It is a LOCAL wall clock, so a writer that has
+ * stopped depending on the machine packs this one number everywhere on earth.
+ *
+ * Read at offset 10, which is not a guess and not a scan: the first local file header sits at byte
+ * 0 of every ZIP and carries its DOS stamp at +10. `PK\x03\x04` also occurs inside deflated
+ * payloads, so a search for the later headers would find phantoms — the byte-identity test above
+ * covers the remaining entries, since a stamp that moved in any of them would move the bytes.
+ */
+const DOS_1980_01_02 = 0x0022_0000;
+
+describe('the packet is the same file on any machine, not merely on one machine twice', () => {
+  it('packs identical bytes from UTC−12 to the far side of the date line', async () => {
+    const input = packetInput();
+    const built = new Map<string, Buffer>();
+    for (const tz of TIMEZONES) {
+      built.set(tz, Buffer.from(await inTimeZone(tz, () => buildApplicationPacket(input))));
+    }
+    const reference = built.get('UTC') as Buffer;
+    for (const [tz, bytes] of built) {
+      expect(bytes.equals(reference), `${tz} packs a different packet from UTC`).toBe(true);
+    }
+  });
+
+  it('stamps the archive 1980-01-02 00:00 local, whatever local happens to mean', async () => {
+    for (const tz of TIMEZONES) {
+      const packet = Buffer.from(await inTimeZone(tz, () => buildApplicationPacket(packetInput())));
+      expect(packet.readUInt32LE(10), `${tz} packs a different DOS stamp`).toBe(DOS_1980_01_02);
+    }
+  });
+
+  /**
+   * A stamp outside 1980-2099 does not produce a wrong archive, it produces NO archive: fflate
+   * 0.8.3 throws "date not in range 1980-2099". Etc/GMT+12 and Pacific/Kiritimati are the zones
+   * that would drag 1 January 1980 back into 1979, which is why the fixed date is the 2nd.
+   */
+  it('still opens, with all six entries, when it was written in the most distant zones', async () => {
+    for (const tz of ['Etc/GMT+12', 'Pacific/Kiritimati']) {
+      const packet = await inTimeZone(tz, () => buildApplicationPacket(packetInput()));
+      const entries = unzipSync(packet);
+      expect(Object.keys(entries).sort(), `${tz} produced an unreadable packet`).toEqual([
+        'README.txt',
+        'budget-worksheet.csv',
+        'draft.docx',
+        'draft.md',
+        'requirements-checklist.md',
+        'source-links.md',
+      ]);
+      expect(strFromU8(entries['draft.md'] as Uint8Array)).toContain('# Need statement');
+    }
+  });
+});

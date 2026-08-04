@@ -46,8 +46,20 @@ const BUDGET_COLUMNS = [
   'quoteSource',
 ];
 
-/** Same fixed archive mtime as the DOCX writer, for the same reason: a diffable packet. */
-const ARCHIVE_EPOCH = new Date(Date.UTC(1980, 0, 2));
+/**
+ * Same fixed archive mtime as the DOCX writer, for the same reason: a diffable packet.
+ *
+ * A STRING, AND THAT IS THE ENTIRE POINT. This was `new Date(Date.UTC(1980, 0, 2))` — one INSTANT —
+ * and fflate packs the DOS stamp with `getHours()`, `getDate()` and friends, every one of them
+ * LOCAL. One instant is a different wall clock in every zone, so one input produced a different
+ * packet on every machine: the stamp measured 0x220000 under UTC, 0x219800 in New York, 0x224800
+ * in Tokyo, and 0x216000 under Etc/GMT+12 — where the DATE half had moved too, because midnight
+ * UTC on the 2nd is noon on the 1st there. The packet was reproducible on one machine and not
+ * between two, which meant every byte proof over it held only inside a single timezone. A
+ * date-time string with no offset is parsed as LOCAL time, which pins those getters to the same
+ * wall clock everywhere. Same fix, same reason, as `XLSX_ARCHIVE_MTIME` in `xlsx.ts`.
+ */
+const ARCHIVE_MTIME = '1980-01-02T00:00:00';
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -308,6 +320,8 @@ export async function buildApplicationPacket(input: PacketInput): Promise<Uint8A
   };
   // A fixed archive mtime keeps the packet byte-stable for the same input, which makes it
   // diffable. `mtime: 0` — which the task brief specified — THROWS in fflate 0.8.3:
-  // "date not in range 1980-2099", because the DOS timestamp ZIP stores starts at 1980.
-  return zipSync(files, { level: 6, mtime: ARCHIVE_EPOCH });
+  // "date not in range 1980-2099", because the DOS timestamp ZIP stores starts at 1980. The 2nd
+  // rather than the 1st for the same reason, now that the date is read as a local wall clock:
+  // Etc/GMT+12 would put the 1st back into 1979 and the packet would not build at all there.
+  return zipSync(files, { level: 6, mtime: ARCHIVE_MTIME });
 }

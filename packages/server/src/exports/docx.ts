@@ -181,8 +181,23 @@ export async function draftToDocx(draft: DraftDocument, options: DocxOptions = {
  */
 const CREATED_RE = /(<dcterms:created[^>]*>)[^<]*(<\/dcterms:created>)/;
 const MODIFIED_RE = /(<dcterms:modified[^>]*>)[^<]*(<\/dcterms:modified>)/;
-/** The floor of the DOS timestamp ZIP stores. Noon-safe: local time stays inside 1980 everywhere. */
-const ARCHIVE_EPOCH = new Date(Date.UTC(1980, 0, 2));
+/**
+ * The fixed archive mtime, just above the floor of the DOS timestamp ZIP stores.
+ *
+ * A STRING, AND THAT IS THE ENTIRE POINT. This was `new Date(Date.UTC(1980, 0, 2))` — one INSTANT —
+ * and fflate packs the DOS stamp with `getHours()`, `getDate()` and friends, every one of them
+ * LOCAL. One instant is a different wall clock in every zone, so one draft produced a different
+ * document on every machine: the stamp measured 0x220000 under UTC, 0x219800 in New York, 0x224800
+ * in Tokyo, and 0x216000 under Etc/GMT+12 — where the DATE half had moved too, because midnight
+ * UTC on the 2nd is noon on the 1st there. The BYTE-STABILITY this function is here to provide
+ * therefore held on one machine and not between two, and it carried into every packet that embeds
+ * this file. A date-time string with no offset is parsed as LOCAL time, which pins those getters to
+ * the same wall clock everywhere. Same fix, same reason, as `XLSX_ARCHIVE_MTIME` in `xlsx.ts`.
+ *
+ * The 2nd and not the 1st: fflate 0.8.3 throws "date not in range 1980-2099" below 1980, and read
+ * as a local wall clock the 1st would fall back into 1979 anywhere behind UTC.
+ */
+const ARCHIVE_MTIME = '1980-01-02T00:00:00';
 
 function withStatedTimestamp(buffer: Buffer, generatedAtISO: string): Buffer {
   const entries = unzipSync(new Uint8Array(buffer));
@@ -198,5 +213,5 @@ function withStatedTimestamp(buffer: Buffer, generatedAtISO: string): Buffer {
     }
     rewritten[name] = data;
   }
-  return Buffer.from(zipSync(rewritten, { level: 6, mtime: ARCHIVE_EPOCH }));
+  return Buffer.from(zipSync(rewritten, { level: 6, mtime: ARCHIVE_MTIME }));
 }
