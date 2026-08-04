@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type Database from 'better-sqlite3';
 import { openTestDb } from '../test/testDb.js';
@@ -129,5 +131,72 @@ describe('schema conformance (Plan 3 read-contract)', () => {
     expect(declared.has('table programs')).toBe(true);
     expect(declared.has('table program_search')).toBe(true);
     expect(declared.has('index idx_pf_lookup')).toBe(true);
+  });
+});
+
+/**
+ * RESOLUTIONS R19, made executable per file rather than per name. The check
+ * above catches a name declared twice; this one catches the case where someone
+ * pastes a Plan 1 table back into a Plan 3 migration under a *different* name,
+ * or empties one of these files of the indexes that are its only reason to
+ * exist.
+ */
+describe('migration ownership (RESOLUTIONS R19)', () => {
+  let ownedDb: Database.Database;
+
+  beforeAll(() => {
+    ownedDb = openTestDb();
+  });
+
+  afterAll(() => {
+    ownedDb.close();
+  });
+
+  // `profiles` and `watches` are CONTRACT §6 tables created by Plan 1's
+  // 001-init.sql. Plan 3's 032/033 may only add indexes: a CREATE TABLE here
+  // sorts after 001, so it no-ops, and its (divergent, FK-less) shape would
+  // read as the schema while never existing.
+  //
+  // DEVIATION FROM THE TASK BRIEF (2026-08-03): the brief matched these two
+  // regexes against the RAW file text. Both files explain the no-op trap in
+  // their header comments, and 032-profiles.sql spells the words "CREATE TABLE
+  // IF NOT EXISTS" while doing so, so the raw-text form fails on a comment that
+  // is arguing FOR the rule it is being failed by. Comments are stripped first,
+  // exactly as the duplicate-name check above already does.
+  it.each([
+    ['032-profiles.sql'],
+    ['033-watches.sql'],
+  ])('%s adds indexes only — it never re-creates a Plan 1 table', (file) => {
+    const raw = readFileSync(
+      fileURLToPath(new URL(`./migrations/${file}`, import.meta.url)),
+      'utf8',
+    );
+    const sql = raw.replace(/--[^\n]*/g, '');
+    expect(sql).not.toMatch(/CREATE\s+TABLE/i);
+    expect(sql).toMatch(/CREATE\s+(UNIQUE\s+)?INDEX/i);
+  });
+
+  it('keeps Plan 1’s cascade on watches, which is what makes the fixtures need parents', () => {
+    const keys = ownedDb.prepare('PRAGMA foreign_key_list(watches)').all() as Array<{
+      table: string; on_delete: string;
+    }>;
+    expect(keys.map((k) => k.table).sort()).toEqual(['programs', 'users']);
+    for (const k of keys) expect(k.on_delete).toBe('CASCADE');
+    expect(ownedDb.pragma('foreign_keys', { simple: true })).toBe(1);
+  });
+
+  /**
+   * The index migration 033 actually adds. Plan 1 already ships
+   * `idx_watches_program` for the fan-out direction, and the UNIQUE
+   * (user_id, program_id) constraint already indexes the other, so the only
+   * thing left uncovered was `watchedProgramIds`' ORDER BY created_at. If this
+   * index disappears, every watchlist read goes back to sorting in memory.
+   */
+  it('indexes the watchlist read that Plan 1 left uncovered', () => {
+    const names = (
+      ownedDb.prepare('PRAGMA index_list(watches)').all() as Array<{ name: string }>
+    ).map((r) => r.name);
+    expect(names).toContain('idx_watches_user_created');
+    expect(names).toContain('idx_watches_program');
   });
 });

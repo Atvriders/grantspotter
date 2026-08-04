@@ -1,0 +1,44 @@
+-- Owner: Plan 1, packages/server/src/db/migrations/001-init.sql.
+-- `watches` (id, user_id, program_id, notify_changes, created_at) is created
+-- there, with ON DELETE CASCADE foreign keys to users(id) and programs(id) and
+-- UNIQUE (user_id, program_id).
+-- RESOLUTIONS R19: this file adds indexes ONLY. Table DDL belongs to 001-init.sql
+-- and re-declaring it here would no-op; the ownership guard in
+-- schemaConformance.test.ts fails this file if any table DDL appears in it.
+--
+-- DEVIATION FROM THE TASK BRIEF, and why (2026-08-03). The brief specified two
+-- indexes here and NEITHER can be created:
+--
+--   1. `idx_watches_program ON watches (program_id)` ALREADY EXISTS. Plan 1's
+--      001-init.sql:198 creates it, under a comment giving the brief's exact
+--      reasoning (the UNIQUE constraint's leading column is user_id, so it
+--      cannot serve a lookup keyed by program_id alone). Repeating it here is
+--      the precise defect R19 exists to stop: migrations run in filename order,
+--      033 sorts after 001, so `IF NOT EXISTS` matches on the NAME and the
+--      statement silently does nothing. It is also already caught -- the
+--      existing `declares every table and index name exactly once across all
+--      migrations` assertion in schemaConformance.test.ts turns RED on
+--      "index idx_watches_program declared in 001-init.sql, 033-watches.sql".
+--
+--   2. `idx_watches_user_program ON watches (user_id, program_id)` would be a
+--      byte-for-byte duplicate of the implicit index SQLite already maintains
+--      for Plan 1's UNIQUE (user_id, program_id) constraint. A second B-tree
+--      over the same two columns in the same order is never consulted by the
+--      planner and is written on every insert, update and delete.
+--
+-- What IS missing is the index the watchlist's own read actually needs.
+-- `watchedProgramIds` -- the helper both this router's GET and Task 8's
+-- change-event fan-out call -- is
+--
+--     SELECT program_id FROM watches WHERE user_id = ? ORDER BY created_at
+--
+-- and the UNIQUE constraint's index, keyed (user_id, program_id), satisfies the
+-- WHERE but leaves SQLite to materialise and sort every one of a user's stars on
+-- each read. (user_id, created_at) answers it in index order with no sort step,
+-- and no existing index covers those two columns.
+--
+-- A star is a subscription to CHANGE EVENTS on a program (spec 11.2), not merely
+-- a deadline bookmark, which is why the reverse question -- "who watches this
+-- program?" -- is asked on every change event and why Plan 1 indexed program_id
+-- for it in the first place.
+CREATE INDEX IF NOT EXISTS idx_watches_user_created ON watches (user_id, created_at);
