@@ -64,6 +64,37 @@ function renderSession() {
   );
 }
 
+/**
+ * Block until `/api/me` has actually ANSWERED.
+ *
+ * Three of the fields `Probe` renders have a pre-fetch value that is also a legitimate
+ * post-fetch value, so a `waitFor` on any of them can be satisfied by the FIRST render — before
+ * the request resolves — and every assertion after it then runs against a session that was never
+ * populated:
+ *   - `completeness-for` is `(none)` before the request resolves AND when the server names no
+ *     profile;
+ *   - `unevaluated` is `(none)` before the request resolves AND when the user holds no profile;
+ *   - `score` is `0` before the request resolves AND for a profile that answers nothing.
+ * That is not a theoretical race. `counts every held profile as unevaluated when the server names
+ * none` waited on `completeness-for` being `(none)`, and measured 3 reds in 30 runs on a 36-core
+ * box with a full `npm test` running beside it — green the rest of the time WITHOUT EVER HAVING
+ * TESTED WHAT IT NAMES, which is the worse half of the defect. See
+ * `.superpowers/sdd/2026-08-02-grantspotter-plan-3-product/flaky-and-blocklist-report.md`.
+ *
+ * These two fields carry no such ambiguity: `user` starts `(anonymous)` and only becomes an email
+ * once a 200 lands, and `loading` starts `true` and is set false in the `finally` that runs after
+ * `setMe`. Requiring both is the difference between "the server answered and named no profile"
+ * and "we have not asked yet". The `renders "(none)", "(none)" and 0 BEFORE it has asked` test
+ * below pins that premise, so this helper cannot quietly become unnecessary — or quietly become
+ * insufficient — without a test saying so.
+ */
+async function waitForServerAnswer(email: string = USER.email): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByTestId('user')).toHaveTextContent(email);
+    expect(screen.getByTestId('loading')).toHaveTextContent('false');
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -165,9 +196,10 @@ describe('SessionProvider', () => {
     });
 
     renderSession();
-    await waitFor(() => {
-      expect(screen.getByTestId('completeness-for')).toHaveTextContent('(none)');
-    });
+    // NOT `waitFor(completeness-for === '(none)')`: that is also this field's value before the
+    // request resolves, so it passed on the first render and asserted against an empty session.
+    await waitForServerAnswer();
+    expect(screen.getByTestId('completeness-for')).toHaveTextContent('(none)');
     expect(screen.getByTestId('unevaluated')).toHaveTextContent('student,organization');
   });
 
@@ -185,10 +217,35 @@ describe('SessionProvider', () => {
     });
 
     renderSession();
-    await waitFor(() => {
-      expect(screen.getByTestId('score')).toHaveTextContent('0');
-    });
+    // The same defect as the test above, one field over, and fully vacuous rather than merely
+    // flaky: `score` is 0 and `unevaluated` is `(none)` BEFORE the request resolves as well as
+    // after it, so every assertion here was satisfiable without `/api/me` ever answering — this
+    // one could never go red to say so.
+    await waitForServerAnswer();
+    expect(screen.getByTestId('score')).toHaveTextContent('0');
     expect(screen.getByTestId('unevaluated')).toHaveTextContent('(none)');
+  });
+
+  it('renders "(none)", "(none)" and 0 BEFORE it has asked, which is why the tests above wait on user and loading', () => {
+    // The premise `waitForServerAnswer` rests on, pinned rather than remembered. While this is
+    // true, a `waitFor` on `completeness-for`, `unevaluated` or `score` proves nothing about the
+    // server's answer; if it ever stops being true, this test says so instead of leaving the
+    // helper looking like ceremony. `user` and `loading` are asserted here too, so the two fields
+    // the helper DOES trust are shown to start somewhere the server can never leave them.
+    //
+    // The stub never settles on purpose: a stub that resolves would update state outside `act`
+    // and turn this into the flake it documents.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+
+    renderSession();
+    expect(screen.getByTestId('completeness-for')).toHaveTextContent('(none)');
+    expect(screen.getByTestId('unevaluated')).toHaveTextContent('(none)');
+    expect(screen.getByTestId('score')).toHaveTextContent('0');
+    expect(screen.getByTestId('user')).toHaveTextContent('(anonymous)');
+    expect(screen.getByTestId('loading')).toHaveTextContent('true');
   });
 
   it('survives a notifications outage without losing the session', async () => {
