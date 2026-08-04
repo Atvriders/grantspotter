@@ -78,7 +78,19 @@ export function requireAdmin(): RequestHandler {
   return requireRole('admin');
 }
 
-// Spec §12 role matrix, named once so Plans 2-5 never re-derive it.
+// Spec §12's role matrix, written out once so the mapping from capability to role is readable in
+// one place rather than inferred by grepping for `requireAdmin()` across five plans.
+//
+// WHAT THIS COMMENT USED TO CLAIM, AND WHY IT WAS WRONG. It said these were "named once so Plans
+// 2-5 never re-derive it". Plans 2-5 re-derived it anyway: every router reaches for `requireAuth()`
+// or `requireAdmin()` directly, and only `requireInboxRead`/`requireInboxWrite` are referenced
+// anywhere — by `test/session.test.ts`. Six of the eight have no reference at all.
+//
+// They are kept rather than deleted because the matrix itself is worth stating, and each alias is a
+// literal assignment, so what the routers do inline is byte-equivalent to what these name; there is
+// no second implementation here that could drift from the first. But this block documents the
+// intent, it does not enforce it — changing a line here changes NOTHING about who can reach what.
+// The route tests are what hold the real matrix in place.
 export const requireBrowse = requireAuth;
 export const requireVerifyNow = requireAuth;
 export const requireInboxRead = requireAuth;

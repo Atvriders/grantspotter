@@ -286,7 +286,15 @@ function readmeText(input: PacketInput): string {
     'Contents',
     '  draft.md                  the application draft in markdown',
     '  draft.docx                the same draft as a Word document',
-    '  budget-worksheet.csv      line items, totals and any indirect-cost cap',
+    // Say which of the two this file actually is. GrantSpotter never composes a budget, and no
+    // screen in the app collects line items today, so for anyone using the product through its own
+    // UI this file arrives EMPTY apart from a zero total and whatever indirect-cost cap the funder
+    // published. A contents list promising "line items, totals" over a file containing none is the
+    // packet overclaiming itself, which is the one thing this product is built not to do.
+    input.budgetLines.length > 0
+      ? '  budget-worksheet.csv      your line items, totals and any indirect-cost cap'
+      : '  budget-worksheet.csv      a blank worksheet to fill in; any indirect-cost cap the funder\n' +
+        '                            published is already filled in for you',
     '  requirements-checklist.md hard requirements, preferences, restrictions, obligations',
     '  source-links.md           every source URL, the AI policy and any disputed reading',
     '',
