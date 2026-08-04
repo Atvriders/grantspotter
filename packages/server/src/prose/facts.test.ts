@@ -1,6 +1,6 @@
 import type { Funder, OrgProfile, Program } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
-import { TODO_MARKER_SCAN, fillTemplate, renderSlotValue } from '../templates/fill.js';
+import { TODO_MARKER_SCAN, extractSlots, fillTemplate, renderSlotValue } from '../templates/fill.js';
 import { buildSlotContext, describeSlotKnowledge } from '../templates/slots.js';
 import { buildDocIndex, isFigureToken, tokenize } from './features.js';
 import {
@@ -93,6 +93,7 @@ describe('buildFactChecklist and exportReadiness', () => {
     const after = exportReadiness(DRAFT, all);
     expect(after.ready).toBe(true);
     expect(after.unconfirmed).toBe(0);
+    expect(after.rawSlots).toBe(0); // DRAFT has no {{…}} in it — the clean-draft control
   });
 
   it('treats a draft with no assertions as ready', () => {
@@ -155,6 +156,94 @@ describe('a [TODO: …] gap is a hole, never an assertion', () => {
     const marker = '[TODO: club.callsign — your club’s FCC callsign, e.g. W8UM]';
     expect([...marker.matchAll(TODO_MARKER_SCAN())].length).toBe(1);
     expect(exportReadiness(marker).openTodos).toBe(1);
+  });
+});
+
+/**
+ * A RAW `{{slot.path}}` IS ALSO A GAP, NEVER AN ASSERTION.
+ *
+ * `fillTemplate` replaces every slot it can resolve and writes `[TODO: …]` for the rest — but only
+ * for text that goes through it. An applicant who pastes template markdown straight into the draft
+ * editor has a document with literal `{{club.callsign}}` in it, and that pipeline never ran, so no
+ * `[TODO: …]` marker exists to say so. `openTodos` alone is blind to it; `rawSlots` is not.
+ */
+describe('a raw {{slot.path}} placeholder is a hole, never an assertion', () => {
+  const WITH_RAW_SLOTS =
+    'The club {{club.callsign}} was founded in {{club.foundedYear}} and asks for $250.';
+
+  it('lists no assertion drawn from inside a raw placeholder', () => {
+    const texts = extractFactAssertions(WITH_RAW_SLOTS).map((f) => f.text);
+    expect(texts).not.toContain('club');
+    expect(texts).not.toContain('callsign');
+    expect(texts).not.toContain('club.callsign');
+    expect(texts).not.toContain('foundedYear');
+    expect(texts).toContain('$250');
+  });
+
+  it('still blocks export on the placeholders themselves, counted once each', () => {
+    const readiness = exportReadiness(WITH_RAW_SLOTS);
+    expect(readiness.rawSlots).toBe(2);
+    expect(readiness.rawSlotPaths).toEqual(['club.callsign', 'club.foundedYear']);
+    expect(readiness.ready).toBe(false);
+  });
+
+  it('confirming every listed fact does not release a draft that still has a raw placeholder', () => {
+    const confirmations: Record<string, { confirmed: boolean; note: string }> = {};
+    for (const item of buildFactChecklist(WITH_RAW_SLOTS)) {
+      confirmations[item.id] = { confirmed: true, note: '' };
+    }
+    const readiness = exportReadiness(WITH_RAW_SLOTS, confirmations);
+    expect(readiness.unconfirmed).toBe(0);
+    expect(readiness.openTodos).toBe(0);
+    expect(readiness.ready).toBe(false);
+  });
+
+  it('repeats the same slot path once per occurrence in the count, but once in the name list', () => {
+    const readiness = exportReadiness('{{club.callsign}} ... {{club.callsign}} again.');
+    expect(readiness.rawSlots).toBe(2);
+    expect(readiness.rawSlotPaths).toEqual(['club.callsign']);
+  });
+
+  it('agrees with fill.ts about the shape of a placeholder', () => {
+    // If Task 2/3 ever changes the mustache syntax, the gate that counts it must move with it.
+    // `extractSlots` is the exported function built on the real `slotRe`; pinning against it
+    // rather than duplicating `slotRe` here is what makes the two impossible to drift apart
+    // silently.
+    const raw = '{{club.callsign}}';
+    expect(extractSlots(raw)).toEqual(['club.callsign']);
+    const readiness = exportReadiness(raw);
+    expect(readiness.rawSlots).toBe(1);
+    expect(readiness.rawSlotPaths).toEqual(['club.callsign']);
+  });
+
+  it('does not mistake a doubled brace that is not the template engine’s shape for a placeholder', () => {
+    // Free prose an applicant might plausibly write: a matrix, an empty brace pair, a code sample
+    // with no dotted path inside it. None of these is what `fillTemplate` ever emits.
+    expect(exportReadiness('The matrix is {{1,2},{3,4}}.').rawSlots).toBe(0);
+    expect(exportReadiness('Fill in the blank: {{ }} here.').rawSlots).toBe(0);
+    expect(exportReadiness('The set builder notation uses {{x}} for a singleton.').rawSlots).toBe(0);
+    expect(exportReadiness('See the config block: { key: {{ } } }.').rawSlots).toBe(0);
+  });
+
+  it('still flags a placeholder even where a `[TODO: …]` marker also appears', () => {
+    const readiness = exportReadiness(
+      '{{club.callsign}} applies. [TODO: project.title — a plain title].',
+    );
+    expect(readiness.rawSlots).toBe(1);
+    expect(readiness.openTodos).toBe(1);
+    expect(readiness.ready).toBe(false);
+  });
+
+  it('a clean draft with no gaps at all, fully confirmed, still exports', () => {
+    const CLEAN = 'The club W8UM asks for $250 this year.';
+    const items = buildFactChecklist(CLEAN);
+    const confirmations: Record<string, { confirmed: boolean; note: string }> = {};
+    for (const item of items) confirmations[item.id] = { confirmed: true, note: '' };
+    const readiness = exportReadiness(CLEAN, confirmations);
+    expect(readiness.unconfirmed).toBe(0);
+    expect(readiness.openTodos).toBe(0);
+    expect(readiness.rawSlots).toBe(0);
+    expect(readiness.ready).toBe(true);
   });
 });
 
@@ -495,6 +584,9 @@ describe('origin, per item', () => {
     expect(readiness.ready).toBe(false);
     expect(readiness.unconfirmed).toBe(readiness.items.length);
     expect(readiness.openTodos).toBeGreaterThan(0);
+    // fillTemplate resolved every slot it could and marked the rest [TODO: …] — a draft that went
+    // through the real pipeline never has a raw {{…}} left in it.
+    expect(readiness.rawSlots).toBe(0);
   });
 
   it('reads the same three origins slots.ts writes', () => {

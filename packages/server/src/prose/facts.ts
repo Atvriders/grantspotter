@@ -129,6 +129,16 @@ export interface ExportReadiness {
   ready: boolean;
   unconfirmed: number;
   openTodos: number;
+  /**
+   * Occurrences of a raw, unfilled `{{slot.path}}` placeholder — the shape `templates/fill.ts`
+   * leaves behind when a slot has no value AND was never routed through `fillTemplate` at all, as
+   * when an applicant pastes template markdown straight into the draft editor. Counted the same
+   * way `openTodos` is: once per occurrence, not deduplicated, because two unfilled placeholders
+   * are two things to go fix even when they name the same slot.
+   */
+  rawSlots: number;
+  /** Every distinct slot path found by `rawSlots`, sorted — what the export-blocked message names. */
+  rawSlotPaths: string[];
   items: FactChecklistItem[];
 }
 
@@ -142,6 +152,28 @@ const MONTHS =
  * turns red rather than quietly letting hint text onto the checklist.
  */
 const TODO_MARKER = /\[TODO:[^\]]*\]/g;
+
+/**
+ * A raw, unfilled template placeholder — `{{club.callsign}}` reaching the checklist because the
+ * text never went through `fillTemplate` at all, as when an applicant pastes template markdown
+ * straight into the draft editor. `fillTemplate` replaces every slot it can resolve and leaves
+ * only the ones it cannot as `[TODO: …]`; a literal `{{…}}` in a draft's body means the pipeline
+ * that writes `[TODO: …]` never ran, so `TODO_MARKER` alone cannot see the gap.
+ *
+ * Restated from `templates/fill.ts`'s `slotRe` — for the same reason `TODO_MARKER` restates
+ * `TODO_MARKER_SCAN`, `prose/` may not import outside itself — and pinned against the real thing
+ * by facts.test.ts via the exported `extractSlots`, so the two cannot drift silently apart.
+ *
+ * THE SHAPE IS DELIBERATE, and NARROWER than `slotRe` in one respect. This is prose an applicant
+ * writes freely, and a bare `\{\{[^}]*\}\}` scan would also catch a doubled brace in mathematics
+ * or in a quoted code sample. `slotRe` itself would accept a single bare segment — `{{x}}` — but
+ * every one of Task 2's 66 real slots is a DOTTED path (`club.callsign`, `project.awardAmount`);
+ * none is a single word. So this requires at least one `.segment`, which `slotRe` treats as
+ * optional: `{{x}}` in a maths aside is left alone, `{{club.callsign}}` from the real vocabulary
+ * is not. Matching the vocabulary's actual shape, rather than the parser's most permissive one,
+ * is what keeps a legitimate document from losing a checkbox to this matcher.
+ */
+const RAW_SLOT_MARKER = /\{\{\s*([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)\s*\}\}/g;
 
 /** All-caps organization names: `ARRL`, `ARDC`, `NASA`, `IEEE`. Two characters minimum. */
 const ACRONYM_RE = /^[A-Z][A-Z0-9-]+$/;
@@ -260,9 +292,16 @@ function fingerprintOf(kind: FactKind, text: string): string {
  * Gap markers become runs of spaces of the same length, so offsets still point into the original
  * text while nothing inside a marker can match. Blanking rather than deleting is what keeps
  * `text.slice(start, end) === fact.text` true for the caller.
+ *
+ * Both gap shapes are blanked here, `[TODO: …]` and raw `{{slot.path}}`: a gap is a gap
+ * regardless of which pipeline stage left it unfilled, and neither one's contents — a hint's
+ * `e.g. W8UM`, or a dotted path that happens to look like a proper noun — is prose the applicant
+ * wrote.
  */
-function blankTodoMarkers(text: string): string {
-  return text.replace(TODO_MARKER, (marker) => ' '.repeat(marker.length));
+function blankGapMarkers(text: string): string {
+  return text
+    .replace(TODO_MARKER, (marker) => ' '.repeat(marker.length))
+    .replace(RAW_SLOT_MARKER, (marker) => ' '.repeat(marker.length));
 }
 
 /**
@@ -277,7 +316,7 @@ function contextAround(text: string, start: number, end: number): string {
 }
 
 export function extractFactAssertions(text: string): FactAssertion[] {
-  const scan = blankTodoMarkers(text);
+  const scan = blankGapMarkers(text);
   const properNouns = buildDocIndex(scan).midSentenceCapitalized;
   const taken: Array<{ start: number; end: number }> = [];
   const out: FactAssertion[] = [];
@@ -434,6 +473,13 @@ export function unconfirmedCount(items: FactChecklistItem[]): number {
 /**
  * A leftover `[TODO: …]` marker blocks export just as an unconfirmed fact does — and it is counted
  * rather than confirmed, because a hole is not an assertion a person can affirm.
+ *
+ * A raw `{{slot.path}}` placeholder blocks it the same way, for the same reason: it is a hole,
+ * just one left by a different route. `fillTemplate` never ran over this text — or the applicant
+ * pasted template markdown into the editor after it did — so no `[TODO: …]` marker was ever
+ * written to say so. Left uncounted, it is arguably the worse gap of the two: `[TODO: club.callsign
+ * — your club's FCC callsign, e.g. W8UM]` at least reads as unfinished, where `{{club.callsign}}`
+ * can look like a stray formatting artefact the reader is meant to ignore.
  */
 export function exportReadiness(
   text: string,
@@ -443,5 +489,15 @@ export function exportReadiness(
   const items = buildFactChecklist(text, confirmations, sources);
   const unconfirmed = unconfirmedCount(items);
   const openTodos = [...text.matchAll(TODO_MARKER)].length;
-  return { ready: unconfirmed === 0 && openTodos === 0, unconfirmed, openTodos, items };
+  const rawSlotMatches = [...text.matchAll(RAW_SLOT_MARKER)];
+  const rawSlots = rawSlotMatches.length;
+  const rawSlotPaths = [...new Set(rawSlotMatches.map((m) => m[1] as string))].sort();
+  return {
+    ready: unconfirmed === 0 && openTodos === 0 && rawSlots === 0,
+    unconfirmed,
+    openTodos,
+    rawSlots,
+    rawSlotPaths,
+    items,
+  };
 }

@@ -358,11 +358,15 @@ export function applicationReadiness(db: Db, app: ApplicationRow): ExportReadine
  * Markdown, ZIP and PDF alike — before a single byte of the draft is rendered.
  *
  * Every funder policy reviewed makes the human, not the tool, accountable for
- * the content, so this throws while EITHER of these is true:
+ * the content, so this throws while ANY of these is true:
  *   1. any extracted factual assertion is still unconfirmed
  *      (exportReadiness().unconfirmed > 0), or
  *   2. any `[TODO: …]` marker remains in the draft body
- *      (exportReadiness().openTodos > 0).
+ *      (exportReadiness().openTodos > 0), or
+ *   3. any raw, unfilled `{{slot.path}}` template placeholder remains in the
+ *      draft body (exportReadiness().rawSlots > 0) — the shape left behind
+ *      when template markdown reaches the editor without going through
+ *      `fillTemplate`, so no `[TODO: …]` marker was ever written for it.
  *
  * It throws AppError('conflict', …) — HTTP **409** through Plan 1's
  * errorHandler — for an ungated draft, and AppError('not_found', …) — HTTP 404
@@ -385,11 +389,25 @@ export function assertExportReady(db: Db, applicationId: string, userId: string)
   if (!app) throw new AppError('not_found', 'No draft with that id belongs to you.');
   const readiness = applicationReadiness(db, app);
   if (!readiness.ready) {
-    throw new AppError(
-      'conflict',
+    let message =
       `This draft is not ready to export: ${readiness.unconfirmed} unconfirmed factual assertion(s) and ` +
-        `${readiness.openTodos} unresolved [TODO: …] marker(s) must be handled first.`,
-      { unconfirmed: readiness.unconfirmed, openTodos: readiness.openTodos },
-    );
+      `${readiness.openTodos} unresolved [TODO: …] marker(s) must be handled first.`;
+    // Named separately, and only when present: a raw `{{slot.path}}` has no vocabulary hint the
+    // way a `[TODO: …]` marker does, so the message has to say which slot belongs there and where
+    // to go fix it — the template — or the applicant is left staring at a brace pair with no clue
+    // what it means.
+    if (readiness.rawSlots > 0) {
+      const slots = readiness.rawSlotPaths.map((path) => `{{${path}}}`).join(', ');
+      message +=
+        ` This draft also contains ${readiness.rawSlots} raw template placeholder(s) that were ` +
+        `never filled in (${slots}) — go back to the template for this slot and fill it in, or ` +
+        `replace the placeholder with real text.`;
+    }
+    throw new AppError('conflict', message, {
+      unconfirmed: readiness.unconfirmed,
+      openTodos: readiness.openTodos,
+      rawSlots: readiness.rawSlots,
+      rawSlotPaths: readiness.rawSlotPaths,
+    });
   }
 }

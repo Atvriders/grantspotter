@@ -220,6 +220,26 @@ describe('applications router', () => {
     expect(readiness.body.openTodos).toBe(1);
   });
 
+  /**
+   * A user who pastes raw template markdown into the editor — never through `fillTemplate` — ends
+   * up with a literal `{{club.callsign}}` in `bodyMarkdown`. No `[TODO: …]` marker was ever
+   * written for it, so `openTodos` alone would report this draft ready. `rawSlots` is what closes
+   * that hole, and this drives it through the real router and a real sqlite-backed draft, not just
+   * the pure `exportReadiness` function.
+   */
+  it('blocks export while a raw {{slot}} placeholder remains, even with no TODO marker at all', async () => {
+    const id = await draft();
+    await json(`/api/applications/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bodyMarkdown: 'Our club {{club.callsign}} respectfully applies.' }),
+    });
+    const readiness = await json(`/api/applications/${id}/export-readiness`);
+    expect(readiness.body.ready).toBe(false);
+    expect(readiness.body.openTodos).toBe(0);
+    expect(readiness.body.rawSlots).toBe(1);
+    expect(readiness.body.rawSlotPaths).toEqual(['club.callsign']);
+  });
+
   it('never returns another user’s draft', async () => {
     const id = await draft('mine');
     db.prepare('UPDATE applications SET user_id = ? WHERE id = ?').run('user-2', id);
@@ -568,6 +588,31 @@ describe('assertExportReady', () => {
     expect(() => assertExportReady(db, id, 'user-1')).toThrow(/TODO/);
   });
 
+  /**
+   * THE HOLE THIS CLOSES. A raw `{{club.callsign}}` reaching `assertExportReady` — the gate every
+   * Plan 5 export endpoint calls before a byte is rendered — must refuse the export, and the
+   * message must name the slot rather than just a bare count, because a `{{…}}` on its own gives
+   * the applicant no idea what belongs there or where to go fix it.
+   */
+  it('throws conflict (409) while a raw {{slot}} placeholder remains, naming the slot', async () => {
+    const id = await draftWith('Our club {{club.callsign}} respectfully applies.');
+    const err = (() => {
+      try {
+        assertExportReady(db, id, 'user-1');
+        return undefined;
+      } catch (e) {
+        return e as AppError;
+      }
+    })();
+    expect(err).toBeInstanceOf(AppError);
+    expect(err?.code).toBe('conflict');
+    expect(err?.status).toBe(409);
+    expect(err?.message).toMatch(/club\.callsign/);
+    expect(err?.message).toContain('{{club.callsign}}');
+    expect(err?.message.toLowerCase()).toContain('template');
+    expect((err?.details as { rawSlots?: number } | undefined)?.rawSlots).toBe(1);
+  });
+
   it('throws not_found (404) for another user’s draft, so export cannot read across users', async () => {
     const id = await draftWith('Nothing to confirm here.');
     try {
@@ -587,6 +632,77 @@ describe('assertExportReady', () => {
       body: JSON.stringify({ confirmations: confirmAll(readiness.body.items, 'checked the invoice') }),
     });
     expect(() => assertExportReady(db, id, 'user-1')).not.toThrow();
+  });
+
+  /**
+   * THE CONTROL. Closing the raw-{{slot}} hole must not turn the gate into "always refuse" — a
+   * draft with no gap of any kind (no unconfirmed fact, no [TODO: …], no {{…}}) has to clear it,
+   * driven through the same router + sqlite-backed draft as every blocking case above.
+   */
+  it('does not become "always refuse": a clean, fully-confirmed draft with no gaps still exports', async () => {
+    const id = await draftWith('W8UM spent $1,099 on March 7, 2027.');
+    const before = await json(`/api/applications/${id}/export-readiness`);
+    expect(before.body.rawSlots).toBe(0);
+    await json(`/api/applications/${id}/facts`, {
+      method: 'PUT',
+      body: JSON.stringify({ confirmations: confirmAll(before.body.items, 'checked the invoice') }),
+    });
+    const after = await json(`/api/applications/${id}/export-readiness`);
+    expect(after.body.ready).toBe(true);
+    expect(after.body.unconfirmed).toBe(0);
+    expect(after.body.openTodos).toBe(0);
+    expect(after.body.rawSlots).toBe(0);
+    expect(() => assertExportReady(db, id, 'user-1')).not.toThrow();
+  });
+
+  /**
+   * ALL FOUR EXPORT BLOCKERS, PROVEN TOGETHER, THROUGH THE REAL ROUTE AND A REAL DRAFT.
+   *
+   * (1) an unconfirmed factual assertion, (2) an open `[TODO: …]` marker, (3) a raw `{{slot}}`
+   * placeholder — this task's fix — and (4) a confirmation that goes stale when its value is
+   * edited at identical character width. Each fires on its own, and fixing all of them together is
+   * what finally lets the gate open — proof this is additive, not a replacement for the other
+   * three.
+   */
+  it('proves all four export blockers fire, then clears to ready once every gap is closed', async () => {
+    const id = await draftWith(
+      'W8UM spent $1,450 this year. [TODO: club.foundedYear — the year the club was founded] {{project.title}}',
+    );
+
+    let readiness = await json(`/api/applications/${id}/export-readiness`);
+    expect(readiness.body.ready).toBe(false);
+    expect(readiness.body.unconfirmed).toBeGreaterThan(0); // (1) unconfirmed fact
+    expect(readiness.body.openTodos).toBe(1); // (2) open [TODO: …]
+    expect(readiness.body.rawSlots).toBe(1); // (3) raw {{slot}}
+    expect(readiness.body.rawSlotPaths).toEqual(['project.title']);
+    expect(() => assertExportReady(db, id, 'user-1')).toThrow(AppError);
+
+    // Close the TODO and the raw slot; confirm every remaining fact.
+    await json(`/api/applications/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bodyMarkdown: 'W8UM spent $1,450 this year.' }),
+    });
+    readiness = await json(`/api/applications/${id}/export-readiness`);
+    await json(`/api/applications/${id}/facts`, {
+      method: 'PUT',
+      body: JSON.stringify({ confirmations: confirmAll(readiness.body.items, 'checked') }),
+    });
+    readiness = await json(`/api/applications/${id}/export-readiness`);
+    expect(readiness.body.ready).toBe(true);
+    expect(() => assertExportReady(db, id, 'user-1')).not.toThrow();
+
+    // (4) Edit the confirmed amount to a same-width value — the id is reused, so only the
+    // fingerprint catches it.
+    await json(`/api/applications/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bodyMarkdown: 'W8UM spent $9,999 this year.' }),
+    });
+    const stale = await json(`/api/applications/${id}/export-readiness`);
+    expect(stale.body.ready).toBe(false);
+    const money = stale.body.items.find((i: { kind: string }) => i.kind === 'money');
+    expect(money.confirmed).toBe(false);
+    expect(money.staleConfirmation).toBe(true);
+    expect(() => assertExportReady(db, id, 'user-1')).toThrow(/unconfirmed/i);
   });
 });
 
