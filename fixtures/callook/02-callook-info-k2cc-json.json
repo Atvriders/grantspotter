@@ -1,0 +1,34 @@
+{
+    "status": "VALID",
+    "type": "CLUB",
+    "current": {
+        "callsign": "K2CC",
+        "operClass": ""
+    },
+    "previous": {
+        "callsign": "",
+        "operClass": ""
+    },
+    "trustee": {
+        "callsign": "[redacted]",
+        "name": "[redacted]"
+    },
+    "name": "CLARKSON UNIVERSITY AMATEUR RADIO CLUB",
+    "address": {
+        "line1": "8 CLARKSON AVE, P.O. BOX 8550",
+        "line2": "POTSDAM, NY 13699",
+        "attn": "[redacted]"
+    },
+    "location": {
+        "latitude": "44.66594",
+        "longitude": "-74.992531",
+        "gridsquare": "FN24mp"
+    },
+    "otherInfo": {
+        "grantDate": "09/02/2020",
+        "expiryDate": "11/29/2030",
+        "lastActionDate": "02/09/2026",
+        "frn": "0004117206",
+        "ulsUrl": "https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=236705"
+    }
+}

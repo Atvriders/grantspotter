@@ -1,0 +1,34 @@
+{
+    "status": "VALID",
+    "type": "CLUB",
+    "current": {
+        "callsign": "W1MX",
+        "operClass": ""
+    },
+    "previous": {
+        "callsign": "",
+        "operClass": ""
+    },
+    "trustee": {
+        "callsign": "[redacted]",
+        "name": "[redacted]"
+    },
+    "name": "M I T RADIO SOCIETY",
+    "address": {
+        "line1": "P.O. BOX 51421",
+        "line2": "BOSTON, MA 02205-1421",
+        "attn": "[redacted]"
+    },
+    "location": {
+        "latitude": "42.34991837",
+        "longitude": "-71.0538559",
+        "gridsquare": "FN42li"
+    },
+    "otherInfo": {
+        "grantDate": "08/10/2024",
+        "expiryDate": "08/24/2034",
+        "lastActionDate": "08/10/2024",
+        "frn": "0011325347",
+        "ulsUrl": "https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=783425"
+    }
+}

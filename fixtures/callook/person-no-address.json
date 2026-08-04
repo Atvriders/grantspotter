@@ -1,0 +1,34 @@
+{
+    "status": "VALID",
+    "type": "PERSON",
+    "current": {
+        "callsign": "NV0ZZZ",
+        "operClass": "TECHNICIAN"
+    },
+    "previous": {
+        "callsign": "",
+        "operClass": ""
+    },
+    "trustee": {
+        "callsign": "",
+        "name": ""
+    },
+    "name": "ALEX Q EXAMPLE",
+    "address": {
+        "line1": "",
+        "line2": "",
+        "attn": ""
+    },
+    "location": {
+        "latitude": "",
+        "longitude": "",
+        "gridsquare": ""
+    },
+    "otherInfo": {
+        "grantDate": "04/04/2019",
+        "expiryDate": "06/19/2029",
+        "lastActionDate": "04/14/2022",
+        "frn": "0000000000",
+        "ulsUrl": "https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=0"
+    }
+}

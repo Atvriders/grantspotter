@@ -1,0 +1,34 @@
+{
+    "status": "VALID",
+    "type": "CLUB",
+    "current": {
+        "callsign": "W1AW",
+        "operClass": ""
+    },
+    "previous": {
+        "callsign": "",
+        "operClass": ""
+    },
+    "trustee": {
+        "callsign": "[redacted]",
+        "name": "[redacted]"
+    },
+    "name": "ARRL HQ OPERATORS CLUB",
+    "address": {
+        "line1": "225 MAIN ST",
+        "line2": "NEWINGTON, CT 06111",
+        "attn": "[redacted]"
+    },
+    "location": {
+        "latitude": "41.714707",
+        "longitude": "-72.728411",
+        "gridsquare": "FN31pr"
+    },
+    "otherInfo": {
+        "grantDate": "12/08/2020",
+        "expiryDate": "02/26/2031",
+        "lastActionDate": "03/12/2026",
+        "frn": "0004511143",
+        "ulsUrl": "https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=780866"
+    }
+}
