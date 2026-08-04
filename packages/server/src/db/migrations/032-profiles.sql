@@ -1,34 +1,53 @@
 -- Owner: Plan 1, packages/server/src/db/migrations/001-init.sql.
 -- `profiles` (id, user_id, kind, data, updated_at) is created there, with
 -- user_id REFERENCES users(id) ON DELETE CASCADE and UNIQUE (user_id, kind).
--- RESOLUTIONS R19: this file adds indexes ONLY. Table DDL belongs to 001-init.sql
--- and re-declaring it here would no-op — SQLite matches CREATE TABLE IF NOT
--- EXISTS on the name alone — while nonetheless *reading* as this plan's schema.
--- `schemaConformance.test.ts` asserts Plan 1's columns and fails on any table or
--- index name declared twice across the migration set.
 --
--- A user may hold BOTH a student and an organization profile (spec §5), which is
--- what the composite uniqueness expresses; the named index below is the lookup
--- Plan 3's `loadProfile(db, userId, kind)` runs on every browse request.
+-- RESOLUTIONS R19: this file adds indexes ONLY. The table DDL belongs to
+-- 001-init.sql, and re-declaring the table here would no-op — SQLite matches
+-- IF NOT EXISTS on the NAME alone — while nonetheless *reading* as this plan's
+-- schema. `schemaConformance.test.ts` asserts Plan 1's columns, fails on any
+-- table or index name declared twice across the migration set, and fails this
+-- file if it declares a table or carries no index at all.
 --
--- MEASURED, so the next reader does not have to guess (2026-08-03, EXPLAIN QUERY
--- PLAN on this schema, `SELECT data FROM profiles WHERE user_id = ? AND kind = ?`):
+-- NO NAME COLLISION HERE, checked rather than assumed (2026-08-03). Every
+-- table and index name across all seven migrations was enumerated with comments
+-- stripped: `idx_profiles_user_kind` appears once, in this file, and 001-init.sql
+-- declares no index on `profiles` at all. This is NOT the sibling defect in
+-- 033-watches.sql, where the brief re-used `idx_watches_program` — a name
+-- 001-init.sql:198 had already taken — so that statement silently never ran.
+-- The statement below really is created; verified by EXPLAIN QUERY PLAN
+-- switching to it.
 --
---   without this file : SEARCH profiles USING INDEX sqlite_autoindex_profiles_2
---   with this file    : SEARCH profiles USING INDEX idx_profiles_user_kind
+-- WHAT IT BUYS, MEASURED, so the next reader does not have to guess. Every
+-- access path against this table in the whole repository is prefixed by user_id:
 --
--- The lookup was ALREADY indexed before this migration existed: Plan 1's
--- UNIQUE (user_id, kind) makes SQLite build exactly this index implicitly, and
--- the planner simply switches to whichever of the two it is given. So this
--- statement buys no speed, and it is kept for one reason only — it gives the
--- structure a name the schema can be reasoned about by, instead of leaving
--- Plan 3's hot lookup depending on an anonymous `sqlite_autoindex_*` that no
--- migration mentions and any future rewrite of the table constraint would take
--- away silently. A covering variant `(user_id, kind, data)` was tried and
--- rejected in the same session: the planner ignored it in favour of the
--- autoindex, so it was pure write amplification over a JSON blob.
+--   SELECT data ... WHERE user_id = ? AND kind = ?   repositories/profiles.ts, api/profileStore.ts
+--   SELECT data ... WHERE user_id = ? ORDER BY kind  repositories/profiles.ts (listForUser)
+--   DELETE      ... WHERE user_id = ? AND kind = ?   repositories/profiles.ts (remove)
+--   INSERT      ... ON CONFLICT (user_id, kind)      api/profileStore.ts (saveProfile)
+--   SELECT COUNT(*) ... WHERE user_id = ?            api/adminUsersRouter.ts
+--
+-- ...and Plan 1's UNIQUE (user_id, kind) already makes SQLite build exactly this
+-- index implicitly, so all five were already served before this file existed:
+--
+--   with no index here          : SEARCH profiles USING INDEX sqlite_autoindex_profiles_2
+--   with the index below        : SEARCH profiles USING INDEX idx_profiles_user_kind
+--   with a covering (..., data) : SEARCH profiles USING INDEX sqlite_autoindex_profiles_2
+--
+-- So this buys NO read speed, and unlike `watches` — where 033 found a genuinely
+-- uncovered `ORDER BY created_at` and shipped it — `profiles` has no uncovered
+-- read to put here instead. The covering variant was tried and rejected in the
+-- same session: the planner ignored it, making it pure write amplification over
+-- a JSON blob.
+--
+-- It is kept for the one thing it does do: it gives the uniqueness a NAME the
+-- schema can be reasoned about by, so "one profile per user per kind" does not
+-- rest solely on an anonymous `sqlite_autoindex_*` that no migration mentions
+-- and a future rewrite of the table constraint would remove silently. The write
+-- cost is a second B-tree on a table holding at most two rows per user, touched
+-- only when someone edits their profile.
 --
 -- Being a second unique index over the same key does NOT make `saveProfile`'s
 -- `ON CONFLICT (user_id, kind) DO UPDATE` ambiguous; that was checked directly
--- against this schema before the statement was kept.
+-- against this schema.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_user_kind ON profiles (user_id, kind);
