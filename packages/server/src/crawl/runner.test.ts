@@ -13,7 +13,8 @@ import {
   listSourceHealth,
   upsertProgram,
 } from '../db/repositories/ingestion.js';
-import { approveReviewItem } from '../review/index.js';
+import { NSF_FEED_URLS } from '../federal/nsf.js';
+import { approveReviewItem, confidenceFor } from '../review/index.js';
 import { funderFor, SOURCES } from '../sources/registry.js';
 import { healthMessageFor, runCrawl, runSource } from './runner.js';
 
@@ -996,5 +997,191 @@ describe('do_not_publish end-to-end: past awards are stored but never queued', (
     expect(result.parsedCount).toBe(1);
     expect(listReviewItems(db, 'pending')).toEqual([]);
     expect(storedCandidates('crosscheck')).toHaveLength(1);
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the adjacency signal, end to end through the REAL crawl pipeline.
+ *
+ * `federal/adjacency.ts` scores a candidate's relevance to amateur radio on a weighted vocabulary,
+ * and five source modules compute it and write `rawFields.adjacencyScore`. It reached NOTHING:
+ * `normalizeRaw` drops `rawFields` wholesale, and `confidenceFor`'s adjacency parameter was
+ * optional and never passed. Measured on the committed captures BEFORE the fix, the one real open
+ * federal opportunity (NTIA PWSCIF, adjacencyScore 6) was queued with confidence 0.85 — the flat
+ * Tier-A number — and `nsf-funding-rss` queued all 45 of its real items at a flat 0.5.
+ *
+ * These run `runSource` itself against those same real captures, so the number asserted here is
+ * the number a reviewer actually sees.
+ */
+describe('adjacencyScore end to end: the score reaches confidenceFor', () => {
+  const SEARCH_FILES = [
+    '00-api-grants-gov-v1-api-search2.json',
+    '01-api-grants-gov-v1-api-search2.json',
+    '02-api-grants-gov-v1-api-search2.json',
+    '03-api-grants-gov-v1-api-search2.json',
+    '04-api-grants-gov-v1-api-search2.json',
+  ] as const;
+
+  /**
+   * The five keyword searches are answered in request order (the module builds one request per
+   * GRANTS_GOV_KEYWORDS entry), and the single follow-up detail fetch is answered by the captured
+   * fetchOpportunity response. Both legs hit api.grants.gov, so they are told apart by path.
+   */
+  function grantsGovFetcher() {
+    let n = 0;
+    return {
+      async fetch(req: FetchRequest): Promise<FetchedPayload> {
+        if (req.url.toLowerCase().includes('fetchopportunity')) {
+          return fixturePayload(
+            'grants-gov-federal',
+            '05-api-grants-gov-v1-api-fetchopportunity.json',
+            req.url,
+          );
+        }
+        if (req.url.includes('search2')) {
+          return fixturePayload(
+            'grants-gov-federal',
+            SEARCH_FILES[Math.min(n++, SEARCH_FILES.length - 1)],
+            req.url,
+          );
+        }
+        return { url: req.url, status: 404, contentType: 'text/html', body: '', fetchedAt: NOW };
+      },
+    };
+  }
+
+  it('gives the one real open federal call a confidence of exactly its score over 12', async () => {
+    const result = await runSource(deps(grantsGovFetcher()), 'grants-gov-federal');
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBe(1);
+
+    const [item] = listReviewItems(db, 'pending');
+    expect(item.candidate.name).toBe(
+      'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
+    );
+    // NTIA PWSCIF scores exactly 6 (Public Wireless Supply Chain Innovation Fund + PWSCIF).
+    // 6/12 = 0.5. Before the fix this row read 0.85 — TIER_CONFIDENCE.A, the score discarded.
+    expect(item.confidence).toBe(0.5);
+    expect(item.confidence).not.toBe(confidenceFor('A', 'new', undefined));
+    expect(item.confidence).toBe(confidenceFor('A', 'new', 6));
+  });
+});
+
+/**
+ * REMEDIATION 2026-08-03 — the `nsf-funding-rss` nightly flood.
+ *
+ * Measured on the three real captured feeds BEFORE the fix: parsedCount 45, review items 45, every
+ * one at a flat 0.5, every night, forever — and not one of the 45 is adjacent to amateur radio
+ * (the best three score 1: Gravitational Physics, Chemical Oceanography, SBIR). A queue that is
+ * 45-out-of-45 noise trains its reader to approve without reading.
+ *
+ * The fix scores every item in the source and gates the QUEUE downstream, in `buildReviewItems`,
+ * rather than dropping items in `parse()`. The tests below are paired deliberately: the first
+ * measures the queue, the second measures what a broken feed still does — because zeroing the
+ * source's YIELD would have suppressed the noise and disabled `detectYieldDrop` at the same time,
+ * which is exactly how `arrl-scholarship-program` parsed 0 records from its own real page while
+ * the suite stayed green.
+ */
+describe('nsf-funding-rss: noise suppressed, breakage still detectable', () => {
+  const FEED_FILES: ReadonlyArray<readonly [string, string]> = [
+    ['00-www-nsf-gov-rss-rss-www-funding-xml.xml', NSF_FEED_URLS[0]],
+    ['01-www-nsf-gov-rss-rss-www-funding-pgm-annc-inf-xml.xml', NSF_FEED_URLS[1]],
+    ['02-www-nsf-gov-rss-rss-www-funding-upcoming-rss-xml.xml', NSF_FEED_URLS[2]],
+  ];
+
+  const feedFetcher = () => ({
+    async fetch(req: FetchRequest): Promise<FetchedPayload> {
+      const hit = FEED_FILES.find(([, url]) => url === req.url);
+      if (!hit) return { url: req.url, status: 404, contentType: 'text/html', body: '', fetchedAt: NOW };
+      return fixturePayload('nsf-funding-rss', hit[0], req.url);
+    },
+  });
+
+  /** The three feeds still answer 200, but with the SPA shell every Grants.gov feed serves. */
+  const brokenFetcher = () => ({
+    async fetch(req: FetchRequest): Promise<FetchedPayload> {
+      return {
+        url: req.url,
+        status: 200,
+        contentType: 'text/html',
+        body: '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+        fetchedAt: NOW,
+      };
+    },
+  });
+
+  it('queues NONE of the 45 real items, and still parses and reports all 45', async () => {
+    const result = await runSource(deps(feedFetcher()), 'nsf-funding-rss');
+    expect(result.error).toBeUndefined();
+
+    // Was 45. This is the whole point of the fix.
+    expect(result.reviewItems).toBe(0);
+    expect(listReviewItems(db, 'pending')).toEqual([]);
+
+    // Unchanged, and load-bearing: the parse yield is what the alarm watches.
+    expect(result.parsedCount).toBe(45);
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'nsf-funding-rss')?.lastRecordCount).toBe(45);
+
+    // No alarm on a healthy night: 45 >= expectedMinRecords of 10.
+    expect(listChangeEvents(db, 500).filter((e) => e.kind === 'parse_yield_dropped')).toEqual([]);
+  });
+
+  it('keeps all 45 stored and retrievable, so suppression costs no evidence', async () => {
+    await runSource(deps(feedFetcher()), 'nsf-funding-rss');
+    const stored = listChangeEvents(db, 500)
+      .map((e) => e.after as Program | undefined)
+      .filter((p): p is Program => Array.isArray(p?.tags));
+    expect(stored).toHaveLength(45);
+    expect(stored.map((p) => p.name)).toContain('Research Experiences for Undergraduates (REU)');
+  });
+
+  it('STILL fires the yield alarm when the feed breaks — the property a parse() filter would lose', async () => {
+    const result = await runSource(deps(brokenFetcher()), 'nsf-funding-rss');
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBe(0);
+
+    const alarms = listChangeEvents(db, 500).filter((e) => e.kind === 'parse_yield_dropped');
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0].after).toEqual({ parsedCount: 0 });
+    expect(alarms[0].before).toEqual({ expectedMinRecords: 10 });
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'nsf-funding-rss')?.lastRecordCount).toBe(0);
+  });
+
+  it('the true positive still fires: an adjacent NSF solicitation reaches the queue', async () => {
+    // A synthetic feed in the REAL shape, carrying the language a genuinely relevant NSF
+    // solicitation would carry. Without this, "the queue is empty" would be indistinguishable
+    // from "the gate swallows everything" — which is the failure mode the gate itself creates.
+    const item = (title: string, description: string, guid: string) =>
+      `<item><title>${title}</title><link>https://www.nsf.gov/funding/${guid}</link>` +
+      `<guid>https://www.nsf.gov/funding/${guid}</guid><description>${description}</description></item>`;
+    const body =
+      '<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>NSF</title>' +
+      item(
+        'Geospace Facilities',
+        'Supports ionospheric radio science, HF propagation studies and space weather ' +
+          'observation, including undergraduate research at minority serving institutions.',
+        'geospace',
+      ) +
+      item('Chemical Oceanography', 'Supports research in marine chemistry.', 'chemocean') +
+      '</channel></rss>';
+    const fetcher = {
+      async fetch(req: FetchRequest): Promise<FetchedPayload> {
+        return {
+          url: req.url,
+          status: req.url === NSF_FEED_URLS[0] ? 200 : 404,
+          contentType: 'application/rss+xml',
+          body: req.url === NSF_FEED_URLS[0] ? body : '',
+          fetchedAt: NOW,
+        };
+      },
+    };
+    const result = await runSource(deps(fetcher), 'nsf-funding-rss');
+    expect(result.parsedCount).toBe(2);
+
+    const pending = listReviewItems(db, 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].candidate.name).toBe('Geospace Facilities');
+    // Tier B alone would be a flat 0.5; the score is what puts this above it.
+    expect(pending[0].confidence).toBeGreaterThan(confidenceFor('B', 'new', undefined));
   });
 });

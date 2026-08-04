@@ -128,13 +128,13 @@ describe('rejectKeyFor', () => {
 
 describe('confidenceFor', () => {
   it('trusts a real API more than a scraped page and a human most of all', () => {
-    expect(confidenceFor('D', 'new')).toBeGreaterThan(confidenceFor('A', 'new'));
-    expect(confidenceFor('A', 'new')).toBeGreaterThan(confidenceFor('C', 'new'));
-    expect(confidenceFor('C', 'new')).toBeGreaterThan(confidenceFor('B', 'new'));
+    expect(confidenceFor('D', 'new', undefined)).toBeGreaterThan(confidenceFor('A', 'new', undefined));
+    expect(confidenceFor('A', 'new', undefined)).toBeGreaterThan(confidenceFor('C', 'new', undefined));
+    expect(confidenceFor('C', 'new', undefined)).toBeGreaterThan(confidenceFor('B', 'new', undefined));
   });
 
   it('drops confidence for a parse_yield_dropped alarm, which always needs a human', () => {
-    expect(confidenceFor('C', 'parse_yield_dropped')).toBeLessThan(0.3);
+    expect(confidenceFor('C', 'parse_yield_dropped', undefined)).toBeLessThan(0.3);
   });
 
   it('scales a federal candidate by its adjacency score and clamps to 0..1', () => {
@@ -146,11 +146,23 @@ describe('confidenceFor', () => {
   it('always returns a value in 0..1', () => {
     for (const tier of ['A', 'B', 'C', 'D'] as const) {
       for (const kind of ['new', 'vanished', 'deadline_changed'] as const) {
-        const c = confidenceFor(tier, kind);
+        const c = confidenceFor(tier, kind, undefined);
         expect(c).toBeGreaterThanOrEqual(0);
         expect(c).toBeLessThanOrEqual(1);
       }
     }
+  });
+
+  /**
+   * REMEDIATION (2026-08-03). The third parameter used to be OPTIONAL, and the only production
+   * caller passed two arguments, so this branch had never run. Making it required-but-nullable is
+   * the structural half of the fix: every one of the calls above now has to SAY `undefined`, which
+   * is a statement ("this source scores nothing") rather than an omission ("I forgot"). A future
+   * caller that forgets fails `tsc`, not a code review.
+   */
+  it('a score of 0 is not the same input as "no score at all"', () => {
+    expect(confidenceFor('D', 'new', 0)).toBe(0);
+    expect(confidenceFor('D', 'new', undefined)).toBe(0.95);
   });
 });
 
@@ -219,7 +231,7 @@ describe('buildReviewItems', () => {
 
   it('uses the deterministic confidence when no assist is supplied', async () => {
     const [item] = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa');
-    expect(item.confidence).toBe(confidenceFor('C', 'new'));
+    expect(item.confidence).toBe(confidenceFor('C', 'new', undefined));
   });
 
   it('lets an enabled assist refine the confidence, and ignores it when it returns undefined', async () => {
@@ -229,7 +241,69 @@ describe('buildReviewItems', () => {
     expect(a.confidence).toBeCloseTo(0.33, 5);
     db.exec('DELETE FROM review_items');
     const [b] = await buildReviewItems(db, [event({ id: 'evt-9' })], candidates(), 'C', 'qcwa', silent);
-    expect(b.confidence).toBe(confidenceFor('C', 'new'));
+    expect(b.confidence).toBe(confidenceFor('C', 'new', undefined));
+  });
+});
+
+/**
+ * REMEDIATION (2026-08-03) — `adjacencyScore` reaches `confidenceFor`, and gates the queue.
+ *
+ * Before this, `confidenceFor`'s adjacency branch had never executed in production: the parameter
+ * was optional and the one call site passed two arguments. `crawl/runner.test.ts` proves the whole
+ * wire end to end through a real captured federal API response; these prove the two behaviours at
+ * this seam directly, including the boundary that decides whether the federal sweep keeps its only
+ * true positive.
+ */
+describe('buildReviewItems: the adjacency signal', () => {
+  const candidates = () => new Map([[program().id, program()]]);
+  const scores = (score: number) => new Map([[program().id, score]]);
+
+  it('uses the score, not the tier, for the confidence of a scored candidate', async () => {
+    // Tier C alone would be 0.7. A score of 6 is 6/12.
+    const [item] = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa', undefined, scores(6));
+    expect(item.confidence).toBe(0.5);
+    expect(item.confidence).not.toBe(confidenceFor('C', 'new', undefined));
+  });
+
+  it('leaves an unscored candidate on the tier path, exactly as before', async () => {
+    const [item] = await buildReviewItems(db, [event()], candidates(), 'C', 'qcwa', undefined, new Map());
+    expect(item.confidence).toBe(confidenceFor('C', 'new', undefined));
+  });
+
+  it('keeps a candidate that scores exactly at the threshold', async () => {
+    // The one real open federal call in the committed captures (NTIA PWSCIF) scores exactly 6.
+    // An off-by-one here silently empties the federal sweep of its only true positive.
+    const items = await buildReviewItems(db, [event()], candidates(), 'A', 'qcwa', undefined, scores(6));
+    expect(items).toHaveLength(1);
+  });
+
+  it('keeps a below-threshold candidate OUT of the queue', async () => {
+    const items = await buildReviewItems(db, [event()], candidates(), 'B', 'qcwa', undefined, scores(1));
+    expect(items).toEqual([]);
+    expect(listReviewItems(db, 'pending')).toEqual([]);
+  });
+
+  it('still queues a vanished event for a below-threshold record', async () => {
+    // Same exemption, same reason, as do_not_publish: a vanished event proposes a REMOVAL. It is
+    // the only reviewable path by which a record published before this gate existed can be taken
+    // back out of the corpus, so swallowing it would strand that record forever.
+    const items = await buildReviewItems(
+      db,
+      [event({ id: 'evt-v', kind: 'vanished', before: program(), after: undefined })],
+      candidates(),
+      'B',
+      'qcwa',
+      undefined,
+      scores(1),
+    );
+    expect(items).toHaveLength(1);
+  });
+
+  it('a score of 0 gates; no score at all does not', async () => {
+    const gated = await buildReviewItems(db, [event()], candidates(), 'B', 'qcwa', undefined, scores(0));
+    expect(gated).toEqual([]);
+    const kept = await buildReviewItems(db, [event()], candidates(), 'B', 'qcwa', undefined, new Map());
+    expect(kept).toHaveLength(1);
   });
 });
 

@@ -10,6 +10,7 @@ import type {
 } from '@grantspotter/core';
 import { expandCycles, hashProgram, resolveDeadlineOwner } from '@grantspotter/core';
 import type { AiAssist } from '../ai/assist.js';
+import { ADJACENCY_THRESHOLD } from '../federal/adjacency.js';
 import type { CycleRepo } from '../db/repositories/cycles.js';
 import { createCycleRepo } from '../db/repositories/cycles.js';
 import {
@@ -57,10 +58,28 @@ export function rejectKeyFor(sourceId: string, program: Program): string {
 
 const TIER_CONFIDENCE: Record<SourceTier, number> = { A: 0.85, B: 0.5, C: 0.7, D: 0.95 };
 
+/**
+ * REMEDIATION (2026-08-03). `adjacencyScore` was `adjacencyScore?: number` — OPTIONAL — and the
+ * one production call site (`buildReviewItems` below) passed two arguments. The branch under it
+ * had therefore never executed even once, while `grants-gov-extract`, `grants-gov-federal`,
+ * `nsf-awards` and `usaspending` all faithfully computed the number and wrote it into
+ * `rawFields.adjacencyScore`, from where `normalizeRaw` discarded it. A relevance signal written
+ * by four sources reached nothing.
+ *
+ * The parameter is now REQUIRED-BUT-NULLABLE rather than optional, and that is the actual fix to
+ * the defect class at this seam: an optional parameter lets a call site silently mean "I have no
+ * opinion", which is indistinguishable from "I forgot", and no test and no compiler can tell the
+ * two apart. `number | undefined` forces every caller to state which one it means, so `tsc` — not
+ * a reviewer's memory — is what catches the next call site that drops the signal.
+ *
+ * `undefined` means "this source computes no adjacency score", which every ham-specific source
+ * legitimately does. It must never be conflated with a score of 0, which means "scored, and
+ * scored nothing".
+ */
 export function confidenceFor(
   tier: SourceTier,
   kind: ChangeKind,
-  adjacencyScore?: number,
+  adjacencyScore: number | undefined,
 ): number {
   if (adjacencyScore !== undefined) {
     return Math.min(1, Math.max(0, adjacencyScore / 12));
@@ -111,6 +130,38 @@ const NO_CANDIDATE_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['parse_
  */
 const SUPPRESSION_EXEMPT_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['vanished']);
 
+/**
+ * REMEDIATION (2026-08-03) — the nightly `nsf-funding-rss` flood, and why the gate is HERE.
+ *
+ * `nsf-funding-rss` is the one federal source that carries OPEN solicitations rather than award
+ * history, so `do_not_publish` is the wrong instrument for it: these are real opportunities, they
+ * are simply not opportunities for a radio club. A real capture of its three feeds (2026-08-03)
+ * holds 45 items and EVERY ONE scores 1 or 0 against `ADJACENCY_THRESHOLD` of 6 — the best three
+ * are Gravitational Physics, Chemical Oceanography and SBIR. All 45 landed in the review queue,
+ * every night, forever. A queue that is 45-out-of-45 noise trains its reader to approve without
+ * reading, which destroys the entire reason for having a review step instead of auto-publishing.
+ *
+ * WHY NOT FILTER IN THE SOURCE'S `parse()`, WHICH IS WHERE THE OTHER FOUR SCORED SOURCES FILTER.
+ * Because `parse()`'s return length IS the yield alarm. `runSource` feeds `raws.length` to
+ * `detectYieldDrop` (against `expectedMinRecords: 10`) and to `recordPollSuccess`. A source that
+ * drops sub-threshold items inside `parse()` reports a yield of 0 on a night when nothing is
+ * adjacent — which is indistinguishable from NSF moving the feed, serving an SPA shell, or
+ * renaming an element. That is exactly how `arrl-scholarship-program` parsed 0 records from its
+ * own real page while the whole suite stayed green. Filtering here, one stage downstream, means
+ * the source keeps parsing and REPORTING all 45, the alarm keeps watching the real number, and
+ * only the human queue is spared.
+ *
+ * `vanished` is exempt for the same reason it is exempt from `do_not_publish`: it proposes a
+ * REMOVAL, never a publication, and swallowing it would strand a record that is already published.
+ *
+ * A score of exactly `ADJACENCY_THRESHOLD` passes — the single real open federal call in the
+ * committed captures (NTIA PWSCIF) scores exactly 6, so an off-by-one here silently empties the
+ * federal sweep of its only true positive.
+ */
+function isBelowAdjacencyThreshold(score: number | undefined): boolean {
+  return score !== undefined && score < ADJACENCY_THRESHOLD;
+}
+
 /** Thrown when something tries to publish a program tagged `do_not_publish`. */
 export class SuppressedProgramError extends Error {
   readonly programId: string;
@@ -136,6 +187,17 @@ function reviewItemId(event: ChangeEvent): string {
  * pending ReviewItem, unless its rejectKey is already in the reject memory. Signal-only events
  * (ARRL news RSS) and alarms (parse_yield_dropped) carry no candidate and produce no item —
  * they are read directly from change_events by the Inbox.
+ *
+ * `adjacencyByProgramId` carries `federal/adjacency.ts`'s weighted relevance score for the
+ * candidates whose source computed one, keyed by the program id `normalizeRaw` minted for the
+ * matching `RawOpportunity`. `crawl/runner.ts` is the only production caller and builds it there,
+ * because that is the one place where a `RawOpportunity` and the `Program` it became are both in
+ * hand: `normalizeRaw` drops `rawFields` wholesale, so by the time a candidate reaches this
+ * function the score exists nowhere else.
+ *
+ * A missing entry means "this source computes no adjacency score" — true of every ham-specific
+ * source, and of any candidate that came out of the database rather than tonight's parse (a
+ * `vanished` candidate) — and leaves the tier/kind behaviour exactly as it was.
  */
 export async function buildReviewItems(
   db: Database.Database,
@@ -144,6 +206,7 @@ export async function buildReviewItems(
   tier: SourceTier,
   sourceId: string,
   assist?: AiAssist,
+  adjacencyByProgramId?: ReadonlyMap<string, number>,
 ): Promise<ReviewItem[]> {
   const out: ReviewItem[] = [];
   for (const event of events) {
@@ -155,10 +218,19 @@ export async function buildReviewItems(
     // stored: `runSource` already wrote it (and this whole candidate Program) into change_events.
     if (isDoNotPublish(candidate) && !SUPPRESSION_EXEMPT_KINDS.has(event.kind)) continue;
 
+    // The adjacency gate — see `isBelowAdjacencyThreshold` above. Same shape as the line above it
+    // and for the same reason: the record was already written to change_events by `runSource`
+    // before this function was ever called, so it stays stored, scored and retrievable; only the
+    // human queue is spared. `parsedCount`/source health still report the true parse yield.
+    const adjacencyScore = adjacencyByProgramId?.get(event.programId);
+    if (isBelowAdjacencyThreshold(adjacencyScore) && !SUPPRESSION_EXEMPT_KINDS.has(event.kind)) {
+      continue;
+    }
+
     const rejectKey = rejectKeyFor(sourceId, candidate);
     if (isRejected(db, rejectKey)) continue;
 
-    const deterministic = confidenceFor(tier, event.kind);
+    const deterministic = confidenceFor(tier, event.kind, adjacencyScore);
     // Optional (spec §9). undefined whenever ANTHROPIC_API_KEY is absent or the call failed,
     // and then the deterministic number stands exactly as it did before this task existed.
     const assisted = assist === undefined ? undefined : await assist.preScore(candidate);

@@ -66,6 +66,43 @@ export function healthMessageFor(err: unknown): string {
 }
 
 /**
+ * REMEDIATION (2026-08-03). `federal/adjacency.ts`'s weighted score is the only relevance signal
+ * this codebase computes. Five source modules write it into `rawFields.adjacencyScore`, and it
+ * reached NOTHING: `normalizeRaw` drops `rawFields` wholesale (a `Program` has no field for them),
+ * and `confidenceFor`'s `adjacencyScore` parameter — which has real arithmetic behind it — was
+ * never passed a value by the one production call site.
+ *
+ * This is the seam that repairs it, and it is the only place it can be repaired without inventing
+ * a new `Program` field: `raws[i]` and `next[i]` are the same record before and after
+ * normalization, so this is the one point in the whole pipeline where the score and the minted
+ * program id are both in hand. Keying by program id is what lets `buildReviewItems` — which sees
+ * only `Program`s — find it again.
+ *
+ * WHY NOT STAMP IT ONTO THE PROGRAM (an `adjacency:<n>` tag, the way `source:`/`key:` ride along).
+ * Because the score is a property of TONIGHT'S PARSE of a source record, not of the published
+ * opportunity: `hashProgram` includes `tags`, so a tag would fold an operational triage number
+ * into the published corpus's content hash and into every `rejectKey`, and a rescoring caused by
+ * nothing but a vocabulary edit would resurface records a reviewer had already dismissed. The
+ * signal is needed for exactly one decision — how to triage tonight's candidate — so it travels
+ * exactly as far as that decision and no further.
+ *
+ * A non-numeric or absent value yields no entry, and an absent entry means "not scored", which
+ * leaves `confidenceFor` on its tier/kind path exactly as before.
+ */
+function adjacencyScores(raws: RawOpportunity[], next: Program[]): Map<string, number> {
+  const out = new Map<string, number>();
+  raws.forEach((raw, i) => {
+    const program = next[i];
+    if (program === undefined) return;
+    const score = Number(raw.rawFields.adjacencyScore);
+    if (raw.rawFields.adjacencyScore !== undefined && Number.isFinite(score)) {
+      out.set(program.id, score);
+    }
+  });
+  return out;
+}
+
+/**
  * Carry-forward #3 (RESOLUTIONS R9). `DEADLINE_INHERITANCE` (normalize/deadline.ts) points
  * `arrl-scholarship-descriptions` and `qcwa` at the literal id `arrl-foundation-scholarships`,
  * and nothing enforces at runtime that a published program actually carries that id — if Plan 5's
@@ -185,15 +222,26 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
       // confidenceFor computed it, and buildReviewItems must still be awaited regardless — a bare
       // call returns a Promise, and reading `.length` off that is a type error, not just a race.
       //
-      // `reviewItemCount` is deliberately NOT `next.length`, and for four sources it is much
+      // `reviewItemCount` is deliberately NOT `next.length`, and for five sources it is much
       // smaller: `buildReviewItems` drops every candidate tagged `do_not_publish` (past awards and
-      // cross-check-only records — see its `SUPPRESSION_EXEMPT_KINDS` doc comment). Those records
-      // are already fully stored by the `insertChangeEvents` call above, which carries the whole
-      // normalized Program in `after_json`, so suppression costs no evidence. `parsedCount` and
-      // `recordPollSuccess` below still report the true parse yield, so a parser that quietly
-      // stops working is still caught by `detectYieldDrop` rather than being masked by suppression.
+      // cross-check-only records — see its `SUPPRESSION_EXEMPT_KINDS` doc comment) and, since
+      // 2026-08-03, every candidate whose source scored it below `ADJACENCY_THRESHOLD` (the
+      // nsf-funding-rss flood — see `isBelowAdjacencyThreshold`). Those records are already fully
+      // stored by the `insertChangeEvents` call above, which carries the whole normalized Program
+      // in `after_json`, so suppression costs no evidence. `parsedCount` and `recordPollSuccess`
+      // below still report the true parse yield — 45 for nsf-funding-rss, not 0 — so a parser that
+      // quietly stops working is still caught by `detectYieldDrop` rather than being masked by
+      // suppression. That is the whole reason both gates live here and not in the parsers.
       reviewItemCount = (
-        await buildReviewItems(deps.db, events, byId, module.tier, sourceId, deps.assist)
+        await buildReviewItems(
+          deps.db,
+          events,
+          byId,
+          module.tier,
+          sourceId,
+          deps.assist,
+          adjacencyScores(raws, next),
+        )
       ).length;
     }
 

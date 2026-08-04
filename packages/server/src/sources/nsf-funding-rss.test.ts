@@ -121,14 +121,46 @@ describe('nsfFundingRss against the three real captured feeds', () => {
     expect(math?.rawText).toContain('Program Guidelines: PD 20-1260');
   });
 
-  it.runIf(captured())('emits every real item unscored — this source runs no adjacency gate', () => {
-    // Documented honestly in `notes`. On this capture the best item scores 1, so a filter here
-    // would empty the source; that is a live design question, not a silently-applied fix.
+  /**
+   * REMEDIATION 2026-08-03. This source used to emit its 45 real items unscored, and all 45
+   * reached the human review queue every night while not one of them was adjacent to amateur
+   * radio. Every item now carries its score, and NOTHING is dropped here — the queue gate lives
+   * one stage downstream in `review/buildReviewItems`.
+   *
+   * The split matters and is the whole design: `parse()`'s length is what `detectYieldDrop`
+   * compares against `expectedMinRecords`, so a source that filters its own sub-threshold items
+   * reports a yield of 0 on a quiet night and becomes indistinguishable from a feed that broke.
+   * `crawl/runner.test.ts` holds the end-to-end proof of both halves (queue 45 -> 0; a broken feed
+   * still raises `parse_yield_dropped`).
+   */
+  it.runIf(captured())('scores every real item and drops none of them', () => {
     const raws = nsfFundingRss.parse(payloads());
-    const best = Math.max(...raws.map((r) => scoreAdjacency(r.rawText ?? '').score));
+    expect(raws).toHaveLength(45);
+    for (const r of raws) expect(r.rawFields.adjacencyScore).toBeDefined();
+
+    // The score written into rawFields is the score of the text the item actually carries.
+    for (const r of raws) {
+      expect(Number(r.rawFields.adjacencyScore)).toBe(scoreAdjacency(r.rawText ?? '').score);
+    }
+  });
+
+  it.runIf(captured())('finds not one adjacent item in the whole real capture', () => {
+    // The measurement the fix rests on: the best of the 45 scores 1 (Gravitational Physics,
+    // Chemical Oceanography, SBIR), against a threshold of 6. If this ever stops being true the
+    // gate downstream will start letting items through, which is exactly what it should do.
+    const raws = nsfFundingRss.parse(payloads());
+    const best = Math.max(...raws.map((r) => Number(r.rawFields.adjacencyScore)));
     expect(best).toBe(1);
     expect(best).toBeLessThan(ADJACENCY_THRESHOLD);
+    expect(raws.filter((r) => Number(r.rawFields.adjacencyScore) >= ADJACENCY_THRESHOLD)).toEqual([]);
+    expect(nsfFundingRss.notes).toMatch(/SCORED BUT NOT FILTERED HERE/);
+  });
+
+  it.runIf(captured())('leaves the parse yield at 45, which is what the alarm watches', () => {
+    // Filtering the 45 down to 0 inside parse() would have suppressed the noise AND disabled
+    // detectYieldDrop, making a broken feed look exactly like a quiet night.
+    const raws = nsfFundingRss.parse(payloads());
+    expect(raws.length).toBeGreaterThanOrEqual(nsfFundingRss.expectedMinRecords);
     expect(raws).toHaveLength(45);
-    expect(nsfFundingRss.notes).toMatch(/NOT SCORED/);
   });
 });
