@@ -34,7 +34,13 @@ export interface VerifyFetcher {
 export interface VerifyRunnerOptions {
   db: Db;
   fetcher: VerifyFetcher;
-  sources: SourceModule[];
+  /**
+   * `readonly` because the composition root passes `SOURCES` from
+   * `sources/registry.ts`, which is `readonly SourceModule[]`. A mutable
+   * parameter type made Task 14's `createVerifyRunner({ ..., sources: SOURCES })`
+   * fail to compile (TS4104), and the runner only ever reads the array.
+   */
+  sources: readonly SourceModule[];
   now: () => string;
 }
 
@@ -118,7 +124,7 @@ interface SourceKeyRow {
  * scholarship as vanished. Refusing names a real gap; guessing invents an event.
  */
 function resolveSource(
-  sources: SourceModule[],
+  sources: readonly SourceModule[],
   program: Program,
   storedSourceId: string | null,
   provenanceSourceId: string | undefined,
