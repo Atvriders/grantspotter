@@ -3,7 +3,7 @@ import { parseAmount } from '@grantspotter/core';
 import { fixturePayload, loadFixture } from '../../test/fixtures.js';
 import { type NormalizeContext, normalizeRaw } from '../normalize/index.js';
 import { programIdFor } from './util/ids.js';
-import { findDr2xPdfLinks, windowFromPdfLink, yaesuDr2x } from './yaesu-dr2x.js';
+import { closeDateFromBody, findDr2xPdfLinks, windowFromPdfLink, yaesuDr2x } from './yaesu-dr2x.js';
 
 const BASE = 'https://systemfusion.yaesu.com/';
 const html = () => loadFixture('yaesu-dr2x', 'pathological.html');
@@ -122,6 +122,10 @@ describe('yaesuDr2x', () => {
     for (const r of requests) expect(r.accept).toBe('html');
   });
 
+  it('records where each window date came from', () => {
+    expect(raws[0].rawFields.windowSource).toBe('pdf_title');
+  });
+
   it('says in notes that this is a discounted purchase, not a grant', () => {
     expect(yaesuDr2x.notes).toMatch(/discounted purchase, not a grant/i);
     expect(yaesuDr2x.notes).toMatch(/PDF title/i);
@@ -146,5 +150,96 @@ describe('yaesuDr2x', () => {
     expect(
       yaesuDr2x.parse([fixturePayload('yaesu-dr2x', 'unparseable-filename.html', BASE)]),
     ).toEqual([]);
+  });
+});
+
+// The committed REAL capture, fixtures/yaesu-dr2x/00-systemfusion-yaesu-com.html — pulled from
+// systemfusion.yaesu.com on 2026-08-03 through the production fetcher. Everything above this
+// line drove only synthetic HTML this module's author wrote, and against the actual landing page
+// this source parsed ZERO records.
+describe('yaesuDr2x (REAL fixture — this source parsed ZERO records from its own live page)', () => {
+  // Raw HTML, fixtures/yaesu-dr2x/00-systemfusion-yaesu-com.html:
+  //   line 308: <h4>Yaesu USA is please to offer this DR-2X Program offering to our loyal
+  //             customers once again through August 31st, 2026.</h4>
+  //   line 310: <a … href="https://systemfusion.yaesu.com/wp-content/uploads/2026/06/
+  //             DR-2X_Jun-thru-Aug_2026-FILLABLE.pdf" …>DR-2X REPEATER APPLICATION</a>
+  //   line 314: The new program price is either $1,450.00 or $1,860.00.
+  // Two failures met here: the form filename is MONTH-granular ("Jun thru Aug 2026") so no
+  // day-precision window can be read from it, and the anchor text carries no dates at all — yet
+  // the module required both an opensAt and a closesAt from exactly those two strings. Separately
+  // the live prices carry cents, and the pricing capture treated the cents separator in
+  // "$1,450.00" as the end of the sentence.
+  const raws = yaesuDr2x.parse([
+    fixturePayload('yaesu-dr2x', '00-systemfusion-yaesu-com.html', BASE),
+  ]);
+
+  it('parses exactly one record from the live page (it used to parse none)', () => {
+    expect(raws).toHaveLength(1);
+  });
+
+  it('finds the month-granular program form the live page actually links', () => {
+    const links = findDr2xPdfLinks(loadFixture('yaesu-dr2x', '00-systemfusion-yaesu-com.html'), BASE);
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe(
+      'https://systemfusion.yaesu.com/wp-content/uploads/2026/06/DR-2X_Jun-thru-Aug_2026-FILLABLE.pdf',
+    );
+    expect(links[0].text).toBe('DR-2X REPEATER APPLICATION');
+    // The documented "read the window out of the PDF title" path yields nothing here — that is
+    // the finding, not a test workaround.
+    expect(windowFromPdfLink(links[0])).toBeUndefined();
+  });
+
+  it('takes the close date from the page prose, and says so', () => {
+    expect(raws[0].rawFields.closesAt).toBe('2026-08-31');
+    expect(raws[0].rawFields.windowSource).toBe('page_body');
+  });
+
+  it('invents no opening date from the "Jun" in the filename or the /2026/06/ upload path', () => {
+    expect(raws[0].rawFields.opensAt).toBeUndefined();
+  });
+
+  it('parses "through August 31st, 2026" with its ordinal suffix', () => {
+    expect(closeDateFromBody('… once again through August 31st, 2026.')).toBe('2026-08-31');
+    expect(closeDateFromBody('Applications are not currently open.')).toBeUndefined();
+  });
+
+  // The domain fact this source exists to get right: $1,450 for the repeater, $1,860 with the
+  // LAN-01A. On the live page both figures carry cents, and the old capture stopped dead at the
+  // first decimal point — publishing a flat $1,450 and losing the accessory-inclusive ceiling.
+  it('captures BOTH live prices, cents and all, instead of truncating at the decimal point', () => {
+    expect(raws[0].rawFields.pricing).toBe(
+      'The new program price is either $1,450.00 or $1,860.00.',
+    );
+  });
+
+  it('still publishes amountMin 1450 / amountMax 1860 from the live page', () => {
+    expect(raws[0].rawFields.amount).toBe('$1,450 to $1,860.');
+    expect(parseAmount(raws[0].rawFields.amount!)).toEqual({ amountMin: 1450, amountMax: 1860 });
+  });
+
+  it('lands as a discounted purchase at 1450-1860 through the full normalize pipeline', () => {
+    const ctx: NormalizeContext = {
+      sourceId: 'yaesu-dr2x',
+      funderId: 'yaesu-usa',
+      klass: 'equipment_in_kind',
+      tier: 'C',
+      nowISO: '2026-08-03T00:00:00.000Z',
+      verificationMethod: 'live_fetch',
+      mintId: programIdFor,
+    };
+    const program = normalizeRaw(raws[0], ctx);
+    expect(program.amount.instrument).toBe('discounted_purchase');
+    expect(program.amount.amountMin).toBe(1450);
+    expect(program.amount.amountMax).toBe(1860);
+  });
+
+  // HONEST NEGATIVE: the 12-month on-air obligation is a real term of this program, but it is
+  // not stated anywhere on the landing page — it lives in the application PDF, which this module
+  // deliberately never downloads. Asserting it here off a page that does not say it would be
+  // exactly the fabrication the real-fixture exercise exists to catch.
+  it('does NOT assert the 12-month obligation, because the live page never states it', () => {
+    expect(raws[0].rawFields.sustainment).toBeUndefined();
+    expect(raws[0].rawText).not.toMatch(/twelve months|12 months/i);
+    expect(yaesuDr2x.notes).toMatch(/12-month on-air obligation is NOT stated/);
   });
 });

@@ -3,6 +3,15 @@ import { fixturePayload } from '../../test/fixtures.js';
 import { extractGender } from '../normalize/axes/index.js';
 import { TIER_C_A_SOURCES, austinArc, qcwa, sara, ylrl } from './tier-c-a.js';
 
+// The committed REAL captures under fixtures/<id>/00-*.html — pages actually pulled from the
+// funders' own sites on 2026-08-03 through the production fetcher, as opposed to the synthetic
+// pathological.html each `describe` above drives. Plan 2's review found that every test in this
+// file drove only the synthetic fixture, which is how two of these four sources shipped parsers
+// that return ZERO records from their own live pages while the suite stayed green: "the tests
+// measure agreement between a parser and its author, not between a parser and the web." Each
+// block below asserts a record COUNT plus exact field values read off the raw HTML.
+const real = (id: string, file: string, url: string) => fixturePayload(id, file, url);
+
 describe('qcwa', () => {
   const raws = qcwa.parse([
     fixturePayload('qcwa', 'pathological.html', 'https://www.qcwa.org/scholarship-program.htm'),
@@ -19,15 +28,98 @@ describe('qcwa', () => {
   });
 });
 
+describe('qcwa (REAL fixture — this source parsed ZERO records from its own live page)', () => {
+  // Raw HTML, fixtures/qcwa/00-www-qcwa-org-scholarship-program-htm.html:
+  //   line 86:  "administered in partnership with the <strong>ARRL Foundation</strong>"
+  //   line 88:  "Each applicant must be recommended by an active QCWA member"
+  //   line 89:  "must be received by the ARRL Foundation <strong>before the first week in
+  //             January</strong> each year"
+  //   line 94:  https://www.arrl.org/scholarship-descriptions
+  //   line 103: "The first QCWA scholarship was a $500 award given in 1978. As of 2024,
+  //             <strong>15 scholarships totaling $57,000</strong> were awarded."
+  // There is NO $3,000 anywhere on the page, and `amount` used to be a REQUIRED field pinned to
+  // that literal — so the parser returned [] against the very page it exists to read, and the
+  // page says "recommended by" where the parser demanded "sponsored by" and "first week IN
+  // January" where it demanded "first week OF January".
+  const raws = qcwa.parse([
+    real(
+      'qcwa',
+      '00-www-qcwa-org-scholarship-program-htm.html',
+      'https://www.qcwa.org/scholarship-program.htm',
+    ),
+  ]);
+
+  it('parses exactly one record from the live page (it used to parse none)', () => {
+    expect(raws).toHaveLength(1);
+  });
+
+  it('reads the QCWA-member requirement as the page words it — "recommended by", not "sponsored by"', () => {
+    expect(raws[0].rawFields.sponsor).toBe(
+      'recommended by an active QCWA member, and applications must be received by the ARRL ' +
+        'Foundation before the first week in January each year.',
+    );
+  });
+
+  it('reads the deadline note as "first week IN January", the page\'s actual wording', () => {
+    expect(raws[0].rawFields.deadlineNote).toBe('before the first week in January each year.');
+    expect(raws[0].rawFields.requestWindow).toBe(
+      'on or after October 31 of each year from the ARRL Foundation Committee.',
+    );
+  });
+
+  it('captures the exact ARRL intake URL the page prints', () => {
+    expect(raws[0].rawFields.applyUrl).toBe('https://www.arrl.org/scholarship-descriptions');
+    expect(raws[0].rawFields.applyNote).toBe(
+      'administered in partnership with the ARRL Foundation.',
+    );
+  });
+
+  // The whole point of dropping the hardcoded $3,000: the live page publishes no per-award
+  // figure at all, only a historical first award and two totals. Publishing any of those as the
+  // award size would be a fabrication, and 15 x $3,000 = $45,000 does not even reconcile with
+  // the $57,000 the page reports for those 15 awards.
+  it('publishes NO amount, because the live page publishes none', () => {
+    expect(raws[0].rawFields.amount).toBeUndefined();
+    expect(raws[0].rawText).toMatch(/\$500 award given in 1978/);
+    expect(raws[0].rawText).toMatch(/15 scholarships totaling \$57,000/);
+  });
+
+  it('never mistakes a historical or aggregate figure for the award size', () => {
+    expect(raws[0].rawFields.history).toBe('As of 2024, 15 scholarships totaling $57,000 were awarded.');
+    for (const value of Object.values(raws[0].rawFields)) {
+      expect(value).not.toMatch(/\$930,350/);
+    }
+  });
+
+  it('carries no farweb.org reference — the live page does not link it, contrary to the old note', () => {
+    expect(raws[0].rawText).not.toMatch(/farweb/i);
+    expect(qcwa.notes).toMatch(/carries NO farweb\.org link/);
+  });
+});
+
 describe('ylrl', () => {
   const raws = ylrl.parse([fixturePayload('ylrl', 'pathological.html', 'https://ylrl.net/Scholarships/')]);
 
+  // The three names below are now CANONICAL — fixed in YLRL_AWARDS, not lifted from whatever
+  // the page happens to call each award. The synthetic fixture writes two of them without the
+  // word "Memorial"; the live page writes all three inside a sentence that also carries the
+  // dollar figure. Deriving identity from either would make one program's id churn whenever its
+  // page wording or its award amount changed.
   it('emits one record per named scholarship plus the page record', () => {
     const names = raws.map((r) => r.name);
     expect(names).toContain('Ethel Smith K4LMB Memorial Scholarship');
-    expect(names).toContain('Mary Lou Brown NM7N Scholarship');
-    expect(names).toContain('Marte Wessel K0EPE Scholarship');
+    expect(names).toContain('Mary Lou Brown NM7N Memorial Scholarship');
+    expect(names).toContain('Marte Wessel K0EPE Memorial Scholarship');
     expect(raws.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('mints a stable externalKey that does not contain the award amount or page wording', () => {
+    expect(raws.map((r) => r.externalKey).sort()).toEqual([
+      'ylrl-ethel-smith-k4lmb',
+      'ylrl-marte-wessel-k0epe',
+      'ylrl-mary-lou-brown-nm7n',
+      'ylrl-scholarships',
+    ]);
   });
 
   it('captures each award amount', () => {
@@ -55,26 +147,30 @@ describe('ylrl', () => {
       expect(named).toHaveLength(3);
       const byName = Object.fromEntries(named.map((r) => [r.name, r]));
       expect(byName['Ethel Smith K4LMB Memorial Scholarship'].rawFields.amount).toBe('$2,500');
-      expect(byName['Mary Lou Brown NM7N Scholarship'].rawFields.amount).toBe('$2,500');
-      expect(byName['Marte Wessel K0EPE Scholarship'].rawFields.amount).toBe('$1,500');
+      expect(byName['Mary Lou Brown NM7N Memorial Scholarship'].rawFields.amount).toBe('$2,500');
+      expect(byName['Marte Wessel K0EPE Memorial Scholarship'].rawFields.amount).toBe('$1,500');
     });
 
+    // The summaries below now lead with the line that NAMES the award, because on the live page
+    // that line is the content ("The Ethel Smith, K4LMB, Memorial Scholarship awards $2,500.")
+    // rather than a bare <h2> title. What these assertions are for is unchanged: each record
+    // carries its OWN figure and detail and no trace of a sibling.
     it('gives Ethel Smith her own summary with no Mary Lou Brown bleed', () => {
       const ethel = named.find((r) => r.name.includes('Ethel Smith'));
-      expect(ethel?.rawFields.summary).toBe('Award: $2,500.');
+      expect(ethel?.rawFields.summary).toBe('Ethel Smith K4LMB Memorial Scholarship Award: $2,500.');
       expect(ethel?.rawText).not.toMatch(/Mary Lou Brown/);
     });
 
     it('gives Mary Lou Brown her own summary with no Marte Wessel bleed', () => {
       const mlb = named.find((r) => r.name.includes('Mary Lou Brown'));
-      expect(mlb?.rawFields.summary).toBe('Award: $2,500.');
+      expect(mlb?.rawFields.summary).toBe('Mary Lou Brown NM7N Scholarship Award: $2,500.');
       expect(mlb?.rawText).not.toMatch(/Marte Wessel/);
     });
 
     it("keeps Marte Wessel's part-time-working-full-time detail intact", () => {
       const wessel = named.find((r) => r.name.includes('Wessel'));
       expect(wessel?.rawFields.summary).toBe(
-        'Award: $1,500. For part-time students working full-time.',
+        'Marte Wessel K0EPE Scholarship Award: $1,500. For part-time students working full-time.',
       );
     });
   });
@@ -107,6 +203,96 @@ describe('ylrl', () => {
   });
 });
 
+describe('ylrl (REAL fixture — this source parsed ZERO records from its own live page)', () => {
+  // Raw HTML, fixtures/ylrl/00-ylrl-net-scholarships.html line 992, all inside ONE paragraph:
+  //   "The <strong>Ethel Smith, K4LMB, Memorial Scholarship</strong> awards <strong>$2,500</strong>."
+  //   "The <strong>Mary Lou Brown, NM7N, Memorial Scholarship</strong> awards <strong> $2,500</strong>."
+  //   "The <strong>Martha “Marte” Wessel, K0EPE, Memorial Scholarship</strong> awards <strong> $1,500</strong>."
+  //   "• Applicant must be female."
+  //   "• Applicant must have an Amateur Radio License."
+  //   "• There are no residency restrictions. Non-U.S. Amateurs are eligible."
+  //   "• Preference will be given to YLRL members."
+  // There are no per-scholarship headings at all, so the old whole-line heading regex matched
+  // nothing; and the restriction is the bare bullet "Applicant must be female", not the
+  // "licensed women…" prose the old required `eligibility` pattern demanded. Both failed, so the
+  // source yielded nothing. Had only the heading half been fixed, all three genuinely
+  // female-only scholarships would have published as open to everyone.
+  const raws = ylrl.parse([
+    real('ylrl', '00-ylrl-net-scholarships.html', 'https://ylrl.net/Scholarships/'),
+  ]);
+  const named = raws.filter((r) => r.rawFields.scope === 'named_scholarship');
+
+  it('parses four records — three named scholarships plus the page record (it used to parse none)', () => {
+    expect(raws).toHaveLength(4);
+    expect(named).toHaveLength(3);
+    expect(ylrl.expectedMinRecords).toBe(3);
+  });
+
+  it('reads the three award amounts the live page states', () => {
+    const byKey = Object.fromEntries(named.map((r) => [r.externalKey, r]));
+    expect(byKey['ylrl-ethel-smith-k4lmb'].rawFields.amount).toBe('$2,500');
+    expect(byKey['ylrl-mary-lou-brown-nm7n'].rawFields.amount).toBe('$2,500');
+    expect(byKey['ylrl-marte-wessel-k0epe'].rawFields.amount).toBe('$1,500');
+  });
+
+  it('matches "Martha “Marte” Wessel, K0EPE" through the curly quotes and the comma', () => {
+    const wessel = named.find((r) => r.externalKey === 'ylrl-marte-wessel-k0epe');
+    expect(wessel?.rawFields.summary).toBe(
+      'The Martha “Marte” Wessel, K0EPE, Memorial Scholarship awards $1,500. • The Martha ' +
+        '“Marte” Wessel, K0EPE scholarship is intended for a part-time student of an accredited ' +
+        'educational institution* who is working full-time. Full time work includes a ' +
+        'stay-at-home parent or caregiver. High School students are exempt from the full-time ' +
+        'work requirement.',
+    );
+  });
+
+  it("gives Ethel Smith her own figure and the page's own shared full-time sentence", () => {
+    const ethel = named.find((r) => r.externalKey === 'ylrl-ethel-smith-k4lmb');
+    expect(ethel?.rawFields.summary).toBe(
+      'The Ethel Smith, K4LMB, Memorial Scholarship awards $2,500. • The Ethel Smith, K4LMB and ' +
+        'Mary Lou Brown, NM7N scholarships are intended for full-time students. For these ' +
+        'scholarships, applicants must intend to seek a Bachelor’s or Graduate degree from an ' +
+        'accredited college or university.',
+    );
+    // Not bleed: the live page really does write that one sentence about both scholarships, so
+    // it is correctly attributed to both records rather than to whichever came first.
+    expect(ethel?.rawFields.summary).not.toMatch(/Marte|Wessel/);
+  });
+
+  it('puts BOTH hard restrictions — female and licensed — on all three named records', () => {
+    for (const r of named) {
+      expect(r.rawFields.eligibility).toBe(
+        'Applicant must be female. Applicant must have an Amateur Radio License.',
+      );
+    }
+  });
+
+  it('drives a hard female-only gender constraint for all three off the live wording', () => {
+    for (const r of named) {
+      const constraints = extractGender(r);
+      expect(constraints).toHaveLength(1);
+      expect(constraints[0].hard).toBe(true);
+      expect(constraints[0].spec).toEqual({ axis: 'gender', allowed: ['female'] });
+      expect(constraints[0].rawText).toBe('Applicant must be female.');
+    }
+  });
+
+  it('records that non-US applicants are eligible and YLRL membership is only a preference', () => {
+    const page = raws.find((r) => r.externalKey === 'ylrl-scholarships');
+    expect(page?.rawFields.residency).toBe(
+      'There are no residency restrictions. Non-U.S. Amateurs are eligible.',
+    );
+    expect(page?.rawFields.membershipPreference).toBe('Preference will be given to YLRL members.');
+  });
+
+  it('points at ylrl.net/apply/, because the scholarships page states no dates at all', () => {
+    for (const r of raws) expect(r.rawFields.detailUrl).toBe('https://ylrl.net/apply/');
+    expect(raws.every((r) => !/\b(deadline is|closes on)\b/i.test(r.rawFields.summary ?? ''))).toBe(
+      true,
+    );
+  });
+});
+
 describe('austin-arc', () => {
   const url = 'https://austinhams.org/scholarships/';
 
@@ -127,6 +313,47 @@ describe('austin-arc', () => {
   });
 });
 
+describe('austin-arc (REAL fixture)', () => {
+  // Raw HTML, fixtures/austin-arc/00-austinhams-org-scholarships.html:
+  //   line 58: "Applications open <strong>May 1</strong> and close <strong>July 31</strong> each year."
+  //   line 58: "Travis, Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson</strong> counties."
+  //   line 48: href=https://grants.austinhams.org   (UNQUOTED attribute)
+  // The page is headed "Club Scholarships" and names no individual award: "Copeland" and
+  // "Greenwood" appear nowhere on it.
+  const raws = austinArc.parse([
+    real('austin-arc', '00-austinhams-org-scholarships.html', 'https://austinhams.org/scholarships/'),
+  ]);
+
+  it('parses one record from the live page even three days after the window closed', () => {
+    expect(raws).toHaveLength(1);
+    expect(austinArc.expectedMinRecords).toBe(0);
+  });
+
+  it('names the program what the live page names it, not two awards it never mentions', () => {
+    expect(raws[0].name).toBe('Austin ARC Club Scholarships');
+    expect(raws[0].rawText).not.toMatch(/Copeland|Greenwood/i);
+  });
+
+  it('captures the window as a whole sentence rather than a "May 1 and close July 31" fragment', () => {
+    expect(raws[0].rawFields.window).toBe('Applications open May 1 and close July 31 each year.');
+  });
+
+  it('captures all seven Central Texas counties verbatim, Oxford comma and all', () => {
+    expect(raws[0].rawFields.counties).toBe(
+      'Travis, Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson counties.',
+    );
+  });
+
+  it('reads the apply portal out of an unquoted href attribute', () => {
+    expect(raws[0].rawFields.detailUrl).toBe('https://grants.austinhams.org');
+  });
+
+  it('publishes no amount, because the live page contains no dollar figure at all', () => {
+    expect(raws[0].rawFields.amount).toBeUndefined();
+    expect(raws[0].rawText).not.toMatch(/\$/);
+  });
+});
+
 describe('sara', () => {
   const raws = sara.parse([
     fixturePayload('sara', 'pathological.html', 'https://www.radio-astronomy.org/grants'),
@@ -140,6 +367,65 @@ describe('sara', () => {
   it('records that there is no deadline anywhere on the page', () => {
     expect(sara.notes).toMatch(/rolling/i);
     expect(raws[0].rawFields.window).toBeUndefined();
+  });
+});
+
+describe('sara (REAL fixture)', () => {
+  // Raw HTML, fixtures/sara/00-www-radio-astronomy-org-grants.html — the entire program is one
+  // <p>:
+  //   "The Society of Amateur Radio Astronomers provides funds in support of student projects.
+  //    The funds will be divided up into several small grants of no more than $200 each or more,
+  //    with the approval of the grant committee, to ensure that the money reaches the largest
+  //    number of students. Preference will be given to students 5th grade through college and to
+  //    new and innovative ideas. UPDATE: Teachers are now eligible to apply…"
+  //   "Email the completed form to grants at radio-astronomy.org"
+  // That last line is the whole reason the old `@`-anchored applyNote pattern found nothing on
+  // the live page: SARA spells the address out to defeat address harvesters.
+  const raws = sara.parse([
+    real('sara', '00-www-radio-astronomy-org-grants.html', 'https://www.radio-astronomy.org/grants'),
+  ]);
+
+  it('parses exactly one record from the live page', () => {
+    expect(raws).toHaveLength(1);
+  });
+
+  it('recovers the intake address even though the page writes " at " instead of "@"', () => {
+    expect(raws[0].rawFields.applyNote).toBe('grants at radio-astronomy.org');
+  });
+
+  it('keeps "no more than", so the $200 reads as a ceiling rather than a flat award', () => {
+    expect(raws[0].rawFields.amount).toBe(
+      'no more than $200 each or more, with the approval of the grant committee, to ensure that ' +
+        'the money reaches the largest number of students.',
+    );
+  });
+
+  it('keeps "Preference will be given to", so 5th-grade-through-college is not published as a bar', () => {
+    expect(raws[0].rawFields.audience).toBe(
+      'Preference will be given to students 5th grade through college and to new and innovative ideas.',
+    );
+  });
+
+  it('records that teachers became eligible by a later UPDATE line', () => {
+    expect(raws[0].rawFields.teachers).toBe(
+      'UPDATE: Teachers are now eligible to apply for grants to bring radio astronomy to the classroom.',
+    );
+  });
+
+  it('finds no deadline anywhere on the live page, so the rolling kind is not a guess', () => {
+    expect(raws[0].rawFields.window).toBeUndefined();
+    expect(raws[0].rawFields.closesAt).toBeUndefined();
+    expect(raws[0].rawText).not.toMatch(/deadline|due (?:by|date)|apply by/i);
+  });
+
+  // Radio astronomy is genuinely in scope for this product, so this asserts the funder is real
+  // and its subject matter is the intended one — not the unrelated broadcast sense of "radio".
+  it('is the radio-astronomy funder it claims to be', () => {
+    expect(raws[0].rawFields.summary).toBe(
+      'The Society of Amateur Radio Astronomers provides funds in support of student projects.',
+    );
+    expect(raws[0].rawText).toMatch(/Radio JOVE/);
+    expect(raws[0].rawText).toMatch(/SuperSID/);
   });
 });
 
