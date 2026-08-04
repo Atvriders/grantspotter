@@ -12,6 +12,7 @@ import { seedTestUser } from '../test/fixtures/programs.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
 import { createProgramRepo, withContentHash } from '../db/repositories/programs.js';
 import {
+  calendarPrograms,
   createCalendarFeedRouter,
   createExportsRouter,
   type ExportDeps,
@@ -277,11 +278,21 @@ describe('ICS', () => {
     const body = await res.text();
     expect(body.startsWith('BEGIN:VCALENDAR')).toBe(true);
     expect(body).toContain('BEGIN:VEVENT');
+    // The plain URL is every publishable deadline. This fixture's watchlist holds exactly one of
+    // the two programmes, so a download that read the watchlist would answer one event here.
+    expect(body.split('BEGIN:VEVENT').length - 1).toBe(2);
+    expect(body).toContain('X-GRANTSPOTTER-PROGRAM-ID:arrl-club-grant');
   });
 
   it('limits the feed to watched programs when watched=1', async () => {
     const body = await (await fetch(`${base}/api/exports/deadlines.ics?watched=1`)).text();
     expect(body).toContain('X-GRANTSPOTTER-PROGRAM-ID:ardc-grants');
+    // EXCLUSION, which is the half this test was missing. The `toContain` above was the whole
+    // assertion, and a download that ignored `watched=1` and returned the entire corpus satisfies
+    // it just as well: it proved the starred programme was present, never that anything else was
+    // absent — the only direction in which "limits" means anything.
+    expect(body).not.toContain('X-GRANTSPOTTER-PROGRAM-ID:arrl-club-grant');
+    expect(body.split('BEGIN:VEVENT').length - 1).toBe(1);
   });
 
   it('404s the token endpoint before a token exists', async () => {
@@ -518,12 +529,29 @@ describe('the feed is rate limited', () => {
  * hands the routes the hazard directly.
  */
 describe('no suppressed record can leave through a route', () => {
-  const withSuppressed = async (path: string): Promise<string> => {
-    data.suppressedVisible = true;
+  /**
+   * THE WATCHLIST EVERY FETCH IN THIS BLOCK RUNS UNDER, clean and mixed alike, and what makes the
+   * `?watched=1` rows below assert anything at all.
+   *
+   * `?watched=1` narrows to the watchlist, so while the fixture starred only `ardc-grants` the
+   * suppressed record was out of scope on those paths for a reason that has nothing to do with the
+   * gate. Measured, not assumed: with the hazard's `do_not_publish` tag REMOVED — the gate then
+   * having nothing to catch — both watched rows still passed. They could not fail, so they proved
+   * nothing, on the one surface whose contents a subscriber chooses. A star outlives a
+   * reclassification, so starring the hazard is the state in which the gate is the only thing
+   * standing between it and a calendar.
+   */
+  const STARRED = ['ardc-grants', SUPPRESSED.id];
+
+  const fetchStarred = async (path: string, suppressed: boolean): Promise<string> => {
+    const previous = data.watching;
+    data.watching = [...STARRED];
+    data.suppressedVisible = suppressed;
     try {
       return await (await fetch(`${base}${path}`)).text();
     } finally {
       data.suppressedVisible = false;
+      data.watching = previous;
     }
   };
 
@@ -537,11 +565,12 @@ describe('no suppressed record can leave through a route', () => {
       '/api/exports/eligibility.csv',
       '/api/exports/eligibility.html',
       '/api/exports/deadlines.ics',
+      '/api/exports/deadlines.ics?watched=1',
       `/calendar/${created.token}.ics`,
       `/calendar/${created.token}.ics?watched=1`,
     ]) {
-      const clean = await (await fetch(`${base}${path}`)).text();
-      const mixed = await withSuppressed(path);
+      const clean = await fetchStarred(path, false);
+      const mixed = await fetchStarred(path, true);
       expect(mixed.length, path).toBe(clean.length);
       expect(mixed, path).toBe(clean);
     }
@@ -560,7 +589,7 @@ describe('no suppressed record can leave through a route', () => {
       `/calendar/${created.token}.ics`,
       `/calendar/${created.token}.ics?watched=1`,
     ]) {
-      const body = await withSuppressed(path);
+      const body = await fetchStarred(path, true);
       expect(body, path).not.toContain(SUPPRESSED.id);
       expect(body, path).not.toContain(SUPPRESSED.name);
       expect(body, path).not.toContain(DO_NOT_PUBLISH_TAG);
@@ -587,12 +616,55 @@ describe('no suppressed record can leave through a route', () => {
         const body = await (await fetch(`${base}${path}`)).text();
         expect(body.split('BEGIN:VEVENT').length - 1, path).toBe(0);
         expect(body, path).not.toContain(SUPPRESSED.id);
+        expect(body, path).not.toContain(SUPPRESSED.name);
         expect(body, path).not.toContain(DO_NOT_PUBLISH_TAG);
       }
     } finally {
       data.suppressedVisible = false;
       data.watching = previous;
     }
+  });
+
+  /**
+   * THE LAYER NO RESPONSE CAN SHOW YOU, so it is the layer that was never actually tested.
+   *
+   * Every assertion above reads bytes, and bytes cannot see this gate. `calendarPrograms` runs
+   * `exportablePrograms` before the watch filter; `buildIcsCalendar` runs the same predicate again
+   * on the map it is handed, and `cycleToVevent` a third time. So the handler's own gate can be
+   * deleted without changing one byte of any calendar. Measured, which is why this exists: with
+   * `calendarPrograms` patched to skip the gate on the watched path — the "the subscriber asked for
+   * it, so let it through" bug, verbatim — `npx vitest run --project server` reported 3048 passed,
+   * every suppression test in this file included. Four layers are worth having only while losing
+   * one is detectable; otherwise the outermost is a comment, and the next reader deletes it.
+   *
+   * So this calls the function, not the route. It is the only test in the repository that fails
+   * when the handler's gate alone is removed.
+   */
+  describe('gates before it filters, in the handler itself and not only downstream', () => {
+    const chosen = (watched?: ReadonlySet<string>): string[] => {
+      data.suppressedVisible = true;
+      try {
+        return [...calendarPrograms(depsFor(data), watched).keys()];
+      } finally {
+        data.suppressedVisible = false;
+      }
+    };
+
+    it('never puts the suppressed record in the plain scope', () => {
+      expect(chosen(undefined)).toEqual(['ardc-grants', 'arrl-club-grant']);
+    });
+
+    /** The exact hazard: a watchlist row that outlived the record's reclassification. */
+    it('never puts it in the watched scope, even when the user has starred it', () => {
+      expect(chosen(new Set([SUPPRESSED.id]))).toEqual([]);
+      expect(chosen(new Set([SUPPRESSED.id, 'ardc-grants']))).toEqual(['ardc-grants']);
+    });
+
+    /** A set, never a size: the empty watchlist is an empty calendar, not the whole corpus. */
+    it('reads the watchlist as a set of ids', () => {
+      expect(chosen(new Set())).toEqual([]);
+      expect(chosen(new Set(['arrl-club-grant']))).toEqual(['arrl-club-grant']);
+    });
   });
 
   it('cannot be turned off by asking for the suppression tag by name', async () => {

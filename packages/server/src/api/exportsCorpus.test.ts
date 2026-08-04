@@ -257,42 +257,87 @@ describe('no route leaks a suppressed record, at corpus scale', () => {
   }, 180_000);
 
   /**
+   * THE WATCHED SCOPE, WITH SOMETHING ACTUALLY IN IT. `?watched=1` narrows to the watchlist, so
+   * every watched row in this block runs against the default empty one — two empty calendars, which
+   * stay byte-identical however the gate behaves, and assert nothing whatever about suppression.
+   * Starring all 703 records is the arrangement in which the gate is the only difference between
+   * the two files: the 243 publishable events must all survive it and the 553 hidden ones must not
+   * appear, on the download and on the feed alike.
+   */
+  it('is byte-identical on both watched surfaces when all 703 records are starred', async () => {
+    watching = [...corpus.programs, ...corpus.suppressedPrograms].map((p) => p.id);
+    try {
+      for (const path of [
+        '/api/exports/deadlines.ics?watched=1',
+        `/calendar/${token}.ics?watched=1`,
+      ]) {
+        const clean = await body(path, false);
+        const mixed = await body(path, true);
+        // Not an empty calendar this time, which is what makes the two comparisons below mean
+        // something: every publishable cycle is in scope on a watched URL.
+        expect(clean.split('BEGIN:VEVENT').length - 1, path).toBe(243);
+        expect(mixed.length, path).toBe(clean.length);
+        expect(mixed, path).toBe(clean);
+      }
+    } finally {
+      watching = [];
+    }
+  }, 180_000);
+
+  /**
    * THE NEW VARIANT'S OWN HAZARD. `?watched=1` is the one feed whose contents a user chooses, and
    * a watchlist can name a record that was publishable when it was starred and `do_not_publish`
    * afterwards — the star outlives the reclassification. "The subscriber asked for it" is not a
    * reason to publish it, so the gate runs BEFORE the watch filter and this proves the order.
    */
-  it('publishes nothing from the opt-in feed when every starred record is a suppressed one', async () => {
+  it('publishes nothing from either opt-in surface when every starred record is a suppressed one', async () => {
     watching = corpus.suppressedPrograms.map((p) => p.id);
-    let text: string;
     try {
-      text = await body(`/calendar/${token}.ics?watched=1`, true);
+      // The download as well as the feed: they take the same scope from the same query on the same
+      // assembly, and a claim proved of one of them is not a claim about the other.
+      for (const path of [
+        '/api/exports/deadlines.ics?watched=1',
+        `/calendar/${token}.ics?watched=1`,
+      ]) {
+        const text = await body(path, true);
+        expect(text.split('BEGIN:VEVENT').length - 1, path).toBe(0);
+        expect(
+          corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id),
+          path,
+        ).toEqual([]);
+        expect(text, path).not.toContain(DO_NOT_PUBLISH_TAG);
+        expect(text, path).not.toContain(':planted');
+      }
     } finally {
       watching = [];
     }
-    expect(text.split('BEGIN:VEVENT').length - 1).toBe(0);
-    expect(corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id)).toEqual([]);
-    expect(text).not.toContain(DO_NOT_PUBLISH_TAG);
-    expect(text).not.toContain(':planted');
   }, 180_000);
 
   it('writes no suppressed id, name or tag into any of the bytes', async () => {
     const publishableNames = new Set(corpus.programs.map((p) => p.name));
-    for (const path of [...PATHS, `/calendar/${token}.ics`, `/calendar/${token}.ics?watched=1`]) {
-      const text = await body(path, true);
-      expect(
-        corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id),
-        path,
-      ).toEqual([]);
-      expect(
-        corpus.suppressedPrograms
-          .filter((p) => !publishableNames.has(p.name))
-          .filter((p) => text.includes(p.name))
-          .map((p) => p.name),
-        path,
-      ).toEqual([]);
-      expect(text, path).not.toContain(DO_NOT_PUBLISH_TAG);
-      expect(text, path).not.toContain(':planted');
+    // Everything starred, for the same reason as the byte-identical pair above: on a `?watched=1`
+    // URL an unstarred record is out of scope whatever the gate does, so a search of those bytes
+    // for 553 ids that were never in scope is a search that cannot find anything.
+    watching = [...corpus.programs, ...corpus.suppressedPrograms].map((p) => p.id);
+    try {
+      for (const path of [...PATHS, `/calendar/${token}.ics`, `/calendar/${token}.ics?watched=1`]) {
+        const text = await body(path, true);
+        expect(
+          corpus.suppressedPrograms.filter((p) => text.includes(p.id)).map((p) => p.id),
+          path,
+        ).toEqual([]);
+        expect(
+          corpus.suppressedPrograms
+            .filter((p) => !publishableNames.has(p.name))
+            .filter((p) => text.includes(p.name))
+            .map((p) => p.name),
+          path,
+        ).toEqual([]);
+        expect(text, path).not.toContain(DO_NOT_PUBLISH_TAG);
+        expect(text, path).not.toContain(':planted');
+      }
+    } finally {
+      watching = [];
     }
   }, 180_000);
 

@@ -135,8 +135,20 @@ function calendarScope(req: Request, canReadWatchlist: boolean): CalendarScope {
  *
  * `undefined` means every publishable programme. A SET means exactly that set — including the empty
  * set, which means an empty calendar. Nothing here reads the size of the watchlist.
+ *
+ * EXPORTED, AND ONLY BECAUSE THE LAYERING MAKES THIS GATE INVISIBLE FROM A RESPONSE. All four
+ * layers apply the same `isDoNotPublish` predicate, so deleting THIS one changes no byte of any
+ * calendar: with it skipped on the watched path — literally "the subscriber asked for it, so let it
+ * through" — the whole 3,048-test server suite still passed, every suppression test in
+ * `exports.test.ts` included, because `buildIcsCalendar` caught what this let past. Redundancy
+ * whose loss nothing can detect is redundancy that erodes silently, and this is the layer the other
+ * three were added to back up. `exports.test.ts` therefore calls it directly; nothing else imports
+ * it, and no behaviour changed to make that possible.
  */
-function calendarPrograms(deps: ExportDeps, watched?: ReadonlySet<string>): Map<string, Program> {
+export function calendarPrograms(
+  deps: ExportDeps,
+  watched?: ReadonlySet<string>,
+): Map<string, Program> {
   const publishable = exportablePrograms(deps.data.listPrograms());
   const chosen = watched === undefined ? publishable : publishable.filter((p) => watched.has(p.id));
   return new Map(chosen.map((p) => [p.id, p]));
