@@ -201,6 +201,51 @@
   outline-offset: -1px;
 }
 
+/*
+ * ---------- the fold ----------
+ *
+ * 112 of the 150 publishable programmes ride ONE deadline, so 2026-12-30 carries 113 marks. The
+ * fold is a real <details>, not a "+N more": the summary states its own size and names the owner,
+ * so the cell can never read as emptier than it is, and the body scrolls rather than growing a
+ * table row to twelve screens.
+ */
+.chip-group {
+  font-size: var(--fs-100);
+  line-height: var(--lh-tight);
+  margin-bottom: var(--s-1);
+  border-left: 3px double var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+}
+
+.chip-group > summary {
+  padding: 2px var(--s-2);
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 560;
+}
+
+.chip-group > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chip-group[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.chip-group-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: var(--s-2);
+}
+
+.chip-group-note {
+  margin: 0 0 var(--s-2);
+  color: var(--text-muted);
+  line-height: var(--lh-normal);
+}
+
 /* The overlay: where the work starts, and where a published window opens. */
 .prep-mark,
 .opens-mark {
@@ -276,6 +321,16 @@
 
 .agenda .provenance.projected {
   color: var(--warn);
+}
+
+/* Whose date this is — distinct from `.provenance`, which is how the date was arrived at. */
+.agenda .source {
+  display: block;
+  font-family: var(--font-text);
+  font-size: var(--fs-100);
+  color: var(--text-muted);
+  margin-top: var(--s-1);
+  white-space: normal;
 }
 
 .agenda .agenda-name {

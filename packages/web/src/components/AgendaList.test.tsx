@@ -22,6 +22,7 @@ function entry(over: Partial<CalendarEntry> = {}): CalendarEntry {
     instrument: 'cash_range',
     applicantEntities: ['individual'],
     isEstimated: false,
+    deadlineSource: { kind: 'stated' },
     prepLeadDays: 30,
     prepStartAt: '2026-11-30T17:00:00.000Z',
     prepNote: 'The single ARRL Foundation application needs a transcript and references.',
@@ -209,6 +210,39 @@ describe('AgendaList', () => {
     for (const link of screen.getAllByRole('link')) {
       expect(link.getAttribute('href') ?? '').not.toMatch(/farweb\.org/);
     }
+  });
+
+  /**
+   * TASK 21. 112 of the 150 publishable programmes hold no deadline of their own — they ride the
+   * ARRL Foundation scholarship portal's single window. An agenda card that prints that date with
+   * no attribution asserts that this funder published it, which this one did not. The owner is
+   * named AND linked, because the row's practical advice is "the thing you actually submit to is
+   * over there".
+   */
+  it('names and links the programme an inherited date came from', () => {
+    renderAgenda([
+      entry({
+        cycle: { ...entry().cycle, id: 'qcwa' },
+        programId: 'qcwa-memorial-scholarship',
+        programName: 'QCWA Memorial Scholarship Fund',
+        deadlineSource: {
+          kind: 'inherited',
+          fromProgramId: 'arrl-foundation-scholarship',
+          fromProgramName: 'ARRL Foundation Scholarship Program',
+        },
+      }),
+    ]);
+    expect(screen.getByText(/inherited from/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /ARRL Foundation Scholarship Program/ }),
+    ).toHaveAttribute('href', '/o/arrl-foundation-scholarship');
+  });
+
+  /** The other half of the same claim: a programme that stated its own date must not borrow one. */
+  it('says a self-stated deadline is this programme’s own, and claims no inheritance', () => {
+    renderAgenda([entry()]);
+    expect(screen.getByText(/stated by this programme/i)).toBeInTheDocument();
+    expect(screen.queryByText(/inherited from/i)).not.toBeInTheDocument();
   });
 
   it('keys rows by cycle so two cycles of one program both render', () => {

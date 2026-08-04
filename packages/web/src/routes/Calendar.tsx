@@ -59,6 +59,38 @@ const DEADLINE_KIND_WORDS: Record<string, string> = {
   annual_window: 'Annual window',
 };
 
+/**
+ * How much of this window is one date wearing many hats.
+ *
+ * The entry count is the most misleading number on this page taken alone: over twelve months the
+ * real corpus returns 127 dated cycles, of which 112 are the SAME ARRL Foundation portal deadline
+ * inherited by 112 catalog entries. "127 cycles" reads as 127 things to prepare; it is 16.
+ * `total` is how many entries ride somebody else's date, and `top` is the owner most of them ride.
+ */
+function ridership(entries: CalendarEntry[]): {
+  total: number;
+  top: { id: string; name: string; count: number } | null;
+} {
+  const byOwner = new Map<string, { id: string; name: string; count: number }>();
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.deadlineSource.kind !== 'inherited') continue;
+    total += 1;
+    const { fromProgramId, fromProgramName } = entry.deadlineSource;
+    const seen = byOwner.get(fromProgramId);
+    if (seen === undefined) {
+      byOwner.set(fromProgramId, { id: fromProgramId, name: fromProgramName, count: 1 });
+    } else {
+      seen.count += 1;
+    }
+  }
+  let top: { id: string; name: string; count: number } | null = null;
+  for (const owner of byOwner.values()) {
+    if (top === null || owner.count > top.count) top = owner;
+  }
+  return { total, top };
+}
+
 function monthBounds(year: number, month: number): { start: number; end: number } {
   return {
     start: Date.UTC(year, month - 1, 1),
@@ -103,6 +135,7 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
   const monthTitle = `${MONTHS[cursor.month - 1] ?? ''} ${cursor.year}`;
   const published = data?.entries.filter((e) => !e.isEstimated).length ?? 0;
   const projected = data?.entries.filter((e) => e.isEstimated).length ?? 0;
+  const riding = ridership(data?.entries ?? []);
 
   const bounds = monthBounds(cursor.year, cursor.month);
   const outsideWindow =
@@ -175,6 +208,15 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
           {formatDate(data.from)} and {formatDate(data.to)} — {published} funder-published,{' '}
           {projected} projected. A projected date was worked out from a recurrence rule; the funder
           has not announced it.
+          {riding.total > 0 && riding.top !== null && (
+            <>
+              {' '}
+              {riding.total} of them inherit their date from another programme rather than
+              publishing one, so this is a shorter list than it looks: {riding.top.count} ride{' '}
+              <Link to={`/o/${riding.top.id}`}>{riding.top.name}</Link>, and clearing that one
+              deadline is what clears all of them.
+            </>
+          )}
         </p>
       )}
 

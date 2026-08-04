@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { MonthGrid, monthMatrix } from './MonthGrid.js';
+import { GROUP_MIN, MonthGrid, groupByDeadlineOwner, monthMatrix } from './MonthGrid.js';
 import type { CalendarEntry } from './AgendaList.js';
 
 const NOW = '2026-08-02T12:00:00.000Z';
@@ -35,6 +36,7 @@ const entries: CalendarEntry[] = [
     instrument: 'cash_range',
     applicantEntities: ['individual'],
     isEstimated: false,
+    deadlineSource: { kind: 'stated' },
     prepLeadDays: 30,
     prepStartAt: '2026-11-30T17:00:00.000Z',
     prepNote: 'Start about 30 days before the close.',
@@ -61,6 +63,7 @@ const entries: CalendarEntry[] = [
     instrument: 'cash_range',
     applicantEntities: ['university'],
     isEstimated: true,
+    deadlineSource: { kind: 'stated' },
     prepLeadDays: 45,
     prepStartAt: '2026-10-17T00:00:00.000Z',
     prepNote: 'ARDC evaluates for 60 to 120 days.',
@@ -87,6 +90,7 @@ const entries: CalendarEntry[] = [
     instrument: 'cash_range',
     applicantEntities: ['club_501c3'],
     isEstimated: true,
+    deadlineSource: { kind: 'stated' },
     prepLeadDays: 30,
     // Inside December, while the deadline itself is not. The whole point of the overlay.
     prepStartAt: '2026-12-16T00:00:00.000Z',
@@ -115,6 +119,7 @@ const entries: CalendarEntry[] = [
     instrument: 'in_kind_service',
     applicantEntities: ['school_lea'],
     isEstimated: false,
+    deadlineSource: { kind: 'stated' },
     prepLeadDays: 45,
     prepStartAt: '2026-11-21T00:00:00.000Z',
     prepNote: 'ARISS proposal windows are rewritten quarterly.',
@@ -267,5 +272,221 @@ describe('MonthGrid', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText(/nothing falls in September 2026/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * TASK 21 — THE 113-CHIP DAY.
+ *
+ * The real corpus puts 113 entries on 2026-12-30, and 112 of them inherit that date from one
+ * record: the ARRL Foundation scholarship portal. Rendered as 113 independent chips the cell says
+ * "113 deadlines that happen to coincide", which is false and is also unusable — the one thing a
+ * planner needs to see, that clearing ONE portal deadline is what clears all of them, is the one
+ * thing buried.
+ *
+ * The fixture is built at the real size on purpose. A 5-entry stand-in would have passed against a
+ * renderer that still emitted 113 chips.
+ */
+const OWNER_ID = 'arrl-foundation-scholarship';
+const OWNER_NAME = 'ARRL Foundation Scholarship Program';
+
+function denseDecember(): CalendarEntry[] {
+  const owner: CalendarEntry = {
+    ...entries[0]!,
+    cycle: { ...entries[0]!.cycle, id: 'owner-cycle', isEstimated: true },
+    isEstimated: true,
+    deadlineSource: { kind: 'stated' },
+  };
+  const riders = Array.from({ length: 112 }, (_, i): CalendarEntry => ({
+    ...owner,
+    cycle: { ...owner.cycle, id: `rider-${String(i)}`, programId: `rider-${String(i)}` },
+    programId: `rider-${String(i)}`,
+    programName: `Rider Scholarship ${String(i)}`,
+    deadlineSource: { kind: 'inherited', fromProgramId: OWNER_ID, fromProgramName: OWNER_NAME },
+  }));
+  return [owner, ...riders];
+}
+
+describe('groupByDeadlineOwner', () => {
+  it('folds the riders of one owner together and leaves self-stated entries alone', () => {
+    const { solo, groups } = groupByDeadlineOwner(denseDecember());
+    expect(solo.map((e) => e.programId)).toEqual([OWNER_ID]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.ownerId).toBe(OWNER_ID);
+    expect(groups[0]!.ownerName).toBe(OWNER_NAME);
+    expect(groups[0]!.entries).toHaveLength(112);
+  });
+
+  /**
+   * A disclosure costs a click and a line of chrome. Below `GROUP_MIN` riders that is more
+   * attention than the chips it would fold, so a small group stays as chips — each of which still
+   * names its owner in its own accessible name. The rule is about LAYOUT, never about what is said.
+   */
+  it('leaves a group smaller than the threshold as ordinary chips', () => {
+    const dense = denseDecember();
+    const small = [dense[0]!, ...dense.slice(1, GROUP_MIN)];
+    const { solo, groups } = groupByDeadlineOwner(small);
+    expect(groups).toHaveLength(0);
+    expect(solo).toHaveLength(GROUP_MIN);
+  });
+
+  it('never loses or duplicates an entry, whatever the shape', () => {
+    const dense = denseDecember();
+    const { solo, groups } = groupByDeadlineOwner(dense);
+    const seen = [...solo, ...groups.flatMap((g) => g.entries)].map((e) => e.cycle.id);
+    expect(new Set(seen).size).toBe(dense.length);
+    expect(seen).toHaveLength(dense.length);
+  });
+
+  it('keeps riders of different owners in different groups', () => {
+    const dense = denseDecember();
+    const other = dense.slice(1, 5).map(
+      (e, i): CalendarEntry => ({
+        ...e,
+        cycle: { ...e.cycle, id: `other-${String(i)}` },
+        programId: `other-${String(i)}`,
+        deadlineSource: { kind: 'inherited', fromProgramId: 'ncdxf-grants', fromProgramName: 'NCDXF Grants' },
+      }),
+    );
+    const { groups } = groupByDeadlineOwner([...dense, ...other]);
+    expect(groups.map((g) => g.ownerId).sort()).toEqual(['arrl-foundation-scholarship', 'ncdxf-grants']);
+  });
+});
+
+describe('MonthGrid — a day 113 entries deep', () => {
+  function renderDense() {
+    return render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={12} entries={denseDecember()} now={NOW} />
+      </MemoryRouter>,
+    );
+  }
+
+  function decemberThirtieth(): HTMLElement {
+    return screen.getByRole('gridcell', { name: /^30 December 2026$/ });
+  }
+
+  it('shows the owner’s own deadline as a chip and folds the 112 that ride it', () => {
+    renderDense();
+    const cell = decemberThirtieth();
+    // The chips a reader has to take in at a glance: the portal deadline, and one group.
+    expect(cell.querySelectorAll(':scope > a.chip')).toHaveLength(1);
+    // Anchored to the START of the accessible name: every one of the 112 folded chips also
+    // CONTAINS the owner's name, which is the point of the fix and would otherwise match here.
+    expect(
+      within(cell).getByRole('link', { name: new RegExp(`^${OWNER_NAME}:`), hidden: true }),
+    ).toHaveAttribute('href', `/o/${OWNER_ID}`);
+    expect(cell.querySelectorAll('details.chip-group')).toHaveLength(1);
+  });
+
+  /**
+   * THE FAILURE THIS MUST NOT REPRODUCE. `undated` once reported 147 of 150 programmes as
+   * deadline-less because a window-scoped count was rendered as a corpus-wide claim; a "+N more"
+   * that swallowed 112 chips would be the same lie in the other direction. The count and the owner
+   * are both in the visible summary, so the cell states its own size before anything is opened.
+   */
+  it('states how many it folded, and whose date they ride, without being opened', () => {
+    renderDense();
+    const summary = within(decemberThirtieth()).getByText(/112 programmes ride/i);
+    expect(summary).toHaveTextContent(OWNER_NAME);
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+  });
+
+  /** Folded is not dropped: all 113 links are in the cell, reachable, before any interaction. */
+  it('keeps every one of the 113 entries in the day, not merely the visible ones', () => {
+    renderDense();
+    expect(decemberThirtieth().querySelectorAll('a[href^="/o/"]')).toHaveLength(113);
+  });
+
+  it('opens to reveal every rider as its own link', async () => {
+    renderDense();
+    const cell = decemberThirtieth();
+    await userEvent.click(within(cell).getByText(/112 programmes ride/i));
+    expect(cell.querySelector('details.chip-group')).toHaveAttribute('open');
+    expect(within(cell).getByRole('link', { name: /Rider Scholarship 0:/ })).toHaveAttribute(
+      'href',
+      '/o/rider-0',
+    );
+  });
+
+  it('says in words that one date moves all of them, which is the reason to group at all', () => {
+    renderDense();
+    expect(within(decemberThirtieth()).getByText(/one date, 112 applications/i)).toBeInTheDocument();
+  });
+
+  /** Every rider names its owner whether it was folded or not. Grouping is layout, not the claim. */
+  it('names the owner in each folded chip’s accessible name', () => {
+    renderDense();
+    const chip = within(decemberThirtieth()).getByRole('link', {
+      name: /Rider Scholarship 3:/,
+      hidden: true,
+    });
+    expect(chip).toHaveAccessibleName(new RegExp(`inherited from ${OWNER_NAME}`, 'i'));
+  });
+
+  /**
+   * The prep overlay stacks exactly as hard: all 113 share a prep start of 2026-11-30, so November
+   * would have carried 113 "Start preparing" rows. The same fold applies, with its own wording.
+   */
+  it('folds the prep overlay on the day 113 runways start', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} />
+      </MemoryRouter>,
+    );
+    const cell = screen.getByRole('gridcell', { name: /^30 November 2026$/ });
+    expect(cell.querySelectorAll(':scope > a.prep-mark')).toHaveLength(1);
+    expect(within(cell).getByText(/112 programmes ride/i)).toBeInTheDocument();
+    expect(cell.querySelectorAll('a[href^="/o/"]')).toHaveLength(113);
+  });
+
+  /**
+   * THE TWO CYCLE KINDS MUST SURVIVE THE FOLD. `isEstimated` is the distinction this whole screen
+   * exists for — 4 of 244 cycles are funder-published — and a folded chip is still a chip: dashed
+   * when projected, "projected, not observed" in its accessible name, and NO opening mark, because
+   * a projected opening is a projection of a projection.
+   */
+  it('keeps projected and funder-published distinct inside a fold', () => {
+    const dense = denseDecember();
+    // Ten of the riders become windows the funder actually printed. 17:00Z is midday on the 30th
+    // in New York, so both ends land on the day under test in the cycle's own zone.
+    const published = dense.slice(1, 11).map(
+      (e): CalendarEntry => ({
+        ...e,
+        cycle: { ...e.cycle, opensAt: '2026-12-30T17:00:00.000Z', isEstimated: false },
+        isEstimated: false,
+      }),
+    );
+    render(
+      <MemoryRouter>
+        <MonthGrid
+          year={2026}
+          month={12}
+          entries={[dense[0]!, ...published, ...dense.slice(11)]}
+          now={NOW}
+        />
+      </MemoryRouter>,
+    );
+    const cell = screen.getByRole('gridcell', { name: /^30 December 2026$/ });
+
+    const projected = within(cell).getByRole('link', {
+      name: /Rider Scholarship 100: 2026-12-30/,
+      hidden: true,
+    });
+    expect(projected).toHaveClass('estimated');
+    expect(projected).toHaveAccessibleName(/projected, not observed/i);
+
+    const stated = within(cell).getByRole('link', {
+      name: /Rider Scholarship 5: 2026-12-30/,
+      hidden: true,
+    });
+    expect(stated).not.toHaveClass('estimated');
+    expect(stated).toHaveAccessibleName(/funder-published/i);
+    expect(stated).not.toHaveAccessibleName(/projected/i);
+
+    // Ten funder-published windows open on this day; the 102 projected cycles contribute no
+    // opening mark at all — a projected opening is a projection of a projection.
+    expect(cell.querySelectorAll('a.opens-mark')).toHaveLength(10);
   });
 });

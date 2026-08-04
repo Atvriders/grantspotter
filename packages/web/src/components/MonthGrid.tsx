@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { INSTRUMENT_WORDS, cycleSpan, localDay, type CalendarEntry } from './AgendaList.js';
 import './calendar.css';
@@ -53,6 +54,163 @@ export function monthMatrix(year: number, month: number): Array<Array<Date | nul
 /** The cell key for a `Date` produced by `monthMatrix`, which is always a UTC midnight. */
 function cellDay(day: Date): string {
   return day.toISOString().slice(0, 10);
+}
+
+/**
+ * How many entries must ride ONE owner's date before they are folded into a disclosure.
+ *
+ * Below this the disclosure costs a click and a line of chrome for less than it hides, so a small
+ * group stays as ordinary marks. The threshold governs LAYOUT ONLY: every inherited mark names its
+ * owner in its accessible name whether it was folded or not.
+ */
+export const GROUP_MIN = 3;
+
+export interface OwnerGroup {
+  ownerId: string;
+  ownerName: string;
+  entries: CalendarEntry[];
+}
+
+export interface DayBuckets {
+  /** Rendered one mark each, in the order the server sent them. */
+  solo: CalendarEntry[];
+  /** Rendered as one disclosure each, in order of first appearance. */
+  groups: OwnerGroup[];
+}
+
+/**
+ * Split one day's marks into "stands on its own" and "rides somebody else's date".
+ *
+ * THE PROBLEM THIS SOLVES. 112 of the 150 publishable programmes inherit their deadline from the
+ * ARRL Foundation scholarship portal, so 2026-12-30 carries 113 entries of which 112 are one portal
+ * date. Rendered flat, the cell claims 113 independent deadlines that happen to coincide — and
+ * buries the only thing a planner needs from it: that clearing ONE deadline clears all of them, and
+ * that a change to that single owner moves every one.
+ *
+ * WHAT THIS IS NOT. It is not "+N more". Nothing is dropped, nothing is capped, and the count and
+ * the owner are both in the visible summary before anything is opened, so the day can never look
+ * emptier than it is — that specific failure (a September view reporting 147 of 150 programmes as
+ * deadline-less) is the one the `undated` fix already had to correct once.
+ *
+ * Membership is by object identity, not by `cycle.id`, so a duplicated id could never silently
+ * swallow a mark.
+ */
+export function groupByDeadlineOwner(
+  entries: CalendarEntry[],
+  minToFold: number = GROUP_MIN,
+): DayBuckets {
+  const byOwner = new Map<string, OwnerGroup>();
+  const order: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.deadlineSource.kind !== 'inherited') continue;
+    const { fromProgramId, fromProgramName } = entry.deadlineSource;
+    let group = byOwner.get(fromProgramId);
+    if (group === undefined) {
+      group = { ownerId: fromProgramId, ownerName: fromProgramName, entries: [] };
+      byOwner.set(fromProgramId, group);
+      order.push(fromProgramId);
+    }
+    group.entries.push(entry);
+  }
+
+  const folded = new Set<CalendarEntry>();
+  const groups: OwnerGroup[] = [];
+  for (const id of order) {
+    const group = byOwner.get(id);
+    if (group === undefined || group.entries.length < minToFold) continue;
+    groups.push(group);
+    for (const entry of group.entries) folded.add(entry);
+  }
+
+  return { solo: entries.filter((entry) => !folded.has(entry)), groups };
+}
+
+/** What an inherited mark adds to its accessible name. Empty for a self-stated one. */
+function sourceSuffix(entry: CalendarEntry): string {
+  return entry.deadlineSource.kind === 'inherited'
+    ? `, date inherited from ${entry.deadlineSource.fromProgramName}`
+    : '';
+}
+
+function CloseChip({ entry }: { entry: CalendarEntry }): JSX.Element {
+  return (
+    <Link
+      to={`/o/${entry.programId}`}
+      className={[
+        'chip',
+        `inst-${entry.instrument}`,
+        entry.applicantEntities.includes('individual') ? 'ent-individual' : '',
+        entry.isEstimated ? 'estimated' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-label={`${entry.programName}: ${cycleSpan(entry.cycle)}, ${
+        entry.isEstimated ? 'projected, not observed' : 'funder-published'
+      }, ${INSTRUMENT_WORDS[entry.instrument]}${sourceSuffix(entry)}`}
+    >
+      {entry.programName}
+    </Link>
+  );
+}
+
+function OpensMark({ entry }: { entry: CalendarEntry }): JSX.Element {
+  return (
+    <Link
+      to={`/o/${entry.programId}`}
+      className="opens-mark"
+      aria-label={`${entry.programName}: funder-published window opens today${sourceSuffix(entry)}`}
+    >
+      Opens: {entry.programName}
+    </Link>
+  );
+}
+
+function PrepMark({ entry }: { entry: CalendarEntry }): JSX.Element {
+  return (
+    <Link
+      to={`/o/${entry.programId}`}
+      className="prep-mark"
+      aria-label={`Start preparing ${entry.programName}, ${String(
+        entry.prepLeadDays,
+      )} days before it ${cycleSpan(entry.cycle)}${sourceSuffix(entry)}`}
+    >
+      Start preparing: {entry.programName}
+    </Link>
+  );
+}
+
+/**
+ * A fold, whose SUMMARY states its own size and names the date everything inside it rides.
+ *
+ * The summary is the whole honesty argument for grouping at all: a reader who never opens it still
+ * knows exactly how many marks this day holds and which single deadline governs them.
+ */
+function OwnerFold({
+  group,
+  note,
+  children,
+}: {
+  group: OwnerGroup;
+  note: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <details className="chip-group">
+      <summary>
+        {group.entries.length} programmes ride {group.ownerName}’s deadline
+      </summary>
+      {/*
+        No "open the owner" link here on purpose: the owner's own mark is already in this cell in
+        every case the corpus produces, and a second link to the same target would double every
+        chip count taken off this grid.
+      */}
+      <div className="chip-group-body">
+        <p className="chip-group-note">{note}</p>
+        {children}
+      </div>
+    </details>
+  );
 }
 
 export interface MonthGridProps {
@@ -135,6 +293,9 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
                 }
                 const key = cellDay(day);
                 const label = `${day.getUTCDate()} ${monthName} ${year}`;
+                const closes = groupByDeadlineOwner(closesOn.get(key) ?? []);
+                const opens = groupByDeadlineOwner(opensOn.get(key) ?? []);
+                const preps = groupByDeadlineOwner(prepsOn.get(key) ?? []);
                 return (
                   <td
                     key={key}
@@ -144,48 +305,57 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
                   >
                     <span className="num">{day.getUTCDate()}</span>
 
-                    {(closesOn.get(key) ?? []).map((entry) => (
-                      <Link
-                        key={`close-${entry.cycle.id}`}
-                        to={`/o/${entry.programId}`}
-                        className={[
-                          'chip',
-                          `inst-${entry.instrument}`,
-                          entry.applicantEntities.includes('individual') ? 'ent-individual' : '',
-                          entry.isEstimated ? 'estimated' : '',
-                        ]
-                          .filter(Boolean)
-                          .join(' ')}
-                        aria-label={`${entry.programName}: ${cycleSpan(entry.cycle)}, ${
-                          entry.isEstimated ? 'projected, not observed' : 'funder-published'
-                        }, ${INSTRUMENT_WORDS[entry.instrument]}`}
+                    {closes.solo.map((entry) => (
+                      <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
+                    ))}
+                    {closes.groups.map((group) => (
+                      <OwnerFold
+                        key={`close-group-${group.ownerId}`}
+                        group={group}
+                        note={`One date, ${String(group.entries.length)} applications. They are not ${String(
+                          group.entries.length,
+                        )} deadlines: ${group.ownerName} sets this date, so clearing that one is what clears all of them, and a change to it moves every one.`}
                       >
-                        {entry.programName}
-                      </Link>
+                        {group.entries.map((entry) => (
+                          <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
+                        ))}
+                      </OwnerFold>
                     ))}
 
-                    {(opensOn.get(key) ?? []).map((entry) => (
-                      <Link
-                        key={`open-${entry.cycle.id}`}
-                        to={`/o/${entry.programId}`}
-                        className="opens-mark"
-                        aria-label={`${entry.programName}: funder-published window opens today`}
+                    {opens.solo.map((entry) => (
+                      <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
+                    ))}
+                    {opens.groups.map((group) => (
+                      <OwnerFold
+                        key={`open-group-${group.ownerId}`}
+                        group={group}
+                        note={`One window opening, ${String(
+                          group.entries.length,
+                        )} applications: ${group.ownerName} published this date and they all read it off that record.`}
                       >
-                        Opens: {entry.programName}
-                      </Link>
+                        {group.entries.map((entry) => (
+                          <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
+                        ))}
+                      </OwnerFold>
                     ))}
 
-                    {(prepsOn.get(key) ?? []).map((entry) => (
-                      <Link
-                        key={`prep-${entry.cycle.id}`}
-                        to={`/o/${entry.programId}`}
-                        className="prep-mark"
-                        aria-label={`Start preparing ${entry.programName}, ${String(
-                          entry.prepLeadDays,
-                        )} days before it ${cycleSpan(entry.cycle)}`}
+                    {preps.solo.map((entry) => (
+                      <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
+                    ))}
+                    {preps.groups.map((group) => (
+                      <OwnerFold
+                        key={`prep-group-${group.ownerId}`}
+                        group={group}
+                        note={`One runway, ${String(
+                          group.entries.length,
+                        )} applications. They start on the same day because they end on the same day — ${
+                          group.ownerName
+                        }'s.`}
                       >
-                        Start preparing: {entry.programName}
-                      </Link>
+                        {group.entries.map((entry) => (
+                          <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
+                        ))}
+                      </OwnerFold>
                     ))}
                   </td>
                 );

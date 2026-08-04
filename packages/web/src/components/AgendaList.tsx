@@ -14,6 +14,18 @@ import { TrustBadge } from './TrustBadge.js';
 import './calendar.css';
 
 /**
+ * PLAN-LOCAL mirror of the server's `CalendarDeadlineSource` (`api/calendarRouter.ts`).
+ *
+ * `'stated'` — this programme published the window itself. `'inherited'` — the date was read off
+ * ANOTHER programme's record, which is named, because 112 of the 150 publishable programmes ride
+ * the ARRL Foundation scholarship portal's single window and a date with no attribution asserts
+ * that the funder in front of you published it.
+ */
+export type CalendarDeadlineSource =
+  | { kind: 'stated' }
+  | { kind: 'inherited'; fromProgramId: string; fromProgramName: string };
+
+/**
  * PLAN-LOCAL mirror of the server's `CalendarEntry` (`api/calendarRouter.ts`).
  *
  * It is a hand-written copy because the import direction is one-way — `web -> core`, never
@@ -37,6 +49,11 @@ export interface CalendarEntry {
    * entire reason this screen exists.
    */
   isEstimated: boolean;
+  /**
+   * WHOSE deadline this is. Orthogonal to `isEstimated`, which says how the date was ARRIVED at:
+   * an inherited date can be projected or funder-published, and both facts are rendered.
+   */
+  deadlineSource: CalendarDeadlineSource;
   prepLeadDays: number;
   prepStartAt: string | null;
   prepNote: string;
@@ -183,6 +200,26 @@ export function AgendaList({ entries, now }: AgendaListProps): JSX.Element {
                 }
               >
                 {entry.isEstimated ? 'Projected, not observed' : 'Funder-published'}
+              </span>
+
+              {/*
+                WHOSE date this is, said on every row rather than only on the odd ones. 112 of the
+                150 publishable programmes hold no deadline of their own; printing that date with
+                no attribution asserts that the funder named on this card published it. The owner
+                is LINKED because the row's practical advice is "the thing you actually submit to
+                is over there" — one ARRL portal application covers 111 of these catalog entries.
+              */}
+              <span className="source">
+                {entry.deadlineSource.kind === 'inherited' ? (
+                  <>
+                    Date inherited from{' '}
+                    <Link to={`/o/${entry.deadlineSource.fromProgramId}`}>
+                      {entry.deadlineSource.fromProgramName}
+                    </Link>
+                  </>
+                ) : (
+                  'Deadline stated by this programme'
+                )}
               </span>
             </div>
 

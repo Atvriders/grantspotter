@@ -10,7 +10,7 @@ import type {
   ProgramStatus,
   Verdict,
 } from '@grantspotter/core';
-import { expandCycles, matchAll, observedCycles } from '@grantspotter/core';
+import { expandCycles, matchAll, observedCycles, resolveDeadlineOwner } from '@grantspotter/core';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { isDoNotPublish } from '../normalize/index.js';
 import type { RouterDeps } from './deps.js';
@@ -19,6 +19,25 @@ import { loadActiveProfile, type ProfileKind } from './profileStore.js';
 import { HORIZON_DAYS } from './reindex.js';
 import { watchedProgramIds } from './watchRouter.js';
 import { prepLeadFor, prepStartFor } from './prepLead.js';
+
+/**
+ * PLAN-LOCAL to Plan 3. WHERE THIS ENTRY'S DATE CAME FROM, resolved.
+ *
+ * `'stated'` means this programme published the window itself. `'inherited'` means the dates were
+ * read off ANOTHER programme's record — and it names that programme, because "inherited" without a
+ * name is a shrug, not an answer.
+ *
+ * TWO KINDS ARE ENOUGH, and that is a property of core rather than an assumption here.
+ * `resolveDeadlineOwner` returns the INPUT programme when the declared owner is absent from the
+ * corpus or the chain loops, which read naively would make a dangling inheritance look self-stated.
+ * It cannot reach an entry: such a programme still carries `deadline.kind: 'inherited'` after
+ * resolution, and both cycle functions test the OWNER's kind — `'inherited'` is in core's
+ * `KINDS_WITH_NO_CYCLE` and absent from its `PROJECTABLE_KINDS` — so it produces no cycle at all
+ * and can only land in `undated`. `calendarRouter.test.ts` pins that, and fails if either set moves.
+ */
+export type CalendarDeadlineSource =
+  | { kind: 'stated' }
+  | { kind: 'inherited'; fromProgramId: string; fromProgramName: string };
 
 /** PLAN-LOCAL to Plan 3. One dated deadline, with everything the wall needs. */
 export interface CalendarEntry {
@@ -36,6 +55,16 @@ export interface CalendarEntry {
    * to reach one level deeper to find it is a UI that will eventually forget.
    */
   isEstimated: boolean;
+  /**
+   * Which programme's deadline this actually is.
+   *
+   * 112 of the 150 publishable records inherit their deadline from the ARRL Foundation scholarship
+   * portal, so December 2026 stacks 113 entries on one day of which 112 are one portal date. Both
+   * `expandCycles` and `observedCycles` already resolve that inheritance internally and then
+   * discard the answer; without it on the entry a chip cannot say whose date it is, and a user
+   * reads 113 coincidences instead of one deadline that 112 applications share.
+   */
+  deadlineSource: CalendarDeadlineSource;
   prepLeadDays: number;
   prepStartAt: string | null;
   prepNote: string;
@@ -238,6 +267,15 @@ export function createCalendarRouter(deps: RouterDeps): Router {
       if (inWindow.length === 0) continue;
 
       const lead = prepLeadFor(program);
+      // The SAME resolution both cycle functions ran to produce `inWindow`, kept this time. There
+      // is no second definition of inheritance here: `resolveDeadlineOwner` is core's, called with
+      // the same corpus, so the owner named on the chip is the record the dates were read off.
+      const owner = resolveDeadlineOwner(program, programs);
+      const deadlineSource: CalendarDeadlineSource =
+        owner.id === program.id
+          ? { kind: 'stated' }
+          : { kind: 'inherited', fromProgramId: owner.id, fromProgramName: owner.name };
+
       for (const cycle of inWindow) {
         entries.push({
           cycle,
@@ -248,6 +286,7 @@ export function createCalendarRouter(deps: RouterDeps): Router {
           instrument: program.amount.instrument,
           applicantEntities: program.applicantEntities,
           isEstimated: cycle.isEstimated,
+          deadlineSource,
           prepLeadDays: lead.prepLeadDays,
           prepStartAt: prepStartFor(cycle.closesAt ?? null, lead.prepLeadDays),
           prepNote: lead.note,

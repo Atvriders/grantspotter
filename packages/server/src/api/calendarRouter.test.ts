@@ -9,9 +9,14 @@ import {
   starProgram,
   arrlClubGrant,
   arrlScholarship,
+  qcwaScholarship,
 } from '../test/fixtures/programs.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
+// The 150 publishable records the product would actually show, built offline from the committed
+// fixtures. Precedent for importing it from a server test: `normalize/index.test.ts`,
+// `normalize/licenseFloorContract.test.ts` and both `normalize/axes/*` contract tests.
+import { loadCorpus } from '../../../../scripts/profile-corpus.js';
 import { contextForSource } from '../crawl/context.js';
 import { DO_NOT_PUBLISH_TAG, normalizeRaw } from '../normalize/index.js';
 import { TIER_D_RECORDS, manualTierD } from '../sources/manual-tier-d.js';
@@ -311,4 +316,191 @@ describe('GET /api/calendar', () => {
     expect(warned.status).toBe('discontinued');
     expect(JSON.stringify(res.body)).not.toMatch(/farweb\.org/i);
   });
+
+  /**
+   * ADDED BY TASK 21. A CHIP CANNOT NAME WHERE ITS DATE CAME FROM IF THE ENTRY DOES NOT CARRY IT.
+   *
+   * 112 of the 150 publishable programmes hold `deadline.source = {kind: 'inherited',
+   * fromProgramId}` and ride the ARRL Foundation scholarship portal's single window. The router has
+   * always resolved that — both `expandCycles` and `observedCycles` call `resolveDeadlineOwner`
+   * internally — but it resolved it and then THREW THE ANSWER AWAY, so every entry arrived at the
+   * UI looking equally self-owned. December 2026 then rendered 113 chips on one cell that read as
+   * 113 independent deadlines which happen to coincide, when 112 of them are one portal date.
+   *
+   * The claim is symmetric and both halves are asserted: an inherited entry NAMES its owner, and a
+   * directly-stated one does NOT claim inheritance. A field that only ever said "inherited" would
+   * be as useless as no field at all.
+   */
+  it('names the programme an inherited deadline came from, and claims nothing for a stated one', async () => {
+    const res = await request(buildApp(db)).get(`/api/calendar?${WINDOW}`);
+    const qcwa = res.body.entries.find(
+      (e: { programId: string }) => e.programId === 'qcwa-memorial-scholarship',
+    );
+    expect(qcwa.deadlineSource).toEqual({
+      kind: 'inherited',
+      fromProgramId: 'arrl-foundation-scholarship',
+      fromProgramName: 'ARRL Foundation Scholarship Program',
+    });
+    // ...and the programme that actually states the window says exactly that, not "inherited".
+    const arrl = res.body.entries.find(
+      (e: { programId: string }) => e.programId === 'arrl-foundation-scholarship',
+    );
+    expect(arrl.deadlineSource).toEqual({ kind: 'stated' });
+    expect(arrlScholarship.deadline.source.kind).toBe('self');
+
+    // Every entry carries one or the other. There is no third, unlabelled state on the wire.
+    for (const e of res.body.entries) {
+      expect(['stated', 'inherited']).toContain(e.deadlineSource.kind);
+    }
+  });
+
+  /**
+   * ADDED BY TASK 21, and the reason `deadlineSource` needs only TWO kinds.
+   *
+   * `resolveDeadlineOwner` hands back the INPUT programme when the owner is absent from the corpus
+   * or the chain loops — "an incomplete corpus must not fabricate dates". Read naively that would
+   * make a dangling inheritance indistinguishable from a self-stated deadline, and the entry would
+   * claim "stated by this programme" about a record that says in so many words that it does not
+   * state its own dates. That is the lie this field exists to prevent, so it must be unreachable
+   * rather than merely unlikely.
+   *
+   * It is unreachable STRUCTURALLY, and this pins why: a programme whose chain does not resolve
+   * still carries `deadline.kind: 'inherited'` after resolution, and core tests the OWNER's kind —
+   * `'inherited'` is in `KINDS_WITH_NO_CYCLE` (observedCycles) and absent from `PROJECTABLE_KINDS`
+   * (expandCycles). So it yields no cycle at all and can only ever land in `undated`. If either set
+   * ever changes, this test fails and `deadlineSource` needs a third kind before it ships.
+   */
+  it('never turns a dangling inheritance into an entry that claims it stated its own date', async () => {
+    const orphan: Program = {
+      ...qcwaScholarship,
+      id: 'orphan-scholarship',
+      name: 'Scholarship riding a programme this corpus does not hold',
+      deadline: {
+        kind: 'inherited',
+        source: { kind: 'inherited', fromProgramId: 'a-programme-that-is-not-here' },
+        note: qcwaScholarship.deadline.note,
+      },
+    };
+    createProgramRepo(db).upsert(orphan);
+
+    const res = await request(buildApp(db))
+      .get('/api/calendar?from=2026-08-01T00:00:00.000Z&to=2029-01-01T00:00:00.000Z');
+    expect(res.status).toBe(200);
+    const dated = res.body.entries.filter(
+      (e: { programId: string }) => e.programId === 'orphan-scholarship',
+    );
+    expect(dated).toEqual([]);
+    const undated = res.body.undated.map((u: { programId: string }) => u.programId);
+    expect(undated).toContain('orphan-scholarship');
+  });
+});
+
+/**
+ * ADDED BY TASK 21 — the acceptance evidence, taken from the REAL corpus through the REAL router.
+ *
+ * The fixture corpus above holds one inherited programme. The shipped corpus holds 112, all riding
+ * the same portal, and that ratio IS the defect: a December cell with 113 chips on it is not a busy
+ * month, it is one deadline wearing 113 hats. Numbers asserted here are measured, not assumed, and
+ * they are the same numbers the report carries.
+ */
+describe('GET /api/calendar — the real corpus', () => {
+  let db: Database.Database;
+  let app: express.Express;
+
+  /** `loadCorpus` re-parses every committed fixture — about eight seconds. Once for the file. */
+  let cached: ReturnType<typeof loadCorpus> | undefined;
+
+  beforeEach(async () => {
+    cached ??= loadCorpus();
+    const { programs } = await cached;
+    db = openTestDb();
+    const funderRepo = createFunderRepo(db);
+    const programRepo = createProgramRepo(db);
+    const seen = new Set<string>();
+    for (const program of programs) {
+      if (!seen.has(program.funderId)) {
+        seen.add(program.funderId);
+        funderRepo.upsert({ id: program.funderId, name: program.funderId, homepage: '' });
+      }
+      programRepo.upsert(program);
+    }
+    app = buildApp(db);
+  }, 60_000);
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('names the ARRL portal on every December chip that rides it, and on no other', async () => {
+    const res = await request(app)
+      .get('/api/calendar?from=2026-12-01T00:00:00.000Z&to=2026-12-31T23:59:59.999Z');
+    expect(res.status).toBe(200);
+
+    // Measured 2026-08-02: 113 chips, every one of them on 2026-12-30 in America/New_York.
+    expect(res.body.entries).toHaveLength(113);
+
+    const inherited = res.body.entries.filter(
+      (e: { deadlineSource: { kind: string } }) => e.deadlineSource.kind === 'inherited',
+    );
+    const stated = res.body.entries.filter(
+      (e: { deadlineSource: { kind: string } }) => e.deadlineSource.kind === 'stated',
+    );
+    expect(inherited).toHaveLength(112);
+    expect(stated).toHaveLength(1);
+
+    // One owner, named, for all 112 — and it is the one programme that states the date itself.
+    const owners = new Set(
+      inherited.map((e: { deadlineSource: { fromProgramId: string } }) => e.deadlineSource.fromProgramId),
+    );
+    expect(owners.size).toBe(1);
+    expect([...owners][0]).toBe(stated[0].programId);
+    for (const e of inherited) {
+      expect(e.deadlineSource.fromProgramName).toBe('ARRL Foundation Scholarship Program');
+    }
+    expect(stated[0].programName).toBe('ARRL Foundation Scholarship Program');
+  }, 60_000);
+
+  /**
+   * The counts this change must NOT move. Carrying a new field is not licence to change what is on
+   * the wall: the same 113 December entries, the same 3 in September of which 2 are the funder's
+   * own, and the same horizon-wide 28 undated in every window.
+   */
+  it('changes no count as a side effect of carrying the source', async () => {
+    const at = async (from: string, to: string) => {
+      const res = await request(app).get(`/api/calendar?from=${from}&to=${to}`);
+      expect(res.status).toBe(200);
+      const entries = res.body.entries as Array<{ isEstimated: boolean }>;
+      return {
+        total: entries.length,
+        projected: entries.filter((e) => e.isEstimated).length,
+        published: entries.filter((e) => !e.isEstimated).length,
+        undated: (res.body.undated as unknown[]).length,
+      };
+    };
+
+    expect(await at('2026-09-01T00:00:00.000Z', '2026-09-30T23:59:59.999Z')).toEqual({
+      total: 3,
+      projected: 1,
+      published: 2,
+      undated: 28,
+    });
+    expect(await at('2026-12-01T00:00:00.000Z', '2026-12-31T23:59:59.999Z')).toEqual({
+      total: 113,
+      projected: 113,
+      published: 0,
+      undated: 28,
+    });
+    expect(await at('2026-08-02T12:00:00.000Z', '2027-08-02T12:00:00.000Z')).toEqual({
+      total: 127,
+      projected: 123,
+      published: 4,
+      undated: 28,
+    });
+    expect(await at('2026-08-02T12:00:00.000Z', '2028-02-02T12:00:00.000Z')).toEqual({
+      total: 244,
+      projected: 240,
+      published: 4,
+      undated: 28,
+    });
+  }, 60_000);
 });

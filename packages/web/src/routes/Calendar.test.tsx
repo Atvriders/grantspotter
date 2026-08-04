@@ -37,6 +37,7 @@ const RESPONSE = {
       instrument: 'cash_range',
       applicantEntities: ['individual'],
       isEstimated: false,
+      deadlineSource: { kind: 'stated' },
       prepLeadDays: 30,
       prepStartAt: '2026-11-30T17:00:00.000Z',
       prepNote: 'The ARRL application needs a transcript and references.',
@@ -63,6 +64,7 @@ const RESPONSE = {
       instrument: 'cash_range',
       applicantEntities: ['university', 'club_via_fiscal_sponsor'],
       isEstimated: true,
+      deadlineSource: { kind: 'stated' },
       prepLeadDays: 45,
       prepStartAt: '2026-12-18T00:00:00.000Z',
       prepNote: 'ARDC evaluates for 60 to 120 days after a cycle closes.',
@@ -153,6 +155,43 @@ describe('Calendar', () => {
   it('counts the two kinds, because 4 of 244 cycles being the funder’s own is the point', async () => {
     renderCalendar();
     expect(await screen.findByText(/1 funder-published, 1 projected/i)).toBeInTheDocument();
+  });
+
+  /**
+   * TASK 21. The single most misleading number on this page used to be the entry count itself:
+   * "127 dated cycles" reads as 127 things to prepare, when 112 of them are one ARRL portal
+   * application. The summary now says how many entries ride somebody else's date and names the
+   * programme most of them ride, so the size of the wall is qualified where the size is stated.
+   */
+  it('says how many entries ride another programme’s deadline, and name the one they ride', async () => {
+    stub({
+      ...RESPONSE,
+      entries: [
+        RESPONSE.entries[0],
+        ...Array.from({ length: 4 }, (_, i) => ({
+          ...RESPONSE.entries[1],
+          cycle: { ...RESPONSE.entries[1]!.cycle, id: `rider-${String(i)}` },
+          programId: `rider-${String(i)}`,
+          programName: `Rider ${String(i)}`,
+          deadlineSource: {
+            kind: 'inherited',
+            fromProgramId: 'arrl-foundation-scholarship',
+            fromProgramName: 'ARRL Foundation Scholarship Program',
+          },
+        })),
+      ],
+    });
+    renderCalendar();
+    const summary = await screen.findByText(/4 of them inherit/i);
+    expect(summary).toHaveTextContent(/ARRL Foundation Scholarship Program/);
+    expect(summary).toHaveTextContent(/5 dated cycles/i);
+  });
+
+  /** With nothing inherited there is nothing to qualify, and the sentence stays off the page. */
+  it('says nothing about inheritance when no entry inherits anything', async () => {
+    renderCalendar();
+    await screen.findByRole('list', { name: /agenda/i });
+    expect(screen.queryByText(/inherit/i)).not.toBeInTheDocument();
   });
 
   it('lists the undated programs so they are not silently dropped', async () => {
