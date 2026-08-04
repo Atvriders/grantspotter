@@ -1,0 +1,159 @@
+/* Review queue.
+ *
+ * Every class here is prefixed `inbox-` (or nested under `.inbox`) on purpose: Plan 3's route
+ * stylesheets are all imported into one bundle, so a generic name like `.meta`, `.actions` or
+ * `.move` is a collision with whatever another route happens to call its own version of the same
+ * idea. See the same note at the top of `watchlist.css`.
+ */
+
+.inbox {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.inbox article {
+  padding: var(--s-4);
+  border-left: 3px solid var(--accent);
+  display: grid;
+  gap: var(--s-3);
+}
+
+/* A decided row is history, not work. It stays legible — an audit trail that is hard to read is
+   one nobody checks — but it stops competing with the rows that still need a person. */
+.inbox article.inbox-decided {
+  border-left-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.inbox-title {
+  font-size: var(--fs-400);
+  margin: 0;
+}
+
+/* before → after, side by side. The old value keeps its strike so a glance says which is which
+   without reading the arrow. */
+.inbox-move {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+}
+
+.inbox-was {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.inbox-now {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.inbox-raw {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: var(--fs-100);
+  background: var(--surface-2);
+  padding: var(--s-2);
+  border-radius: var(--r-1);
+  max-height: 14rem;
+  overflow: auto;
+  margin: var(--s-2) 0 0;
+}
+
+.inbox-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+.inbox-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.inbox-summary {
+  color: var(--text-muted);
+  font-size: var(--fs-200);
+  margin: 0 0 var(--s-4);
+}
+
+.inbox-filter {
+  display: flex;
+  gap: var(--s-2);
+  margin-bottom: var(--s-4);
+}
+
+.inbox-filter button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.inbox-note {
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface-2);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin-bottom: var(--s-4);
+  max-width: 76ch;
+}
+
+.inbox-note p:last-child {
+  margin-bottom: 0;
+}
+
+.inbox-outcome {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.inbox-error {
+  padding: var(--s-3);
+  border-left: 3px solid var(--no);
+  background: var(--no-soft);
+  color: var(--text);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin: 0;
+}
+
+/* A blocklisted host is never a link, so the warning has to carry the whole signal itself. */
+.inbox-safety {
+  padding: var(--s-3);
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+  margin: 0;
+}
+
+.inbox-panel {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: var(--surface-2);
+  border-radius: var(--r-1);
+}
+
+.inbox-panel textarea {
+  font: inherit;
+  padding: var(--s-2);
+  min-height: 5rem;
+  width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+}
+
+.inbox-panel .inbox-hint {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  margin: 0;
+}
