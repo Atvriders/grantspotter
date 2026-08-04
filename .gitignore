@@ -2,6 +2,22 @@ node_modules/
 dist/
 build/
 *.log
+
+# Compiler output emitted BESIDE its source, which happens when tsc is run
+# without -outDir. Two reasons this must never be committed or left lying
+# around: on a public repo it is 44 files of noise, and — more seriously — this
+# codebase uses ESM with explicit `.js` extensions on relative imports
+# (`import './amount.js'`), so a stale `amount.js` next to `amount.ts` can win
+# at runtime resolution and quietly test code that no longer exists.
+# The real build output goes to packages/*/dist, already ignored above.
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts.map
+scripts/**/*.js
+scripts/**/*.d.ts
+scripts/**/*.js.map
+scripts/**/*.d.ts.map
 .env
 .env.local
 data/*.sqlite
