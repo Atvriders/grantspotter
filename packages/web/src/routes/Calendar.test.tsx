@@ -273,3 +273,59 @@ describe('Calendar', () => {
     }
   });
 });
+
+/**
+ * The screen with NO `now` prop — which is the only way the router ever renders it, and the one
+ * configuration nothing above covers.
+ *
+ * Every test in the block above passes `now={NOW}`. That fixes the timestamp, which is exactly
+ * the input that was never broken. Rendered as the app renders it, `nowISO` was
+ * `new Date().toISOString()` evaluated in the render body and interpolated into the `/api/calendar`
+ * query string; since that string is `useApi`'s effect dependency, every response re-rendered the
+ * screen, the clock moved a millisecond, and the new URL was fetched. In Chromium against the real
+ * corpus: 41 requests of 168 kB in 15 seconds and no `networkidle`, forever.
+ */
+describe('Calendar with no injected clock', () => {
+  function renderWithRealClock() {
+    return render(
+      <MemoryRouter>
+        <Calendar />
+      </MemoryRouter>,
+    );
+  }
+
+  it('asks for its window ONCE and never re-asks for a window a millisecond wider', async () => {
+    renderWithRealClock();
+    await screen.findByRole('list', { name: /agenda/i });
+
+    // Real elapsed time, not fake timers: the loop is driven by the wall clock advancing between
+    // renders, and freezing the clock is precisely what would hide it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Two re-renders that mint nothing new — with the defect, each one changed the URL.
+    await userEvent.click(screen.getByRole('tab', { name: /month/i }));
+    await userEvent.click(screen.getByRole('tab', { name: /agenda/i }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const urls = fetchMock.mock.calls
+      .map((call) => String((call as [string])[0]))
+      .filter((url) => url.startsWith('/api/calendar'));
+
+    expect(new Set(urls).size, `the window drifted across renders: ${urls.join(' | ')}`).toBe(1);
+    expect(urls).toHaveLength(1);
+  });
+
+  it('holds the window it opened with, so a month step is measured against a fixed horizon', async () => {
+    renderWithRealClock();
+    await screen.findByRole('list', { name: /agenda/i });
+    const first = String((fetchMock.mock.calls[0] as [string])[0]);
+
+    await userEvent.click(screen.getByRole('tab', { name: /month/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /next month/i }));
+    await userEvent.click(screen.getByRole('button', { name: /next month/i }));
+
+    const urls = fetchMock.mock.calls
+      .map((call) => String((call as [string])[0]))
+      .filter((url) => url.startsWith('/api/calendar'));
+    expect(urls).toEqual([first]);
+  });
+});

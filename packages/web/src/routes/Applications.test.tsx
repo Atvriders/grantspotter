@@ -18,6 +18,8 @@ import { ProseCheckPanel } from '../components/ProseCheckPanel.js';
 import { auditA11y } from '../test/a11y.js';
 import type { DensityDTO, FactItemDTO, ProseReportDTO } from '../api/writing.js';
 import { ApplicationsScreen } from './Applications.js';
+import { AppShell } from '../components/AppShell.js';
+import { SessionContext, makeSessionValue } from '../store/session.js';
 
 const REPORT: ProseReportDTO = {
   paragraphs: [
@@ -736,5 +738,47 @@ describe('ApplicationsScreen deep link', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText(/No funder overlay has been written/)).toBeTruthy());
+  });
+});
+
+/**
+ * The regression this file could not previously see, rendered the way the router draws it.
+ *
+ * Every other test above renders `ApplicationsScreen` bare, and that is why this screen shipped
+ * with `<main className="draft-editor">` inside `AppShell`'s `<main id="main">` — two `main`
+ * landmarks on the composed page, invalid HTML, an ambiguous skip-link target, and a
+ * strict-mode violation for `page.getByRole('main')`. Both halves tested clean in isolation.
+ *
+ * `AppShell.test.tsx` carries the general guard (the shell is the only component in the package
+ * that may render a `main`, so the NEXT route is covered too). This one is the specific case,
+ * rendered rather than read: the shell wrapped around the real screen, counted in a real DOM.
+ */
+describe('ApplicationsScreen composed inside the shell', () => {
+  it('adds no second main landmark to the page the router actually draws', async () => {
+    stubScreenFetch();
+    const { container } = render(
+      <MemoryRouter initialEntries={['/applications?programId=ardc-grants&funderId=ardc&klass=ham_grant']}>
+        <SessionContext.Provider
+          value={makeSessionValue({
+            user: { id: 'u-1', email: 'member@example.com', role: 'member' },
+            unread: 0,
+          })}
+        >
+          <AppShell>
+            <ApplicationsScreen />
+          </AppShell>
+        </SessionContext.Provider>
+      </MemoryRouter>,
+    );
+
+    // With the draft open, which is when the editor pane — the element that used to be a
+    // `<main>` — is on screen at all. Counting before that would pass against the bug.
+    await openTheDraft();
+
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main');
+    // And the editor is still there, inside it — the fix must not have removed the pane.
+    expect(within(screen.getByRole('main')).getByRole('heading', { name: 'Draft' })).toBeTruthy();
   });
 });

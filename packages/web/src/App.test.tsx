@@ -248,14 +248,19 @@ describe('App', () => {
         }),
       ),
     );
-    renderAt('/');
+    const { container } = renderAt('/');
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: /primary/i })).not.toBeInTheDocument();
+
+    // Login is a page ROOT: `Authenticated` returns it instead of the shell, so its own
+    // `<main id="main">` is this page's only one. `AppShell.test.tsx`'s source-level guard
+    // allowlists that file on exactly this basis and points here for the proof.
+    expect(container.querySelectorAll('main')).toHaveLength(1);
   });
 
   it('renders Browse inside the shell for a signed-in member', async () => {
     stubSignedIn('member');
-    renderAt('/');
+    const { container } = renderAt('/');
     expect(await screen.findByRole('navigation', { name: /primary/i })).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'Browse opportunities' }),
@@ -264,6 +269,7 @@ describe('App', () => {
     await settle();
     expect(screen.getByRole('heading', { name: 'Browse opportunities' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: /primary/i })).toBeInTheDocument();
+    expect(container.querySelectorAll('main')).toHaveLength(1);
   });
 
   it('routes a program id to the opportunity screen', async () => {
@@ -307,6 +313,41 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: /not found/i })).toBeInTheDocument();
   });
 
+  /**
+   * `/browse` used to fall through to `*`.
+   *
+   * Browse lives at `/`, and the rail links there, so nothing inside the app ever pointed at
+   * `/browse` — but three places in the ship plan use it as the worked example of "a deep client
+   * route survives a hard refresh", and the server's SPA fallback answers ANY GET with the shell.
+   * So `/browse` returned 200 with byte-identical HTML while the screen underneath said "No
+   * GrantSpotter screen answers to that address": a status check that passes over a wrong-address
+   * page. This test is the difference between the two layers agreeing and only appearing to.
+   */
+  it('sends /browse to Browse instead of the not-found screen', async () => {
+    stubSignedIn('member');
+    renderAt('/browse');
+    expect(
+      await screen.findByRole('heading', { name: 'Browse opportunities' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /not found/i })).not.toBeInTheDocument();
+
+    await settle();
+    // `replace`, so Back does not land on the alias and bounce forward again.
+    expect(window.location.pathname).toBe('/');
+    expect(screen.getByRole('heading', { name: 'Browse opportunities' })).toBeInTheDocument();
+  });
+
+  /**
+   * ONE `main` LANDMARK PER COMPOSED PAGE, counted on the tree the router actually draws.
+   *
+   * `/applications` shipped with two: `AppShell`'s `<main id="main">` and a second one inside
+   * `routes/Applications.tsx`. Both files' own tests passed, because each renders ONE component —
+   * the shell around a heading, or the route with no shell. Only the composition is wrong, and
+   * this file is the only place in the package that builds it.
+   *
+   * The loop below therefore counts as well as asserting the heading. `AppShell.test.tsx` carries
+   * the static half, which covers the routes this file has no stubs for.
+   */
   it('registers every Plan 3 route name from CONTRACT §2', async () => {
     // The heading each screen actually carries, which is not always the rail's word for it:
     // `/sources` is "Source health". Matching the rail's label instead would pass against a
@@ -326,6 +367,7 @@ describe('App', () => {
       // eslint-disable-next-line no-await-in-loop
       await settle();
       expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+      expect(view.container.querySelectorAll('main'), `${path} has a nested main`).toHaveLength(1);
       view.unmount();
       vi.unstubAllGlobals();
     }

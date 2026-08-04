@@ -45,6 +45,21 @@ function Authenticated(): JSX.Element {
           inside Browse, which is why there is no `/why` here.
         */}
         <Route path="/" element={<Browse />} />
+        {/*
+          `/browse` is an ALIAS for `/`, not a second screen.
+
+          The rail's "Browse" entry points at `/`, so nothing in the app ever linked here — but
+          `/browse` is the address a user types, bookmarks or is sent by a colleague, and it is the
+          worked example three places in the ship plan use for "a deep client route survives a hard
+          refresh". Without this line all four of those were true only at the HTTP layer: the server
+          hands back the SPA shell for any GET (`api/spa.ts`), so `curl -o /dev/null -w '%{http_code}'
+          /browse` prints 200 and looks right, while the screen underneath renders `NotFound`. A
+          status check that passes over a wrong-address page is worse than one that fails.
+
+          `replace` so the Back button returns to wherever the user came from rather than to the
+          alias, which would bounce them straight forward again.
+        */}
+        <Route path="/browse" element={<Navigate to="/" replace />} />
         <Route path="/o/:programId" element={<Opportunity />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/watchlist" element={<Watchlist />} />

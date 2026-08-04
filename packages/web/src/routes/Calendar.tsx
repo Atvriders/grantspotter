@@ -107,7 +107,33 @@ function monthBounds(year: number, month: number): { start: number; end: number 
  * the one question this screen exists to answer honestly.
  */
 export function Calendar({ now }: { now?: string }): JSX.Element {
-  const nowISO = now ?? new Date().toISOString();
+  /*
+   * READ THIS BEFORE INLINING IT BACK INTO `nowISO`.
+   *
+   * This was `now ?? new Date().toISOString()`, evaluated in the render body, and it made the
+   * page request `/api/calendar` FOREVER. Measured in Chromium against the real corpus: 41
+   * requests of 168 kB each in 15 seconds, ~460 kB/s for as long as the tab stayed open, and the
+   * page therefore never reached `networkidle`.
+   *
+   * The loop is closed by the query string. `nowISO` is interpolated into `from`/`to` below, that
+   * string is the `path` argument to `useApi`, and `path` is in the hook's effect dependencies —
+   * correctly, since a different URL is a different question. So: render mints a timestamp →
+   * fetch → response → `setData` → re-render → the clock has moved a millisecond → a URL that
+   * has never been fetched → fetch. Nothing in it is a retry or a poll; each pass is a first
+   * request for a window one millisecond wide of the last.
+   *
+   * No component test could see it: every one of them passes a fixed `now`, which is exactly the
+   * branch that was never broken. `App.test.tsx` renders this route with no prop, but its
+   * `settle()` helper drains a bounded five passes and a bounded drain of an unbounded loop
+   * terminates and passes.
+   *
+   * A `useState` initializer runs once per mount, so the window is now the moment the screen was
+   * opened and stays that moment. That is also the honest reading: "the next 365 days" is a
+   * question asked once, and re-asking it every few hundred milliseconds against a corpus whose
+   * fastest-moving record changes weekly answers nothing.
+   */
+  const [openedAt] = useState(() => new Date().toISOString());
+  const nowISO = now ?? openedAt;
   const [view, setView] = useState<'agenda' | 'month'>('agenda');
   const [cursor, setCursor] = useState(() => {
     const d = new Date(nowISO);

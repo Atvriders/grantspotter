@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { join } from 'node:path';
 import { createApp } from './app.js';
 import { buildUserAgent, ConfigError, loadConfig, type AppConfig } from './config.js';
@@ -107,7 +108,11 @@ function main(): void {
     { cron: config.crawlCron, enabled: config.crawlEnabled },
     () => runCrawl(crawlDeps),
   );
-  process.on('SIGTERM', () => crawlScheduler.stop());
+  // The SIGTERM handler is registered AFTER app.listen, at the bottom of this
+  // function, because it has to close the listener too. Registering it here —
+  // as this file used to — replaced Node's default terminate-on-SIGTERM with a
+  // handler that stopped the scheduler and then returned, leaving the process
+  // alive and listening forever. See installShutdown below.
 
   // Plan 1's attachUser middleware has already put the authenticated user on
   // req.auth by the time any of these routers run; requireAuth guarantees it,
@@ -184,9 +189,72 @@ function main(): void {
   reindexBrowse(db, now());
   drainChangeEvents(db, now());
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log(`[server] GrantSpotter listening on port ${config.port}`);
   });
+
+  installShutdown({ server, scheduler: crawlScheduler, db });
+}
+
+/**
+ * Stop cleanly when the container does, in the order that makes the next boot safe.
+ *
+ * This process previously registered `SIGTERM` to stop the crawl scheduler and NOTHING ELSE.
+ * Registering any handler for SIGTERM replaces Node's default behaviour, which is to terminate;
+ * a handler that returns without exiting therefore turns SIGTERM into a no-op. The process stayed
+ * alive and listening, `docker stop` waited out its full 10-second grace period on every single
+ * deploy and restart before SIGKILL, and SIGKILL is exactly the way to leave a WAL-mode SQLite
+ * file mid-write. `kill -9` was needed to stop it by hand.
+ *
+ * The order below is the point of the function:
+ *
+ *  1. `server.close()` stops accepting NEW connections and resolves once the open ones finish, so
+ *     a request already in flight gets to write its response instead of losing it.
+ *  2. `closeIdleConnections()` immediately drops keep-alive sockets that are sitting between
+ *     requests. Without it a single browser tab holds `server.close()` open until its socket
+ *     times out, which is the whole grace period again for no work.
+ *  3. Only then the scheduler stops and the database closes. `db.close()` checkpoints the WAL
+ *     back into the main file, which is the difference between a clean restart and a recovery.
+ *  4. `process.exit(0)` — a clean stop is a success, and `docker stop` reads the code.
+ *
+ * The 5-second fallback is for a request that hangs: it fires, says so, and exits non-zero rather
+ * than letting the deploy hang. It is `unref`'d so it can never be the reason the process stays up.
+ *
+ * SIGINT gets the same treatment. Ctrl-C in `npm run dev:server` had the same defect for the same
+ * reason, and a shutdown path that only one signal exercises is a shutdown path nobody tests.
+ */
+function installShutdown(deps: {
+  server: Server;
+  scheduler: ReturnType<typeof startScheduler>;
+  db: ReturnType<typeof openDatabase>;
+}): void {
+  let stopping = false;
+
+  const shutdown = (signal: NodeJS.Signals): void => {
+    // A second signal must not run the teardown twice: closing an already-closed better-sqlite3
+    // handle throws, and an exception here would turn a clean stop into a non-zero exit.
+    if (stopping) return;
+    stopping = true;
+    console.log(`[server] ${signal} received — shutting down`);
+
+    const forced = setTimeout(() => {
+      console.error('[server] connections did not drain in 5s, exiting anyway');
+      process.exit(1);
+    }, 5_000);
+    forced.unref();
+
+    deps.server.close(() => {
+      clearTimeout(forced);
+      deps.scheduler.stop();
+      deps.db.close();
+      console.log('[server] stopped cleanly');
+      process.exit(0);
+    });
+    deps.server.closeIdleConnections();
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 main();
