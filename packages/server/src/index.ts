@@ -12,6 +12,7 @@ import { currentSessionUser, mountProductApi } from './api/mount.js';
 import { createVerifyRunner } from './api/verify.js';
 import { reindexBrowse } from './api/reindex.js';
 import { drainChangeEvents } from './api/notify.js';
+import { importSeedIfEmpty } from './seed/import.js';
 import { SOURCES } from './sources/registry.js';
 // Plan 2's optional transport wiring. It must be identical on the scheduled and
 // the admin-triggered path (RESOLUTIONS R23), which is why the one fetcher that
@@ -75,6 +76,22 @@ function main(): void {
   // which runCrawl gates on — RESOLUTIONS R20) and would throw MissingSchemaError against an
   // unmigrated database.
   ensureIngestionSchema(db);
+
+  // THE FIRST-RUN CORPUS. A fresh install has an empty database, and nothing else in this process
+  // would ever put a funder in front of a user: the crawl is nightly and everything it finds waits
+  // in a review queue for an admin. So the shipped corpus lands here, and only here.
+  //
+  // The position is the whole of it. AFTER migrate(), because the import writes source_id and
+  // external_key. BEFORE startScheduler below, because a crawl against an empty programs table
+  // resolves no existing record for any (sourceId, externalKey) and mints a fresh id for the whole
+  // corpus — after which the seed, arriving second, is the duplicate. And BEFORE the
+  // reindexBrowse() call further down, which is what puts these records into the browse
+  // projection; the importer deliberately does not reindex itself (see seed/import.ts).
+  //
+  // The log line is for the operator: on a fresh container it prints the corpus size at boot, and
+  // on every restart after that it says their reviewed data was left alone.
+  const seedResult = importSeedIfEmpty(db);
+  console.log(`[seed] ${seedResult.reason}`);
 
   const now = (): string => new Date().toISOString();
 
