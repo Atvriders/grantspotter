@@ -45,6 +45,12 @@ const NOT_A_SOURCE_MODULE: ReadonlyMap<string, string> = new Map([
   ['util/dates.ts', 'Date parsing shared by parsers. Pure text helpers, no module.'],
   ['util/ids.ts', 'Stable external-key hashing shared by parsers. Pure, no module.'],
   ['util/payload.ts', 'Payload selection/decoding helpers used by parse() implementations.'],
+  [
+    'util/proseWindow.ts',
+    'Reads a funder\'s window sentence ("open May 1 and close July 31 each year") into month-days, ' +
+      'and a year only when the page prints one. A pure string->object function shared by the four ' +
+      'sources that state a window in prose; no payloads, no module.',
+  ],
   ['util/rss.ts', 'RSS/Atom item extraction shared by the three feed parsers.'],
   ['util/singlePage.ts', 'The single-landing-page parser body that Tier C modules are built from.'],
   ['util/text.ts', 'HTML-to-text flattening and label matching shared by every HTML parser.'],

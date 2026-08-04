@@ -133,7 +133,85 @@ export const RECURRENCE_BY_SOURCE: Readonly<Record<string, string>> = Object.fre
     'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | ' +
     'Opens about Oct 30 and closes Dec 30 at 12:00 PM Eastern. Moved from Jan 31 — never ' +
     'hardcode the old date.',
+
+  /* --------------------------------------------------------------------------------------------
+   * THE THREE YEARLESS ANNUAL RULES (remediation 2026-08-03).
+   *
+   * `sources/util/proseWindow.ts` reads all four prose windows in this corpus. ETP's names its
+   * year ("…OCTOBER 1ST AND OCTOBER 31ST of 2025") and so resolves through the OBSERVED channel —
+   * `rawFields.opensAt`/`closesAt`, ONE dated window, correctly `closed` here because it shut nine
+   * months before this corpus's clock. The other three name a month and a day and NO YEAR
+   * ANYWHERE ON THEIR PAGE, so the parser refuses to date them, and until this entry existed they
+   * had nowhere else to go: `KIND_BY_SOURCE` calls each one an `annual_window`, `inferStatus`'s
+   * GATE 2 asks for the schedule that kind promises, finds none, and publishes `unknown`.
+   *
+   * A RECUR directive is the right home precisely BECAUSE IT CARRIES NO YEAR. `window=MM-DD..MM-DD`
+   * is a rule, and each of these three pages states a rule in its own words — that is the evidence,
+   * quoted per entry below, and nothing here is derived from the clock or from the year a capture
+   * happened to be taken in. The years on those pages are footer copyrights and a post byline; not
+   * one of them reaches this table.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT DO. It does not project an OBSERVED window forward. A window a
+   * funder stated once is one dated window, not a yearly rule — see the OBSERVED DATES block
+   * below, and `core`'s `observedCycles`, which returns at most one row and can generate no
+   * successor. The four `isEstimated: false` rows in this corpus (ARISS 2026-07-01..09-30, Yaesu
+   * 2026-08-31, and the two federal NOFOs) stay exactly four. ETP gets no entry here for the same
+   * reason: its window is dated, so it is observed, not recurring.
+   * ------------------------------------------------------------------------------------------ */
+
+  // "Applications open May 1 and close July 31 each year." — austinhams.org/scholarships/, and the
+  // page says it twice more the same way ("between May 1 and July 31", "each year from May 1
+  // through July 31"). Both ends and the word "each year": a genuine annual WINDOW, the one shape
+  // this kind was built for. America/Chicago is where the club is (Austin, Texas).
+  'austin-arc':
+    'RECUR annual_window tz=America/Chicago window=05-01..07-31 | ' +
+    'Applications open May 1 and close July 31 each year. The club states the window three times ' +
+    'and never states a year; the page\'s only four-digit number is its footer copyright.',
+
+  // "IMPORTANT: All requests for MTT chapter funding must be received by October 1 or the chapter
+  // may be asked to make its application in the following year." — mtt.org. "the following year"
+  // is MTT-S saying this repeats annually; October 1 is the only date it prints.
+  //
+  // ONE DATE, SO OPEN AND CLOSE ARE THE SAME DAY. That is the honest limit of what this page
+  // supports: an open date is not stated anywhere on it, and inventing one — even the obvious
+  // "the day after last year's cutoff" — would be this table asserting a schedule IEEE has not
+  // published, which is the whole thing it exists not to do. The cost is real and is recorded
+  // here rather than hidden: outside October 1, `isInsideStatedWindow` reads this as `closed`,
+  // where the page arguably means "accepted until October 1". See the note below the table.
+  'ieee-mtts':
+    'RECUR annual_window tz=America/New_York window=10-01..10-01 | ' +
+    'All requests for MTT chapter funding must be received by October 1 or the chapter may be ' +
+    'asked to make its application in the following year. No year is printed next to that date.',
+
+  // "Student Branch Annual Plans are due 15 March." — students.ieee.org. An ANNUAL Plan, due on a
+  // month-day, is a rule stated in the programme's own name. Same one-date shape, same limit, and
+  // the same caveat as ieee-mtts above: the two years on that page are the post's 2022 byline and
+  // the site's 2026 copyright, and neither is when a plan is due.
+  'ieee-student-branch-rebate':
+    'RECUR annual_window tz=America/New_York window=03-15..03-15 | ' +
+    'Student Branch Annual Plans are due 15 March. No year is printed next to that date.',
 });
+
+/**
+ * KNOWN COST OF THE TWO ONE-DAY WINDOWS ABOVE, stated because it is the kind of thing this file
+ * keeps having to rediscover from a corpus run.
+ *
+ * `WINDOW_KINDS` + `isInsideStatedWindow` read `annual_window` as "applications are accepted
+ * INSIDE this interval and not outside it", which is exactly right for Austin ARC. The two IEEE
+ * pages state a DEADLINE, not a window, and encoding a deadline as a one-day window therefore
+ * makes them read `closed` on every day but one — a false `closed`, the direction that hides a
+ * live opportunity. It is a smaller error than the `open` these records used to publish and a
+ * more informative one than the `unknown` they published until now (they gain a real calendar
+ * row: the next October 1 / March 15), but it is not nothing.
+ *
+ * The shape that fits them is `n_fixed_dates`, which is deliberately NOT in `WINDOW_KINDS` for
+ * this precise reason (see the comment there): ARDC "accepts proposals continuously and merely
+ * GRADES them on Feb 1 / Apr 1 / Jul 1 / Sep 1", which is the same claim as "must be received by
+ * October 1 or apply in the following year". Moving them means changing their `KIND_BY_SOURCE`
+ * entry too, since `noteFor` requires the directive kind to equal the emitted kind. Left as a
+ * recorded finding rather than done here, because the kind a source publishes is a research
+ * question about the funder and not a side effect of routing its recurrence.
+ */
 
 const KIND_BY_SOURCE: Readonly<Record<string, DeadlineKind>> = Object.freeze({
   'ardc-grants': 'n_fixed_dates', // Feb 1, Apr 1, Jul 1, Sep 1

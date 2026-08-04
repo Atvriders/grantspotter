@@ -1,14 +1,18 @@
-import type { RawOpportunity } from '@grantspotter/core';
-import { parseRecurrence } from '@grantspotter/core';
+import type { Program, RawOpportunity, SourceModule } from '@grantspotter/core';
+import { OBSERVED_WINDOW_MARKER, expandCycles, observedCycles, parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 import { fixturePayload } from '../../test/fixtures.js';
-import { ariss } from '../sources/tier-c-b.js';
+import { cycleHorizonEndISO } from '../review/index.js';
+import { austinArc } from '../sources/tier-c-a.js';
+import { ariss, ieeeMtts, ieeeStudentBranchRebate } from '../sources/tier-c-b.js';
 import { yaesuDr2x } from '../sources/yaesu-dr2x.js';
 import { SOURCES } from '../sources/registry.js';
 import { programIdFor } from '../sources/util/ids.js';
+import { normalizeRaw } from './index.js';
 import {
   DEADLINE_INHERITANCE,
   DEADLINE_OWNER_EXTERNAL_KEY,
+  RECURRENCE_BY_SOURCE,
   deadlineOwnerKey,
   deadlineOwnerProgramId,
   inferDeadline,
@@ -867,15 +871,76 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
   });
 
   it('computes unknown when the kind promises a window and nobody ever stated one', () => {
-    // Four real records sit here: arrl-etp-grants, austin-arc, ieee-mtts and
-    // ieee-student-branch-rebate. Each page prints its window in prose that nothing parses
-    // ("OCTOBER 1ST AND OCTOBER 31ST of 2025" — a window that ended before capture). `unknown`
-    // is honest; `open` was a guess, and NO DATE IS INVENTED to fill the gap.
-    for (const sourceId of ['arrl-etp-grants', 'austin-arc', 'ieee-mtts', 'ieee-student-branch-rebate']) {
+    // GATE 2, and what is left in it. This used to name four sources; three of them now state
+    // their annual rule in RECURRENCE_BY_SOURCE and are resolved by GATE 3 in the test below.
+    // `arrl-etp-grants` is the one that stays here, and deliberately so: its page prints a DATED
+    // window ("OCTOBER 1ST AND OCTOBER 31ST of 2025"), so it resolves through the OBSERVED
+    // channel on a real record and gets no RECUR directive at all. Strip that observed window —
+    // which `rawFields: {}` does — and there is genuinely no schedule left to ask. `unknown` is
+    // honest; `open` was a guess, and NO DATE IS INVENTED to fill the gap.
+    const status = inferStatus(
+      raw({ sourceId: 'arrl-etp-grants', rawFields: {} }),
+      ctx({ sourceId: 'arrl-etp-grants' }),
+    );
+    expect(status).toBe('unknown');
+    expect(status).not.toBe('open');
+  });
+
+  /**
+   * THE THREE YEARLESS ANNUAL RULES, resolved by their RECUR directive and by nothing else.
+   *
+   * Each of these three pages states a rule in prose and prints no year anywhere on itself, so
+   * `sources/util/proseWindow.ts` reads the month-days and refuses to date them, and the record
+   * publishes no `opensAt`/`closesAt` at all — `rawFields: {}` here is the true shape of these
+   * records, not a convenience. What resolves them is the year-free directive, which is exactly
+   * the case a recurrence exists for.
+   *
+   * All three read `closed` against this corpus's clock, 2026-08-02. Austin ARC's is a plain fact
+   * (the window shut on July 31, three days before the capture). The two IEEE entries are a
+   * one-day window standing in for a stated deadline, which is the known cost recorded next to
+   * them in `RECURRENCE_BY_SOURCE` — asserted here so it is a decision on the record rather than
+   * something a later corpus run rediscovers.
+   */
+  it('resolves the three yearless annual rules from their RECUR directive alone', () => {
+    for (const sourceId of ['austin-arc', 'ieee-mtts', 'ieee-student-branch-rebate']) {
       const status = inferStatus(raw({ sourceId, rawFields: {} }), ctx({ sourceId }));
-      expect(status, sourceId).toBe('unknown');
-      expect(status, sourceId).not.toBe('open');
+      expect(status, sourceId).toBe('closed');
+      expect(status, sourceId).not.toBe('unknown');
     }
+  });
+
+  /**
+   * ...AND THE DIRECTIVES ARE READ AGAINST THE PAGES, not trusted because they are written down.
+   *
+   * `RECURRENCE_BY_SOURCE` is a table WE wrote, and `expandCycles` projects a calendar out of it
+   * under the funder's name, so the month-days in it have to be the month-days the funder's own
+   * sentence states. `sources/util/proseWindow.ts` is what reads those sentences off the real
+   * captures (asserted there and in each source's `(REAL fixture)` block); this pins the table to
+   * the same values, so a typo in either one turns red instead of shipping a deadline nobody
+   * published.
+   */
+  it('pins each directive to the month-days its funder actually prints', () => {
+    const windowOf = (sourceId: string): string => {
+      const parsed = parseRecurrence(RECURRENCE_BY_SOURCE[sourceId]);
+      if (parsed.kind !== 'annual_window') throw new Error(`${sourceId} is not an annual_window`);
+      const md = (d: { month: number; day: number }): string =>
+        `${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
+      return `${md(parsed.window.open)}..${md(parsed.window.close)}`;
+    };
+    // "Applications open May 1 and close July 31 each year."
+    expect(windowOf('austin-arc')).toBe('05-01..07-31');
+    // "All requests for MTT chapter funding must be received by October 1 or the chapter may be
+    //  asked to make its application in the following year."
+    expect(windowOf('ieee-mtts')).toBe('10-01..10-01');
+    // "Student Branch Annual Plans are due 15 March."
+    expect(windowOf('ieee-student-branch-rebate')).toBe('03-15..03-15');
+
+    // And no directive smuggles a year in: the whole reason a rule lives here is that it carries
+    // none. `arrl-etp-grants` — whose window IS dated — must have no entry at all.
+    for (const directive of Object.values(RECURRENCE_BY_SOURCE)) {
+      expect(directive.split('|')[0]).not.toMatch(/\b(?:19|20)\d{2}\b/);
+    }
+    expect(RECURRENCE_BY_SOURCE['arrl-etp-grants']).toBeUndefined();
   });
 
   it('leaves ARDC alone: fixed DATES are not windows, and it takes proposals all year', () => {
@@ -898,4 +963,165 @@ describe('inferStatus — a window kind must earn "open" against the stated sche
     const past = raw({ sourceId: 'arrl-amateur-radio-grants', rawFields: { closesAt: '2026-06-30' } });
     expect(inferStatus(past, ctx({ sourceId: 'arrl-amateur-radio-grants' }))).toBe('closed');
   });
+});
+
+/**
+ * THE THREE ANNUAL RULES, END TO END FROM THEIR REAL CAPTURES — page bytes in, calendar rows out.
+ *
+ * Everything above tests `inferStatus` against a hand-built `RawOpportunity`. This runs the actual
+ * committed HTML through the actual source module, through `normalizeRaw`, and into the two
+ * functions `review/index.ts`'s `writeCyclesFor` and `api/reindex.ts` both call — so what is
+ * asserted here is what the product would put on a user's calendar, not what a fixture agrees to.
+ *
+ * The horizon is `cycleHorizonEndISO(NOW)`, the product's own, for the same reason.
+ */
+describe('the three yearless annual rules, from their real captures to their calendar rows', () => {
+  const horizon = cycleHorizonEndISO(NOW);
+
+  const programFor = (
+    module: SourceModule,
+    fixture: string,
+    url: string,
+    sourceId: string,
+    funderId: string,
+  ): Program => {
+    const raws = module.parse([fixturePayload(sourceId, fixture, url)]);
+    expect(raws, `${sourceId} parsed no record from its real capture`).toHaveLength(1);
+    return normalizeRaw(raws[0], ctx({ sourceId, funderId, klass: 'ham_grant' }));
+  };
+
+  const CASES = [
+    {
+      sourceId: 'austin-arc',
+      // "Applications open May 1 and close July 31 each year."
+      sentence: /Applications open May 1 and close July 31 each year\./,
+      program: (): Program =>
+        programFor(
+          austinArc,
+          '00-austinhams-org-scholarships.html',
+          'https://austinhams.org/scholarships/',
+          'austin-arc',
+          'austin-arc',
+        ),
+      // NOW is 2026-08-02: the 2026 window shut on July 31, and 2028's close falls past the
+      // 550-day horizon. One projected cycle, 2027's.
+      closes: ['2027-08-01T04:59:00.000Z'],
+    },
+    {
+      sourceId: 'ieee-mtts',
+      // "…must be received by October 1 or the chapter may be asked to make its application in
+      //  the following year."
+      sentence: /must be received by October 1 or the chapter may be asked/,
+      program: (): Program =>
+        programFor(
+          ieeeMtts,
+          '00-mtt-org-chapter-support.html',
+          'https://mtt.org/chapter-support/',
+          'ieee-mtts',
+          'ieee-mtts',
+        ),
+      closes: ['2026-10-02T03:59:00.000Z', '2027-10-02T03:59:00.000Z'],
+    },
+    {
+      sourceId: 'ieee-student-branch-rebate',
+      // "Student Branch Annual Plans are due 15 March."
+      sentence: /Student Branch Annual Plans are due 15 March\./,
+      program: (): Program =>
+        programFor(
+          ieeeStudentBranchRebate,
+          '00-students-ieee-org-topics-submit-your-student-branch-annual-plan.html',
+          'https://students.ieee.org/topics/submit-your-student-branch-annual-plan/',
+          'ieee-student-branch-rebate',
+          'ieee',
+        ),
+      // 2026's 15 March is behind NOW; 2028's falls past the horizon.
+      closes: ['2027-03-16T03:59:00.000Z'],
+    },
+  ];
+
+  for (const c of CASES) {
+    describe(c.sourceId, () => {
+      const program = c.program();
+
+      it('states the annual rule in its own words, with no year next to it', () => {
+        const raws = [program.rawOtherText, program.summary, program.deadline.note].join(' ');
+        expect(raws.length).toBeGreaterThan(0);
+        expect(c.sentence.test(program.deadline.note)).toBe(true);
+        // The directive half — everything before the first ` | ` — carries no year, by design.
+        expect(program.deadline.note.split('|')[0]).not.toMatch(/\b(?:19|20)\d{2}\b/);
+      });
+
+      it('resolves closed against the 2026-08-02 corpus clock', () => {
+        expect(program.trust.status).toBe('closed');
+        expect(program.trust.status).not.toBe('open');
+        expect(program.trust.status).not.toBe('unknown');
+      });
+
+      it('projects exactly the estimated cycles its rule supports inside the horizon', () => {
+        const projected = expandCycles(program, [program], NOW, horizon);
+        expect(projected.map((x) => x.closesAt)).toEqual(c.closes);
+        expect(projected.every((x) => x.isEstimated)).toBe(true);
+      });
+
+      /**
+       * AND NOT ONE OBSERVED ROW. `observedCycles` is the `isEstimated: false` channel, and it
+       * reads a window a funder DATED. These three pages date nothing, so the record carries no
+       * `published by the funder:` marker and this channel is correctly empty — which is what
+       * keeps a rule from being mistaken for a window somebody actually announced.
+       */
+      it('contributes nothing to the observed channel, because it published no dated window', () => {
+        expect(observedCycles(program, [program], NOW, horizon)).toEqual([]);
+        expect(program.deadline.note).not.toContain(OBSERVED_WINDOW_MARKER);
+      });
+    });
+  }
+});
+
+/**
+ * THE OBSERVED WINDOWS ARE STILL OBSERVED, and still have no successors.
+ *
+ * The risk in routing three yearless rules into `RECURRENCE_BY_SOURCE` is doing the same to a
+ * window a funder stated ONCE — which would publish, say, a 2027 ARISS deadline ARISS has never
+ * announced. This is the guard: the two ham-side records that DO carry a funder-dated window each
+ * yield exactly one `isEstimated: false` row and zero projected ones, from their real captures,
+ * with an 18-month horizon that would comfortably contain a successor if anything generated one.
+ */
+describe('a window a funder stated once is still never projected forward', () => {
+  const horizon = cycleHorizonEndISO(NOW);
+
+  const CASES = [
+    {
+      label: 'ariss',
+      program: (): Program => {
+        const raws = ariss.parse([
+          fixturePayload('ariss', '00-ariss-usa-org-proposal-overview.html', 'https://ariss-usa.org/proposal-overview/'),
+        ]);
+        return normalizeRaw(raws[0], ctx({ sourceId: 'ariss', funderId: 'ariss-usa', klass: 'equipment_in_kind' }));
+      },
+      closesAt: '2026-09-30T23:59:59.999Z',
+    },
+    {
+      label: 'yaesu-dr2x',
+      program: (): Program => {
+        const raws = yaesuDr2x.parse([
+          fixturePayload('yaesu-dr2x', '00-systemfusion-yaesu-com.html', 'https://systemfusion.yaesu.com/dr-2x-repeater-program/'),
+        ]);
+        return normalizeRaw(raws[0], ctx({ sourceId: 'yaesu-dr2x', funderId: 'yaesu', klass: 'equipment_in_kind' }));
+      },
+      closesAt: '2026-08-31T23:59:59.999Z',
+    },
+  ];
+
+  for (const c of CASES) {
+    it(`${c.label} yields exactly one observed cycle and no projected successor`, () => {
+      const program = c.program();
+      const observed = observedCycles(program, [program], NOW, horizon);
+      expect(observed).toHaveLength(1);
+      expect(observed[0].closesAt).toBe(c.closesAt);
+      expect(observed[0].isEstimated).toBe(false);
+      // The successor that must not exist. A `RECUR` directive for either of these would put one
+      // here, one year on, under the funder's name.
+      expect(expandCycles(program, [program], NOW, horizon)).toEqual([]);
+    });
+  }
 });

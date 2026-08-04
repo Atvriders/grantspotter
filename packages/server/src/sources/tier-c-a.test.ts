@@ -392,12 +392,23 @@ describe('austin-arc (REAL fixture)', () => {
   });
 
   /**
-   * The consequence, stated as a test so it cannot silently change: with no resolvable window and
-   * no RECUR directive for this source, `inferStatus`'s window gate has no schedule to ask, and
-   * `unknown` — not `open` — is what the record publishes. That is a worse answer than `closed`
-   * (the capture was taken three days after the window shut) and a much better one than `open`.
+   * The consequence, stated as a test so it cannot silently change.
+   *
+   * This used to assert `unknown`: with no resolvable window and no RECUR directive for this
+   * source, `inferStatus`'s window gate had no schedule to ask, and `unknown` — not `open` — was
+   * what the record published. That was, in this file's own words, "a worse answer than `closed`
+   * (the capture was taken three days after the window shut) and a much better one than `open`".
+   *
+   * The club's "each year" is now carried where a rule belongs, as
+   * `RECUR annual_window tz=America/Chicago window=05-01..07-31` in `normalize/deadline.ts`'s
+   * `RECURRENCE_BY_SOURCE` — a directive with no year in it, built from the very month-days the
+   * test above reads off the page. So the gate has a schedule to ask, and the answer is the better
+   * one: `closed` on 2026-08-02, because July 31 is behind us.
+   *
+   * The refusal it was guarding is untouched and is still asserted here: no `opensAt`/`closesAt`
+   * is published, no `published by the funder` marker appears, and no year reaches the record.
    */
-  it('stays unknown rather than open, because nothing here can date the window', () => {
+  it('reads closed off its stated annual rule, and still publishes no date it was never given', () => {
     const ctx: NormalizeContext = {
       sourceId: 'austin-arc',
       funderId: 'austin-arc',
@@ -408,8 +419,11 @@ describe('austin-arc (REAL fixture)', () => {
       mintId: programIdFor,
     };
     const program = normalizeRaw(raws[0], ctx);
-    expect(program.trust.status).toBe('unknown');
+    expect(program.trust.status).toBe('closed');
+    expect(program.trust.status).not.toBe('open');
     expect(program.deadline.note).not.toContain('published by the funder');
+    expect(program.deadline.note).toContain('RECUR annual_window');
+    expect(program.deadline.note).not.toMatch(/\b(?:19|20)\d{2}\b/);
   });
 });
 
