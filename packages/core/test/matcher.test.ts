@@ -655,12 +655,20 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
       'ARRL Amateur Radio Grants',
       'ARRL Club Grant Program',
       'HamSCI Personal Space Weather Station Expansion',
+      // Both added by the applicant-entity remediation in normalize/index.ts, and both were
+      // reachable by NOBODY before it. NCDXF's grant guidelines name their own audience —
+      // "individuals and groups who use amateur radio communications…" — and had no
+      // ENTITIES_BY_SOURCE entry at all; the NTIA call carries Grants.gov's real applicantTypes
+      // ("Others (see text…)"), which maps to the organisation entities and never to an
+      // individual. A club is exactly who both are for.
+      'NCDXF Grant Program',
+      'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
       'Yaesu System Fusion DR-2X Repeater Program',
     ]);
 
     // Every one of them accepts this club outright: matches.ts only ever evaluates `geography`
     // and `arrl_membership` for an organisation (every other axis is NOT_EVALUABLE for a
-    // non-student profile), and none of these six records carries either constraint in the
+    // non-student profile), and none of these records carries either constraint in the
     // committed fixtures — so a correctly-typed, US-based, ARRL-affiliated club is eligible for
     // all of them. That is a real, code-verified reading of matchProgram, not an assumption.
     for (const program of open) {

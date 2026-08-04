@@ -1,6 +1,16 @@
 import type { RawOpportunity } from '@grantspotter/core';
+import { parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
-import { inferDeadline, inferInstrument, inferStatus } from './deadline.js';
+import { fixturePayload } from '../../test/fixtures.js';
+import { ariss } from '../sources/tier-c-b.js';
+import { yaesuDr2x } from '../sources/yaesu-dr2x.js';
+import {
+  inferDeadline,
+  inferInstrument,
+  inferStatus,
+  observedWindow,
+  parseObservedDate,
+} from './deadline.js';
 import type { NormalizeContext } from './index.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
@@ -365,5 +375,363 @@ describe('inferStatus — inactivity wording about a RETIRED PREDECESSOR is not 
     'The scholarship is discontinued.',
   ])('still fires on %j when the sentence is about this programme', (sentence) => {
     expect(inferStatus(raw({ rawText: sentence }), ctx())).toBe('dormant');
+  });
+});
+
+/* ============================================================================================
+ * OBSERVED DATES — the remediation of write-only-field bug #2 (rawFieldsContract.test.ts).
+ *
+ * `opensAt`, `closesAt`, `openDate`, `closeDate` and `responseDate` were parsed off real funder
+ * pages by three source modules and read by NOTHING: this file contained not one reference to
+ * any of them, so every date the product showed came out of DEADLINE_INHERITANCE, a RECUR
+ * directive or KIND_BY_SOURCE — tables we wrote — never from what the funder printed.
+ * ========================================================================================== */
+
+describe('parseObservedDate — strict, and rejects rather than coerces', () => {
+  it.each([
+    ['2026-09-30', '2026-09-30', 'ISO day, as ARISS / Yaesu / the daily extract emit it'],
+    ['09/09/2026', '2026-09-09', 'MM/DD/YYYY, as Grants.gov search2 emits closeDate'],
+    ['7/4/2026', '2026-07-04', 'single-digit MM/DD/YYYY'],
+    ['Sep 09, 2026 12:00:00 AM EDT', '2026-09-09', 'the long form Grants.gov uses for responseDate'],
+    ['Nov 14, 2026', '2026-11-14', 'the short long-form, with no time'],
+    ['September 30, 2026', '2026-09-30', 'a spelled-out month'],
+    ['2028-02-29', '2028-02-29', 'Feb 29 in a real leap year'],
+  ])('reads %j as %j (%s)', (input, expected) => {
+    expect(parseObservedDate(input)).toBe(expected);
+  });
+
+  it.each([
+    ['', 'blank'],
+    ['   ', 'whitespace'],
+    ['TBD', 'prose, not a date'],
+    ['2026-02-30', 'February has no 30th in any year'],
+    ['2027-02-29', 'February 29 in a NON-leap year'],
+    ['2026-13-01', 'month 13'],
+    ['2026-00-10', 'month 0'],
+    ['13/01/2026', 'a day-first date in a MM/DD/YYYY field'],
+    ['1899-01-01', 'a year no funder is publishing a deadline in'],
+    ['2999-01-01', 'the same, forward'],
+    ['Smarch 9, 2026', 'not a month'],
+    ['2026-09', 'month granularity is not day granularity'],
+    ['09-09-2026', 'an unrecognised separator order'],
+  ])('rejects %j (%s) rather than coercing it into a plausible deadline', (input) => {
+    expect(parseObservedDate(input)).toBeUndefined();
+  });
+
+  it('rejects undefined without throwing', () => {
+    expect(parseObservedDate(undefined)).toBeUndefined();
+  });
+});
+
+describe('observedWindow — which rawFields it reads, and when it refuses', () => {
+  const withFields = (rawFields: Record<string, string>): RawOpportunity => raw({ rawFields });
+
+  it('reads the tier-c-b / yaesu pair', () => {
+    expect(observedWindow(withFields({ opensAt: '2026-07-01', closesAt: '2026-09-30' }))).toEqual({
+      opensAt: '2026-07-01',
+      closesAt: '2026-09-30',
+    });
+  });
+
+  it('reads the federal pair', () => {
+    expect(observedWindow(withFields({ openDate: '07/14/2026', closeDate: '09/09/2026' }))).toEqual({
+      opensAt: '2026-07-14',
+      closesAt: '2026-09-09',
+    });
+  });
+
+  it('falls back to responseDate only when there is no closeDate', () => {
+    expect(
+      observedWindow(withFields({ responseDate: 'Sep 09, 2026 12:00:00 AM EDT' })),
+    ).toEqual({ closesAt: '2026-09-09' });
+    // closeDate wins when both are present: it is the machine field on BOTH federal legs.
+    expect(
+      observedWindow(
+        withFields({ closeDate: '09/09/2026', responseDate: 'Dec 31, 2026 12:00:00 AM EST' }),
+      ),
+    ).toEqual({ closesAt: '2026-09-09' });
+  });
+
+  it('keeps a close-only window (Yaesu publishes no opening date at all)', () => {
+    expect(observedWindow(withFields({ closesAt: '2026-08-31' }))).toEqual({ closesAt: '2026-08-31' });
+  });
+
+  it('never reads postDate as an opening date', () => {
+    // Grants.gov's postDate is when the ROW was posted, not when the funder opens its window.
+    expect(observedWindow(withFields({ postDate: '2026-02-01', closeDate: '05/01/2026' }))).toEqual({
+      closesAt: '2026-05-01',
+    });
+  });
+
+  it('rejects the whole window when the close precedes the open', () => {
+    // Both halves come out of one parsed sentence; if they contradict each other, neither is
+    // trustworthy, and keeping the close alone would let a mis-parse decide open vs closed.
+    expect(observedWindow(withFields({ opensAt: '2026-09-30', closesAt: '2026-07-01' }))).toBeUndefined();
+  });
+
+  it('is undefined when the source published no date at all', () => {
+    expect(observedWindow(withFields({ 'Award Amount': '$5,000' }))).toBeUndefined();
+  });
+});
+
+describe('inferDeadline — ARISS: the dates come from the REAL captured page, not from a table', () => {
+  // The whole point of this remediation, driven end to end: parse the committed capture with the
+  // production parser, then normalize it, and read the dates back out of the DeadlineSpec.
+  // fixtures/ariss/00-ariss-usa-org-proposal-overview.html line 243:
+  //   "Proposal window opened July 1 and closes on September 30 for contacts to be held from
+  //    January to June 2027."  — no year on either end; the capture year supplies it.
+  const arissRaw = ariss.parse([
+    fixturePayload('ariss', '00-ariss-usa-org-proposal-overview.html', 'https://ariss-usa.org/proposal-overview/'),
+  ])[0];
+  const arissCtx = ctx({ sourceId: 'ariss', funderId: 'ariss-usa', klass: 'equipment_in_kind' });
+
+  it('parsed the real window off the page in the first place', () => {
+    expect(arissRaw.rawFields.opensAt).toBe('2026-07-01');
+    expect(arissRaw.rawFields.closesAt).toBe('2026-09-30');
+  });
+
+  it('publishes both of the funder’s own dates in the DeadlineSpec', () => {
+    const spec = inferDeadline(arissRaw, arissCtx);
+    expect(spec.note).toContain('2026-07-01');
+    expect(spec.note).toContain('2026-09-30');
+  });
+
+  it('is not merely the per-source table sentence any more', () => {
+    // The regression: before this fix the note was exactly this and nothing else, for every
+    // ARISS record, forever — which also meant `diffPrograms` could never see the window move.
+    expect(inferDeadline(arissRaw, arissCtx).note).not.toBe(
+      'One window sentence rewritten quarterly at a stable URL.',
+    );
+  });
+
+  it('keeps the funder-stated SHAPE: four windows a year, rewritten quarterly', () => {
+    // A concrete observed window does not turn ARISS into an annual programme. Nothing here may
+    // become projectable, or `expandCycles` would publish a 2027 ARISS deadline ARISS has never
+    // announced.
+    const spec = inferDeadline(arissRaw, arissCtx);
+    expect(spec.kind).toBe('quarterly_rewritten');
+    expect(parseRecurrence(spec.note).kind).toBe('none');
+  });
+
+  it('the window is still open on the capture date, so the status stays open', () => {
+    expect(inferStatus(arissRaw, arissCtx)).toBe('open');
+  });
+});
+
+describe('inferDeadline — Yaesu publishes only a close date, and only that is published', () => {
+  const yaesuRaw = yaesuDr2x.parse([
+    fixturePayload('yaesu-dr2x', '00-systemfusion-yaesu-com.html', 'https://systemfusion.yaesu.com/dr-2x-repeater-program/'),
+  ])[0];
+  const yaesuCtx = ctx({ sourceId: 'yaesu-dr2x', funderId: 'yaesu-usa', klass: 'equipment_in_kind' });
+
+  it('states the real close date from the page prose ("…once again through August 31st, 2026")', () => {
+    expect(yaesuRaw.rawFields.closesAt).toBe('2026-08-31');
+    expect(inferDeadline(yaesuRaw, yaesuCtx).note).toContain('2026-08-31');
+  });
+
+  it('invents no opening date to go with it', () => {
+    expect(yaesuRaw.rawFields.opensAt).toBeUndefined();
+    expect(inferDeadline(yaesuRaw, yaesuCtx).note).not.toMatch(/opens \d{4}-/);
+  });
+});
+
+describe('inferDeadline — a kind that ASSERTS no date cannot survive the funder publishing one', () => {
+  const federalCtx = ctx({ sourceId: 'grants-gov-federal', funderId: 'federal', klass: 'adjacent_stem', tier: 'A' });
+  const pwscif = raw({
+    sourceId: 'grants-gov-federal',
+    externalKey: '363179',
+    name: 'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
+    rawFields: { openDate: '07/14/2026', closeDate: '09/09/2026', oppStatus: 'posted' },
+  });
+
+  it('promotes unpublished to ad_hoc — a federal NOFO with a window is not "no deadline exists"', () => {
+    const spec = inferDeadline(pwscif, federalCtx);
+    expect(spec.kind).toBe('ad_hoc');
+    expect(spec.note).not.toMatch(/never published a deadline/i);
+    expect(spec.note).toContain('2026-07-14');
+    expect(spec.note).toContain('2026-09-09');
+  });
+
+  it('promotes rolling the same way, and only when a date really was published', () => {
+    const rollingCtx = ctx({ sourceId: 'sara', funderId: 'sara', klass: 'equipment_in_kind' });
+    expect(inferDeadline(raw({ rawFields: {} }), rollingCtx).kind).toBe('rolling');
+    expect(inferDeadline(raw({ rawFields: { closesAt: '2027-03-01' } }), rollingCtx).kind).toBe('ad_hoc');
+  });
+
+  it('leaves ad_hoc alone: nothing is promoted twice', () => {
+    expect(
+      inferDeadline(raw({ rawFields: { closesAt: '2026-08-31' } }), ctx({ sourceId: 'yaesu-dr2x' })).kind,
+    ).toBe('ad_hoc');
+  });
+
+  it('never touches no_application_exists — there is no application to have a deadline', () => {
+    // YASME and HamSCI select recipients themselves. A stray date field on such a record is not
+    // an application deadline and must not be published as one.
+    const spec = inferDeadline(
+      raw({
+        sourceId: 'manual-tier-d',
+        rawFields: { deadlineKind: 'no_application_exists', closesAt: '2026-01-01' },
+      }),
+      ctx({ sourceId: 'manual-tier-d', tier: 'D' }),
+    );
+    expect(spec.kind).toBe('no_application_exists');
+    expect(spec.note).not.toContain('2026-01-01');
+  });
+});
+
+describe('inferDeadline — the RECUR calendar survives an observed window untouched', () => {
+  // 112 of 181 candidates ride the arrl-scholarship-program cycle, which `expandCycles` projects
+  // out of the RECUR directive in `note`. `parseRecurrence` reads only as far as the first ` | `,
+  // so appending observed dates to the prose half must leave the projection bit-for-bit identical.
+  const scholarshipCtx = ctx({ sourceId: 'arrl-scholarship-program', deadlineInheritsFrom: undefined });
+
+  it('still emits a directive that parses to the same annual window', () => {
+    const withDates = inferDeadline(
+      raw({ rawFields: { opensAt: '2026-10-30', closesAt: '2026-12-30' } }),
+      scholarshipCtx,
+    );
+    expect(withDates.note.startsWith('RECUR ')).toBe(true);
+    expect(parseRecurrence(withDates.note)).toMatchObject({
+      kind: 'annual_window',
+      timezone: 'America/New_York',
+      window: { open: { month: 10, day: 30 }, close: { month: 12, day: 30 } },
+      closeTime: { hour: 12, minute: 0 },
+    });
+  });
+
+  it('parses identically with and without the appended observed window', () => {
+    const bare = inferDeadline(raw({ rawFields: {} }), scholarshipCtx);
+    const withDates = inferDeadline(
+      raw({ rawFields: { opensAt: '2026-10-30', closesAt: '2026-12-30' } }),
+      scholarshipCtx,
+    );
+    expect(parseRecurrence(withDates.note)).toEqual(parseRecurrence(bare.note));
+    expect(withDates.kind).toBe(bare.kind);
+    expect(withDates.note).toContain('2026-12-30');
+  });
+});
+
+describe('inferDeadline — precedence between an observed date and inheritance', () => {
+  it('keeps all 112 ARRL-catalog entries inheriting: none of them parses a date of its own', () => {
+    const spec = inferDeadline(raw(), ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }));
+    expect(spec.kind).toBe('inherited');
+    expect(spec.source).toEqual({ kind: 'inherited', fromProgramId: 'arrl-foundation-scholarships' });
+  });
+
+  it('lets a record that DID parse its own window own its deadline instead of riding another’s', () => {
+    // The stated precedence rule: a date on the funder's own page outranks another programme's
+    // projected cycle. Unreachable on today's corpus (no inheriting source parses dates), which
+    // is exactly why it is pinned here rather than left true by accident.
+    const spec = inferDeadline(
+      raw({ rawFields: { opensAt: '2027-01-05', closesAt: '2027-02-05' } }),
+      ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+    );
+    expect(spec.source).toEqual({ kind: 'self' });
+    expect(spec.note).toContain('2027-01-05');
+    expect(spec.note).toContain('2027-02-05');
+  });
+
+  it('a window rejected as nonsensical falls straight back to inheritance', () => {
+    const spec = inferDeadline(
+      raw({ rawFields: { opensAt: '2027-02-05', closesAt: '2027-01-05' } }),
+      ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+    );
+    expect(spec.kind).toBe('inherited');
+  });
+});
+
+describe('inferStatus — only the CLOSED direction is asserted from an observed window', () => {
+  const federalCtx = ctx({ sourceId: 'grants-gov-extract', funderId: 'federal', klass: 'adjacent_stem', tier: 'A' });
+
+  it('computes closed when the funder’s own close date has passed', () => {
+    // The real regression this fixes: grants-gov-extract row 354777, the NTIA PWSCIF entry in the
+    // committed daily extract, carries closeDate 2026-05-01 and oppStatus "posted", and published
+    // as `open` three months after it shut.
+    const status = inferStatus(
+      raw({ sourceId: 'grants-gov-extract', externalKey: '354777', rawFields: { closeDate: '2026-05-01', oppStatus: 'posted' } }),
+      federalCtx,
+    );
+    expect(status).toBe('closed');
+    expect(status).not.toBe('open');
+  });
+
+  it('leaves a still-open window open', () => {
+    expect(
+      inferStatus(raw({ rawFields: { closeDate: '2026-11-14' } }), federalCtx),
+    ).toBe('open');
+  });
+
+  it('treats the close DAY as open all day, in the most permissive zone', () => {
+    // A day-precision deadline must not expire early anywhere on earth.
+    expect(inferStatus(raw({ rawFields: { closesAt: '2026-08-02' } }), federalCtx)).toBe('open');
+    expect(inferStatus(raw({ rawFields: { closesAt: '2026-08-01' } }), federalCtx)).toBe('closed');
+  });
+
+  it('does not downgrade a programme whose window has not opened yet', () => {
+    // A future opening is still a live opportunity to prepare for; there is no honest
+    // ProgramStatus for "forecast", and 'unknown' would hide a real call.
+    expect(
+      inferStatus(raw({ rawFields: { openDate: '01/05/2027', closeDate: '03/05/2027' } }), federalCtx),
+    ).toBe('open');
+  });
+
+  it('never asserts closed off an unreadable date', () => {
+    expect(inferStatus(raw({ rawFields: { closeDate: 'TBD' } }), federalCtx)).toBe('open');
+    expect(inferStatus(raw({ rawFields: { closeDate: '2026-02-30' } }), federalCtx)).toBe('open');
+  });
+
+  it('cannot displace any verdict the rules above it already reached', () => {
+    const past = { closesAt: '2020-01-01' };
+    // A researched override still wins.
+    expect(inferStatus(raw({ rawFields: { ...past, status: 'contact_only' } }), federalCtx)).toBe('contact_only');
+    // So does the funder's own inactivity wording...
+    expect(
+      inferStatus(raw({ rawFields: past, rawText: 'This scholarship is not currently active.' }), ctx()),
+    ).toBe('dormant');
+    // ...and an explicitly-unpublished source stays unknown rather than becoming closed.
+    expect(
+      inferStatus(raw({ sourceId: 'ylrl', rawFields: past }), ctx({ sourceId: 'ylrl' })),
+    ).toBe('unknown');
+  });
+});
+
+describe('the behaviours this change had to leave alone', () => {
+  it('the ARRL scholarship cycle stays CLOSED — its page says the 2026 cycle is closed', () => {
+    // arrl-pages.ts represents the closed cycle as rawFields.status and deliberately fabricates
+    // no dates for it. Inheriting a closed cycle is correct; nothing here may turn it open.
+    const arrlCtx = ctx({ sourceId: 'arrl-scholarship-program', deadlineInheritsFrom: undefined });
+    const closedCycle = raw({
+      sourceId: 'arrl-scholarship-program',
+      externalKey: 'scholarship-program',
+      rawFields: { status: 'closed', window: 'The 2026 Scholarship Cycle is now closed.' },
+      rawText: 'The 2026 Scholarship Cycle is now closed.',
+    });
+    expect(inferStatus(closedCycle, arrlCtx)).toBe('closed');
+    // ...and an entry inheriting from it is still inherited, not re-dated.
+    expect(inferDeadline(raw(), ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' })).kind).toBe(
+      'inherited',
+    );
+  });
+
+  it('Winscott stays dormant, YLRL stays unknown, NCDXF W6EEN stays unknown', () => {
+    expect(
+      inferStatus(
+        raw({ rawFields: { Other: 'This scholarship is not currently active.' }, rawText: 'Other: This scholarship is not currently active.' }),
+        ctx({ deadlineInheritsFrom: 'arrl-foundation-scholarships' }),
+      ),
+    ).toBe('dormant');
+    expect(inferStatus(raw({ sourceId: 'ylrl', rawFields: {} }), ctx({ sourceId: 'ylrl' }))).toBe('unknown');
+    const w6een = inferStatus(
+      raw({
+        sourceId: 'ncdxf-scholarships',
+        rawFields: { retiredPredecessor: 'Previous ARRL Foundation Scholarship Program (No Longer Active)' },
+        rawText:
+          'NCDXF will provide full tuition scholarships for hams 25 years of age and younger.\n' +
+          'Previous ARRL Foundation Scholarship Program (No Longer Active)',
+      }),
+      ctx({ sourceId: 'ncdxf-scholarships' }),
+    );
+    expect(w6een).toBe('unknown');
+    expect(w6een).not.toBe('dormant');
   });
 });

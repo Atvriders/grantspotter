@@ -264,7 +264,7 @@ const WRITE_ONLY_BY_DESIGN: ReadonlyMap<string, string> = new Map([
   ['scope', "'named_scholarship' marker on tier-c-a records. Nothing branches on it."],
   ['formTitle', "The Yaesu application form's own heading, kept so a capture can be audited against the live page."],
   ['sustainment', "Yaesu's parsed 12-month on-air requirement. NOT lost: normalize/index.ts states this same obligation for yaesu-dr2x as a literal in OBLIGATIONS_BY_SOURCE, so the parsed copy is a duplicate of a fact the pipeline already carries."],
-  ['windowSource', "Provenance for how yaesu-dr2x derived its opensAt/closesAt — see those two in the defect list below, which is where the actual problem is."],
+  ['windowSource', "Provenance for how yaesu-dr2x derived its opensAt/closesAt: 'pdf_title' or 'page_body'. The DATES are consumed (normalize/deadline.ts's observedWindow); which of the two channels produced them is for a reviewer auditing the capture, and no code branches on it."],
 ]);
 
 /**
@@ -274,20 +274,24 @@ const WRITE_ONLY_BY_DESIGN: ReadonlyMap<string, string> = new Map([
  * on purpose: an entry moving from here to a reader is progress, and an entry moving into here is
  * a decision somebody has to defend.
  *
- * None of them are fixed in this change because every one of them lands in `normalize/deadline.ts`
- * or in `normalize/index.ts`'s per-source tables, which are outside this change's blast radius —
- * and a deadline fix made blind, without re-reading the real captures each source was graded
- * against, is how a wrong deadline gets published, which is the single worst thing this product
- * can do.
+ * SIX OF THE ORIGINAL EIGHT ARE NOW FIXED, and have been deleted from this list rather than
+ * annotated — an entry here means "written and read by nothing", so once a reader exists the
+ * entry is a lie, and the orphan check above is what keeps the key honest from then on:
+ *
+ *   opensAt, closesAt, openDate, closeDate, responseDate — `normalize/deadline.ts`'s
+ *     `observedWindow` reads all five BY NAME (a computed subscript would be invisible to this
+ *     scanner, which is why it does not use one). `inferDeadline` publishes the funder's own
+ *     window in the DeadlineSpec note and promotes a kind that asserted no deadline exists;
+ *     `inferStatus` computes `closed` from a close date the funder published and that has passed.
+ *   applicantTypes — `normalize/index.ts`'s `entitiesFromApplicantTypes` maps Grants.gov's
+ *     eligibility vocabulary onto ApplicantEntity, per record, ahead of ENTITIES_BY_SOURCE.
+ *
+ * The two that remain are untouched for the same reason the six were originally deferred: a fix
+ * made blind, without re-reading the real capture the source was graded against, is how a wrong
+ * fact gets published.
  */
 const WRITE_ONLY_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([
-  ['opensAt', 'DEFECT (bug #2 of this class). tier-c-b and yaesu-dr2x parse a real application window; inferDeadline (normalize/deadline.ts) reads only rawFields.deadlineKind and the per-source RECUR table, so a window a funder actually published never becomes a DeadlineSpec.'],
-  ['closesAt', 'DEFECT (bug #2 of this class). The closing half of the same parsed window, dropped the same way.'],
-  ['openDate', "DEFECT. Grants.gov publishes the opportunity's real open date on the detail leg. inferDeadline reads no date field at all."],
-  ['closeDate', 'DEFECT. The real federal application deadline, on both the detail leg and the daily extract. Nothing reads it, so every federal candidate publishes with a deadline inferred from nothing.'],
-  ['responseDate', 'DEFECT. Grants.gov’s response deadline in long form ("Sep 09, 2026 12:00:00 AM EDT"). Same gap.'],
-  ['oppStatus', "DEFECT. Grants.gov's own posted/closed/forecasted status. inferStatus ALREADY has an override seam — an explicit rawFields.status beats inference — and nothing maps oppStatus onto it, so a federal record's status is guessed while the funder's own answer sits unread."],
-  ['applicantTypes', 'DEFECT. The detail API’s real eligibility list. ENTITIES_BY_SOURCE (normalize/index.ts) has no entry for any federal source, so every federal candidate publishes with applicantEntities: [] while the answer is right here.'],
+  ['oppStatus', "DEFECT. Grants.gov's own posted/closed/forecasted status. inferStatus ALREADY has an override seam — an explicit rawFields.status beats inference — and nothing maps oppStatus onto it, so a federal record's status is inferred from its dates while the funder's own answer sits unread. (The dates are now read; this is the remaining half.)"],
   ['excerpt', "DEFECT. The ARDC REST API's own summary. buildSummary's firstOf list is ['summary','audience','eligibility','__preamble'] and does not include it, so ardc-grants records fall back to a rawText dump."],
 ]);
 
@@ -369,8 +373,17 @@ describe('the rawFields scanner actually sees the tree', () => {
     );
     expect(readersOf('Field of Study', readerSources).length).toBeGreaterThan(0);
     expect(readersOf('pricing', readerSources)).toEqual(['normalize/index.ts']);
-    // The subject of this remediation: the score now reaches a consumer, and this names it.
+    // The subject of the previous remediation: the score now reaches a consumer, and this names it.
     expect(readersOf('adjacencyScore', readerSources)).toEqual(['crawl/runner.ts']);
+    // The subject of THIS one. Named readers, not "somewhere downstream": if a later refactor
+    // moves these back behind a computed subscript the scanner goes blind again, and the whole
+    // defect class comes back silently. That is the failure this pins.
+    for (const key of ['opensAt', 'closesAt', 'openDate', 'closeDate', 'responseDate']) {
+      expect(readersOf(key, readerSources), `${key} must be read by name`).toEqual([
+        'normalize/deadline.ts',
+      ]);
+    }
+    expect(readersOf('applicantTypes', readerSources)).toEqual(['normalize/index.ts']);
   });
 
   it('does not mistake a mention in a comment for a reader', async () => {

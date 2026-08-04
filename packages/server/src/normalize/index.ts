@@ -134,7 +134,7 @@ const APPLY_VIA_BY_SOURCE: Readonly<Record<string, ApplyVia>> = Object.freeze({
   'ardc-award-tables': 'none',
 });
 
-const ENTITIES_BY_SOURCE: Readonly<Record<string, ApplicantEntity[]>> = Object.freeze({
+export const ENTITIES_BY_SOURCE: Readonly<Record<string, ApplicantEntity[]>> = Object.freeze({
   'ardc-grants': ['club_via_fiscal_sponsor', 'club_501c3', 'school_lea', 'university', 'university_dept'],
   'arrl-amateur-radio-grants': ['club_unincorporated', 'club_501c3', 'school_lea', 'university'],
   'arrl-club-grant': ['club_unincorporated', 'club_501c3'],
@@ -151,7 +151,171 @@ const ENTITIES_BY_SOURCE: Readonly<Record<string, ApplicantEntity[]>> = Object.f
   'nasa-csli': ['university', 'school_lea'],
   'yaesu-dr2x': ['club_unincorporated', 'club_501c3', 'individual'],
   sara: ['individual', 'teacher', 'school_lea'],
+  // ADDED with this fix, from the funder's own captured page. NCDXF's grant guidelines
+  // (fixtures/ncdxf-grants/00-www-ncdxf-org-pages-grant-app-html.html) name the audience in one
+  // sentence the parser already extracts as `audience`: "individuals and groups who use amateur
+  // radio communications to advance and promote education, science and international goodwill."
+  // With no entry here it published `applicantEntities: []`, and the matcher's entity gate reads
+  // an empty list as "accepts nobody" — a real, live ham grant that no profile in the corpus
+  // could reach. "Groups" is left at the two club shapes and NOT extended to universities: the
+  // page's own subject is DXpeditions and expedition teams, and it never mentions an institution.
+  'ncdxf-grants': ['individual', 'club_unincorporated', 'club_501c3'],
 });
+
+/**
+ * WHAT AN UNKNOWN APPLICANT-ENTITY LIST MEANS, decided here rather than defaulted.
+ *
+ * `applicantEntities: ENTITIES_BY_SOURCE[ctx.sourceId] ?? []` treated two completely different
+ * findings as the same value: "the funder accepts none of the entities we model" (rare, and a
+ * real answer) and "nobody has established who may apply" (common, and not an answer at all).
+ * `matcher.ts` hard-fails on the empty list either way — its own reason string even reads
+ * "(none recorded)" — so the second one silently barred 76 of 197 candidates from every profile.
+ * That is the same silence-as-prohibition shape as `licenseMin` defaulting to `'NONE'` and
+ * `partTimeOK` defaulting to `false`.
+ *
+ * THE RULE, in precedence order — see `applicantEntitiesFor`:
+ *   1. what the FUNDER published, per record (`rawFields.applicantTypes`), including its own
+ *      explicit refusal to enumerate;
+ *   2. `ENTITIES_BY_SOURCE`, which is our research on that source's own page;
+ *   3. an entry in THIS table, which keeps the empty list but makes it a statement somebody
+ *      signed rather than a value that fell out of a `??`.
+ *
+ * WHY (3) IS STILL EMPTY AND NOT "EVERY ENTITY", measured rather than assumed. Defaulting the
+ * unknown case to every entity was tried against the real corpus: it takes the individual-facing
+ * candidate pool from 121 to 187 and the unlicensed-high-school-senior profile from 2 eligible
+ * programmes to 63 — 45 of those being `nsf-funding-rss` items that `buildReviewItems` already
+ * drops (every one scores 1 or 0 against an adjacency threshold of 6, so no user is ever shown
+ * one), and 16 being `manual-tier-d` records whose own researched status is `no_application` or
+ * `contact_only`. The asymmetry argument for permissiveness holds when a false include costs one
+ * applicant one page-read; it inverts when the false includes outnumber the true answers 30 to 1
+ * and bury them. So the unknown case stays empty AND STAYS VISIBLE: `normalize/index.test.ts`
+ * fails if any candidate-producing source id is absent from both tables, which is what turns the
+ * next new source's blank entity list from a silent exclusion into a build failure.
+ */
+export const ENTITIES_UNKNOWN_BY_SOURCE: Readonly<Record<string, string>> = Object.freeze({
+  'grants-gov-federal':
+    'Per RECORD, not per source: entities come from the detail leg’s rawFields.applicantTypes ' +
+    '(see APPLICANT_TYPE_RULES). A hit whose detail fetch did not run carries no eligibility ' +
+    'list at all, and Grants.gov posts ~5,000 opportunities with no shared audience, so there is ' +
+    'no source-level answer to write here.',
+  'grants-gov-extract':
+    'The daily XML extract publishes no applicant-type element at all — OpportunitySynopsisDetail ' +
+    'carries title, agency, description, dates and status, and nothing about eligibility. The ' +
+    'hydrated search2+detail leg (grants-gov-federal) is where that answer exists.',
+  'nsf-funding-rss':
+    'An NSF solicitation feed: title, link and synopsis, no eligibility field. NSF’s PAPPG ' +
+    'audience is institutional, but the feed never states it per solicitation and guessing it ' +
+    'here would be a table entry with no page behind it. All 45 real items score 1 or 0 against ' +
+    'ADJACENCY_THRESHOLD 6, so buildReviewItems drops every one and none has ever reached a user.',
+  'manual-tier-d':
+    'Sixteen different funders under one source id, so a source-level list cannot be right for ' +
+    'all of them (OBLIGATIONS_BY_RECORD exists for the same reason). Their researched statuses ' +
+    'are mostly no_application or contact_only — YASME and HamSCI select recipients themselves, ' +
+    'the Icom/DXE record is a relationship, and RCA is nominated_by_institution — so an entity ' +
+    'list would describe an application route most of them do not have.',
+  'arrl-foundation-special-funds':
+    'A funder-provenance page for named donor endowments. Its one sentence — "The ARRL Foundation ' +
+    'manages special funds that provide awards to celebrate individual accomplishments and grant ' +
+    'for youth-oriented Amateur Radio activities" — describes what the funds do, never who may ' +
+    'apply, and the page carries no application at all.',
+  'ardc-award-tables':
+    'Every record it produces is recordType past_award, tagged do_not_publish: money already ' +
+    'handed out. Stored as evidence about a funder, never queued and never matched, so it has no ' +
+    'applicant to model.',
+  'nsf-awards': 'Past NSF awards, recordType past_award and do_not_publish. Same as ardc-award-tables.',
+  usaspending:
+    'Past federal obligations, recordType past_award and do_not_publish. Same as ardc-award-tables.',
+  'arrl-summary-of-scholarship-requirements':
+    'A crosscheck-only source (recordType crosscheck, do_not_publish) whose own notes call it ' +
+    'STALE — 79 entries against the catalog’s 111. It corroborates other sources and never ' +
+    'publishes, so it has no applicant of its own.',
+});
+
+/**
+ * Every entity CONTRACT §3 models except `nominated_by_institution`, which is not an applicant
+ * type at all — it is the marker for "you cannot apply; an institution puts you forward", and
+ * `inferStatus` turns it into `contact_only`. Including it in a permissive set would advertise a
+ * direct application route that does not exist.
+ */
+const ALL_APPLICANT_ENTITIES: readonly ApplicantEntity[] = Object.freeze([
+  'individual',
+  'teacher',
+  'club_unincorporated',
+  'club_501c3',
+  'club_via_fiscal_sponsor',
+  'school_lea',
+  'university',
+  'university_dept',
+  'ieee_student_branch_chapter',
+]);
+
+/** The organisation half of the above: everything that is not a natural person. */
+const ORGANISATION_ENTITIES: readonly ApplicantEntity[] = Object.freeze(
+  ALL_APPLICANT_ENTITIES.filter((e) => e !== 'individual' && e !== 'teacher'),
+);
+
+/**
+ * Grants.gov's applicant-type vocabulary, mapped onto the entities CONTRACT §3 models. Matched in
+ * order, first rule wins per listed type, and the results are unioned across the whole list.
+ *
+ * The two non-enumerable values are the interesting ones, and they are NOT the same:
+ *
+ *   "Others (see text field entitled ..." — the funder declining to pick from the vocabulary.
+ *     Mapped to the ORGANISATION entities only, because `Individuals` is itself one of the values
+ *     in that vocabulary: a NOFO open to natural persons selects it, and one that instead reaches
+ *     for "Others" is naming organisation shapes the list cannot express. The committed capture
+ *     confirms it — NTIA PWSCIF lists exactly this value, and its own applicantEligibilityDesc
+ *     reads "The applicant must be organized under the laws of the United States or a State
+ *     thereof, with its principal place of business in the United States", which no individual
+ *     can satisfy. Reading it as "everyone" put a $-millions AI-RAN NOFO in front of an
+ *     unlicensed high-school senior as ELIGIBLE.
+ *
+ *   "Unrestricted (i.e., open to any type of entity above)" — the funder saying every type
+ *     qualifies, `Individuals` included, in so many words. Mapped to everything. Absent from the
+ *     current captures; pinned by test so the distinction cannot rot into the rule above.
+ *
+ * A type with no counterpart here (state/county/city governments, tribal governments, housing
+ * authorities, small businesses, other for-profits) contributes nothing. If a NOFO's whole list
+ * is such types, the mapped result is genuinely empty — and that empty list is the FUNDER's
+ * answer, not our silence.
+ */
+const APPLICANT_TYPE_RULES: ReadonlyArray<{ match: RegExp; entities: readonly ApplicantEntity[] }> =
+  Object.freeze([
+    // Must precede the bare 501(c)(3) rule below — this description contains that string too.
+    { match: /\bdo(?:es)? not have a 501\(c\)\(3\)/i, entities: ['club_unincorporated'] },
+    { match: /\b501\(c\)\(3\)/i, entities: ['club_501c3'] },
+    { match: /institutions? of higher education/i, entities: ['university', 'university_dept'] },
+    { match: /independent school districts?/i, entities: ['school_lea'] },
+    { match: /^individuals\b/i, entities: ['individual'] },
+    { match: /^unrestricted\b/i, entities: ALL_APPLICANT_ENTITIES },
+    { match: /^others\b/i, entities: ORGANISATION_ENTITIES },
+  ]);
+
+/**
+ * `rawFields.applicantTypes` — Grants.gov's real eligibility list, written by `federal/grantsGov.ts`
+ * as `'; '`-joined descriptions — turned into entities. `undefined` when the source published no
+ * list, which is what hands the decision back to the tables above.
+ */
+export function entitiesFromApplicantTypes(value: string | undefined): ApplicantEntity[] | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const found = new Set<ApplicantEntity>();
+  for (const type of value.split(';')) {
+    const text = type.trim();
+    if (text === '') continue;
+    const rule = APPLICANT_TYPE_RULES.find((r) => r.match.test(text));
+    if (rule) for (const entity of rule.entities) found.add(entity);
+  }
+  // Stable order, so two runs of the crawler cannot produce two different contentHashes for the
+  // same record just because a Set iterated differently.
+  return ALL_APPLICANT_ENTITIES.filter((entity) => found.has(entity));
+}
+
+/** Precedence: what the funder published, then our research on the source, then the signed blank. */
+function applicantEntitiesFor(raw: RawOpportunity, ctx: NormalizeContext): ApplicantEntity[] {
+  return (
+    entitiesFromApplicantTypes(raw.rawFields.applicantTypes) ?? ENTITIES_BY_SOURCE[ctx.sourceId] ?? []
+  );
+}
 
 function firstOf(fields: Record<string, string>, keys: string[]): string {
   for (const key of keys) {
@@ -291,7 +455,7 @@ export function normalizeRaw(raw: RawOpportunity, ctx: NormalizeContext): Progra
     name: raw.name,
     klass: ctx.klass,
     summary: buildSummary(raw),
-    applicantEntities: ENTITIES_BY_SOURCE[ctx.sourceId] ?? [],
+    applicantEntities: applicantEntitiesFor(raw, ctx),
     amount: buildAmount(raw, ctx),
     deadline: inferDeadline(raw, ctx),
     applyVia: APPLY_VIA_BY_SOURCE[ctx.sourceId] ?? 'page_form',

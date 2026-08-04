@@ -1,17 +1,24 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
-import { expandCycles, hashProgram, parseRecurrence } from '@grantspotter/core';
+import type { OrgProfile, Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
+import { expandCycles, hashProgram, matchProgram, parseRecurrence } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
+import { fixturePayload } from '../../test/fixtures.js';
+import { grantsGovFederal } from '../sources/grants-gov-federal.js';
 import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
+import { SOURCES } from '../sources/registry.js';
+import { isSignalSource } from '../sources/types.js';
 import { programIdFor } from '../sources/util/ids.js';
 import { DEADLINE_INHERITANCE } from './deadline.js';
 import { DISPUTED_OVERRIDES, sourceKeyOf } from './disputed.js';
 import {
   DO_NOT_PUBLISH_TAG,
+  ENTITIES_BY_SOURCE,
+  ENTITIES_UNKNOWN_BY_SOURCE,
   PUBLISHABLE_RECORD_TYPES,
   SUPPRESSED_RECORD_TYPES,
+  entitiesFromApplicantTypes,
   isDoNotPublish,
   type NormalizeContext,
   normalizeRaw,
@@ -913,5 +920,297 @@ describe('the NCDXF grant intake is a web form, not only an emailed packet', () 
     expect(via('ardc-grants')).toBe('external_spa_portal');
     expect(via('arrl-etp-grants')).toBe('jotform_year_keyed');
     expect(via('manual-tier-d')).toBe('contact_person');
+  });
+});
+
+/* ============================================================================================
+ * APPLICANT ENTITIES — the remediation of write-only-field defect `applicantTypes`, and of the
+ * `?? []` behind it.
+ *
+ * `applicantEntities: ENTITIES_BY_SOURCE[ctx.sourceId] ?? []` collapsed "the funder accepts none
+ * of the entities we model" and "nobody has established who may apply" into one value, and
+ * `matchProgram` hard-fails on an empty list either way — its own reason string reads
+ * "(none recorded)". 76 of 197 candidates were unreachable by every profile in the corpus, the
+ * single genuinely-open federal call among them, while Grants.gov's real eligibility list sat
+ * unread in `rawFields.applicantTypes`.
+ * ========================================================================================== */
+
+describe('no source may accept nobody BY ACCIDENT', () => {
+  /** Every source that produces candidates. Signal-only sources emit change events, not Programs. */
+  const candidateSourceIds = SOURCES.filter((s) => !isSignalSource(s)).map((s) => s.id);
+
+  it('finds the registry it is about to check', () => {
+    expect(candidateSourceIds.length).toBeGreaterThan(20);
+  });
+
+  it('classifies every candidate-producing source as either known or declared-unknown', () => {
+    // THE POINT OF THIS TEST. A new source added with no entity list gets `[]`, which the matcher
+    // reads as "accepts nobody" — silently, with no error and no failing test. This is what turns
+    // that into a build failure: state the audience, or state that nobody has established it.
+    const unclassified = candidateSourceIds
+      .filter((id) => ENTITIES_BY_SOURCE[id] === undefined && ENTITIES_UNKNOWN_BY_SOURCE[id] === undefined)
+      .sort();
+    expect(unclassified).toEqual([]);
+  });
+
+  it('never classifies a source both ways', () => {
+    const both = Object.keys(ENTITIES_BY_SOURCE).filter((id) => ENTITIES_UNKNOWN_BY_SOURCE[id] !== undefined);
+    expect(both).toEqual([]);
+  });
+
+  it('keeps both tables honest: no entry for a source that does not exist', () => {
+    const known = new Set(SOURCES.map((s) => s.id));
+    const stale = [...Object.keys(ENTITIES_BY_SOURCE), ...Object.keys(ENTITIES_UNKNOWN_BY_SOURCE)]
+      .filter((id) => !known.has(id))
+      .sort();
+    expect(stale).toEqual([]);
+  });
+
+  it('gives every declared-unknown a real reason, not a placeholder', () => {
+    for (const [id, reason] of Object.entries(ENTITIES_UNKNOWN_BY_SOURCE)) {
+      expect(reason.length, `${id} needs a reason somebody signed`).toBeGreaterThan(60);
+    }
+  });
+
+  it('never lets a known list be empty — that is what the unknown table is for', () => {
+    for (const [id, entities] of Object.entries(ENTITIES_BY_SOURCE)) {
+      expect(entities.length, `${id} has an empty list in the KNOWN table`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('entitiesFromApplicantTypes — Grants.gov’s own eligibility list', () => {
+  it('is undefined when the source published no list, so the tables decide', () => {
+    expect(entitiesFromApplicantTypes(undefined)).toBeUndefined();
+    expect(entitiesFromApplicantTypes('   ')).toBeUndefined();
+  });
+
+  it('maps the enumerable types it can', () => {
+    expect(entitiesFromApplicantTypes('Individuals')).toEqual(['individual']);
+    expect(entitiesFromApplicantTypes('Public and State controlled institutions of higher education')).toEqual([
+      'university',
+      'university_dept',
+    ]);
+    expect(entitiesFromApplicantTypes('Independent school districts')).toEqual(['school_lea']);
+    expect(
+      entitiesFromApplicantTypes(
+        'Nonprofits having a 501(c)(3) status with the IRS, other than institutions of higher education',
+      ),
+    ).toEqual(['club_501c3']);
+    expect(
+      entitiesFromApplicantTypes(
+        'Nonprofits that do not have a 501(c)(3) status with the IRS, other than institutions of higher education',
+      ),
+    ).toEqual(['club_unincorporated']);
+  });
+
+  it('unions a multi-type list in a stable order', () => {
+    const list =
+      'Individuals; Private institutions of higher education; Independent school districts';
+    expect(entitiesFromApplicantTypes(list)).toEqual([
+      'individual',
+      'school_lea',
+      'university',
+      'university_dept',
+    ]);
+    // Order comes from the canonical entity order, never from the funder's listing order, so two
+    // crawls of the same record cannot produce two contentHashes.
+    expect(entitiesFromApplicantTypes(list)).toEqual(
+      entitiesFromApplicantTypes(
+        'Independent school districts; Private institutions of higher education; Individuals',
+      ),
+    );
+  });
+
+  it('reads "Others (see text…)" as ORGANISATIONS, never as everyone', () => {
+    // `Individuals` is itself a value in this vocabulary: a NOFO open to natural persons selects
+    // it. "Others" names organisation shapes the list cannot express — confirmed by NTIA PWSCIF's
+    // own applicantEligibilityDesc, "The applicant must be organized under the laws of the United
+    // States or a State thereof".
+    const entities = entitiesFromApplicantTypes(
+      'Others (see text field entitled "Additional Information on Eligibility" for clarification)',
+    );
+    expect(entities).not.toContain('individual');
+    expect(entities).not.toContain('teacher');
+    expect(entities).toEqual(
+      expect.arrayContaining(['university', 'university_dept', 'school_lea', 'club_501c3']),
+    );
+  });
+
+  it('reads "Unrestricted" as everyone, individuals included — the funder said so in words', () => {
+    const entities = entitiesFromApplicantTypes(
+      'Unrestricted (i.e., open to any type of entity above), subject to any clarification in text field entitled "Additional Information on Eligibility"',
+    );
+    expect(entities).toContain('individual');
+    expect(entities).toContain('university');
+  });
+
+  it('never offers nominated_by_institution, which is not an application route', () => {
+    for (const list of ['Unrestricted (i.e., open to any type of entity above)', 'Others (see text)']) {
+      expect(entitiesFromApplicantTypes(list)).not.toContain('nominated_by_institution');
+    }
+  });
+
+  it('is empty when the funder enumerated only types this contract does not model', () => {
+    // The funder's own answer, not our silence: a state-government-only call accepts nobody here.
+    expect(entitiesFromApplicantTypes('State governments; Small businesses')).toEqual([]);
+  });
+});
+
+describe('the one genuinely open federal call reaches an applicant (NTIA PWSCIF)', () => {
+  // Driven end to end through the production parser against the committed real captures:
+  // fixtures/grants-gov-federal/00..04 (search2) plus 05 (fetchOpportunity for opportunity
+  // 363179). It is the only hit in 128 that clears ADJACENCY_THRESHOLD, and its detail leg lists
+  // exactly one applicant type: Others (see text field entitled "Additional Information on
+  // Eligibility" for clarification).
+  const SEARCH_URL = 'https://api.grants.gov/v1/api/search2';
+  const searchPayloads = [
+    '00-api-grants-gov-v1-api-search2.json',
+    '01-api-grants-gov-v1-api-search2.json',
+    '02-api-grants-gov-v1-api-search2.json',
+    '03-api-grants-gov-v1-api-search2.json',
+    '04-api-grants-gov-v1-api-search2.json',
+  ].map((file) => fixturePayload('grants-gov-federal', file, SEARCH_URL));
+  const payloads = [
+    ...searchPayloads,
+    fixturePayload(
+      'grants-gov-federal',
+      '05-api-grants-gov-v1-api-fetchopportunity.json',
+      'https://api.grants.gov/v1/api/fetchOpportunity',
+    ),
+  ];
+  const raws = grantsGovFederal.parse(payloads);
+  const federalCtx = ctx({
+    sourceId: 'grants-gov-federal',
+    funderId: 'federal',
+    klass: 'adjacent_stem',
+    tier: 'A',
+    deadlineInheritsFrom: undefined,
+  });
+  const pwscif = normalizeRaw(raws[0], federalCtx);
+
+  const org = (entity: OrgProfile['entity']): OrgProfile => ({ kind: 'organization', entity });
+
+  it('parses exactly the one real open opportunity', () => {
+    expect(raws).toHaveLength(1);
+    expect(raws[0].externalKey).toBe('363179');
+    expect(raws[0].rawFields.applicantTypes).toMatch(/^Others \(see text field/);
+  });
+
+  it('no longer publishes an empty applicant-entity list', () => {
+    expect(pwscif.applicantEntities).not.toEqual([]);
+  });
+
+  it('reaches a university and a school applicant — the profiles this NOFO is actually for', () => {
+    expect(matchProgram(org('university'), pwscif, NOW).kind).not.toBe('ineligible');
+    expect(matchProgram(org('school_lea'), pwscif, NOW).kind).not.toBe('ineligible');
+    expect(matchProgram(org('club_501c3'), pwscif, NOW).kind).not.toBe('ineligible');
+  });
+
+  it('publishes the funder’s own window, not a table sentence', () => {
+    expect(pwscif.deadline.note).toContain('2026-07-14');
+    expect(pwscif.deadline.note).toContain('2026-09-09');
+    expect(pwscif.deadline.kind).toBe('ad_hoc');
+    expect(pwscif.trust.status).toBe('open'); // closes 2026-09-09, after NOW
+  });
+});
+
+describe('NCDXF grants: a live ham grant that no profile could reach', () => {
+  it('accepts the individuals and groups its own page names', () => {
+    // fixtures/ncdxf-grants/00-www-ncdxf-org-pages-grant-app-html.html, the `audience` field the
+    // parser already extracted: "individuals and groups who use amateur radio communications to
+    // advance and promote education, science and international goodwill."
+    const p = normalizeRaw(
+      raw({ sourceId: 'ncdxf-grants', externalKey: 'ncdxf-grant-program', rawFields: {} }),
+      ctx({ sourceId: 'ncdxf-grants', funderId: 'ncdxf', klass: 'ham_grant', deadlineInheritsFrom: undefined }),
+    );
+    expect(p.applicantEntities).toContain('individual');
+    expect(p.applicantEntities).toContain('club_unincorporated');
+    expect(p.applicantEntities).not.toEqual([]);
+  });
+});
+
+describe('a per-record applicant list outranks the per-source table', () => {
+  it('uses what the funder published over what we researched about the source', () => {
+    const p = normalizeRaw(
+      raw({ sourceId: 'ariss', rawFields: { applicantTypes: 'Individuals' } }),
+      ctx({ sourceId: 'ariss', funderId: 'ariss-usa', klass: 'equipment_in_kind', deadlineInheritsFrom: undefined }),
+    );
+    expect(p.applicantEntities).toEqual(['individual']);
+  });
+
+  it('falls back to the table when the record carries no list', () => {
+    const p = normalizeRaw(
+      raw({ sourceId: 'ariss', rawFields: {} }),
+      ctx({ sourceId: 'ariss', funderId: 'ariss-usa', klass: 'equipment_in_kind', deadlineInheritsFrom: undefined }),
+    );
+    expect(p.applicantEntities).toEqual(['school_lea', 'university']);
+  });
+});
+
+describe('observed dates do not disturb the calendar', () => {
+  /** Owner + one dependent, exactly as the corpus's 112 inheriting candidates are shaped. */
+  const owner = (): Program =>
+    normalizeRaw(
+      raw({
+        sourceId: 'arrl-scholarship-program',
+        externalKey: 'scholarship-program',
+        name: 'ARRL Foundation Scholarship Program',
+        rawFields: { status: 'closed', window: 'The 2026 Scholarship Cycle is now closed.' },
+        rawText: 'The 2026 Scholarship Cycle is now closed.',
+      }),
+      ctx({
+        sourceId: 'arrl-scholarship-program',
+        deadlineInheritsFrom: undefined,
+        existingIdFor: () => 'arrl-foundation-scholarships',
+      }),
+    );
+  const dependent = (): Program => normalizeRaw(raw(), ctx());
+  const FROM = '2027-01-01T00:00:00.000Z';
+  const TO = '2027-12-31T23:59:59.999Z';
+
+  it('still projects the owner’s cycle', () => {
+    const all = [owner(), dependent()];
+    expect(expandCycles(all[0], all, FROM, TO).length).toBeGreaterThan(0);
+  });
+
+  it('still lets the dependent ride it, and inheriting a CLOSED cycle stays correct', () => {
+    const all = [owner(), dependent()];
+    expect(all[0].trust.status).toBe('closed');
+    const cycles = expandCycles(all[1], all, FROM, TO);
+    expect(cycles.length).toBeGreaterThan(0);
+    expect(cycles.every((c) => c.programId === all[1].id)).toBe(true);
+  });
+
+  it('converges identically whether the owner or the dependent is seen first', () => {
+    // The order-independence property `review/index.ts`'s backfill exists to guarantee, checked
+    // at the seam this change actually touches: the same corpus in either order must project the
+    // same rows.
+    const ownerFirst = [owner(), dependent()];
+    const dependentsFirst = [dependent(), owner()];
+    const project = (all: Program[], p: Program) => expandCycles(p, all, FROM, TO);
+    expect(project(dependentsFirst, dependentsFirst[0])).toEqual(project(ownerFirst, ownerFirst[1]));
+    expect(project(dependentsFirst, dependentsFirst[1])).toEqual(project(ownerFirst, ownerFirst[0]));
+  });
+
+  it('projects the same cycles when the owner also states an observed window', () => {
+    const withObserved = normalizeRaw(
+      raw({
+        sourceId: 'arrl-scholarship-program',
+        externalKey: 'scholarship-program',
+        name: 'ARRL Foundation Scholarship Program',
+        rawFields: { opensAt: '2026-10-30', closesAt: '2026-12-30' },
+      }),
+      ctx({
+        sourceId: 'arrl-scholarship-program',
+        deadlineInheritsFrom: undefined,
+        existingIdFor: () => 'arrl-foundation-scholarships',
+      }),
+    );
+    const plain = owner();
+    expect(expandCycles(withObserved, [withObserved], FROM, TO)).toEqual(
+      expandCycles(plain, [plain], FROM, TO),
+    );
+    expect(withObserved.deadline.note).toContain('2026-12-30');
   });
 });
