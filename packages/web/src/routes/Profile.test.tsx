@@ -53,9 +53,21 @@ function jsonResponse(body: unknown): Response {
  * saved, exactly as `profileRouter.ts` does — that echo is what moves the meter
  * from one profile to the other, so a stub that hardcoded `student` would hide the
  * selector this task exists to build.
+ *
+ * `getFor` is query-aware: a GET whose URL carries `?profile=<kind>` (the same
+ * parameter 2a1a9c3 added to the real route) answers with `getFor[kind]` when the
+ * test supplied one, and falls back to `get` otherwise — so every existing test
+ * that never passes `getFor` keeps seeing one fixed response regardless of query,
+ * exactly as before.
  */
-function stubFetch(options: { get?: ProfilesBody; putReport?: CompletenessReport } = {}) {
-  const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+function stubFetch(
+  options: {
+    get?: ProfilesBody;
+    getFor?: Partial<Record<ProfileKind, ProfilesBody>>;
+    putReport?: CompletenessReport;
+  } = {},
+) {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if ((init?.method ?? 'GET') === 'PUT') {
       const sent = JSON.parse(String(init?.body)) as { kind: ProfileKind };
       return Promise.resolve(
@@ -67,7 +79,10 @@ function stubFetch(options: { get?: ProfilesBody; putReport?: CompletenessReport
         }),
       );
     }
-    return Promise.resolve(jsonResponse(options.get ?? PROFILES));
+    const match = /[?&]profile=(student|organization)\b/.exec(url);
+    const forKind = match?.[1] as ProfileKind | undefined;
+    const body = (forKind !== undefined ? options.getFor?.[forKind] : undefined) ?? options.get ?? PROFILES;
+    return Promise.resolve(jsonResponse(body));
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
@@ -410,6 +425,149 @@ describe('Profile', () => {
     expect(
       screen.getByText(/3 of 5 programs still return an unknown verdict/i),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * The gap this task closes: before, a dual-profile user could only ever see the
+   * organization meter by SAVING over it, because the PUT reply was the only response
+   * that ever named a non-priority profile. 2a1a9c3 gave `GET /api/profiles` a
+   * `?profile=` parameter for exactly this; this is the UI actually using it.
+   */
+  it('shows the organization profile its own meter after a tab switch, with no save', async () => {
+    const fetchMock = stubFetch({
+      get: {
+        student: SAVED_STUDENT,
+        organization: { kind: 'organization', entity: 'club_501c3' },
+        completenessFor: 'student',
+        completeness: STUDENT_REPORT,
+      },
+      getFor: {
+        organization: {
+          student: SAVED_STUDENT,
+          organization: { kind: 'organization', entity: 'club_501c3' },
+          completenessFor: 'organization',
+          completeness: ORG_REPORT,
+        },
+      },
+    });
+    await renderLoaded();
+    expect(screen.getByText(/measured against your student profile/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/measured against your organization profile/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('meter', { name: /profile completeness/i })).toHaveAttribute(
+      'aria-valuenow',
+      '40',
+    );
+    expect(
+      screen.getByText(/3 of 5 programs still return an unknown verdict/i),
+    ).toBeInTheDocument();
+    // The meter now speaks for organization, so it is STUDENT that is unevaluated —
+    // the label follows the meter, it is never both at once.
+    expect(screen.getByText(/your student profile has not been measured/i)).toBeInTheDocument();
+
+    // No PUT was ever sent: the meter moved without saving anything.
+    expect(fetchMock.mock.calls.every((c) => (c[1] as RequestInit | undefined)?.method !== 'PUT')).toBe(
+      true,
+    );
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/profiles?profile=organization')),
+    ).toBe(true);
+  });
+
+  it('preserves an unsaved draft in the tab left behind, across the refetch a tab switch triggers', async () => {
+    stubFetch({
+      get: {
+        student: SAVED_STUDENT,
+        organization: { kind: 'organization', entity: 'club_501c3' },
+        completenessFor: 'student',
+        completeness: STUDENT_REPORT,
+      },
+      getFor: {
+        organization: {
+          student: SAVED_STUDENT,
+          organization: { kind: 'organization', entity: 'club_501c3' },
+          completenessFor: 'organization',
+          completeness: ORG_REPORT,
+        },
+        student: {
+          student: SAVED_STUDENT,
+          organization: { kind: 'organization', entity: 'club_501c3' },
+          completenessFor: 'student',
+          completeness: STUDENT_REPORT,
+        },
+      },
+    });
+    await renderLoaded();
+
+    // Edit the student tab, then leave it via a switch that triggers a background refetch.
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/measured against your organization profile/i)).toBeInTheDocument(),
+    );
+
+    // Edit the organization tab too, then switch back — another refetch fires.
+    await userEvent.type(screen.getByLabelText(/organization name/i), 'Example University ARC');
+    await userEvent.click(screen.getByRole('tab', { name: /student/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/measured against your student profile/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('K5UTD');
+
+    // And the organization draft survived that second refetch too.
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/measured against your organization profile/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText(/organization name/i)).toHaveValue('Example University ARC');
+  });
+
+  /**
+   * The empty-form hole Task 22 found: saving a form that failed to load would replace a
+   * complete stored profile with nothing. That gate (`loadError !== null && !loaded`, and
+   * the submit button's `disabled={saving || !loaded}`) is wired to the FIRST load only.
+   * A background meter refetch that fails must not be able to reopen it.
+   */
+  it('does not disable saving or touch the loaded draft when a background meter refetch fails', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'PUT') return Promise.reject(new Error('save should not have been called'));
+      if (String(url).includes('profile=organization')) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          student: SAVED_STUDENT,
+          organization: { kind: 'organization', entity: 'club_501c3' },
+          completenessFor: 'student',
+          completeness: STUDENT_REPORT,
+        }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('profile=organization'))).toBe(
+        true,
+      ),
+    );
+
+    // The failed background refetch shows no alert of its own, and does not disable Save —
+    // the organization tab's own data (already in `drafts` from the first, successful load)
+    // is still there to save.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save organization profile/i })).not.toBeDisabled();
+
+    // The student tab, and its already-loaded draft, are untouched by the failure too.
+    await userEvent.click(screen.getByRole('tab', { name: /student/i }));
+    expect(screen.getByLabelText(/callsign/i)).toHaveValue('W8UM');
+    expect(screen.getByRole('button', { name: /save student profile/i })).not.toBeDisabled();
   });
 
   it('says so when no profile has been measured at all', async () => {

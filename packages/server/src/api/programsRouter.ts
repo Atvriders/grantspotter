@@ -195,7 +195,22 @@ export function createProgramsRouter(deps: RouterDeps): Router {
   router.get('/', deps.requireAuth, (req, res) => {
     const user = deps.currentUser(req);
     const filters = parseBrowseQuery(req.query as Record<string, unknown>);
-    const prefer = isProfileKind(req.query.profile) ? req.query.profile : undefined;
+
+    // `?profile=` used to be dropped silently on a typo: an unrecognised value fell back
+    // to the priority profile with nothing in the response to say the request had not
+    // been honoured — the same "silence reads as an assertion" shape `GET /api/profiles`
+    // was fixed for in 2a1a9c3, and this is that same fix here. A caller that asked for a
+    // profile it does not hold still gets an honest empty result (see the comment on
+    // `loadActiveProfile` above); this is only for a value the server does not recognise
+    // as a profile kind at all.
+    const rawPrefer = req.query.profile;
+    if (rawPrefer !== undefined && !isProfileKind(rawPrefer)) {
+      throw new AppError(
+        'validation_failed',
+        `Unknown profile kind "${String(rawPrefer)}" in "profile". Expected "student" or "organization".`,
+      );
+    }
+    const prefer = isProfileKind(rawPrefer) ? rawPrefer : undefined;
 
     // Plan 1 validates `profiles.data` with `profileSchema` on read (CONTRACT
     // §6). A row that no longer parses is a server-side fault about stored

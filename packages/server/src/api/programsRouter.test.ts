@@ -668,9 +668,26 @@ describe('GET /api/programs — an organization profile', () => {
     expect(asClub.body.summary.ineligible).toBe(5);
   });
 
-  it('ignores a profile preference the query string invented', async () => {
+  /**
+   * Was "ignores a profile preference the query string invented": an unrecognised
+   * `?profile=` used to fall back to the priority profile with nothing in the response
+   * to say the request had not been honoured — a typo and a considered choice looked
+   * identical on the wire. `GET /api/profiles` was fixed for this same shape in
+   * 2a1a9c3; this pins the matching fix here, 422 rather than a silent fallback.
+   */
+  it('rejects an unrecognised profile preference as validation_failed / 422, not a silent fallback', async () => {
     seedStudentProfile(db);
     const res = await request(buildApp(db)).get('/api/programs?profile=wizard');
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('validation_failed');
+    expect(res.body.error.message).toMatch(/wizard/i);
+    expect(typeof res.body.requestId).toBe('string');
+  });
+
+  it('leaves a request with no profile preference at all unchanged', async () => {
+    seedStudentProfile(db);
+    const res = await request(buildApp(db)).get('/api/programs');
+    expect(res.status).toBe(200);
     expect(res.body.profileApplied).toBe('student');
   });
 });

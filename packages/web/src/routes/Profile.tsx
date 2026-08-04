@@ -233,6 +233,38 @@ export function Profile(): JSX.Element {
     if (kindParam === null && server !== null) setKind(server);
   }, [data, kindParam]);
 
+  // The completeness a tab switch alone can now obtain, via 2a1a9c3's `?profile=`. Only
+  // requested when the open tab is a profile the user HOLDS but the current report does
+  // not speak for: asking for a profile that is NOT held would come back
+  // `completenessFor: null` (`loadActiveProfile`'s contract — a named preference that is
+  // not on file answers null rather than falling back to whichever one is) and would wipe
+  // out a perfectly good measurement of the OTHER profile for no reason. Once the fetch
+  // below lands, `kind === measuredFor` and this goes quiet again — including right after
+  // a save, since the PUT reply already set `measuredFor` to the kind just saved. That is
+  // what keeps this from ever re-GETting on top of a save and flipping the meter back off
+  // the profile the user just measured, the one thing the PUT-doesn't-re-GET design in
+  // profileRouter.ts exists to prevent.
+  //
+  // This never touches `drafts` or `held`. The whole reason the hydration effect above
+  // only ever runs once is that a GET response overwriting `drafts` erases whatever the
+  // user has typed on the tab they are leaving; a completeness-only refetch must not
+  // reopen that hole either, so it only ever calls `setReport` / `setMeasuredFor`.
+  const needsMeterRefetch = loaded && kind !== measuredFor && held[kind];
+  const { data: meterData } = useApi<ProfilesResponse>(
+    needsMeterRefetch ? `/api/profiles?profile=${kind}` : null,
+  );
+
+  useEffect(() => {
+    if (meterData === null) return;
+    setReport(meterData.completeness);
+    setMeasuredFor(meterData.completenessFor ?? null);
+    // A failed refetch surfaces only as `useApi`'s own (unread) `error` here, on purpose:
+    // the draft and the last-good report are already on screen, and the empty-form guard
+    // below (`loadError !== null && !loaded`) is wired to the FIRST load only. A flaky
+    // background refetch must not be able to disable Save or blank a form that already
+    // loaded successfully — see Profile.test.tsx for the case this is pinned against.
+  }, [meterData]);
+
   // Once, on arrival from an unknown verdict. Re-running it on every keystroke (the
   // obvious `[focusKey, values]` dependency) yanks focus back out of whatever field the
   // user moved to and re-scrolls the page under them.
@@ -339,7 +371,11 @@ export function Profile(): JSX.Element {
             role="tab"
             id={`tab-${tab}`}
             aria-selected={kind === tab}
-            aria-controls={`panel-${tab}`}
+            /* Only the SELECTED tab names a panel. One panel is in the DOM at a time, so the
+               unselected tab's `aria-controls` pointed at an id that did not exist — and a
+               dangling IDREF does not degrade to the element's text, it simply resolves to
+               nothing. Caught by the global audit in `test/a11y.test.tsx`. */
+            aria-controls={kind === tab ? `panel-${tab}` : undefined}
             tabIndex={kind === tab ? 0 : -1}
             onKeyDown={onTabKey}
             onClick={() => setKind(tab)}
