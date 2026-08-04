@@ -7,7 +7,7 @@ import workspace from '../../../vitest.workspace.js';
 /**
  * THE TEST-FILE-THAT-NO-PROJECT-RUNS INVARIANT.
  *
- * Four separate defects in this repo have had exactly one shape: a `*.test.ts` exists on disk,
+ * Five separate defects in this repo have had exactly one shape: a test file exists on disk,
  * and no vitest project's `include` matches it, so `npm test` collects it, runs nothing from it,
  * and goes GREEN. Every "expect N tests passing" gate downstream then checks nothing.
  *
@@ -18,15 +18,31 @@ import workspace from '../../../vitest.workspace.js';
  *   4. `scripts/` — no project covered it AT ALL, so the tests for `scripts/profile-corpus.ts`
  *      had to be smuggled into `packages/core/test/matcher.test.ts`, in another package, importing
  *      `../../../scripts/profile-corpus.js`. Fixed on 2026-08-03 by `scripts/vitest.config.ts`.
+ *   5. THIS FILE'S OWN BLIND SPOT, found by the Plan 2 close-out review (I4). `TEST_FILE` below
+ *      enumerated `.test.ts`/`.test.tsx` only, so a `*.spec.ts`, `*.test.mts`, `*.test.js` or
+ *      `*.spec.tsx` anywhere — INCLUDING inside a covered package — was neither run by vitest
+ *      (no project include matches those extensions) nor flagged here (this walk never saw it).
+ *      Reproduced 2026-08-03 with three probes each holding `expect(1).toBe(2)`
+ *      (`docs/orphan-probe.spec.ts`, `packages/server/test/orphan-probe.test.mts`,
+ *      `packages/core/src/orphan-probe.spec.tsx`): the full suite stayed at its baseline
+ *      1760 passed / 9 failed and named none of them. The file had even transcribed
+ *      `(?:test|spec)` into `VITEST_DEFAULT_INCLUDE` and then never enumerated a spec file.
+ *      A sibling hole, same review: `exclude` defaulted to `[]` rather than to vitest's OWN
+ *      default exclude, so a test file under `.cache/` or `cypress/` was counted as covered by a
+ *      project that would never run it. Both are closed below.
  *
- * ALL FOUR WERE FOUND BY A HUMAN READING CONFIGURATION. Not one was ever caught by a failing
+ * ALL FOUR OF THE ORIGINAL FOUR WERE FOUND BY A HUMAN READING CONFIGURATION. Not one was ever caught by a failing
  * test, and that is the entire problem: the symptom of this bug is the ABSENCE of failure. A
  * suite cannot notice tests it never collected, so the only thing that can notice is a test that
  * reads the filesystem and the configuration and compares them.
  *
- * This test does that. It enumerates every `*.test.ts` / `*.test.tsx` on disk, resolves the
- * projects named by `vitest.workspace.ts` and the `include` globs in each project's own
- * `vitest.config.ts`, and fails — naming the files — when any test file is matched by no project.
+ * This test does that. It enumerates every file on disk that ANY vitest configuration could
+ * plausibly regard as a test — `.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}`, i.e. exactly
+ * vitest's own default `include` vocabulary, not the narrower set this repo happens to write
+ * today — resolves the projects named by `vitest.workspace.ts` and the `include` globs in each
+ * project's own `vitest.config.ts`, and fails — naming the files — when any is matched by no
+ * project. Enumerating the same vocabulary vitest does is the point: a file this walk cannot see
+ * is a file this invariant cannot protect, and defect 5 above lived in exactly that gap.
  *
  * It follows the invariants this repo already relies on: `sources/registry.test.ts` imports every
  * source module on disk and asserts each is registered, and `normalize/rawFieldsContract.test.ts`
@@ -61,8 +77,29 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
  */
 const IGNORED_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', '.superpowers']);
 
-/** The two extensions this repo writes tests in. `.tsx` is here because web's hole was `.tsx`. */
-const TEST_FILE = /\.test\.tsx?$/;
+/**
+ * Every filename shape vitest itself would treat as a test, which is deliberately WIDER than the
+ * two extensions this repo writes today (`.test.ts`, `.test.tsx` — `.tsx` because web's hole was
+ * `.tsx`). It is the same vocabulary as `VITEST_DEFAULT_INCLUDE` below, and that is the whole
+ * point: this walk decides what the invariant can see, so narrowing it to current practice is how
+ * defect 5 happened — a `*.spec.ts` was invisible to the walk AND matched by no project include,
+ * so it ran nowhere and was reported nowhere. A file that no project runs must be flagged whether
+ * or not anyone here would have written it that way.
+ */
+const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+/**
+ * Files that look like a test to vitest but legitimately belong to another runner (a Playwright
+ * `*.spec.ts`, say), keyed by repo-relative POSIX path.
+ *
+ * IT IS EMPTY, AND AN ENTRY IS EXPENSIVE ON PURPOSE. The guards below refuse a vacuous one: the
+ * path must exist on disk, must STILL be matched by no vitest project (so an entry cannot outlive
+ * the condition it excuses — the "allow-listed as a known defect while being cited as proof of
+ * health" trap this repo has already sprung once), and the reason must be a real sentence. This
+ * exists so that the response to a red from the check above is either to wire the file into a
+ * project or to sign a statement, never to quietly re-narrow `TEST_FILE`.
+ */
+const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */
 const CONFIG_NAMES = ['vitest.config.ts', 'vitest.config.js', 'vite.config.ts', 'vite.config.js'];
@@ -75,6 +112,25 @@ const CONFIG_NAMES = ['vitest.config.ts', 'vitest.config.js', 'vite.config.ts', 
  * the only files enumerated, but the whole pattern is kept honest.
  */
 const VITEST_DEFAULT_INCLUDE = /(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+/**
+ * Vitest's built-in default `exclude`, used by a project whose config declares none. It used to
+ * default to `[]` here, which was a second escape hatch found by the same review: a test file
+ * under `cypress/` or `.cache/` is matched by `test/**\/*.test.ts`, so it was reported as COVERED
+ * while vitest's own default exclude means it never runs — the invariant's exact failure mode,
+ * reached from the config side instead of the filename side.
+ *
+ * Only the directory patterns are transcribed. The config-file pattern in vitest's default
+ * (`**\/{karma,rollup,…}.config.*`) cannot match anything `TEST_FILE` enumerates, and vitest MERGES
+ * nothing: a project that declares its own `exclude` replaces this wholesale, which is what the
+ * `exclude.length > 0` branch below does.
+ */
+const VITEST_DEFAULT_EXCLUDE = [
+  '**/node_modules/**',
+  '**/dist/**',
+  '**/cypress/**',
+  '**/.{idea,git,cache,output,temp}/**',
+] as const;
 
 async function walk(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -214,7 +270,12 @@ async function resolveProjects(): Promise<ResolvedProject[]> {
     }
 
     const include = Array.isArray(test.include) ? (test.include as string[]) : undefined;
-    const exclude = Array.isArray(test.exclude) ? (test.exclude as string[]) : [];
+    // A declared `exclude` REPLACES vitest's default rather than adding to it, so the two cases
+    // are kept apart deliberately. Defaulting to `[]` was the second hole (see the note on
+    // VITEST_DEFAULT_EXCLUDE): it credited a project with running files vitest itself skips.
+    const exclude = Array.isArray(test.exclude)
+      ? (test.exclude as string[])
+      : [...VITEST_DEFAULT_EXCLUDE];
     projects.push({
       label: entry,
       root,
@@ -242,11 +303,12 @@ const testFiles = await walk(REPO_ROOT);
 const projects = await resolveProjects();
 const rel = (abs: string): string => path.relative(REPO_ROOT, abs).split(path.sep).join('/');
 
+/** Every enumerated test file that no project would run, allow-list not yet applied. */
+const uncovered = testFiles.filter((file) => projectsMatching(projects, file).length === 0).map(rel);
+
 describe('vitest project coverage', () => {
   it('collects every test file on disk under at least one project', () => {
-    const orphaned = testFiles
-      .filter((file) => projectsMatching(projects, file).length === 0)
-      .map(rel);
+    const orphaned = uncovered.filter((file) => !NOT_A_VITEST_FILE.has(file));
 
     expect(
       orphaned,
@@ -255,7 +317,7 @@ describe('vitest project coverage', () => {
         : `${orphaned.length} test file(s) exist on disk but are matched by NO vitest project, so ` +
           `\`npm test\` runs none of them and stays green:\n  ${orphaned.join('\n  ')}\n` +
           'Add a project to vitest.workspace.ts, or widen the include globs of the project that ' +
-          'should own them.',
+          'should own them. Narrowing TEST_FILE is not a fix — it is defect 5 again.',
     ).toEqual([]);
   });
 
@@ -329,5 +391,68 @@ describe('vitest project coverage — the invariant can still see', () => {
     expect(VITEST_DEFAULT_INCLUDE.test('src/a.test.ts')).toBe(true);
     expect(VITEST_DEFAULT_INCLUDE.test('a.spec.tsx')).toBe(true);
     expect(VITEST_DEFAULT_INCLUDE.test('src/a.ts')).toBe(false);
+  });
+
+  /**
+   * Defect 5, pinned as a property of the walk rather than as a memory. Every one of these is a
+   * filename vitest's own default include would run and none of this repo's four project includes
+   * matches, so each MUST reach the orphan check above; before 2026-08-03 the walk discarded them
+   * and they reached nothing.
+   */
+  it('enumerates every filename shape vitest itself would call a test', () => {
+    for (const name of [
+      'a.test.ts',
+      'a.test.tsx',
+      'a.spec.ts',
+      'a.spec.tsx',
+      'a.test.mts',
+      'a.test.cts',
+      'a.test.js',
+      'a.test.mjs',
+      'a.test.cjs',
+      'a.test.jsx',
+      'a.spec.js',
+    ]) {
+      expect(TEST_FILE.test(name), `${name} must be enumerated`).toBe(true);
+      expect(VITEST_DEFAULT_INCLUDE.test(name), `${name} is a test to vitest`).toBe(true);
+    }
+    for (const name of ['a.ts', 'atest.ts', 'test.ts', 'a.tests.ts', 'a.test.json']) {
+      expect(TEST_FILE.test(name), `${name} is not a test file`).toBe(false);
+    }
+  });
+
+  it('honours vitest\'s default exclude, so an unrunnable path is not counted as covered', () => {
+    const cache = globToRegExp(VITEST_DEFAULT_EXCLUDE[3]);
+    expect(cache.test('test/.cache/a.test.ts')).toBe(true);
+    expect(cache.test('.git/a.test.ts')).toBe(true);
+    expect(cache.test('test/a.test.ts')).toBe(false);
+    expect(globToRegExp(VITEST_DEFAULT_EXCLUDE[2]).test('packages/web/cypress/a.test.ts')).toBe(true);
+    // Every project in this repo declares no `exclude`, so every one must carry the default.
+    for (const project of projects) {
+      expect(project.exclude.length, `${project.label} lost its exclude`).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * The allow-list guards. An exemption has to name a real, still-uncovered file and say why, or it
+ * is indistinguishable from having widened the ignore list to silence a red.
+ */
+describe('vitest project coverage — no exemption may be vacuous', () => {
+  it('names only files that exist and are still matched by no project', () => {
+    const wrong = [...NOT_A_VITEST_FILE.keys()].filter((file) => !uncovered.includes(file));
+    expect(
+      wrong,
+      'listed in NOT_A_VITEST_FILE but either gone from disk or now covered by a project — ' +
+        'delete the entry; a stale exemption hides the next real orphan',
+    ).toEqual([]);
+  });
+
+  it('gives every exemption a written reason', () => {
+    for (const [file, reason] of NOT_A_VITEST_FILE) {
+      expect(reason.trim().length, `${file} needs a real reason, not a placeholder`).toBeGreaterThan(
+        20,
+      );
+    }
   });
 });

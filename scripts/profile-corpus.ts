@@ -32,10 +32,21 @@
  * with it was measured against a population that does not exist for a user, which is worse than
  * having no tool at all.
  *
- * The suppression rule is not reimplemented here: `isDoNotPublish` is imported from
- * `normalize/index.ts` — the same predicate `buildReviewItems` and the approve path call — so the
- * tool and the product cannot drift. If a new suppressed record type is classified there, this
- * profiler starts excluding it in the same commit.
+ * ...AND THE SAME LESSON, LEARNED TWICE (close-out review, 2026-08-03). `buildReviewItems` applies
+ * TWO suppression gates, one immediately below the other, and this file applied only the first.
+ * The second is the ADJACENCY GATE: a candidate whose source scored it below
+ * `ADJACENCY_THRESHOLD` never reaches the review queue either, and all 45 `nsf-funding-rss`
+ * records — Gravitational Physics, Chemical Oceanography, SBIR — score 0 or 1 against a threshold
+ * of 6. So the tool reported a corpus of 197 where a user can reach 152: a 23% over-report, in the
+ * instrument every acceptance figure in this plan was measured with. An over-reporting measuring
+ * tool is worse than none, because it manufactures confidence.
+ *
+ * NEITHER RULE IS REIMPLEMENTED HERE. `isDoNotPublish` (normalize/index.ts) and
+ * `isBelowAdjacencyThreshold` (review/index.ts) are imported from the product — the same two
+ * predicates `buildReviewItems` calls, in the same order — so the tool and the product cannot
+ * drift. If a new suppressed record type is classified there, or the threshold moves, this
+ * profiler follows in the same commit. That is the discipline the `isDoNotPublish` fix
+ * established; missing the gate beside it is what it cost to only half-apply it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,11 +57,13 @@ import type {
   OrgProfile,
   Profile,
   Program,
+  RawOpportunity,
   StudentProfile,
 } from '../packages/core/src/index.js';
 import { matchAll } from '../packages/core/src/matcher.js';
 import { contextForSource } from '../packages/server/src/crawl/context.js';
 import { isDoNotPublish, normalizeRaw } from '../packages/server/src/normalize/index.js';
+import { isBelowAdjacencyThreshold } from '../packages/server/src/review/index.js';
 import { SOURCES } from '../packages/server/src/sources/registry.js';
 import {
   hasFollowUp,
@@ -83,20 +96,40 @@ const LEGACY_FIXTURES: Record<string, Array<{ file: string; requestIndex: number
 };
 
 /**
- * Re-exported so this tool's own test can assert against the SAME predicate the product enforces
- * rather than a copy of the rule. Importing it from anywhere else would be the drift this fix
+ * Re-exported so this tool's own test can assert against the SAME predicates the product enforces
+ * rather than a copy of the rules. Importing them from anywhere else would be the drift this fix
  * exists to prevent.
  */
-export { isDoNotPublish };
+export { isBelowAdjacencyThreshold, isDoNotPublish };
+
+/**
+ * The relevance score a scoring source wrote for this record, as a number, or `undefined` for the
+ * sources that compute none — which is every ham-specific source and means "not scored", not "zero".
+ *
+ * This mirrors `crawl/runner.ts`'s private `adjacencyScores`, which is the production caller that
+ * hands the score to `buildReviewItems`, and it is the one line of that path that cannot be
+ * imported: the runner builds a `Map` keyed by minted program id inside `runSource`. The DECISION
+ * — what counts as below the threshold, and that exactly-threshold passes — is imported, not
+ * restated. `profile-corpus.test.ts` pins this pair against the real corpus so the two cannot
+ * separate silently.
+ */
+function adjacencyScoreOf(raw: RawOpportunity): number | undefined {
+  const written = raw.rawFields.adjacencyScore;
+  if (written === undefined) return undefined;
+  const score = Number(written);
+  return Number.isFinite(score) ? score : undefined;
+}
 
 export interface CorpusLoad {
   /** Publishable programs only: what the review queue would let a user see. */
   programs: Program[];
-  /** Per source: how many publishable programs it yielded, and how many were suppressed. */
-  loaded: Array<{ sourceId: string; programs: number; suppressed: number }>;
+  /** Per source: publishable programs, and how many each gate took out. */
+  loaded: Array<{ sourceId: string; programs: number; suppressed: number; belowAdjacency: number }>;
   skipped: Array<{ sourceId: string; why: string }>;
   /** Total records normalize produced that carry `do_not_publish` and were excluded above. */
   suppressed: number;
+  /** Total records excluded by the adjacency gate — real opportunities, just not for a radio club. */
+  belowAdjacency: number;
 }
 
 function payloadFor(sourceId: string, file: string, url: string): FetchedPayload {
@@ -111,14 +144,17 @@ function payloadFor(sourceId: string, file: string, url: string): FetchedPayload
 
 /**
  * Every candidate Program the committed fixtures can produce, normalized exactly as the crawler
- * does, MINUS the records the review queue suppresses (see the file header). The suppressed count
- * is carried out rather than silently dropped, so the tool reports what it left out.
+ * does, MINUS the records the review queue suppresses — BOTH gates, in the product's own order
+ * (see the file header). Both excluded counts are carried out rather than silently dropped, so the
+ * tool reports what it left out instead of quietly shrinking or, as it did until this fix, quietly
+ * inflating.
  */
 export async function loadCorpus(): Promise<CorpusLoad> {
   const programs: Program[] = [];
   const loaded: CorpusLoad['loaded'] = [];
   const skipped: CorpusLoad['skipped'] = [];
   let suppressed = 0;
+  let belowAdjacency = 0;
 
   for (const source of SOURCES) {
     const dir = path.join(FIXTURE_ROOT, source.id);
@@ -173,20 +209,38 @@ export async function loadCorpus(): Promise<CorpusLoad> {
     }
     const ctx = contextForSource(source, PROFILE_NOW_ISO);
     const produced = raws.map((raw) => normalizeRaw(raw, ctx));
-    // The suppression the product applies, applied here with the product's own predicate. A
-    // past award or a cross-check row is stored evidence, never an opportunity: measuring
-    // eligibility over records no user can ever be shown makes every figure below a fiction.
-    const publishable = produced.filter((program) => !isDoNotPublish(program));
+    // The two suppressions the product applies, applied here with the product's own predicates,
+    // in `buildReviewItems`'s own order. A past award or a cross-check row is stored evidence,
+    // never an opportunity; a sub-threshold federal record is a real opportunity that is not one
+    // for a radio club. Measuring eligibility over records no user can ever be shown makes every
+    // figure below a fiction — in the first case by 545 records, in the second by 45.
+    const publishable: Program[] = [];
+    let suppressedHere = 0;
+    let gatedHere = 0;
+    produced.forEach((program, i) => {
+      if (isDoNotPublish(program)) {
+        suppressedHere += 1;
+        return;
+      }
+      const raw = raws[i];
+      if (raw !== undefined && isBelowAdjacencyThreshold(adjacencyScoreOf(raw))) {
+        gatedHere += 1;
+        return;
+      }
+      publishable.push(program);
+    });
     programs.push(...publishable);
-    suppressed += produced.length - publishable.length;
+    suppressed += suppressedHere;
+    belowAdjacency += gatedHere;
     loaded.push({
       sourceId: source.id,
       programs: publishable.length,
-      suppressed: produced.length - publishable.length,
+      suppressed: suppressedHere,
+      belowAdjacency: gatedHere,
     });
   }
 
-  return { programs, loaded, skipped, suppressed };
+  return { programs, loaded, skipped, suppressed, belowAdjacency };
 }
 
 // ---------------------------------------------------------------- profiles
@@ -470,14 +524,19 @@ async function main(): Promise<void> {
   const detail = args.includes('--detail');
   const wanted = args.filter((a) => !a.startsWith('--'));
 
-  const { programs, loaded, skipped, suppressed } = await loadCorpus();
+  const { programs, loaded, skipped, suppressed, belowAdjacency } = await loadCorpus();
   console.log('=== GrantSpotter corpus profile ===');
   console.log(
     `now: ${PROFILE_NOW_ISO}   corpus: ${programs.length} publishable program(s) from committed fixtures ` +
-      `(${suppressed} do_not_publish record(s) excluded, ${programs.length + suppressed} normalized in total)`,
+      `(${suppressed} do_not_publish + ${belowAdjacency} below the adjacency threshold excluded, ` +
+      `${programs.length + suppressed + belowAdjacency} normalized in total)`,
   );
   for (const entry of loaded) {
-    const note = entry.suppressed > 0 ? `   (+${entry.suppressed} suppressed, not shown to users)` : '';
+    const notes = [
+      entry.suppressed > 0 ? `+${entry.suppressed} suppressed` : '',
+      entry.belowAdjacency > 0 ? `+${entry.belowAdjacency} below adjacency threshold` : '',
+    ].filter((n) => n !== '');
+    const note = notes.length > 0 ? `   (${notes.join(', ')}, not shown to users)` : '';
     console.log(`  loaded  ${entry.sourceId.padEnd(38)} ${entry.programs}${note}`);
   }
   for (const entry of skipped) console.log(`  skipped ${entry.sourceId.padEnd(38)} ${entry.why}`);

@@ -157,8 +157,16 @@ const SUPPRESSION_EXEMPT_KINDS: ReadonlySet<ChangeKind> = new Set<ChangeKind>(['
  * A score of exactly `ADJACENCY_THRESHOLD` passes — the single real open federal call in the
  * committed captures (NTIA PWSCIF) scores exactly 6, so an off-by-one here silently empties the
  * federal sweep of its only true positive.
+ *
+ * EXPORTED so `scripts/profile-corpus.ts` can apply THIS predicate rather than restate the rule.
+ * The profiler's corpus is defined as "the programs the product would actually SHOW", and it
+ * already imports `isDoNotPublish` from `normalize/index.ts` for exactly that reason — but it
+ * missed this second gate and so counted 197 programs where a user can reach 152, over-reporting
+ * by 23% in the instrument every acceptance figure in Plan 2 was measured with. Sharing the
+ * predicate is the fix; re-expressing `score < ADJACENCY_THRESHOLD` over there would have left the
+ * same drift one edit away, including the off-by-one above.
  */
-function isBelowAdjacencyThreshold(score: number | undefined): boolean {
+export function isBelowAdjacencyThreshold(score: number | undefined): boolean {
   return score !== undefined && score < ADJACENCY_THRESHOLD;
 }
 

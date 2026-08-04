@@ -1,8 +1,12 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { FetchedPayload, RawOpportunity } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
+import { FIXTURE_ROOT } from '../../test/fixtures.js';
 import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
+import { SOURCES } from '../sources/registry.js';
+import { hasFollowUp, resolveRequests } from '../sources/types.js';
 
 /**
  * THE WRITTEN-BUT-NEVER-READ INVARIANT.
@@ -32,15 +36,34 @@ import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
  * table asserts no label is a proper prefix of another. Both were proven by deliberately breaking
  * them; so was this one — see the note on `crawl/runner.ts`'s `adjacencyScores`.
  *
- * WHAT IT DELIBERATELY CANNOT SEE, because `rawFields` is an open `Record<string, string>`:
- *   - keys written through a computed subscript (`rawFields[key] = value` in
- *     `arrl-scholarship-descriptions.ts` and `util/singlePage.ts`, where the key comes from a
- *     pattern table). Those are unknowable statically and are simply not checked.
- *   - keys read through a computed subscript. There are none today; a reader added that way would
- *     make this test fail with a false positive, and the fix is to name the key in the allow-list
- *     or to read it by name.
- * A pragmatic scanner that catches the three real bugs beats a perfect one that catches none. The
- * self-check block at the bottom exists so that a scanner which silently stops seeing anything
+ * THE STATIC SCANNER'S BLIND SPOT, AND WHAT REPLACED IT (Plan 2 close-out review, 2026-08-03).
+ * The write side used to be a static text scan only, and the reviewer walked three write shapes
+ * past it with the full suite green: a SPREAD into the `rawFields` literal, a helper writing via
+ * `Object.assign`, and — the expensive one — a COMPUTED SUBSCRIPT, `rawFields[key] = value` from a
+ * pattern table in `util/singlePage.ts` and `arrl-scholarship-descriptions.ts`. That last shape
+ * alone hid roughly 40 keys, 26 of them read by nothing, including `applyUrl`, `jotformId`,
+ * `window`, `restrictions` and `residency` — and one of those was a live user-facing defect: QCWA's
+ * page states its application URL, `tier-c-a.ts` parses it correctly into `rawFields.applyUrl`,
+ * its own test asserts the parse, and nothing downstream read it, so the published record pointed
+ * at the wrong page (close-out review B2, since fixed in `applyUrlFor`). This invariant existed
+ * precisely to make that impossible, and could not see it.
+ *
+ * So the write side is now collected TWICE and unioned:
+ *   1. statically, as before — it names the exact file a key is written in, which is what makes a
+ *      failure actionable; and
+ *   2. AT RUNTIME, by parsing every source over its committed fixtures and reading
+ *      `Object.keys(raw.rawFields)` off the real records — exactly the way `TIER_D_RECORDS` was
+ *      already handled. A key that reaches a real record cannot hide behind the syntax that wrote
+ *      it, whatever that syntax is.
+ * The runtime half is the authority on WHETHER a key exists; the static half is the authority on
+ * WHERE it came from. Neither alone is enough: a key written only on a code path the fixtures do
+ * not exercise is invisible to (2), and a key written by a subscript is invisible to (1).
+ *
+ * WHAT IT STILL CANNOT SEE: keys read through a computed subscript. There are none today; a
+ * reader added that way would make this test fail with a false positive, and the fix is to name
+ * the key in the allow-list or to read it by name.
+ *
+ * The self-check block at the bottom exists so that a scanner which silently stops seeing anything
  * fails rather than passing vacuously.
  */
 
@@ -151,28 +174,99 @@ function writtenKeysIn(src: string): Set<string> {
   return keys;
 }
 
-/** key -> the source files that write it. */
-async function collectWrites(): Promise<Map<string, string[]>> {
-  const written = new Map<string, string[]>();
-  const add = (key: string, where: string): void => {
-    const at = written.get(key) ?? [];
-    if (!at.includes(where)) at.push(where);
-    written.set(key, at);
-  };
-  for (const dir of WRITER_DIRS) {
-    for (const file of await walk(path.join(SRC_ROOT, dir))) {
-      const src = stripComments(await readFile(file, 'utf8'));
-      for (const key of writtenKeysIn(src)) add(key, path.relative(SRC_ROOT, file));
+const CONTENT_TYPE: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.json': 'application/json',
+  '.xml': 'application/rss+xml; charset=utf-8',
+  '.b64': 'application/zip',
+};
+
+/**
+ * Parse every source over its committed real captures and hand back the records themselves.
+ *
+ * This is the write side's ground truth (see the header). It is the same payload assembly
+ * `scripts/profile-corpus.ts` uses — `NN-` files in order, first phase matched to `requests`, the
+ * remainder to `followUp` — so a key that reaches a real record here is a key a real crawl writes.
+ * Nothing is caught and swallowed: a parser that throws fails this test, because a write side that
+ * silently stops seeing a source is the failure mode this whole file exists to break.
+ */
+async function parseAllFixtures(): Promise<{ byId: Map<string, RawOpportunity[]>; noCapture: string[] }> {
+  const byId = new Map<string, RawOpportunity[]>();
+  const noCapture: string[] = [];
+  for (const source of SOURCES) {
+    const dir = path.join(FIXTURE_ROOT, source.id);
+    const captured = (await readdir(dir).catch(() => [] as string[]))
+      .filter((f) => /^\d\d-/.test(f))
+      .sort();
+    if (captured.length === 0) {
+      noCapture.push(source.id);
+      continue;
     }
+    const requests = await resolveRequests(source);
+    const payload = async (file: string, url: string): Promise<FetchedPayload> => ({
+      url,
+      status: 200,
+      contentType: CONTENT_TYPE[path.extname(file)] ?? 'text/plain',
+      body: await readFile(path.join(dir, file), 'utf8'),
+      fetchedAt: '2026-08-02T00:00:00.000Z',
+    });
+
+    const payloads: FetchedPayload[] = [];
+    const firstPhase = captured.slice(0, requests.length);
+    for (const [i, file] of firstPhase.entries()) {
+      payloads.push(await payload(file, requests[i]?.url ?? `file:///${file}`));
+    }
+    const rest = captured.slice(firstPhase.length);
+    if (rest.length > 0 && hasFollowUp(source)) {
+      const followUps = source.followUp(payloads);
+      for (const [i, file] of rest.entries()) {
+        payloads.push(await payload(file, followUps[i]?.url ?? `file:///${file}`));
+      }
+    }
+    byId.set(source.id, source.parse(payloads));
   }
-  // `manual-tier-d.ts` is the one module that builds its rawFields as an argument to a helper
-  // (`record(externalKey, name, sourceUrl, rawFields, rawText)`) rather than as a `rawFields: {}`
-  // literal, so the static scan cannot see its keys. It exports its records, so they are read
-  // straight off the real objects instead — exact, not inferred.
-  for (const rec of TIER_D_RECORDS) {
-    for (const key of Object.keys(rec.rawFields)) add(key, 'sources/manual-tier-d.ts');
-  }
-  return written;
+  return { byId, noCapture };
+}
+
+/**
+ * key -> where it is written: a source file for a statically visible write, `parse:<sourceId>` for
+ * a key observed on a real parsed record. Both halves are unioned — see the header for why one
+ * without the other is not enough. Memoised because every `it` below needs it and parsing the
+ * whole fixture tree three times is pure cost.
+ */
+let writesOnce: Promise<Map<string, string[]>> | undefined;
+
+async function collectWrites(): Promise<Map<string, string[]>> {
+  writesOnce ??= (async (): Promise<Map<string, string[]>> => {
+    const written = new Map<string, string[]>();
+    const add = (key: string, where: string): void => {
+      const at = written.get(key) ?? [];
+      if (!at.includes(where)) at.push(where);
+      written.set(key, at);
+    };
+    for (const dir of WRITER_DIRS) {
+      for (const file of await walk(path.join(SRC_ROOT, dir))) {
+        const src = stripComments(await readFile(file, 'utf8'));
+        for (const key of writtenKeysIn(src)) add(key, path.relative(SRC_ROOT, file));
+      }
+    }
+    // `manual-tier-d.ts` is the one module that builds its rawFields as an argument to a helper
+    // (`record(externalKey, name, sourceUrl, rawFields, rawText)`) rather than as a `rawFields: {}`
+    // literal, so the static scan cannot see its keys. It exports its records, so they are read
+    // straight off the real objects instead — exact, not inferred.
+    for (const rec of TIER_D_RECORDS) {
+      for (const key of Object.keys(rec.rawFields)) add(key, 'sources/manual-tier-d.ts');
+    }
+    // ...and every other source gets the same treatment, from its real captures: spreads,
+    // `Object.assign` and `rawFields[key] = …` all become plain keys on a real record.
+    const { byId } = await parseAllFixtures();
+    for (const [sourceId, raws] of byId) {
+      for (const raw of raws) for (const key of Object.keys(raw.rawFields)) add(key, `parse:${sourceId}`);
+    }
+    return written;
+  })();
+  return writesOnce;
 }
 
 /**
@@ -263,8 +357,20 @@ const WRITE_ONLY_BY_DESIGN: ReadonlyMap<string, string> = new Map([
   ['reason', 'Why a verified_negative record is a negative. The published warning text itself is rawText, which normalizeRaw keeps as rawOtherText.'],
   ['scope', "'named_scholarship' marker on tier-c-a records. Nothing branches on it."],
   ['formTitle', "The Yaesu application form's own heading, kept so a capture can be audited against the live page."],
-  ['sustainment', "Yaesu's parsed 12-month on-air requirement. NOT lost: normalize/index.ts states this same obligation for yaesu-dr2x as a literal in OBLIGATIONS_BY_SOURCE, so the parsed copy is a duplicate of a fact the pipeline already carries."],
   ['windowSource', "Provenance for how yaesu-dr2x derived its opensAt/closesAt: 'pdf_title' or 'page_body'. The DATES are consumed (normalize/deadline.ts's observedWindow); which of the two channels produced them is for a reviewer auditing the capture, and no code branches on it."],
+
+  // ---- Keys the runtime scan added on 2026-08-03 (see the header). Every one of these was
+  // already being written by a live source through a computed subscript and was invisible until
+  // the write side started reading real records. These are the ones that are genuinely write-only;
+  // the rest went into WRITE_ONLY_KNOWN_DEFECTS below, which is where the honest majority landed.
+  ['history', "QCWA's cumulative giving to date (\"As of 2024, 15 scholarships totaling $57,000 were awarded\"). A funder's track record, not this cycle's award: reading it as an amount is the exact $-decoy the amount parser is built to reject, and no Program field models lifetime giving."],
+  ['pageUpdated', "NCDXF's own footer stamp (\"This page was updated January 3, 2014\"). Same rule as `date`/`modified`/`lastUpdatedDate`: freshness in this product is OUR observation (trust.lastVerifiedAt), never the funder's self-report — arrl.org's <lastmod> frozen at 2010 is what taught us that."],
+  ['table', "The scholarship-requirements comparison table as captured, which on the real page is site chrome (\"ARRL Website Search Category Clubs Contests …\"). Its record is tagged `crosscheck` and can never publish; it exists so the ARRL catalogue can be diffed against ARRL's own summary by a human."],
+  ['stake', "NCDXF's stated funding philosophy (\"expedition participants themselves should have a significant financial stake\"). An expectation of the applicant, not a rule any axis can evaluate: there is no profile field for how much of your own money you are putting in, and it is already inside rawText."],
+  ['retiredPredecessor', "A note that NCDXF's earlier ARRL-administered scholarship is \"No Longer Active\". It describes a programme we deliberately do not publish; kept so the capture can be audited against the live page rather than acted on."],
+  ['leadTime', "NCDXF's \"two months lead time for action\" — advice about when to ask, not a date. No DeadlineSpec kind models \"submit this long before you need the money\", and minting a deadline from it would publish a date the funder never stated, which is the failure mode inferDeadline is built to avoid."],
+  ['workshopFund', "IEEE MTT-S's $500-per-chapter workshop seed fund. The programme bundles several distinct benefits and `Program.amount` models ONE award; folding a sibling benefit into it would overstate what a chapter actually receives. Kept as evidence beside the published amount."],
+  ['travelSupport', "IEEE MTT-S's up-to-$2,250 Chapter-Chair travel support. Same as workshopFund: a sibling benefit of the same programme, deliberately not folded into the single published amount."],
 ]);
 
 /**
@@ -285,14 +391,43 @@ const WRITE_ONLY_BY_DESIGN: ReadonlyMap<string, string> = new Map([
  *     `inferStatus` computes `closed` from a close date the funder published and that has passed.
  *   applicantTypes — `normalize/index.ts`'s `entitiesFromApplicantTypes` maps Grants.gov's
  *     eligibility vocabulary onto ApplicantEntity, per record, ahead of ENTITIES_BY_SOURCE.
+ *   excerpt, applyUrl — deleted on 2026-08-03, the day they were added: `buildSummary`'s firstOf
+ *     list now includes `excerpt`, and `applyUrlFor` reads `rawFields.applyUrl` ahead of
+ *     `formUrl`/`detailUrl`/`sourceUrl`, which is close-out review B2 closed. The "no listed field
+ *     has since gained a reader" guard below is what forced both deletions rather than leaving two
+ *     entries asserting a defect that no longer exists.
  *
- * The two that remain are untouched for the same reason the six were originally deferred: a fix
- * made blind, without re-reading the real capture the source was graded against, is how a wrong
- * fact gets published.
+ * The rest are untouched for the same reason the six were originally deferred: a fix made blind,
+ * without re-reading the real capture the source was graded against, is how a wrong fact gets
+ * published. What is NOT deferred any more is knowing they are there.
  */
 const WRITE_ONLY_KNOWN_DEFECTS: ReadonlyMap<string, string> = new Map([
   ['oppStatus', "DEFECT. Grants.gov's own posted/closed/forecasted status. inferStatus ALREADY has an override seam — an explicit rawFields.status beats inference — and nothing maps oppStatus onto it, so a federal record's status is inferred from its dates while the funder's own answer sits unread. (The dates are now read; this is the remaining half.)"],
-  ['excerpt', "DEFECT. The ARDC REST API's own summary. buildSummary's firstOf list is ['summary','audience','eligibility','__preamble'] and does not include it, so ardc-grants records fall back to a rawText dump."],
+
+  // ---- THE SUBSCRIPT-WRITTEN BACKLOG, made visible on 2026-08-03 by collecting written keys off
+  // real parsed records (see the header). None of these is a new write: every one has been written
+  // by a live source, on the real capture, all along. They are listed here rather than in the
+  // by-design map because in each case the funder stated something an applicant acts on and the
+  // pipeline reads a fixed handful of key names instead — which is one defect with 18 faces, not
+  // 18 defects. Consuming any of them deletes its entry (the guard below fails while a listed key
+  // has a reader, so an entry cannot outlive the defect it describes).
+  ['jotformId', "DEFECT (B2). The ARRL ETP application form id (252714368960161) parsed off \"Complete the 2025 ETP Grant Application on Jotform here\". Nothing builds an apply URL from it, so the record points at the catalogue page instead of the form the funder names."],
+  ['window', "DEFECT (B1). The funder's own stated application window, in prose: ETP's \"OCTOBER 1ST AND OCTOBER 31ST of 2025.\", the ARRL scholarship page's \"Scholarship Cycle is now closed.\", Austin ARC's \"Applications open May 1 and close July 31 each year.\", ARISS's \"window opened July 1 and closes on September 30\". deadline.ts's observedWindow reads opensAt/closesAt/openDate/closeDate/responseDate BY NAME and not this, so records whose page states a closed or elapsed window still publish `open`."],
+  ['windows', "DEFECT (B1). ARRL Amateur Radio Grants' three annual windows (\"February 1 - February 28 June 1 - June 30 October 1 - October 31\") — an n_fixed_windows RECUR deadline sitting parsed and unread, on a record that today falls outside all three of them and still publishes `open`."],
+  ['deadline', "DEFECT (close-out review I2). Funder-published deadlines in prose: IEEE MTT-S's \"must be received by October 1\" and the IEEE Student Branch Rebate's \"Annual Plans are due 15 March.\" Both records assert no deadline is known while the date they need is in this key."],
+  ['requestWindow', "DEFECT (B1/I2). QCWA's \"on or after October 31 of each year from the ARRL Foundation Committee\" — when the award may be requested, unread, on a record that publishes `open` year-round."],
+  ['deadlineNote', "DEFECT (I2). QCWA's \"before the first week in January each year\" — the funder's own cutoff, parsed and unread, on a record whose deadline is asserted to be unknown."],
+  ['applicationCycle', "DEFECT (I2). NASA CSLI's \"Announcements of Partnership Opportunity is typically released each August with proposals due in November\" — an annual cadence and a due month, unread."],
+  ['cadence', "DEFECT (I2). ARISS's \"four proposal windows each year – one each quarter\", which is exactly the n_fixed_windows recurrence the DeadlineSpec RECUR kinds exist to carry, unread."],
+  ['residency', "DEFECT (close-out review I5, the widening direction). YLRL's \"There are no residency restrictions. Non-U.S. Amateurs are eligible.\" — a funder statement that the geography and citizenship axes never receive by name, so an explicit widening cannot reach the matcher as one."],
+  ['studyPreference', "DEFECT (B5). YLRL's \"Preference will be given to students studying communications, radio, electronics, or Amateur Radio related arts and sciences.\" — a PREFERENCE, which the preference axis is built to soften, delivered under a key the axis is never handed."],
+  ['membershipPreference', "DEFECT (B5). YLRL's \"Preference will be given to YLRL members.\" Same shape: the one axis that exists to turn this into `eligible_preferred` rather than a bar never sees the field."],
+  ['restrictions', "DEFECT. Funder-stated exclusions: ARRL Amateur Radio Grants' \"requests for emergency communications equipment … will not be considered\" / \"ongoing operations or expenses will not be considered\", and NCDXF's exclusion of commercial transportation costs. These are what an applicant needs to read before writing a proposal, and nothing consumes them."],
+  ['applicant', "DEFECT. Hard applicant rules in the funder's words: ARRL Amateur Radio Grants' \"Grants are awarded only to organizations, not individuals\" and ETP's \"applicants must be a current ARRL member\". The entity and ARRL-membership axes are fed other keys, so both facts reach the matcher only if they happen to survive in rawText."],
+  ['requirements', "DEFECT. IEEE MTT-S's \"Minimum of ten (10) members; five (5) members for Student Branch Chapters\" — a real org-side eligibility threshold with a profile field to compare against (OrgProfile.memberCount), unread."],
+  ['teachers', "DEFECT. SARA's \"UPDATE: Teachers are now eligible to apply for grants to bring radio astronomy to the classroom.\" — a funder-published widening of who may apply, unread, on a record whose applicantEntities come from a per-source table instead."],
+  ['benefit', "DEFECT, same shape as `excerpt` above. The funder's own description of what the award provides (NCDXF's full-tuition DX/Contest University scholarships; NASA CSLI's launch opportunity). buildSummary's firstOf list is ['summary','audience','eligibility','__preamble'], so these records fall back to a rawText dump while the funder's own sentence sits here."],
+  ['amountNote', "DEFECT. ARRL Amateur Radio Grants' \"In support of ARRL's Year of the Club, award amounts may be up to $5,000 in 2026.\" — a qualifier on the published amount, with a year on it, that no consumer reads and no Program field carries."],
 ]);
 
 const ALLOWED = new Set([...WRITE_ONLY_BY_DESIGN.keys(), ...WRITE_ONLY_KNOWN_DEFECTS.keys()]);
@@ -321,6 +456,32 @@ describe('rawFields: nothing a source writes may be silently consumed by nobody'
     // how the next reader learns to stop trusting the list.
     const stale = [...ALLOWED].filter((key) => !written.has(key)).sort();
     expect(stale).toEqual([]);
+  });
+
+  /**
+   * ...AND NO LISTED FIELD MAY HAVE QUIETLY GAINED A READER.
+   *
+   * This is the other half of staleness, and the review found the trap it closes: an allow-list
+   * entry saying "nothing reads this, and that is a known defect" was simultaneously being cited
+   * elsewhere as evidence that the same field was fine. An entry here is a claim about the code —
+   * "this key reaches no consumer" — so the moment it stops being true the entry has to go, or the
+   * list becomes a place where fixed things go to look broken and broken things go to look signed.
+   *
+   * Deleting the entry IS the fix, and it is one line. A red here is the good outcome: it means
+   * somebody consumed the field.
+   */
+  it('keeps the write-only lists honest: no listed field has since gained a reader', async () => {
+    const readerSources = await collectReaderSources();
+    const consumed = [...ALLOWED]
+      .map((key) => ({ key, readers: readersOf(key, readerSources) }))
+      .filter((e) => e.readers.length > 0)
+      .map((e) => `rawFields.${e.key} is now read by ${e.readers.join(', ')}`);
+    expect(
+      consumed,
+      'these keys are listed as written-and-read-by-nothing but now have a consumer — delete ' +
+        'their entries from WRITE_ONLY_BY_DESIGN / WRITE_ONLY_KNOWN_DEFECTS in ' +
+        'rawFieldsContract.test.ts so the orphan check above starts guarding them again',
+    ).toEqual([]);
   });
 
   it('gives every listed field a non-empty reason', () => {
@@ -356,12 +517,50 @@ describe('the rawFields scanner actually sees the tree', () => {
         'sources/usaspending.ts',
       ]),
     );
-    expect(written.get('cfda')).toEqual(['federal/grantsGov.ts']);
+    expect(written.get('cfda')).toEqual(expect.arrayContaining(['federal/grantsGov.ts']));
     expect(written.get('opensAt')).toEqual(
       expect.arrayContaining(['sources/tier-c-b.ts', 'sources/yaesu-dr2x.ts']),
     );
-    expect(written.get('whyManual')).toEqual(['sources/manual-tier-d.ts']);
+    expect(written.get('whyManual')).toEqual(expect.arrayContaining(['sources/manual-tier-d.ts']));
     expect(written.size).toBeGreaterThan(30);
+  });
+
+  /**
+   * THE RUNTIME HALF, pinned against the three write shapes the static scan cannot see. Each of
+   * these keys is written ONLY through a computed subscript on a real record, so if the fixture
+   * parse ever stops running — or starts being swallowed — these assertions fail instead of the
+   * write side silently shrinking back to what a text grep can find. That shrinkage is what let
+   * ~40 keys, and B2 with them, hide for a whole plan.
+   */
+  it('finds the keys only a real parse reveals — spread, Object.assign and rawFields[key]', async () => {
+    const written = await collectWrites();
+    for (const [key, sourceId] of [
+      ['applyUrl', 'qcwa'], // the B2 key — invisible to the static scan for as long as it was broken
+      ['jotformId', 'arrl-etp-grants'],
+      ['window', 'arrl-etp-grants'],
+      ['residency', 'ylrl'],
+      ['requirements', 'ieee-mtts'],
+    ] as const) {
+      expect(written.get(key), `${key} must be seen on a real ${sourceId} record`).toEqual(
+        expect.arrayContaining([`parse:${sourceId}`]),
+      );
+    }
+    // Static-only keys must NOT disappear when the runtime half is added, and vice versa: the two
+    // halves are a union, not a replacement.
+    expect(written.get('whyManual')).toEqual(['sources/manual-tier-d.ts']);
+    expect([...written.values()].filter((w) => w.some((s) => s.startsWith('parse:'))).length)
+      .toBeGreaterThan(30);
+  });
+
+  it('parses every source that has a real capture, and swallows nothing', async () => {
+    const { byId, noCapture } = await parseAllFixtures();
+    // manual-tier-d is hand-curated with `requests: []` and has no capture BY DESIGN — it is
+    // covered through TIER_D_RECORDS instead. Any other source landing here means the write side
+    // has gone blind to a whole module, which is exactly how this defect class starts.
+    expect(noCapture).toEqual(['manual-tier-d']);
+    expect(byId.size).toBeGreaterThan(20);
+    const totalRecords = [...byId.values()].reduce((n, raws) => n + raws.length, 0);
+    expect(totalRecords).toBeGreaterThan(500);
   });
 
   it('finds the readers real consumers really have, in all three read shapes', async () => {

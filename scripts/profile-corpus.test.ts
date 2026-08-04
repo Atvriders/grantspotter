@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { matchProgram } from '../packages/core/src/matcher.js';
 import { makeStudent } from '../packages/core/test/fixtures.js';
-import { isDoNotPublish, loadCorpus, PROFILE_NOW_ISO, PROFILES } from './profile-corpus.js';
+import { ADJACENCY_THRESHOLD } from '../packages/server/src/federal/adjacency.js';
+import {
+  isBelowAdjacencyThreshold,
+  isDoNotPublish,
+  loadCorpus,
+  PROFILE_NOW_ISO,
+  PROFILES,
+} from './profile-corpus.js';
 
 /**
  * The tests for `scripts/profile-corpus.ts` — the dev tool every matcher fix in this remediation
@@ -27,18 +34,19 @@ import { isDoNotPublish, loadCorpus, PROFILE_NOW_ISO, PROFILES } from './profile
  */
 describe('scripts/profile-corpus — the corpus is what the product would show', () => {
   it('excludes every do_not_publish record, and reports how many it excluded', async () => {
-    const { programs, loaded, suppressed } = await loadCorpus();
+    const { programs, loaded, suppressed, belowAdjacency } = await loadCorpus();
 
     // The whole point: not one suppressed record survives into the measured corpus.
     expect(programs.filter((p) => isDoNotPublish(p))).toEqual([]);
 
-    // Real counts, from the committed fixtures. 742 records normalize; 545 of them are
-    // suppressed (544 `past_award` + the 1 `crosscheck` row), leaving 197 the product would
-    // actually show. These move when fixtures land — update them, do not soften them, and
-    // check WHICH source moved: `loaded` carries the split per source.
-    expect(suppressed).toBe(545);
-    expect(programs).toHaveLength(197);
-    expect(programs.length + suppressed).toBe(742);
+    // Real counts, from the committed fixtures. 747 records normalize; 553 are suppressed as
+    // past awards / cross-check rows and 45 more fall under the adjacency gate, leaving 149 the
+    // product would actually show. These move when fixtures land — update them, do not soften
+    // them, and check WHICH source moved: `loaded` carries the split per source.
+    expect(suppressed).toBe(553);
+    expect(belowAdjacency).toBe(45);
+    expect(programs).toHaveLength(149);
+    expect(programs.length + suppressed + belowAdjacency).toBe(747);
 
     // The canonical case from the do_not_publish fix: the ARRL club-grant page yields the ONE
     // real ARRL Club Grant Program plus 37 clubs that have already RECEIVED money.
@@ -46,6 +54,7 @@ describe('scripts/profile-corpus — the corpus is what the product would show',
       sourceId: 'arrl-club-grant',
       programs: 1,
       suppressed: 37,
+      belowAdjacency: 0,
     });
     // ...and the three sources that are ENTIRELY past awards contribute nothing to show.
     for (const sourceId of ['ardc-award-tables', 'nsf-awards', 'usaspending']) {
@@ -57,10 +66,61 @@ describe('scripts/profile-corpus — the corpus is what the product would show',
 });
 
 /**
+ * REMEDIATION 2026-08-03 (close-out review) — the SECOND gate, and the 23% over-report.
+ *
+ * `buildReviewItems` suppresses twice: `isDoNotPublish`, and immediately below it the adjacency
+ * gate. `loadCorpus` applied the first and not the second, so it reported a corpus of 197 where a
+ * user could reach 152 — in the tool every acceptance figure in this plan was measured with, whose
+ * own header promises its corpus is "the set of programs the product would actually SHOW". The
+ * profile numerators did not move (all 45 gated records carry empty `applicantEntities`, so no
+ * profile could ever see them); every denominator did, and every rate quoted against the corpus
+ * was inflated by 23%.
+ *
+ * These tests pin the gate as SHARED rather than copied. `isBelowAdjacencyThreshold` is the
+ * product's own function, re-exported by the tool; if `review/index.ts` changes the rule — or the
+ * off-by-one at exactly-threshold — the tool changes with it, and if somebody re-expresses the
+ * comparison locally instead, the boundary cases below are what fails.
+ */
+describe('scripts/profile-corpus — the adjacency gate is the product’s, not a copy of it', () => {
+  it('excludes every nsf-funding-rss record, because none of them is adjacent', async () => {
+    const { programs, loaded } = await loadCorpus();
+    // A real capture of the three NSF funding feeds: 45 items, best score 1 against a threshold
+    // of 6 (Gravitational Physics, Chemical Oceanography, SBIR). Real open solicitations — just
+    // not for a radio club, which is why the gate and not `do_not_publish` is what removes them.
+    expect(loaded.find((e) => e.sourceId === 'nsf-funding-rss')).toEqual({
+      sourceId: 'nsf-funding-rss',
+      programs: 0,
+      suppressed: 0,
+      belowAdjacency: 45,
+    });
+    expect(programs.filter((p) => p.tags.includes('source:nsf-funding-rss'))).toEqual([]);
+  });
+
+  it('keeps the record that scores EXACTLY the threshold — the gate’s only true positive', async () => {
+    const { programs } = await loadCorpus();
+    // NTIA's Public Wireless Supply Chain Innovation Fund scores exactly ADJACENCY_THRESHOLD, so
+    // an off-by-one in a re-expressed gate would empty the federal sweep of the one open federal
+    // call in the whole corpus and nothing else would look different.
+    expect(programs.map((p) => p.name)).toContain(
+      'Public Wireless Supply Chain Innovation Fund Grant Program – Solutions for AI-Native RAN',
+    );
+  });
+
+  it('applies the product’s predicate at the boundary, including “not scored” ≠ “zero”', () => {
+    expect(isBelowAdjacencyThreshold(ADJACENCY_THRESHOLD)).toBe(false);
+    expect(isBelowAdjacencyThreshold(ADJACENCY_THRESHOLD - 1)).toBe(true);
+    expect(isBelowAdjacencyThreshold(0)).toBe(true);
+    // Every ham-specific source computes no score at all; an absent score is not a low one, and
+    // reading it as 0 would delete all but the federal corner of this corpus.
+    expect(isBelowAdjacencyThreshold(undefined)).toBe(false);
+  });
+});
+
+/**
  * REMEDIATION 2026-08-03 (follow-on) — the profiler's four canned applicants were all
  * individuals, and none was a certificate/vocational student. Two real defects hid behind that
  * blind spot: the CWops Scholarship's trade/art/professional-school disjunct (fixed in commit
- * ec64293) had no profile that could ever exercise it, and 76 of the corpus's 197 publishable
+ * ec64293) had no profile that could ever exercise it, and a quarter of the publishable
  * programs are org-facing (club/school/university) and were never matched against anything —
  * which is exactly the population the `do_not_publish` bug (37 ARRL club-grant past recipients,
  * 424 ARDC award rows, 45 USAspending and 38 NSF historical awards, all publishable) landed on.
@@ -102,18 +162,15 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     expect(matchProgram(certTrade, cwops, PROFILE_NOW_ISO)).toEqual({ kind: 'eligible' });
   });
 
-  it('radio-club (club_501c3) opens exactly the club-facing subset, never the 121 individual-facing programs', async () => {
+  it('radio-club (club_501c3) opens exactly the club-facing subset, never the individual-facing programs', async () => {
     const club = findProfile('radio-club').profile;
     expect(club).toMatchObject({ kind: 'organization', entity: 'club_501c3' });
 
     const { programs } = await loadCorpus();
     const open = programs.filter((p) => p.applicantEntities.includes('club_501c3'));
     expect(open.map((p) => p.name).sort()).toEqual([
-      '2025 Grants',
-      '2026 Grants',
       'ARRL Amateur Radio Grants',
       'ARRL Club Grant Program',
-      'HamSCI Personal Space Weather Station Expansion',
       // Both added by the applicant-entity remediation in normalize/index.ts, and both were
       // reachable by NOBODY before it. NCDXF's grant guidelines name their own audience —
       // "individuals and groups who use amateur radio communications…" — and had no
