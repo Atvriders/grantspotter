@@ -390,7 +390,7 @@ export function Admin(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {users.data.rows.map((row) => (
+                {rows.map((row) => (
                   <tr key={row.id}>
                     <td>
                       <span className="admin-row-email">{row.email}</span>

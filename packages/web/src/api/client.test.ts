@@ -115,6 +115,98 @@ describe('apiFetch (Plan 1)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// A success status carrying a body that is not JSON.
+//
+// This is the deployment failure, not a curiosity: GrantSpotter is served behind
+// a Cloudflare Tunnel, and a tunnel, reverse proxy or captive portal that answers
+// with an HTML page under status 200 produces exactly these responses. apiFetch
+// used to swallow the parse failure and resolve `undefined`, which is not `null`,
+// so it walked through every route's `data !== null` guard and the page went
+// blank. One throw here is the whole fix; see useApi.test.tsx for the proof that
+// the routes then show an error rather than a blank or empty screen.
+// ---------------------------------------------------------------------------
+describe('apiFetch on a 2xx whose body is not JSON', () => {
+  const HTML_ERROR_PAGE =
+    '<!DOCTYPE html><html><head><title>Error 1033</title></head>' +
+    '<body><h1>Argo Tunnel error</h1></body></html>';
+
+  it('rejects rather than resolving undefined, so no route can render a non-answer', async () => {
+    stubFetch(
+      new Response(HTML_ERROR_PAGE, { status: 200, headers: { 'content-type': 'text/html' } }),
+    );
+    const err = await apiGet('/api/programs').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe('internal');
+    // Not 0: something DID answer. useApi reserves status 0 for a request that
+    // never reached a server, and conflating the two would misreport the fault.
+    expect((err as ApiError).status).toBe(200);
+    expect((err as ApiError).message).toMatch(/not JSON/i);
+  });
+
+  it('never resolves a value at all — the failure cannot be mistaken for data', async () => {
+    stubFetch(
+      new Response(HTML_ERROR_PAGE, { status: 200, headers: { 'content-type': 'text/html' } }),
+    );
+    const onFulfilled = vi.fn();
+    const onRejected = vi.fn();
+    await apiGet('/api/calendar').then(onFulfilled, onRejected);
+
+    // The old behaviour resolved with `undefined`, so onFulfilled ran and every
+    // caller believed it had been handed a body.
+    expect(onFulfilled).not.toHaveBeenCalled();
+    expect(onRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a truncated or empty 200 body the same way', async () => {
+    // A proxy that closes the connection early leaves a 200 with nothing in it.
+    // That is not a 204 and must not be read as "asked, answered, nothing there".
+    stubFetch(new Response('', { status: 200 }));
+    const err = await apiGet('/api/watches').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(200);
+  });
+
+  it('applies on writes too, not only reads', async () => {
+    stubFetch(
+      new Response(HTML_ERROR_PAGE, { status: 201, headers: { 'content-type': 'text/html' } }),
+    );
+    const err = await apiSend('POST', '/api/watches', { programId: 'ardc-grants' }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(201);
+  });
+
+  // ---- what must NOT change ----
+
+  it('still resolves a deliberate null body, which is an answer and not a failure', async () => {
+    stubFetch(jsonResponse(200, null));
+    await expect(apiGet('/api/profiles')).resolves.toBeNull();
+  });
+
+  it('still resolves a 204, which never had a body to parse', async () => {
+    stubFetch(new Response(null, { status: 204 }));
+    await expect(apiSend('DELETE', '/api/watches/x')).resolves.toBeUndefined();
+  });
+
+  it('leaves the error envelope path exactly as it was', async () => {
+    stubFetch(jsonResponse(403, errorBody('forbidden', 'Admins only.')));
+    const err = await apiGet('/api/admin/users').catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'forbidden', status: 403, requestId: 'req-test-1' });
+    expect((err as ApiError).message).toBe('Admins only.');
+  });
+
+  it('leaves a non-JSON FAILURE body reporting the status, not the parse', async () => {
+    // The 5xx HTML path predates this guard and keeps its own wording; only the
+    // 2xx case is new, so this pins that the two did not get merged.
+    stubFetch(new Response('<html>502 Bad Gateway</html>', { status: 502 }));
+    const err = await apiGet('/api/health').catch((e: unknown) => e);
+    expect((err as ApiError).message).toBe('Request failed with status 502.');
+  });
+});
+
 // ---- Plan 3's thin wrappers ----
 describe('apiGet', () => {
   it('delegates to apiFetch, so the session cookie travels', async () => {

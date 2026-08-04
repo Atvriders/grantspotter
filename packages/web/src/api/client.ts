@@ -73,10 +73,12 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
   if (response.status === 204) return undefined as T;
 
   let payload: unknown;
+  let bodyParsed = true;
   try {
     payload = await response.json();
   } catch {
     payload = undefined;
+    bodyParsed = false;
   }
 
   if (!response.ok) {
@@ -90,6 +92,36 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
       );
     }
     throw new ApiError('internal', `Request failed with status ${response.status}.`, response.status, '');
+  }
+
+  /**
+   * A success status whose body is not JSON is a failure, and it has to be raised as one HERE —
+   * once — because this is the only place that knows the parse failed.
+   *
+   * Returning `undefined` instead (as this did) is the worst available answer. `undefined` is not
+   * `null`, so it walks straight through every `data !== null` guard in the app and each route
+   * renders as though it were holding a response, then throws on the first field access: a blank
+   * page with no message. The guard below converts that into the ordinary error path each route
+   * already renders, which is why one edit covers all of them.
+   *
+   * This is not a theoretical body. GrantSpotter is served behind a Cloudflare Tunnel, and a
+   * tunnel, reverse proxy, or captive portal answering with an HTML error or sign-in page under
+   * status 200 is exactly this case — the same trap `federal/usaSpending.ts` documents upstream.
+   * `status` stays as the wire status rather than 0, because something did answer; 0 is reserved
+   * by `useApi` for a request that never reached a server, and that distinction is worth keeping.
+   *
+   * A `null` body is NOT this case: `JSON.parse('null')` succeeds, so a deliberate `null` payload
+   * still resolves as `null` and still means "asked, answered, nothing there".
+   */
+  if (!bodyParsed) {
+    throw new ApiError(
+      'internal',
+      `The API answered ${response.status} with a body that is not JSON, so there is no data to ` +
+        'show here. Something other than GrantSpotter — a proxy, tunnel, or sign-in page — may ' +
+        'have answered instead.',
+      response.status,
+      '',
+    );
   }
 
   return payload as T;
