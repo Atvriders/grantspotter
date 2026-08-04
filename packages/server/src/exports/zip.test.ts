@@ -390,8 +390,17 @@ describe('the packet is the same file on any machine, not merely on one machine 
 
   /**
    * A stamp outside 1980-2099 does not produce a wrong archive, it produces NO archive: fflate
-   * 0.8.3 throws "date not in range 1980-2099". Etc/GMT+12 and Pacific/Kiritimati are the zones
-   * that would drag 1 January 1980 back into 1979, which is why the fixed date is the 2nd.
+   * 0.8.3 throws "date not in range 1980-2099". These two zones are where that used to bite, so
+   * they are the ones worth opening the result in.
+   *
+   * They no longer bite, and the reason is worth stating precisely because the first version of
+   * this comment got it backwards. The 1979 hazard was a property of the OLD `new Date(Date.UTC(…))`
+   * form: one instant is a different wall clock everywhere, so midnight UTC on the 1st read back as
+   * 31 December 1979 in any zone behind UTC and fflate refused to build. The date is now a zoneless
+   * STRING, which is 1 January in every zone by construction, so the hazard cannot arise for either
+   * candidate date — measured across every zone in this host's tzdata: both the 1st and the 2nd
+   * yield exactly one stamp and throw in zero zones. The 2nd is kept because it is what already
+   * shipped, and moving it would rewrite the bytes of every archive for no gain.
    */
   it('still opens, with all six entries, when it was written in the most distant zones', async () => {
     for (const tz of ['Etc/GMT+12', 'Pacific/Kiritimati']) {

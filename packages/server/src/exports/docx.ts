@@ -194,8 +194,11 @@ const MODIFIED_RE = /(<dcterms:modified[^>]*>)[^<]*(<\/dcterms:modified>)/;
  * this file. A date-time string with no offset is parsed as LOCAL time, which pins those getters to
  * the same wall clock everywhere. Same fix, same reason, as `XLSX_ARCHIVE_MTIME` in `xlsx.ts`.
  *
- * The 2nd and not the 1st: fflate 0.8.3 throws "date not in range 1980-2099" below 1980, and read
- * as a local wall clock the 1st would fall back into 1979 anywhere behind UTC.
+ * The 2nd and not the 1st, corrected: fflate 0.8.3 does throw "date not in range 1980-2099" below
+ * 1980, but the claim that the 1st "would fall back into 1979 anywhere behind UTC" was false of the
+ * line below. It was true of the instant form described above — and that is exactly why the
+ * constant changed. A zoneless string is 1 January in every zone by construction, so both dates are
+ * safe everywhere; the 2nd stays only because it is what already shipped.
  */
 const ARCHIVE_MTIME = '1980-01-02T00:00:00';
 

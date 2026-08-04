@@ -393,8 +393,13 @@ describe('the DOCX is the same file on any machine, not merely on one machine tw
 
   /**
    * A stamp outside 1980-2099 does not produce a wrong package, it produces NO package: fflate
-   * 0.8.3 throws "date not in range 1980-2099". Etc/GMT+12 and Pacific/Kiritimati are the zones
-   * that would drag 1 January 1980 back into 1979, which is why the fixed date is the 2nd.
+   * 0.8.3 throws "date not in range 1980-2099". These two zones are where that used to bite, which
+   * is why they are the ones this test opens the result in.
+   *
+   * The hazard belonged to the OLD instant form, not to the current one, and the first version of
+   * this comment blamed the wrong thing — see the corrected note on `ARCHIVE_MTIME` in `docx.ts`.
+   * A zoneless date-time string is 1 January in every zone by construction, so neither candidate
+   * date can underflow; the 2nd is retained because it is what already shipped.
    */
   it('is still a readable OPC package when it was written in the most distant zones', async () => {
     for (const tz of ['Etc/GMT+12', 'Pacific/Kiritimati']) {

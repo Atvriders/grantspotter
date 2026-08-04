@@ -320,8 +320,14 @@ export async function buildApplicationPacket(input: PacketInput): Promise<Uint8A
   };
   // A fixed archive mtime keeps the packet byte-stable for the same input, which makes it
   // diffable. `mtime: 0` — which the task brief specified — THROWS in fflate 0.8.3:
-  // "date not in range 1980-2099", because the DOS timestamp ZIP stores starts at 1980. The 2nd
-  // rather than the 1st for the same reason, now that the date is read as a local wall clock:
-  // Etc/GMT+12 would put the 1st back into 1979 and the packet would not build at all there.
+  // "date not in range 1980-2099", because the DOS timestamp ZIP stores starts at 1980.
+  //
+  // Why the 2nd and not the 1st, stated correctly on the second attempt. The original answer here
+  // was "the 1st would fall back into 1979 anywhere behind UTC", and that is FALSE of this code:
+  // it described the earlier `new Date(Date.UTC(1980, 0, 2))` form, where one instant is a
+  // different wall clock in every zone. `ARCHIVE_MTIME` is now a zoneless string, which fflate
+  // reads as the same local wall clock everywhere, so both the 1st and the 2nd are safe in every
+  // zone — measured across all of them. The 2nd simply stays because it is what shipped, and
+  // changing it would rewrite every archive's bytes to no purpose.
   return zipSync(files, { level: 6, mtime: ARCHIVE_MTIME });
 }
