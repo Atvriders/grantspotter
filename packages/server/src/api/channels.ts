@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { ChangeKind } from '@grantspotter/core';
 import { assertNotBlocked } from '../fetcher/blocklist.js';
+import { canonicalHostname, embeddedIpv4, ipv6Bytes } from '../net/hosts.js';
 
 /** PLAN-LOCAL to Plan 3. */
 export interface ChannelConfig {
@@ -106,67 +107,47 @@ function ipv4Reason(octets: readonly number[]): string | null {
 }
 
 /**
- * Expand an IPv6 literal (brackets already stripped) into eight 16-bit groups.
- * Returns null for anything it cannot parse, and the caller refuses those —
- * an address whose scope cannot be determined is not an address to POST to.
+ * Why this IPv6 address is not somewhere a webhook may point, or null.
+ *
+ * THIS USED TO COMPARE SPELLINGS, and it was the second copy of the defect
+ * `net/hosts.ts` was written to end. It asked "do the first five groups read
+ * zero, and does the sixth read ffff?", which recognises `::ffff:127.0.0.1`
+ * and misses every other way of writing the same destination. Measured against
+ * this function before the fix, each one ACCEPTED:
+ *
+ *     https://[::ffff:0:127.0.0.1]/x   IPv4-translated (RFC 2765) loopback
+ *     https://[::ffff:0:c0a8:12b]/x    the same form, LAN address in hex
+ *     https://[2002:7f00:1::]/x        6to4 (RFC 3056) around loopback
+ *     https://[2002:c0a8:105::1]/x     6to4 around 192.168.1.5
+ *
+ * Spellings are unbounded and keep arriving; there are only ever sixteen
+ * bytes. So the parsing is `net/hosts.ts`'s — one parser, shared with the
+ * CONTACT_URL rule — and what stays here is the POLICY, which is genuinely
+ * different: a webhook may point at RFC 3849 documentation space (this
+ * repository's stand-in for a public address) and may not point at multicast,
+ * benchmarking or IETF protocol-assignment space, and the contact-URL rule is
+ * the other way round on both. Sharing the policy would have been wrong;
+ * sharing the parser is the whole point.
  */
-function expandIpv6(text: string): number[] | null {
-  const zoned = text.split('%')[0] ?? '';
-  const halves = zoned.split('::');
-  if (halves.length > 2) return null;
+function ipv6Reason(bytes: Uint8Array): string | null {
+  if (bytes.every((b) => b === 0)) return 'unspecified';
+  if (bytes.every((b, i) => b === (i === 15 ? 1 : 0))) return 'loopback';
 
-  const parse = (part: string): number[] | null => {
-    if (part === '') return [];
-    const groups: number[] = [];
-    for (const piece of part.split(':')) {
-      // A trailing dotted quad, as in ::ffff:127.0.0.1, occupies two groups.
-      if (piece.includes('.')) {
-        const octets = piece.split('.');
-        if (octets.length !== 4) return null;
-        const nums = octets.map((o) => Number(o));
-        if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
-        groups.push(((nums[0] ?? 0) << 8) | (nums[1] ?? 0), ((nums[2] ?? 0) << 8) | (nums[3] ?? 0));
-        continue;
-      }
-      if (!/^[0-9a-f]{1,4}$/i.test(piece)) return null;
-      groups.push(Number.parseInt(piece, 16));
-    }
-    return groups;
-  };
+  // Before the scope tests below, because an IPv4 address inside an IPv6 one is
+  // the destination that actually has to answer: the packet lands on 127.0.0.1
+  // however the literal was spelled. `::` and `::1` are checked above because
+  // both also read as an IPv4-compatible address, and "loopback" is the more
+  // useful answer than "0.0.0.1 is in this-network".
+  const v4 = embeddedIpv4(bytes);
+  if (v4 !== null) {
+    const reason = ipv4Reason(v4.split('.').map((o) => Number(o)));
+    if (reason !== null) return reason;
+  }
 
-  const head = parse(halves[0] ?? '');
-  if (head === null) return null;
-  if (halves.length === 1) return head.length === 8 ? head : null;
-
-  const tail = parse(halves[1] ?? '');
-  if (tail === null) return null;
-  const fill = 8 - head.length - tail.length;
-  if (fill < 0) return null;
-  return [...head, ...Array<number>(fill).fill(0), ...tail];
-}
-
-function ipv6Reason(groups: readonly number[]): string | null {
-  const leading = groups.slice(0, 5).every((g) => g === 0);
-  const embedded = (): string | null =>
-    ipv4Reason([
-      ((groups[6] ?? 0) >> 8) & 0xff,
-      (groups[6] ?? 0) & 0xff,
-      ((groups[7] ?? 0) >> 8) & 0xff,
-      (groups[7] ?? 0) & 0xff,
-    ]) ?? null;
-
-  if (groups.every((g) => g === 0)) return 'unspecified';
-  if (leading && groups[5] === 0 && groups[6] === 0 && groups[7] === 1) return 'loopback';
-  // ::ffff:a.b.c.d — an IPv4 address wearing an IPv6 hat, and the reason a
-  // check that stops at "is this IPv6?" lets 127.0.0.1 straight through.
-  if (leading && groups[5] === 0xffff) return embedded() ?? null;
-  // ::a.b.c.d, the deprecated IPv4-compatible form, and 64:ff9b::/96 (NAT64)
-  // reach the same IPv4 destination by a different route.
-  if (leading && groups[5] === 0) return embedded() ?? null;
-  if (groups[0] === 0x64 && groups[1] === 0xff9b) return embedded() ?? null;
-  if (((groups[0] ?? 0) & 0xfe00) === 0xfc00) return 'unique-local';
-  if (((groups[0] ?? 0) & 0xffc0) === 0xfe80) return 'link-local';
-  if (((groups[0] ?? 0) & 0xff00) === 0xff00) return 'multicast';
+  const firstHextet = ((bytes[0] as number) << 8) | (bytes[1] as number);
+  if ((firstHextet & 0xfe00) === 0xfc00) return 'unique-local';
+  if ((firstHextet & 0xffc0) === 0xfe80) return 'link-local';
+  if ((firstHextet & 0xff00) === 0xff00) return 'multicast';
   return null;
 }
 
@@ -238,15 +219,25 @@ export function assertSafeWebhookUrl(raw: string): void {
   // `url.hostname` and never the raw string: WHATWG normalizes 2130706433,
   // 0x7f000001, 017700000001 and 127.1 to 127.0.0.1 before this reads it, and
   // a check against the raw text would see none of them.
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  //
+  // `canonicalHostname` and not a `.replace(/\.$/, '')` written here. That
+  // expression was this repository's fourth inline copy and the one nobody
+  // unified, and one dot deep is not enough: `new URL` keeps the hostname of
+  // `https://localhost../` as `localhost..`, one dot came off, and what was
+  // left was neither `localhost` nor a dotted-quad, so it fell to the
+  // multi-label branch and was ACCEPTED. Measured before the fix, all three
+  // accepted by this function: `https://localhost../`, `https://127.0.0.1../`,
+  // `https://192.168.1.5../`. A resolver treats every trailing dot as the same
+  // root, so an SSRF guard that does not is not a guard.
+  const host = canonicalHostname(url.hostname);
   const refuse = (why: string): never => {
     throw new Error(`refusing a private or internal webhook host (${why}): ${host}`);
   };
 
   if (host.startsWith('[')) {
-    const groups = expandIpv6(host.slice(1, -1));
-    if (groups === null) refuse('unparseable IPv6 literal');
-    const reason = ipv6Reason(groups as number[]);
+    const bytes = ipv6Bytes(host);
+    if (bytes === null) refuse('unparseable IPv6 literal');
+    const reason = ipv6Reason(bytes as Uint8Array);
     if (reason !== null) refuse(reason);
   } else if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
     const reason = ipv4Reason(host.split('.').map((o) => Number(o)));

@@ -30,8 +30,10 @@ async function main(): Promise<void> {
   // sent `GrantSpotter/0.1.0 (+not a url; …)` to it. `resolveContactUrl` is the same predicate the
   // server runs, and it throws before a fetcher exists.
   //
-  // Unset means "identify through the project's issue tracker". Set CONTACT_URL if the sites you
-  // are about to poll should be able to reach YOU about it.
+  // CONTACT_URL is required and has no default, so unset means this command REFUSES TO RUN. That
+  // is the intended behaviour and it is the point of the whole variable: this command polls ~25
+  // live volunteer-run sites, and there is no address this project could supply on your behalf
+  // that would let them reach YOU about it. Set it to a page you control before running this.
   const contactUrl = resolveContactUrl();
   const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
   const fetcher = createFetcher({

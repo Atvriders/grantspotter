@@ -123,9 +123,58 @@ describe('assertSafeWebhookUrl', () => {
     }
   });
 
+  /**
+   * THE SPELLINGS THE `::ffff:` PATTERN NEVER SAW.
+   *
+   * Until this was fixed, `ipv6Reason` asked "are the first five groups zero
+   * and the sixth `ffff`?", which recognises `::ffff:127.0.0.1` and nothing
+   * else. Every literal below is 127.0.0.1 or 192.168.1.43 by another route,
+   * every one of them parses in `new URL`, and every one of them was ACCEPTED
+   * by this function — an authenticated user could aim a webhook at the
+   * server's own loopback. The parser is `net/hosts.ts`'s now: sixteen bytes,
+   * asked what they are, rather than a regex asked what they look like.
+   */
+  it('rejects an internal IPv4 address hidden in an IPv6 literal, however it is spelled', () => {
+    for (const raw of [
+      'https://[::ffff:0:127.0.0.1]/x', // IPv4-translated, RFC 2765
+      'https://[::ffff:0:c0a8:12b]/x', // the same form, written in hex: 192.168.1.43
+      'https://[2002:7f00:1::]/x', // 6to4, RFC 3056, around loopback
+      'https://[2002:c0a8:105::1]/x', // 6to4 around 192.168.1.5
+      'https://[::127.0.0.1]/x', // IPv4-compatible, RFC 4291
+      'https://[64:ff9b::7f00:1]/x', // NAT64 well-known prefix, RFC 6052
+      'https://[64:ff9b:1::192.168.1.5]/x', // NAT64 local-use prefix, RFC 8215
+      'https://[::ffff:0:a9fe:a9fe]/x', // 169.254.169.254, the metadata endpoint
+    ]) {
+      expect(() => assertSafeWebhookUrl(raw), raw).toThrow(/private/i);
+    }
+  });
+
+  /**
+   * A trailing dot is a legal absolute name, and `example.org.` is the same
+   * host as `example.org`. This guard stripped ONE — the fourth inline
+   * `.replace(/\.$/, '')` in this repository, and the one the unification into
+   * `canonicalHostname` missed — so `new URL` handed it `localhost..`, one dot
+   * came off, and `localhost.` matched neither the loopback name nor a
+   * dotted-quad. All three below were accepted before the fix.
+   */
+  it('is not walked past by a second trailing dot', () => {
+    for (const raw of [
+      'https://localhost../',
+      'https://127.0.0.1../',
+      'https://192.168.1.5.../x',
+      'https://printer.local../x',
+      'https://farweb.org../hook', // and the blocklist behind it
+    ]) {
+      expect(() => assertSafeWebhookUrl(raw), raw).toThrow();
+    }
+  });
+
   it('accepts a public IPv6 literal', () => {
-    // RFC 3849 documentation prefix — the IPv6 equivalent of TEST-NET.
+    // RFC 3849 documentation prefix — the IPv6 equivalent of TEST-NET. Still
+    // accepted after the parser change: the shared parser answers what the
+    // bytes ARE, and what is unacceptable stays this module's own policy.
     expect(() => assertSafeWebhookUrl('https://[2001:db8::1]/x')).not.toThrow();
+    expect(() => assertSafeWebhookUrl('https://[2606:4700::1111]/x')).not.toThrow();
   });
 
   it('rejects a single-label host, which resolves through the search domain', () => {

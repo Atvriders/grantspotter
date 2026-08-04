@@ -55,14 +55,15 @@ async function bootAndStop(dataDir: string, port: number): Promise<string> {
       // SESSION_SECRET has no default and none may be added: the server refuses to start without
       // it. It names itself as a test value on purpose; see the reasoning in deploy/compose.test.ts.
       //
-      // CONTACT_URL is deliberately absent, and the history is the reason it is worth a line. It
-      // was an example.com URL until the loader started refusing RFC 2606 names, then loopback
-      // ("where this process is anyway"), which the loader refuses too now — a crawler that
-      // identifies itself by an address pointing at the reader's own machine is worse than one
-      // that says nothing. Both edits were chasing a value this test never cared about, so it
-      // takes the shipped default: the project's issue tracker, which is what a real deployment
-      // sends.
+      // CONTACT_URL has to be here, and the history is the reason it is worth a line. It was an
+      // example.com URL until the loader started refusing RFC 2606 names, then loopback ("where
+      // this process is anyway"), which the loader refuses too — a crawler identifying itself by
+      // an address pointing at the reader's own machine is worse than one that says nothing — then
+      // absent, taking a shipped default, for the one day there was one. The default is gone: the
+      // server refuses to start without a contact URL, which is a property this file exercises by
+      // booting at all. So it names an invented club page, which is what a real deployment sends.
       SESSION_SECRET: 'first-run-test-session-secret-not-a-real-secret',
+      CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
       // A crawl would reach the network, and would also be the thing that duplicates the corpus
       // if the import were wired in after the scheduler.
       CRAWL_ENABLED: 'false',

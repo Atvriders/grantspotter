@@ -287,6 +287,78 @@ Crawl-delay: 45
   });
 });
 
+/**
+ * ONE GROUP, NOT TWO — RFC 9309 §2.1's `group = startgroupline *(startgroupline / emptyline)
+ * *(rule / emptyline)`.
+ *
+ * A group ended at the first line that was not a `User-agent:`, so a blank line, a comment or a
+ * `Sitemap:` between two agent lines started a new group and the rules landed only in the last of
+ * them. Every file below is an ordinary robots.txt, and the failure shape is the worst available:
+ * the rules are still in the file and still parsed, just filed under a group that nothing matches,
+ * so it reads as obeyed.
+ */
+describe('what does and does not end a run of User-agent lines', () => {
+  const blocked = (body: string): boolean =>
+    !isPathAllowed(parseRobots(body, 'GrantSpotter', 200, NOW), '/amateur-radio-grants');
+
+  it('keeps two consecutive User-agent lines in one group', () => {
+    // RFC 9309 §5's own worked example has exactly this shape.
+    expect(blocked('User-agent: GrantSpotter\nUser-agent: SomeoneElse\nDisallow: /\n')).toBe(true);
+  });
+
+  it('is not split by a blank line between the agent lines', () => {
+    expect(blocked('User-agent: GrantSpotter\n\nUser-agent: *\nDisallow: /\n')).toBe(true);
+  });
+
+  it('is not split by a comment between the agent lines', () => {
+    expect(
+      blocked('User-agent: GrantSpotter\n# and everybody else\nUser-agent: *\nDisallow: /\n'),
+    ).toBe(true);
+  });
+
+  it('is not split by a Sitemap line between the agent lines', () => {
+    // Measured before the fix: two groups, the named one empty. A named group beats the wildcard,
+    // so the empty one won and every path was allowed — the file said "keep out" twice over.
+    const body = `User-agent: GrantSpotter
+Sitemap: https://w9xyz-club.example.test/sitemap.xml
+User-agent: *
+Disallow: /
+`;
+    expect(blocked(body)).toBe(true);
+    expect(parseRobots(body, 'GrantSpotter', 200, NOW).disallows).toEqual(['/']);
+  });
+
+  it('carries a Crawl-delay across the same three separators', () => {
+    for (const separator of ['', '\n', '# note\n', 'Sitemap: https://x.example.test/s.xml\n']) {
+      const body = `User-agent: GrantSpotter\n${separator}User-agent: *\nCrawl-delay: 9\n`;
+      expect(parseRobots(body, 'GrantSpotter', 200, NOW).crawlDelaySec, separator).toBe(9);
+    }
+  });
+
+  it('still starts a new group when a RULE has intervened, which is what does end one', () => {
+    // The other direction, and the reason this is not simply "never split": a rule line closes the
+    // run of agents, so the file below really is two groups and the named one really is empty.
+    const body = `User-agent: SomeoneElse
+Disallow: /
+User-agent: GrantSpotter
+Disallow: /private
+`;
+    expect(blocked(body)).toBe(false);
+    expect(isPathAllowed(parseRobots(body, 'GrantSpotter', 200, NOW), '/private')).toBe(false);
+  });
+
+  it('still starts a new group after a Crawl-delay, which is also a rule for this parser', () => {
+    const body = `User-agent: SomeoneElse
+Crawl-delay: 30
+User-agent: GrantSpotter
+Disallow: /private
+`;
+    const rules = parseRobots(body, 'GrantSpotter', 200, NOW);
+    expect(rules.crawlDelaySec).toBeUndefined(); // the 30 was addressed to somebody else
+    expect(isPathAllowed(rules, '/private')).toBe(false);
+  });
+});
+
 describe('robotsFromResponse', () => {
   it('treats a 403 as "no rules published" — ncdxf.org 403s its own robots.txt', () => {
     // ncdxf.org serves a meta-refresh HTML page (not real robots directives) alongside

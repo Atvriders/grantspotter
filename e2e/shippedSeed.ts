@@ -158,11 +158,11 @@ export async function bootShippedServer(options: {
       // The server opens `${DATA_DIR}/grantspotter.sqlite`. There is no DB-path env var.
       DATA_DIR: options.dataDir,
       SESSION_SECRET: 'e2e-shipped-session-secret-not-a-real-secret',
-      // Blank is "unset", so this harness boots on the shipped default contact URL — which is the
-      // point of a file called shippedSeed. The loopback URL that used to be here is refused now:
-      // it names the reader's own machine, not the operator. Blank rather than absent because
-      // `...process.env` above would otherwise let a developer's own CONTACT_URL decide.
-      CONTACT_URL: '',
+      // What a real `docker compose up` does, which is the point of a file called shippedSeed: an
+      // operator's own page, because there is no default and blank no longer boots. Written out
+      // rather than inherited because `...process.env` above would otherwise let a developer's own
+      // CONTACT_URL decide what this asserts.
+      CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
       CRAWL_ENABLED: 'false',
     },
   });

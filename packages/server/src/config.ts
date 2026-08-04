@@ -25,12 +25,13 @@ export const MIN_SESSION_SECRET_LENGTH = 32;
 export const SERVER_VERSION = '0.1.0';
 
 /**
- * The literal value `docker-compose.yml` ships for SESSION_SECRET — the one variable an operator
- * still has to edit, and the only one with no default.
+ * The literal value `docker-compose.yml` ships for SESSION_SECRET — one of the TWO variables an
+ * operator has to edit before the first run, and one of the two with no default.
  *
- * (It read "the two variables that have no default" until 2026-08-04, and both halves of that had
- * stopped being true in the commit above this one: CONTACT_URL gained a working default, so there
- * is one such variable, not two, and the constant below is only ever about the secret.)
+ * (It said "two" until 2026-08-04, then "the only one" for the day CONTACT_URL had a default, and
+ * it is two again now that the default is gone. The constant below is only ever about the secret;
+ * CONTACT_URL's shipped placeholder is `PLACEHOLDER_CONTACT_URL`, and the two are refused by
+ * different rules for the reason recorded there.)
  *
  * Until 2026-08-04 the compose file wrote `${SESSION_SECRET:?…}`, and that `:?` was doing real
  * work: `docker compose up` refused to run at all until the operator supplied a value. Moving the
@@ -71,46 +72,63 @@ export const PLACEHOLDER_SESSION_SECRET =
   'CHANGE_ME_generate_one_with_openssl_rand_hex_32_and_paste_it_here';
 
 /**
- * What `docker-compose.yml` shipped for CONTACT_URL until 2026-08-04, kept because the guard that
- * refused it still has to refuse it. It is no longer shipped anywhere: CONTACT_URL has a working
- * default now (below), so nobody has to edit it — but "you no longer have to edit this" is not the
- * same statement as "any value is now fine", and the tests hold the second one by feeding this
- * string back to `loadConfig`.
+ * The literal value `docker-compose.yml` ships for CONTACT_URL. The second of the two values an
+ * operator must edit before the first run, and the second with no default.
+ *
+ * (It was called FORMER_PLACEHOLDER_CONTACT_URL for the one day CONTACT_URL had a default and
+ * nothing shipped it. It is shipped again, so the name is accurate again.)
+ *
+ * WHY THIS IS NOT GUARDED THE WAY THE SESSION SECRET IS, which is the obvious thing to reach for
+ * and would be a bug. `sharesRunWith` refuses a value sharing any eight-character run with the
+ * placeholder, and that is safe for a secret because `openssl rand -hex 32` emits `[0-9a-f]` and no
+ * eight-character window of the shipped secret is all-hex. It is not safe here: `https://` is an
+ * eight-character run of this string, so the rule would refuse every https URL on earth, starting
+ * with the operator's real one.
+ *
+ * What guards this instead is two independent rules, either of which catches it alone — which is
+ * what makes a half-edit safe without a run check:
+ *
+ *   keep the marker, change the host  ->  `isPlaceholder` refuses it ("still contains CHANGE_ME")
+ *   delete the marker, keep the host  ->  `reservedContactName` refuses it (example.org, RFC 2606)
+ *
+ * so the two edits an operator's hand actually makes are each caught by the rule the other one
+ * escaped, and only replacing the whole value gets past both. `config.test.ts` walks exactly those
+ * two half-edits, and `compose.test.ts` feeds this file's own literals to the real `loadConfig`.
  */
-export const FORMER_PLACEHOLDER_CONTACT_URL =
+export const PLACEHOLDER_CONTACT_URL =
   'https://example.org/CHANGE_ME_to_a_page_that_says_who_runs_this';
 
-/**
- * Where this crawler points a site owner who wants to talk to a human, when the operator has not
- * named an address of their own.
+/*
+ * CONTACT_URL IS REQUIRED AND HAS NO DEFAULT. Every operator names their own address.
  *
- * This used to be required with no default, on the reasoning that "an anonymous crawler is one
- * nobody can ask to stop". That reasoning was sound about anonymity and wrong about the remedy: it
- * made the FIRST run of a self-hosted app depend on the operator inventing a contact page, and an
- * operator who has no such page has two ways forward — find one, or paste something that parses.
- * The second is the one that actually happens, and it produces a plausible-looking address that
- * reaches nobody, which is the failure the requirement existed to prevent.
+ * A section note and not a docblock, because there is no longer a constant here for it to document
+ * — which is the decision itself.
  *
- * WHAT THE DEFAULT HONESTLY BUYS, AND WHAT IT DOES NOT. It makes the crawler identifiable: the
- * software has a name, a public source tree and an issue tracker a human reads. It does not make
- * every deployment individually accountable, because every deployment that keeps this default
- * points at the SAME tracker — the project's, not the operator's. A site owner who wants one
- * particular instance to stop polling them reaches the maintainers of the software, who do not run
- * that instance and cannot stop it. The remedy that works regardless of who is running what is
- * `robots.txt`: every instance honours it, matched case-insensitively on the `GrantSpotter` token
- * (`fetcher/index.ts` AGENT_TOKEN), with or without a version or suffix after it — so the string
- * a site owner reads in their log stops us as readily as the bare token, which was NOT true until
- * 2026-08-04. `User-agent: GrantSpotter` + `Disallow: /` stops all of
- * them, taking effect on the next nightly crawl — `runCrawl` drops the fetcher's robots cache at
- * the start of every run, and the cache expires on its own after ROBOTS_CACHE_TTL_MS in any case,
- * so no deployment holds a stale copy for longer than a day. That is what the issue template
- * tells an arriving site owner first.
+ * It briefly had one — this project's GitHub issue tracker — on the reasoning that a first run
+ * should not depend on the operator inventing a contact page. The owner removed it, and the reason
+ * is the one that decides this: a shared default makes the maintainers of the SOFTWARE the contact
+ * for every deployment of it, including the ones they do not run, cannot inspect and cannot stop.
+ * Somebody would be reading complaints about other people's crawlers with no power to act on them,
+ * and the site owner who wrote in would get an apology instead of a result. Pointing at the
+ * repository without saying "open an issue" would not have helped: a repository is a place where
+ * people open issues.
  *
- * So: overridable, and it should be overridden by anyone running a modified fork, a large or
- * long-running deployment, or an instance polling on behalf of an institution. The README says
- * this in the same words, at the place an operator is deciding.
+ * So the requirement is back, and it is stronger for politeness than a default was. The server
+ * refuses to start without a contact URL, so no deployment can poll anonymously; and the address
+ * it does carry belongs to the person who can actually switch that instance off.
+ *
+ * The remedy that works no matter who is running what remains `robots.txt`: every instance honours
+ * it, matched case-insensitively on the `GrantSpotter` token (`fetcher/index.ts` AGENT_TOKEN), with
+ * or without a version or suffix after it — so the string a site owner reads in their log stops us
+ * as readily as the bare token, which was NOT true until 2026-08-04. `User-agent: GrantSpotter` +
+ * `Disallow: /` takes effect on the next nightly crawl: `runCrawl` drops the fetcher's robots cache
+ * at the start of every run, and the cache expires after ROBOTS_CACHE_TTL_MS regardless, so no
+ * deployment holds a stale copy for longer than a day.
+ *
+ * What CONTACT_URL must be is checked, not merely parsed — see `assertUsableContactUrl`. An address
+ * that reaches nobody is the failure this value exists to prevent, so a documentation domain, a
+ * loopback or private address, and a leftover placeholder are all refused.
  */
-export const DEFAULT_CONTACT_URL = 'https://github.com/Atvriders/grantspotter/issues';
 
 /**
  * Names reserved so that documentation cannot name anybody: RFC 2606 §3 (the second-level
@@ -263,7 +281,17 @@ const CONTACT_URL_UNSENDABLE = /[^\x20-\x7e]/;
  */
 export function assertUsableContactUrl(value: string): string {
   if (value.trim() === '') {
-    throw new ConfigError('CONTACT_URL is required: the crawler User-Agent must name a contact URL.');
+    // Names where to make the edit and what the value is for. An operator whose server will not
+    // start and who is told only "required" types the fastest thing that parses, and the fastest
+    // thing that parses reaches nobody — which is the failure this variable exists to prevent.
+    // What it must NOT do is print an address: this is the moment somebody pastes what they are
+    // shown, and there is no address this software could print that would reach the operator.
+    throw new ConfigError(
+      'CONTACT_URL is required and has no default: the crawler User-Agent must name a contact ' +
+        'URL. Set it in docker-compose.yml to an http(s) page you control and can be reached ' +
+        'through — it is how one of the ~25 small nonprofits this polls finds out who is polling ' +
+        'them and asks you to stop.',
+    );
   }
   // Above every shape rule, on purpose: the retired placeholder parses as https, so it would
   // otherwise reach `new URL` and pass — and a later edit that broke its shape would report "must
@@ -274,13 +302,16 @@ export function assertUsableContactUrl(value: string): string {
     // No worked example here on purpose. The version of this message that ended "for example
     // https://www.example.org/grantspotter" was handing out a value that this very loader
     // accepted, at the moment the operator is most likely to paste whatever they are shown.
+    //
+    // Nor does it offer "unset it and take the default", which it did for one day: there is no
+    // default to take, and there is no address this software can supply on an operator's behalf
+    // that would reach the operator.
     throw new ConfigError(
-      'CONTACT_URL still contains CHANGE_ME, so it is a placeholder rather than an address. This ' +
-        'variable has a working default — unset it entirely and the crawler identifies itself ' +
-        "through this project's issue tracker. Set it only to point complaints at yourself " +
-        'instead, and then it must be an http(s) page you control and can be reached through: it ' +
-        'goes in the crawler User-Agent, and it is how one of the ~25 small nonprofits this polls ' +
-        'finds out who is polling them.',
+      'CONTACT_URL still contains CHANGE_ME, so it is a placeholder rather than an address. It is ' +
+        'one of the two values in docker-compose.yml you must edit before the first run. Replace ' +
+        'it with an http(s) page you control and can be reached through: it goes in the crawler ' +
+        'User-Agent, and it is how one of the ~25 small nonprofits this polls finds out who is ' +
+        'polling them and asks you to stop.',
     );
   }
   if (CONTACT_URL_UNSENDABLE.test(value)) {
@@ -325,7 +356,8 @@ export function assertUsableContactUrl(value: string): string {
         'resolves for nobody. This value is pasted into the crawler User-Agent and is the route ' +
         'by which a site being polled finds out who is polling it, so a reserved name makes this ' +
         'crawler anonymous while looking identified. Use an http(s) page you control and can be ' +
-        'reached through, or unset CONTACT_URL and take the default.',
+        'reached through — there is no default to fall back on, because no address this software ' +
+        'ships with could reach you.',
     );
   }
   /*
@@ -345,8 +377,11 @@ export function assertUsableContactUrl(value: string): string {
    * `net/hosts.ts` — one list, two anchorings.
    *
    * WHAT IT COSTS, SAID PLAINLY: an operator whose only web page is on their LAN can no longer
-   * name it here. That operator is better served by the default, which reaches a human, than by an
-   * address that reaches the complainant's own router — and the message says exactly that.
+   * name it here, and — since the shared default was removed — has nothing to fall back on either.
+   * The answer is a page somewhere the reader can actually reach: a club page, a university
+   * department page, a personal site, a free static page anywhere on the public web. That is a
+   * real cost, and it is the one the owner chose over making somebody else the contact for a
+   * deployment they do not run. The message says so rather than pretending there is no cost.
    */
   const unreachable = unreachableContactHost(parsed.hostname);
   if (unreachable !== null) {
@@ -355,24 +390,32 @@ export function assertUsableContactUrl(value: string): string {
         'This value goes into the crawler User-Agent, where its only reader is somebody at one of ' +
         'the sites being polled: to them a loopback or private address points at their own ' +
         'machine or their own network, which is less use than no address at all, and it tells ' +
-        'them how yours is numbered. Use an http(s) page reachable from outside your network, or ' +
-        'unset CONTACT_URL and take the default, which reaches a human.',
+        'them how yours is numbered. Use an http(s) page reachable from outside your network — ' +
+        'any public page that says who runs this instance and how to reach you will do, and it ' +
+        'does not have to be the instance itself.',
     );
   }
   return value;
 }
 
 /**
- * The contact URL for this process: the operator's, or the project's issue tracker.
+ * The contact URL for this process: the operator's own, and nobody else's.
  *
  * The one place CONTACT_URL is read from an environment. `loadConfig` uses it, and so do the two
- * live scripts in `scripts/`, which is the whole point — see `assertUsableContactUrl`.
+ * live scripts in `scripts/`, which is the whole point — see `assertUsableContactUrl`. Before that
+ * unification the scripts read the variable themselves and put values the server refuses onto the
+ * wire, so this is a boundary, not a convenience wrapper.
  */
 export function resolveContactUrl(env: Env = process.env): string {
-  // Unset is a supported choice, not an omission: the default identifies the crawler through this
-  // project's issue tracker. Every rule still runs on the resulting value, because the operator
-  // who DOES set this is the one who can get it wrong.
-  return assertUsableContactUrl(optional(env, 'CONTACT_URL') ?? DEFAULT_CONTACT_URL);
+  // No `?? DEFAULT`. Unset reaches `assertUsableContactUrl`, whose first branch refuses it and says
+  // what to set — which is the intended outcome, because there is no address this software can
+  // supply on an operator's behalf that would reach the operator.
+  //
+  // `?? ''` and not `!` or a cast: `optional` returns undefined for both "absent" and "blank", and
+  // the empty string is the one value the predicate's first branch is written to reject. Unset and
+  // `CONTACT_URL: ""` therefore produce the same refusal, which is right — a variable somebody
+  // blanked is not a contact address either.
+  return assertUsableContactUrl(optional(env, 'CONTACT_URL') ?? '');
 }
 
 export function loadConfig(env: Env = process.env): AppConfig {
@@ -436,22 +479,6 @@ export function loadConfig(env: Env = process.env): AppConfig {
 }
 
 /**
- * True when `url` is a GitHub issue tracker, so the User-Agent can say "open an issue" and be
- * telling the truth. Only github.com: the instruction has to match the page, and this is the only
- * host whose issue-tracker URL shape this function can recognise without guessing.
- */
-function isGithubIssueTracker(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.hostname.toLowerCase().replace(/^www\./, '') !== 'github.com') return false;
-  return /\/issues(\/|$)/.test(parsed.pathname);
-}
-
-/**
  * Descriptive, identifiable User-Agent. Spec §7.1 rule 3.
  *
  * RESOLUTIONS R10: this is the ONLY definition in the repository. It accepts
@@ -461,10 +488,15 @@ function isGithubIssueTracker(url: string): boolean {
  * The trailing clause exists because `+URL` is a convention, and a convention only works on
  * someone who already knows it. The reader this string has to survive is a sysadmin at 2am
  * looking at a log line from software they have never heard of, and what they want to know is
- * what it is, what it wants, and how to make it stop. So the string spells the action out — and
- * spells out the action that the URL in it actually supports, which is why the clause is derived
- * from the URL rather than fixed. `open an issue` printed beside a club's homepage would be an
- * instruction that cannot be followed, which is worse than the bare convention it replaced.
+ * what it is, what it wants, and how to make it stop. So the string spells the action out.
+ *
+ * ONE CLAUSE, FIXED, FOR EVERY DEPLOYMENT. It briefly varied — a private `isGithubIssueTracker`
+ * predicate switched the wording to "open an issue there to contact the maintainers" when the URL
+ * was a GitHub issue tracker, which was true of the shared default and of nothing else. The default
+ * is gone, so every URL that can reach this function belongs to whoever runs the instance, the
+ * predicate had no remaining caller, and both are deleted. The sentence that replaces it has to be
+ * true of a club's contact page, a university department page and a personal site alike, so it
+ * names the operator rather than an action only one shape of page affords.
  */
 export function buildUserAgent(source: AppConfig | string): string {
   // Re-validated on the string form as well as the config form, and cheap enough to do on every
@@ -472,8 +504,5 @@ export function buildUserAgent(source: AppConfig | string): string {
   // one. `buildUserAgent('')` still throws "CONTACT_URL is required", which is the first branch of
   // the predicate — the message and the test that pins it are unchanged.
   const url = assertUsableContactUrl(typeof source === 'string' ? source : source.contactUrl);
-  const howToReachUs = isGithubIssueTracker(url)
-    ? 'open an issue there to contact the maintainers'
-    : 'contact the operator at that page';
-  return `GrantSpotter/${SERVER_VERSION} (+${url}; nightly grant-deadline change detector; ${howToReachUs})`;
+  return `GrantSpotter/${SERVER_VERSION} (+${url}; nightly grant-deadline change detector; contact the operator of this instance at that page)`;
 }

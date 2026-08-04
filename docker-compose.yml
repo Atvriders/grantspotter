@@ -1,17 +1,25 @@
 # GrantSpotter. Pulls the image published by GitHub Actions; it does not build.
 #
-# There is no .env file and nothing to copy. Edit the ONE value marked EDIT THIS below, then:
+# There is no .env file and nothing to copy. Edit the TWO values marked EDIT THIS below — the
+# session secret and the contact URL — then:
 #
 #   docker compose pull
 #   docker compose up -d
 #
-# That value ships as a placeholder, and the server refuses to start while any recognisable piece
-# of it is still in place — see packages/server/src/config.ts. Deleting the CHANGE_ME_ prefix is
-# not an edit; the rest of the line is published here too, and the check is on any eight-character
-# run, not on the marker. That refusal replaces the ":?" interpolation guard this file used to
-# carry, and it exists because this repository is public: a session secret readable on GitHub is
-# one every unedited deployment shares, so the cookie signature stops proving this server issued
-# anything.
+# BOTH ship as placeholders and the server refuses to start on either of them. Neither has a
+# default, and neither can have one: a shared secret is not a secret, and a shared contact address
+# would name somebody who cannot switch YOUR instance off. See packages/server/src/config.ts.
+#
+# For SESSION_SECRET, deleting the CHANGE_ME_ prefix is not an edit: the rest of the line is
+# published here too, and the check is on any eight-character run of it, not on the marker. That
+# refusal replaces the ":?" interpolation guard this file used to carry, and it exists because this
+# repository is public — a session secret readable on GitHub is one every unedited deployment
+# shares, so the cookie signature stops proving this server issued anything.
+#
+# For CONTACT_URL the run check would be wrong ("https://" is an eight-character run of the
+# placeholder, so it would refuse every https URL), and two rules catch it instead: the CHANGE_ME
+# marker, and example.org being reserved by RFC 2606 for documentation. Change one half and the
+# other still refuses it.
 #
 # THIS FILE IS TRACKED BY GIT. If your copy of this repository is a fork you push, the secret you
 # paste below is published the moment you push it — the same accident, from the other direction.
@@ -43,23 +51,30 @@ services:
       PORT: 3030
       DATA_DIR: /data
 
-      # EDIT THIS — the only value in this file you must change. Required, no default, and the
-      # placeholder below is refused by value.
+      # EDIT THIS (1 of 2) — required, no default, and the placeholder below is refused by value.
       # Generate a real one with:  openssl rand -hex 32
       SESSION_SECRET: CHANGE_ME_generate_one_with_openssl_rand_hex_32_and_paste_it_here
 
-      # Works as shipped. This goes into the crawler's User-Agent and is how a site owner finds
-      # out who is polling them; left at the value below it points them at this project's issue
-      # tracker, which reaches a human.
+      # EDIT THIS (2 of 2) — required, no default, and the placeholder below is refused by value.
       #
-      # OVERRIDE IT if complaints should reach YOU rather than this project's maintainers — you
-      # are running a modified fork, a large or long-running deployment, or polling on behalf of
-      # an institution. Every deployment that keeps this default names the SAME tracker, so a
-      # site owner who wants your instance in particular to stop reaches people who do not run it
-      # and cannot stop it. Replace it with an http(s) page you control and can be reached
-      # through. The reserved documentation domains (example.com/.net/.org, .invalid, .test,
-      # .example) are refused: they resolve for nobody, which is anonymity wearing a name tag.
-      CONTACT_URL: https://github.com/Atvriders/grantspotter/issues
+      # This goes into the crawler's User-Agent and is the only route by which one of the ~25
+      # small, volunteer-run sites this polls can find out who is polling them and ask you to
+      # stop. It must be YOURS. This project once shipped its own issue tracker here as a working
+      # default, and the reason that was removed is the reason it is required now: a shared
+      # address makes the maintainers of the SOFTWARE the contact for every deployment of it,
+      # including the ones they do not run, cannot inspect and cannot stop. The site owner who
+      # wrote in would get an apology instead of a result.
+      #
+      # Replace it with an http(s) page you control and can be reached through — a club page, a
+      # department page, a personal site. It does not have to be this instance, and it does not
+      # have to be elaborate; it has to say who runs this and how to reach you. Refused: the
+      # reserved documentation names (example.com/.net/.org, .invalid, .test, .example), anything
+      # a stranger cannot reach (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, .local,
+      # .internal, .home.arpa, a single-label name), and anything still carrying CHANGE_ME.
+      #
+      # If you cannot supply one, the remedy a polled site has does not depend on you: every
+      # instance obeys "User-agent: GrantSpotter / Disallow: /", from the next nightly crawl.
+      CONTACT_URL: https://example.org/CHANGE_ME_to_a_page_that_says_who_runs_this
 
       CRAWL_ENABLED: "true"
       CRAWL_CRON: "17 3 * * *"

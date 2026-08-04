@@ -11,6 +11,7 @@ import {
   RobotsDisallowedError,
   isPathAllowed,
   robotsFromResponse,
+  robotsUnread,
 } from './robots.js';
 
 export const AGENT_TOKEN = 'GrantSpotter';
@@ -36,6 +37,31 @@ const MAX_BACKOFF_MS = 30_000;
  */
 export const ROBOTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * How long a FAILED read of robots.txt is remembered — fifteen minutes, not six hours.
+ *
+ * The verdict for an origin we could not read is `Disallow: /` (see `robotsUnread`), and until
+ * 2026-08-04 that was stored in the cache exactly like a file we had read, for the full
+ * ROBOTS_CACHE_TTL_MS. One dropped connection therefore refused a whole origin for a quarter of a
+ * day, including to the admin "Verify now" button pressed thirty seconds later by somebody watching
+ * the site load fine in their browser.
+ *
+ * NOT CACHING IT AT ALL IS WORSE, WHICH IS WHY THIS IS A NUMBER AND NOT A DELETION. `robotsFor` is
+ * consulted once per PAGE, so an uncached failure means every page queued against that origin
+ * re-reads `/robots.txt` — each read now costing up to four attempts (see `fetchWithRetries`) — at a
+ * host that has just proved it is in trouble. The cache is what makes one failure cost one read.
+ *
+ * Fifteen minutes is chosen against the two bounds that actually exist rather than picked. Below:
+ * the entry must outlive the run that created it, and one failing origin costs at most
+ * maxRetries+1 attempts, each bounded by DEFAULT_TIMEOUT_MS with backoffs capped at MAX_BACKOFF_MS
+ * — a little over two minutes at the default settings — against a nightly run of ~25 sources.
+ * Above: it must be short enough that a human who fixes the problem and re-triggers does not meet
+ * their own stale refusal, and short enough that a blip cannot span two crawls. Anything in tens of
+ * minutes satisfies both; this is the middle of that range, and `runCrawl`'s `forgetRobots()` makes
+ * the exact figure irrelevant to the nightly path in any case.
+ */
+export const ROBOTS_UNREAD_CACHE_TTL_MS = 15 * 60 * 1000;
+
 export interface FetchOptions {
   userAgent: string;
   contactUrl: string;
@@ -57,6 +83,8 @@ export interface FetchOptions {
   headersByHost?: Record<string, Record<string, string>>;
   /** Defaults to ROBOTS_CACHE_TTL_MS. Tests set it to exercise expiry against an injected clock. */
   robotsTtlMs?: number;
+  /** Defaults to ROBOTS_UNREAD_CACHE_TTL_MS, and applies only to a read that failed. */
+  robotsUnreadTtlMs?: number;
 }
 
 export interface Fetcher {
@@ -191,7 +219,8 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     sleep,
   });
   const robotsTtlMs = opts.robotsTtlMs ?? ROBOTS_CACHE_TTL_MS;
-  const robotsCache = new Map<string, { readAtMs: number; rules: Promise<RobotsRules> }>();
+  const robotsUnreadTtlMs = opts.robotsUnreadTtlMs ?? ROBOTS_UNREAD_CACHE_TTL_MS;
+  const robotsCache = new Map<string, { expiresAtMs: number; rules: Promise<RobotsRules> }>();
 
   function headers(
     url: string,
@@ -212,20 +241,11 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     return h;
   }
 
-  async function rawGet(url: string, accept: FetchRequest['accept']): Promise<Response> {
-    return transport(url, {
-      method: 'GET',
-      headers: headers(url, accept, false),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  }
-
   /**
    * Read one origin's robots.txt, following redirects.
    *
-   * `rawGet` sends `redirect: 'manual'` — every request this fetcher makes does, so that the
-   * blocklist can be re-asserted on each hop rather than trusting `fetch` to land somewhere
+   * Every request here sends `redirect: 'manual'` — every request this fetcher makes does, so that
+   * the blocklist can be re-asserted on each hop rather than trusting `fetch` to land somewhere
    * acceptable. That is right for pages and it was silently wrong here: nothing followed the
    * redirect, the 3xx fell through `robotsFromResponse` to its allow-all branch, and a site whose
    * `/robots.txt` 301s (apex to `www`, http to https — the default behaviour of most hosting a
@@ -236,6 +256,25 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    * A chain that does not resolve within ROBOTS_MAX_REDIRECTS hops, or that we decline to follow,
    * is handed to `robotsFromResponse` as a 3xx, which backs off for this run — see the
    * enumeration there for why that is not the same choice the RFC makes.
+   *
+   * TWO THINGS THIS FUNCTION HAD TO STOP DOING BY ITSELF, both self-inflicted by the commit that
+   * added redirect following:
+   *
+   *   IT WENT ROUND THE HOST QUEUE. It called the transport directly, so the redirect chain above
+   *   could issue up to ROBOTS_MAX_REDIRECTS + 1 requests to one host back to back, against a
+   *   shipped floor of one per second that the README advertises to the sites being polled.
+   *   Measured with the real fetcher against a loopback HTTP server serving a five-hop chain, the
+   *   gaps one host saw were 18, 2, 2, 2 and 5 ms; after this change, 1013, 1004, 1002, 1003 and
+   *   1004. The commit that made this crawler more obedient made it burstier. Every hop
+   *   goes through `queue.run` now, on the host of THAT hop, so a chain that crosses authorities is
+   *   still spaced per host and the page fetch that follows is spaced from the last hop.
+   *
+   *   IT GOT ONE ATTEMPT WHERE A PAGE GETS FOUR. It called the raw transport rather than
+   *   `fetchWithRetries`, so the file that governs a whole origin was the least-retried request the
+   *   crawler makes — and a single dropped connection then opened the origin, because the `catch`
+   *   below manufactured a 404. Both halves are fixed together because either alone leaves the hole:
+   *   retries without the verdict change still open the origin on the fourth failure, and the
+   *   verdict change without retries refuses an origin over one lost packet.
    */
   async function readRobots(origin: string): Promise<RobotsRules> {
     const stamp = (): string => new Date(now()).toISOString();
@@ -245,13 +284,28 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       let response: Response;
       let body = '';
       try {
-        response = await rawGet(url, 'html');
+        const request: FetchRequest = { url, method: 'GET', accept: 'html' };
+        // `new URL(url).host` and not the origin we were asked about: a chain may cross
+        // authorities, and the host that has to be spaced is the one about to be asked.
+        response = await queue.run(new URL(url).host, () => fetchWithRetries(url, request));
         if (response.status === 200) body = await response.text();
-      } catch {
-        // A network error reading robots.txt is not a licence to crawl freely, but it is also
-        // not a permanent ban: treat it as "no rules for this run" and let backoff handle the
-        // real request. ncdxf.org, which 403s robots.txt, is covered by robotsFromResponse.
-        return robotsFromResponse(404, '', AGENT_TOKEN, stamp());
+      } catch (err) {
+        if (err instanceof HttpStatusError) {
+          // 429 or 5xx, after every retry. The server did answer, so record what it said and let
+          // `robotsFromResponse` back off on it — that branch already refuses to read a server in
+          // distress as permission.
+          return robotsFromResponse(err.status, '', AGENT_TOKEN, stamp());
+        }
+        // A transport failure: connection refused, reset, or timed out on every attempt. THIS USED
+        // TO RETURN `robotsFromResponse(404, …)`, which is the allow-all branch — flatly against
+        // the comment sitting on top of it, which said a network error "is not a licence to crawl
+        // freely". A site that drops the connection on `/robots.txt` was crawled as though it had
+        // published nothing, and dropping that one connection is exactly what an overloaded box or
+        // a WAF in front of a volunteer-run site does. We did not read the rules, so we do not get
+        // to act as though they permit us; `robotsUnread` says so, and `robotsFor` gives that
+        // verdict a much shorter lifetime than a real one so the refusal costs the source minutes
+        // rather than a quarter of a day.
+        return robotsUnread(stamp());
       }
       if (response.status < 300 || response.status >= 400) {
         return robotsFromResponse(response.status, body, AGENT_TOKEN, stamp());
@@ -279,9 +333,27 @@ export function createFetcher(opts: FetchOptions): Fetcher {
     const cached = robotsCache.get(origin);
     // Cached for the run, never for the life of the process. `now()` is injected, so this is the
     // same clock the host queue and the payload timestamps use.
-    if (cached && now() - cached.readAtMs < robotsTtlMs) return cached.rules;
+    if (cached && now() < cached.expiresAtMs) return cached.rules;
+    const readAtMs = now();
     const promise = readRobots(origin);
-    robotsCache.set(origin, { readAtMs: now(), rules: promise });
+    // Optimistic: assume the read will succeed, so a second page queued against this origin while
+    // the first read is still in flight shares it rather than starting a second one.
+    const entry = { expiresAtMs: readAtMs + robotsTtlMs, rules: promise };
+    robotsCache.set(origin, entry);
+    promise.then(
+      (rules) => {
+        // The lifetime depends on the OUTCOME, which is not known when the entry is created. A
+        // verdict we failed to read expires in minutes; one we read keeps the full TTL. Revised
+        // here rather than at read time because that is the earliest moment the answer exists.
+        if (!rules.wasRead) entry.expiresAtMs = readAtMs + robotsUnreadTtlMs;
+      },
+      () => {
+        // `readRobots` rejects only when the origin itself is blocklisted, which is decided with no
+        // network access at all. Caching a rejected promise would hand the same rejection to every
+        // later caller; dropping it costs one synchronous re-check.
+        robotsCache.delete(origin);
+      },
+    );
     return promise;
   }
 

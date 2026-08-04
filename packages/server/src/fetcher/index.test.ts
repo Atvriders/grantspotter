@@ -5,7 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConfigError, buildUserAgent } from '../config.js';
 import { BlockedHostError } from './blocklist.js';
 import { ROBOTS_MAX_REDIRECTS, RobotsDisallowedError } from './robots.js';
-import { ROBOTS_CACHE_TTL_MS, backoffMs, createFetcher } from './index.js';
+import {
+  ROBOTS_CACHE_TTL_MS,
+  ROBOTS_UNREAD_CACHE_TTL_MS,
+  backoffMs,
+  createFetcher,
+} from './index.js';
 
 /**
  * NOT `https://grantspotter.example.test/about`, which is what this was until 2026-08-04.
@@ -316,6 +321,163 @@ describe('createFetcher politeness', () => {
       ).rejects.toBeInstanceOf(RobotsDisallowedError);
       expect(calls).toEqual(['https://w9xyz-club.org/robots.txt']);
     });
+  });
+
+  /**
+   * READING robots.txt IS A REQUEST LIKE ANY OTHER, AND FAILING TO READ IT IS NOT PERMISSION.
+   *
+   * Three defects that compounded into one hole. `readRobots` called the transport directly, so
+   * (a) it got a single attempt where every page under it gets four, (b) none of its requests
+   * entered the host queue, so the redirect chain could burst, and (c) a transport failure was
+   * turned into `robotsFromResponse(404, …)` — the allow-all branch — directly contradicting the
+   * comment on the same lines, which said a network error "is not a licence to crawl freely".
+   * Together: one dropped connection on `/robots.txt` opened the whole origin.
+   */
+  describe('a robots.txt we could not read', () => {
+    const dropped = (): never => {
+      throw new TypeError('fetch failed');
+    };
+
+    it('does not open the origin — a dropped connection is not permission', async () => {
+      const transport = vi.fn(async (url: string) =>
+        url.endsWith('/robots.txt') ? dropped() : res('<p>grants</p>'),
+      );
+      const f = createFetcher({ ...baseOpts, transport });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+      // Measured before the fix: the page was fetched and returned 200.
+      expect(transport.mock.calls.filter(([u]) => !u.endsWith('/robots.txt'))).toEqual([]);
+    });
+
+    it('gets the same retry budget a page under it gets', async () => {
+      // The file that governs a whole origin was the least-retried request the crawler made.
+      let attempts = 0;
+      const transport = vi.fn(async (url: string) => {
+        if (!url.endsWith('/robots.txt')) return res('<p>grants</p>');
+        attempts += 1;
+        return attempts <= 2 ? res('busy', { status: 503 }) : res('User-agent: *\nDisallow: /x\n');
+      });
+      const f = createFetcher({ ...baseOpts, transport });
+      const payload = await f.fetch({
+        url: 'https://w9xyz-club.org/grants',
+        method: 'GET',
+        accept: 'html',
+      });
+      expect(attempts).toBe(3); // two 503s ridden out, exactly as a page would be
+      expect(payload.status).toBe(200);
+    });
+
+    it('backs off when the retries run out, rather than treating 503 as no rules', async () => {
+      const transport = vi.fn(async (url: string) =>
+        url.endsWith('/robots.txt') ? res('busy', { status: 503 }) : res('<p>grants</p>'),
+      );
+      const f = createFetcher({ ...baseOpts, transport, maxRetries: 2 });
+      await expect(
+        f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' }),
+      ).rejects.toBeInstanceOf(RobotsDisallowedError);
+      expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(3);
+    });
+
+    it('is not remembered as long as rules we actually read', async () => {
+      // The verdict a failure manufactures was stored exactly like a real one, for
+      // ROBOTS_CACHE_TTL_MS. One lost packet refused an origin for six hours — including to the
+      // admin "Verify now" pressed a minute later by somebody watching the site load in a browser.
+      let t = 0;
+      let healthy = false;
+      const transport = vi.fn(async (url: string) => {
+        if (!url.endsWith('/robots.txt')) return res('<p>grants</p>');
+        if (!healthy) return dropped();
+        return res('User-agent: *\n');
+      });
+      const f = createFetcher({
+        ...baseOpts,
+        transport,
+        now: () => t,
+        robotsTtlMs: 1_000_000,
+        robotsUnreadTtlMs: 1_000,
+        maxRetries: 0, // one attempt per READ, so the counts below are reads and not retries
+      });
+      const req = { url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' } as const;
+      await expect(f.fetch(req)).rejects.toBeInstanceOf(RobotsDisallowedError);
+
+      t = 999; // still inside the SHORT ttl: not re-read, and still refused
+      await expect(f.fetch(req)).rejects.toBeInstanceOf(RobotsDisallowedError);
+      expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(1);
+
+      t = 1_000; // the failure has expired, though the full TTL has barely started
+      healthy = true;
+      expect((await f.fetch(req)).status).toBe(200);
+      expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(2);
+    });
+
+    it('keeps the full TTL for a 404, which IS an answer about this site’s rules', async () => {
+      // The distinction the cache did not draw. "This site publishes no rules" is a real reading;
+      // "we could not find out" is not, and only the second one expires in minutes.
+      let t = 0;
+      const transport = vi.fn(async (url: string) =>
+        url.endsWith('/robots.txt') ? res('', { status: 404 }) : res('<p>grants</p>'),
+      );
+      const f = createFetcher({
+        ...baseOpts,
+        transport,
+        now: () => t,
+        robotsTtlMs: 1_000_000,
+        robotsUnreadTtlMs: 1_000,
+      });
+      const req = { url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' } as const;
+      await f.fetch(req);
+      t = 500_000; // far past the unread TTL, far inside the real one
+      await f.fetch(req);
+      expect(transport.mock.calls.filter(([u]) => u.endsWith('/robots.txt'))).toHaveLength(1);
+    });
+
+    it('holds the failed-read lifetime well under the real one', () => {
+      expect(ROBOTS_UNREAD_CACHE_TTL_MS).toBeLessThan(ROBOTS_CACHE_TTL_MS / 10);
+      // …and long enough to outlast the run that created it, so one failure costs one read.
+      expect(ROBOTS_UNREAD_CACHE_TTL_MS).toBeGreaterThan(5 * 60 * 1000);
+    });
+  });
+
+  /**
+   * THE REDIRECT CHAIN THAT BYPASSED THE HOST QUEUE (2026-08-04).
+   *
+   * `readRobots` called the transport directly, so the chain the previous commit added could fire
+   * ROBOTS_MAX_REDIRECTS + 1 requests at one host with no spacing at all — against the one-per-
+   * second floor this project's README advertises to the sites it polls. The commit that made the
+   * crawler more obedient made it burstier, which is the worst possible trade for a product whose
+   * central claim is politeness.
+   */
+  it('spaces every hop of a robots.txt redirect chain by the per-host floor', async () => {
+    let t = 0;
+    const at: number[] = [];
+    const hop = (n: number): string => `https://w9xyz-club.org/robots${n}.txt`;
+    const transport = vi.fn(async (url: string) => {
+      at.push(t);
+      const match = /robots(\d*)\.txt$/.exec(url);
+      if (match === null) return res('<p>grants</p>'); // the page at the end of it all
+      const n = Number(match[1] === '' ? '0' : match[1]);
+      if (n < 4) return res('', { status: 301, headers: { location: hop(n + 1) } });
+      return res('User-agent: *\nDisallow: /private\n');
+    });
+    const f = createFetcher({
+      ...baseOpts,
+      transport,
+      defaultMinIntervalMs: 1_000,
+      now: () => t,
+      sleep: async (ms: number) => {
+        t += ms;
+      },
+    });
+    await f.fetch({ url: 'https://w9xyz-club.org/grants', method: 'GET', accept: 'html' });
+
+    expect(at).toHaveLength(6); // five robots hops, then the page
+    const gaps = at.slice(1).map((when, i) => when - (at[i] as number));
+    // Measured before the fix, real fetcher against a loopback HTTP server serving a five-hop
+    // /robots.txt chain: gaps of 18, 2, 2, 2 and 5 ms. After: 1013, 1004, 1002, 1003, 1004.
+    expect(gaps.every((gap) => gap >= 1_000), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+    // …and the page that follows the chain is spaced from the last hop, not fired on top of it.
+    expect(gaps).toHaveLength(5);
   });
 
   it('refuses a path robots.txt disallows', async () => {

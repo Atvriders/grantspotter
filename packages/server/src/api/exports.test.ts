@@ -932,6 +932,10 @@ describe('admin backup and restore', () => {
       config: loadConfig({
         SESSION_SECRET: 'x'.repeat(32),
         NODE_ENV: 'test',
+        // Required with no default: `loadConfig` refuses to build a config without a contact
+        // URL, so every harness that wants one has to name an address a real deployment could
+        // hold. Nothing here reaches the network; this value only has to survive the loader.
+        CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
       }),
       // The real guards, through the one mount seam: an anonymous caller must be refused by
       // requireAuth, not by the body parser and not by notFoundHandler.

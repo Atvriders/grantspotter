@@ -11,6 +11,10 @@ import { createTestDb, type TestDb } from './helpers/tempDb.js';
 const config = loadConfig({
   SESSION_SECRET: 'z'.repeat(32),
   NODE_ENV: 'test',
+  // Required with no default: `loadConfig` refuses to build a config without a contact
+  // URL, so every harness that wants one has to name an address a real deployment could
+  // hold. Nothing here reaches the network; this value only has to survive the loader.
+  CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
 });
 
 const GOOD_PASSWORD = 'a-long-enough-password';

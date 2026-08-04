@@ -496,6 +496,34 @@ the public internet (loopback, RFC 1918, link-local, carrier NAT, single-label n
 `.internal` / `.home.arpa`, and the RFC 5737 / RFC 3849 documentation ranges) — which is what the
 reserved-name rule always claimed to be enforcing.
 
+**Amended a third time, 2026-08-04, by the owner, and this one reverts the first.** `CONTACT_URL`
+is REQUIRED with NO DEFAULT again, so the table row above is once more accurate as written. The
+owner's reason:
+
+> remove the open a issue. i don't see issues for other deployments i have no control over
+
+That reason decides the shape, and it is not about the wording. A shared default makes the
+maintainers of the SOFTWARE the contact for every deployment of it, including the ones they do not
+run, cannot inspect and cannot stop; a site owner who followed it would get an apology rather than a
+result. Pointing at the repository without the words "open an issue" would not have helped — a
+repository is a place where people open issues — so the whole default is gone, along with the
+`isGithubIssueTracker` predicate that varied the User-Agent's trailing clause with the shape of the
+URL. Every deployment now sends one clause: `contact the operator of this instance at that page`.
+
+This is a stronger position for politeness than the default was, not a weaker one: the server
+refuses to start without a contact URL, so no deployment can poll anonymously, and the address every
+request carries belongs to somebody who can actually switch that instance off. `docker-compose.yml`
+ships `PLACEHOLDER_CONTACT_URL` (`https://example.org/CHANGE_ME_…`), so there are TWO must-edit
+values again. It is guarded by the `CHANGE_ME` marker and by the RFC 2606 reserved-name rule
+independently — either half of a half-edit is caught by the rule the other escaped — and NOT by
+`sharesRunWith`, which would be a bug here: `https://` is an eight-character run of the placeholder,
+so the run rule would refuse every https URL an operator could supply.
+
+What did not change: every other rule in `assertUsableContactUrl`, the one-predicate structure, and
+`contactUrlEntryPointContract.test.ts`, whose default-related gate was widened rather than deleted —
+it now refuses any fallback contact URL by SHAPE (`?? 'https://…'`, or any `*_CONTACT_URL` constant)
+across every scanned file, rather than naming one identifier in three entry points.
+
 ## 8. npm scripts (root)
 
 ```

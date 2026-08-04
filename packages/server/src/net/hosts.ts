@@ -116,8 +116,14 @@ export function canonicalHostname(hostname: string): string {
  *
  * Handles `::` compression and a trailing dotted quad, which is all a URL hostname can contain
  * (WHATWG rejects zone identifiers, so there is no `%eth0` to strip).
+ *
+ * EXPORTED because `api/channels.ts`'s webhook SSRF guard had grown its own `expandIpv6` that
+ * compared spellings in exactly the way described above, and accepted `[::ffff:0:127.0.0.1]`,
+ * `[::ffff:0:c0a8:12b]` and `[2002:7f00:1::]` — the same defect, in the file where it lets an
+ * authenticated user aim the server at its own loopback. Two policies read these bytes (a webhook
+ * may point at RFC 3849 documentation space, a contact URL may not), but there is one parser.
  */
-function ipv6Bytes(literal: string): Uint8Array | null {
+export function ipv6Bytes(literal: string): Uint8Array | null {
   if (!literal.startsWith('[') || !literal.endsWith(']')) return null;
   let text = literal.slice(1, -1).toLowerCase();
 
@@ -213,6 +219,23 @@ const IPV4_EMBEDDINGS: readonly Ipv4Embedding[] = [
     ipv4: (b) => dottedQuadAt(b, 2),
   },
 ];
+
+/**
+ * The IPv4 address an IPv6 address carries, in dotted-decimal, or null if it carries none.
+ *
+ * The lookup half of {@link IPV4_EMBEDDINGS}, exported so a caller with a DIFFERENT policy on what
+ * makes an IPv4 address unacceptable — `api/channels.ts` refuses multicast, benchmarking and IETF
+ * protocol-assignment space that this file has no opinion on, and permits the RFC 5737
+ * documentation ranges this file refuses — can still ask the one question that is purely factual:
+ * which IPv4 address, if any, is inside this thing? Deciding what to do about it stays with the
+ * caller; enumerating the six ways it can be written does not.
+ */
+export function embeddedIpv4(bytes: Uint8Array): string | null {
+  for (const embedding of IPV4_EMBEDDINGS) {
+    if (embedding.matches(bytes)) return embedding.ipv4(bytes);
+  }
+  return null;
+}
 
 function unreachableIpv6(literal: string): string | null {
   const bytes = ipv6Bytes(literal);

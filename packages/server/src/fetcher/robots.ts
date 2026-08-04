@@ -7,6 +7,32 @@ export interface RobotsRules {
   crawlDelaySec?: number;
   status: number;
   fetchedAt: string;
+  /**
+   * Did we learn this origin's rules, or only fail to?
+   *
+   * TWO DIFFERENT THINGS PRODUCE `disallows: ['/']` and they must not be stored alike. A file that
+   * says `Disallow: /` is a site owner's decision and is worth believing for as long as any other
+   * file; a 503, a dropped connection or a redirect chain that never resolved is our own failure to
+   * read, and believing it for six hours punishes the site for a blip. It also has to be possible
+   * to say which one happened without inferring it from a status code, because `status` is 0 in the
+   * one case there was no HTTP response at all.
+   *
+   * True for a 200 we parsed AND for a 4xx that is not 429 — "this site publishes no rules" is a
+   * real answer, and it is the one ncdxf.org gives by 403ing its own robots.txt. False for 429, 5xx,
+   * an unresolved redirect chain, and any transport failure.
+   */
+  wasRead: boolean;
+}
+
+/**
+ * The verdict for an origin whose rules we never obtained.
+ *
+ * `disallows: ['/']`, because a read we could not complete is not permission — see the enumeration
+ * on {@link robotsFromResponse}. `status: 0`, because there was no HTTP response to record: this is
+ * the connection that was refused, reset, or timed out after every retry.
+ */
+export function robotsUnread(fetchedAt: string): RobotsRules {
+  return { allows: [], disallows: ['/'], status: 0, fetchedAt, wasRead: false };
 }
 
 export const ROBOTS_ALLOW_ALL: RobotsRules = Object.freeze({
@@ -14,6 +40,9 @@ export const ROBOTS_ALLOW_ALL: RobotsRules = Object.freeze({
   disallows: [],
   status: 0,
   fetchedAt: '1970-01-01T00:00:00.000Z',
+  // A stated absence of rules, not a failed read: this constant is what "the site published nothing
+  // and that is fine" looks like, which is the same posture a 404 produces.
+  wasRead: true,
 });
 
 export class RobotsDisallowedError extends Error {
@@ -76,6 +105,35 @@ function namesUs(agentValue: string, token: string): boolean {
   return !/[a-z0-9]/.test(agentValue.charAt(token.length));
 }
 
+/*
+ * WHAT ENDS A RUN OF `User-agent:` LINES — a RULE, and nothing else.
+ *
+ * RFC 9309 §2.1 spells the grammar out:
+ *
+ *     group = startgroupline *(startgroupline / emptyline) *(rule / emptyline)
+ *
+ * so consecutive `User-agent:` lines are ONE group, and an empty line between them does not end
+ * the run. §2.2.4 then says a crawler may see records that are not part of the protocol at all —
+ * `Sitemap:` is the example the RFC itself gives — and §2.1 strips `#` comments before any of this
+ * is read. None of the three is a rule, so none of them may split a group.
+ *
+ * This used to reset the flag on a blank line and again on EVERY line that was not a `User-agent:`,
+ * which meant all three did. Measured against the parser before the fix, on a file whose only sin
+ * is a sitemap line where a sitemap line normally goes:
+ *
+ *     User-agent: GrantSpotter
+ *     Sitemap: https://example.org/sitemap.xml
+ *     User-agent: *
+ *     Disallow: /
+ *
+ *   -> two groups, the named one empty, the wildcard one holding the Disallow. A named group beats
+ *      the wildcard, so the empty one won and `isPathAllowed('/anything')` was true. The site said
+ *      "GrantSpotter, and everyone else, keep out" and we read it as "no rules for GrantSpotter".
+ *
+ * A blank line and a comment between two `User-agent:` lines produced the same split. All three
+ * shapes are ordinary in real robots.txt files, and the failure is the dangerous kind: it looks
+ * obeyed, because the rules are still there — just in a group nothing matches.
+ */
 export function parseRobots(
   body: string,
   agentToken: string,
@@ -84,42 +142,50 @@ export function parseRobots(
 ): RobotsRules {
   const groups: Group[] = [];
   let current: Group | null = null;
-  let lastLineWasAgent = false;
+  let inAgentRun = false;
 
   for (const rawLine of body.split(/\r?\n/)) {
     const line = stripComment(rawLine);
-    if (line === '') {
-      lastLineWasAgent = false;
-      continue;
-    }
+    // A blank line — or a line that was nothing but a comment, which `stripComment` has just made
+    // blank — is `emptyline` in the ABNF above. It appears INSIDE a group there, so it decides
+    // nothing.
+    if (line === '') continue;
     const colon = line.indexOf(':');
     if (colon === -1) continue;
     const field = line.slice(0, colon).trim().toLowerCase();
     const value = line.slice(colon + 1).trim();
 
     if (field === 'user-agent') {
-      if (!current || !lastLineWasAgent) {
+      if (!current || !inAgentRun) {
         current = { agents: [], allows: [], disallows: [] };
         groups.push(current);
       }
       current.agents.push(value.toLowerCase());
-      lastLineWasAgent = true;
+      inAgentRun = true;
       continue;
     }
-    lastLineWasAgent = false;
     if (!current) continue;
     if (field === 'disallow') {
+      inAgentRun = false;
       if (value !== '') current.disallows.push(value);
       continue;
     }
     if (field === 'allow') {
+      inAgentRun = false;
       if (value !== '') current.allows.push(value);
       continue;
     }
     if (field === 'crawl-delay') {
+      // Not in the RFC's `rule` production — it is an "other record" per §2.2.4 — but this parser
+      // has always treated it as belonging to the group above it, and a site that writes
+      // `Crawl-delay:` between two `User-agent:` lines has plainly finished naming agents.
+      inAgentRun = false;
       const n = Number.parseFloat(value);
       if (Number.isFinite(n) && n >= 0) current.crawlDelaySec = n;
+      continue;
     }
+    // Anything else — `Sitemap:`, `Host:`, a typo — is an unrecognised record. It is not a rule, so
+    // it does not end the run of agents, and it is not ours, so it is dropped.
   }
 
   /*
@@ -152,6 +218,7 @@ export function parseRobots(
     .filter((delay): delay is number => delay !== undefined);
 
   return {
+    wasRead: true,
     allows: matching.flatMap((g) => g.allows),
     disallows: matching.flatMap((g) => g.disallows),
     // The LONGEST delay any matching group asked for. Two groups naming different intervals is a
@@ -205,12 +272,15 @@ export function robotsFromResponse(
 ): RobotsRules {
   if (status === 200) return parseRobots(body, agentToken, status, fetchedAt);
   if (status === 429 || status >= 500) {
-    return { allows: [], disallows: ['/'], status, fetchedAt };
+    return { allows: [], disallows: ['/'], status, fetchedAt, wasRead: false };
   }
   if (status >= 300 && status < 400) {
-    return { allows: [], disallows: ['/'], status, fetchedAt };
+    return { allows: [], disallows: ['/'], status, fetchedAt, wasRead: false };
   }
-  return { allows: [], disallows: [], status, fetchedAt };
+  // A 4xx that is not 429. The site answered, and the answer is "there is nothing here", which is a
+  // real reading of its rules rather than a failure to obtain them — hence `wasRead: true`, and
+  // hence this verdict keeps the full cache lifetime while the two above do not.
+  return { allows: [], disallows: [], status, fetchedAt, wasRead: true };
 }
 
 /**

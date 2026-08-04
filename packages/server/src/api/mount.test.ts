@@ -19,6 +19,10 @@ const NOW = '2026-08-02T12:00:00.000Z';
 const config = loadConfig({
   SESSION_SECRET: 'x'.repeat(32),
   NODE_ENV: 'test',
+  // Required with no default: `loadConfig` refuses to build a config without a contact
+  // URL, so every harness that wants one has to name an address a real deployment could
+  // hold. Nothing here reaches the network; this value only has to survive the loader.
+  CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
 });
 
 /**

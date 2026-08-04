@@ -121,7 +121,7 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/400\s?MB/i);
   });
 
-  it('documents every environment variable, and the one that has no default', () => {
+  it('documents every environment variable, and the two that have no default', () => {
     for (const key of [
       'HOST_PORT',
       'PORT',
@@ -135,38 +135,66 @@ describe('README honesty surfaces', () => {
     ]) {
       expect(readme).toContain(key);
     }
-    expect(readme).toMatch(/no default/i);
+    // Both of them, in the table and in the prose beneath it.
+    expect(readme).toMatch(/\*\*no default\*\*[\s\S]*\*\*no default\*\*/);
+    expect(readme).toMatch(/Two variables fail loudly on startup/);
     expect(readme).toMatch(/32 characters/);
     expect(readme).toMatch(/User-Agent/);
   });
 
   /**
-   * THE TRADE THIS README HAS TO KEEP ADMITTING TO.
+   * WHAT THESE GATES USED TO HOLD, AND WHY THEY HOLD THE OPPOSITE NOW.
    *
-   * Until 2026-08-04 `CONTACT_URL` was required with no default, and this README said why in one
-   * sentence: *an anonymous crawler is one nobody can ask to stop*. It has a default now — the
-   * project's own issue tracker — and the tempting edit was to delete that sentence and say
-   * nothing further. What is true after the change is two things, not one: the crawler is no
-   * longer anonymous, AND every deployment that keeps the default points at the same tracker,
-   * which belongs to the maintainers of the software rather than to the operator of the instance
-   * doing the polling. A site owner who wants one instance stopped reaches people who cannot stop
-   * it.
+   * They were written as "does not oversell the CONTACT_URL default": the README had to print
+   * `https://github.com/Atvriders/grantspotter/issues`, say that every deployment keeping it names
+   * the *same* tracker, and say it is *not yours*. Every one of those assertions was right about
+   * the design of the day, and every one of them is about nothing now — the owner removed the
+   * default, for the reason the caveat was warning about:
    *
-   * So this test exists to make the second half as hard to lose as the first. A README that
-   * advertises the default and drops the caveat would pass every other assertion in this file.
+   *   "remove the open a issue. i don't see issues for other deployments i have no control over"
+   *
+   * A gate on a caveat about a default that no longer exists would pass forever while the README
+   * said anything at all. So the gates move to the restored claims, and they are strictly harder to
+   * satisfy than the ones they replace: the README must now state the requirement, state that it is
+   * BETTER for politeness than the default was rather than merely different, keep the robots.txt
+   * remedy — which matters more with no shared contact point, not less — and must not have quietly
+   * left the old default lying in the prose.
    */
-  it('does not oversell the CONTACT_URL default: same tracker, not the operator’s', () => {
-    expect(readme).toContain('https://github.com/Atvriders/grantspotter/issues');
-    // `\W{0,3}` rather than a space: the emphasis markers around *same* are markdown, not meaning.
-    expect(readme).toMatch(/same\W{0,3}tracker/i);
-    expect(readme).toMatch(/not yours|not you\b/i);
-    // …and says what to do about it, to whom, and when.
-    expect(readme).toMatch(/override it/i);
-    expect(readme).toMatch(/fork/i);
-    expect(readme).toMatch(/institution/i);
-    // The remedy that does not depend on reaching anybody at all.
+  it('says CONTACT_URL is required, with no default, and why there cannot be one', () => {
+    expect(readme).toMatch(/`CONTACT_URL`[\s\S]{0,80}no default/);
+    expect(readme).toMatch(/refuses to start without/i);
+    // The reason, which is the owner's and is what decides the shape.
+    expect(readme).toMatch(/cannot stop it|cannot switch/i);
+    expect(readme).toMatch(/do not run/i);
+    // And that this is the stronger position, not a regression dressed up.
+    // `[\s\S]` and not `.`: the sentence wraps mid-phrase in the source, and a regex that assumes
+    // one line would fail on a reflow that changed nothing a reader can see.
+    expect(readme).toMatch(/no deployment[\s\S]{0,40}poll anonymously/i);
+    expect(readme).toMatch(/hand on the switch|can actually switch that instance off/i);
+  });
+
+  it('leaves no working default lying in the prose for a reader to copy', () => {
+    // The exact string that used to be REQUIRED here. A README still printing it would be handing
+    // an operator an address that reaches people who cannot help them, which is the whole defect.
+    expect(readme).not.toContain('https://github.com/Atvriders/grantspotter/issues');
+    expect(readme).not.toMatch(/open an issue there/);
+    expect(readme).not.toMatch(/leave this variable unset/i);
+  });
+
+  it('keeps the robots.txt remedy prominent, which matters more without a shared contact point', () => {
     expect(readme).toMatch(/User-agent: GrantSpotter/);
     expect(readme).toMatch(/Disallow: \//);
+    // It must say what makes robots.txt the remedy: it works regardless of who runs the instance.
+    expect(readme).toMatch(/no matter who is running what|regardless of who/i);
+    expect(readme).toMatch(/matters more/i);
+    // …and the three ways it was not honoured until 2026-08-04, since a site owner checking their
+    // own logs is the only person who can tell whether it worked.
+    expect(readme).toMatch(/redirects is followed/);
+    expect(readme).toMatch(/stops the crawl of[\s\S]{0,20}that origin rather than being read as permission/);
+    // …and the exception, because a reader who blocks us with a 403 on /robots.txt would otherwise
+    // expect the crawl to stop and it does not.
+    expect(readme).toMatch(/404 or 403 still means/);
+    expect(readme).toMatch(/next nightly crawl/);
   });
 
   /**
@@ -196,7 +224,58 @@ describe('README honesty surfaces', () => {
     expect(template).toMatch(/nightly crawl/);
     expect(template).toMatch(/within a day/);
     expect(template).not.toMatch(/will not notice your new file until it restarts/);
-    expect(template).toMatch(/cannot switch it off|cannot stop it/i);
+    expect(template).toMatch(/cannot stop somebody else's deployment/i);
+  });
+
+  /**
+   * THE TEMPLATE IS NO LONGER SOMEWHERE THE CRAWLER SENDS ANYBODY.
+   *
+   * It was written for a reader who had followed `+https://github.com/…/issues` out of a log line,
+   * and it opened "You are probably here because you saw this in a log", quoting that URL. With the
+   * shared default gone, no deployment points here: the log line names the operator's own page, and
+   * the only way to this file is searching the product name. That changes who is reading and what
+   * they need first — so the page must not imply we can act on an instance we do not run, and must
+   * say what we actually can do (take a source out of the shipped list) rather than leaving the
+   * reader with an implied promise.
+   */
+  it('does not imply the maintainers can stop a third-party instance', () => {
+    const template = readFileSync(
+      resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
+      'utf8',
+    );
+    // Not the address the crawler used to carry, and not the instruction that went with it.
+    expect(template).not.toContain('https://github.com/Atvriders/grantspotter/issues');
+    expect(template).not.toMatch(/open an issue there to contact the maintainers/);
+    // It says, before anything else, that the log line names somebody who is not us.
+    const disclaimer = template.indexOf('we probably do not run the instance');
+    expect(disclaimer).toBeGreaterThan(-1);
+    expect(disclaimer).toBeLessThan(template.indexOf('User-agent: GrantSpotter'));
+    expect(template).toMatch(/self-hosted/i);
+    // …and it names the remedy it CAN deliver, so the honesty is not just a refusal.
+    expect(template).toMatch(/list of sources this software ships with/i);
+  });
+
+  /**
+   * FINDING H: "Expect one request per night, forever. That is the whole footprint of a blocked
+   * site" was false as written. A `Disallow: /` site whose `/robots.txt` 301s twice sees three
+   * requests a run, and a robots.txt that is retried (as it now is, like every other request) can
+   * see four. A site owner counting requests against that sentence would conclude the block had
+   * failed. The template has to state the bound it can actually keep.
+   */
+  it('states a footprint for a blocked site that the crawler can actually keep', () => {
+    const template = readFileSync(
+      resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
+      'utf8',
+    );
+    expect(template).not.toMatch(/That is the whole footprint of a blocked site\.?$/m);
+    expect(template).toMatch(/one request per night/);
+    // The two things that make it more than one, both named, both checkable in the reader's logs.
+    expect(template).toMatch(/redirect is followed/i);
+    expect(template).toMatch(/up to five/i);
+    expect(template).toMatch(/retried/i);
+    expect(template).toMatch(/four attempts/i);
+    // And the closure: nothing else generates a request.
+    expect(template).toMatch(/Nothing else\./);
   });
 
   it('names the verified negatives so a reader does not re-research them', () => {
@@ -253,12 +332,11 @@ describe('README honesty surfaces', () => {
    * asked for one file to edit — so the instruction is now a pointer to nothing, and a README that
    * still printed it would strand a reader on step one. The replacement design has a sharp edge
    * that has to be documented rather than discovered: the compose file ships working-looking
-   * literals, and the server refuses the SESSION_SECRET among them by value.
+   * literals, and the server refuses BOTH of them by value.
    *
-   * ("refuses two of them" until 2026-08-04, and that had stopped being true one commit earlier:
-   * CONTACT_URL gained a working default and the compose file now ships a real address for it, so
-   * exactly one shipped value is refused. `compose.test.ts` holds the sharper version of the same
-   * claim — exactly one edit is needed, checked by making it and requiring a config back.)
+   * (It said two, then one for the day CONTACT_URL had a default, and it is two again.
+   * `compose.test.ts` holds the sharper version of the same claim — each edit made in turn, with
+   * the loader still required to refuse until both are.)
    */
   it('does not send the reader to a file this repository no longer ships', () => {
     expect(readme).not.toContain('.env.example');
@@ -270,6 +348,9 @@ describe('README honesty surfaces', () => {
     expect(readme).toContain(PLACEHOLDER_MARKER); // the marker, imported, not a retyped copy
     expect(readme).toMatch(/refuses? to start|refuses the shipped/i);
     expect(readme).toContain('openssl rand -hex 32');
+    // Two edits, said as a number where the reader is deciding how much work this is.
+    expect(readme).toMatch(/\*\*two\*\* values marked/i);
+    expect(readme).toMatch(/while either is\s+still there/i);
   });
 
   it('gives the deploy path including the workflow_dispatch gotcha', () => {

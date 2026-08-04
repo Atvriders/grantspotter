@@ -41,8 +41,8 @@ async function main(): Promise<void> {
   }
   // The server's rule, not a second one — see the note in `scripts/verify-sources.ts`. This was
   // `process.env.CONTACT_URL?.trim() || DEFAULT_CONTACT_URL`, which put values the server refuses
-  // onto the wire of a real site. Unset means "identify through the project's issue tracker"; set
-  // CONTACT_URL if the site you are about to fetch should be able to reach YOU about it.
+  // onto the wire of a real site. CONTACT_URL is required and has no default, so unset means this
+  // command refuses to run: the site you are about to fetch should be able to reach YOU about it.
   const contactUrl = resolveContactUrl();
 
   const source = getSource(sourceId);

@@ -60,6 +60,10 @@ async function bootServer(port: number): Promise<ChildProcessWithoutNullStreams>
         PORT: String(port),
         DATA_DIR: dataDir,
         SESSION_SECRET: 'shutdown-test-session-secret-not-a-real-secret',
+        // Required with no default since 2026-08-04, so this had to become explicit: the server
+        // will not start without it, and inheriting whatever is in the developer's shell would
+        // make whether this test can boot depend on their environment.
+        CONTACT_URL: 'https://w9xyz-radio-club.org/grantspotter',
         // No scheduler: this test is about stopping, and a crawl would reach the network.
         CRAWL_ENABLED: 'false',
       },

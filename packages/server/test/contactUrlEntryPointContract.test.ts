@@ -123,8 +123,9 @@ const DIRECT_NETWORK = ['packages/server/src/ai/assist.ts', 'e2e/shippedSeed.ts'
  * is how a harness configures a server it is about to start (`playwright.config.ts`, a spawned
  * child's env). `CONTACT_URL ===` is a comparison, so it stays an offence.
  *
- * `DEFAULT_CONTACT_URL` and `FORMER_PLACEHOLDER_CONTACT_URL` do not match: `\b` finds no boundary
- * between `_` and `C`, both being word characters.
+ * `PLACEHOLDER_CONTACT_URL` does not match: `\b` finds no boundary between `_` and `C`, both being
+ * word characters. (`DEFAULT_CONTACT_URL` was the other such constant, and is gone — CONTACT_URL is
+ * required with no default again, for the reason recorded in `config.ts`.)
  *
  * The second alternative exists because `CONTACT_URL:` is not always a write. In
  * `const { CONTACT_URL: url } = env` it is a RENAMING DESTRUCTURE — a read wearing the punctuation
@@ -252,8 +253,8 @@ describe('every path that can name this crawler goes through one predicate', () 
     // …and does not fire on setting it, or on the two constants whose names end in it.
     expect(NAMES_THE_VARIABLE.test("env: { CONTACT_URL: 'https://w9xyz.org/x' }")).toBe(false);
     expect(NAMES_THE_VARIABLE.test("process.env.CONTACT_URL = 'https://w9xyz.org/x';")).toBe(false);
+    expect(NAMES_THE_VARIABLE.test('PLACEHOLDER_CONTACT_URL,')).toBe(false);
     expect(NAMES_THE_VARIABLE.test('return DEFAULT_CONTACT_URL;')).toBe(false);
-    expect(NAMES_THE_VARIABLE.test('FORMER_PLACEHOLDER_CONTACT_URL,')).toBe(false);
     // A `.mjs` is a file, and `v2.0` is a directory.
     expect(RUNNABLE.test('poll-c.mjs')).toBe(true);
     expect(RUNNABLE.test('poll.cjs')).toBe(true);
@@ -277,11 +278,48 @@ describe('every path that can name this crawler goes through one predicate', () 
       expect(source, entry).not.toBe('');
       // It obtains the value from the one predicate…
       expect(source, entry).toMatch(/\b(resolveContactUrl|loadConfig)\s*\(/);
-      // …and does not read the variable itself, or re-implement the default beside it. Both
-      // spellings below are the exact shape of the code this file exists to prevent returning.
+      // …and does not read the variable itself.
       expect(source, entry).not.toMatch(NAMES_THE_VARIABLE);
-      expect(source, entry).not.toMatch(/(?:\?\?|\|\|)\s*DEFAULT_CONTACT_URL/);
     }
+  });
+
+  /**
+   * NOBODY REINTRODUCES A SHARED DEFAULT, UNDER ANY NAME.
+   *
+   * This assertion was `not.toMatch(/(?:\?\?|\|\|)\s*DEFAULT_CONTACT_URL/)` on the entry points
+   * alone, which was the right shape while such a constant existed. It is gone — the owner removed
+   * the default because a shared address makes the maintainers of the software the contact for
+   * deployments they do not run — so that pattern would now be a gate on nothing.
+   *
+   * What replaces it is broader in two ways, and is a gate on the restored design rather than on a
+   * vanished identifier: it covers EVERY scanned file rather than the three entry points, and it
+   * matches the fallback by SHAPE (`?? 'https://…'`) rather than by the name a future author
+   * happens to give the constant. `config.ts` is not exempt: it is the file the default lived in.
+   */
+  it('lets nothing supply a fallback contact URL, by name or by literal', async () => {
+    const SUPPLIES_A_FALLBACK = new RegExp(
+      [
+        String.raw`(?:\?\?|\|\|)\s*['"\`]https?://`, // `process.env.CONTACT_URL ?? 'https://…'`
+        String.raw`(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*CONTACT_URL\b`, // …or via any such constant
+        String.raw`\b(?:DEFAULT|FALLBACK)_CONTACT_URL\b`, // …or one merely declared, awaiting a caller
+      ].join('|'),
+    );
+    const offenders = (await scannedFiles())
+      .filter((f) => SUPPLIES_A_FALLBACK.test(f.source))
+      .map((f) => f.rel);
+    expect(offenders).toEqual([]);
+    // Vacuity guards: the pattern must fire on each shape it claims to catch.
+    for (const offender of [
+      "const url = process.env.CONTACT_URL ?? 'https://github.com/x/y/issues';",
+      'const url = readIt() || DEFAULT_CONTACT_URL;',
+      "export const FALLBACK_CONTACT_URL = 'https://github.com/x/y/issues';",
+    ]) {
+      expect(SUPPLIES_A_FALLBACK.test(offender), offender).toBe(true);
+    }
+    // …and not on the shipped placeholder, which is a value the loader REFUSES rather than a
+    // fallback it accepts.
+    expect(SUPPLIES_A_FALLBACK.test('PLACEHOLDER_CONTACT_URL,')).toBe(false);
+    expect(SUPPLIES_A_FALLBACK.test("optional(env, 'CONTACT_URL') ?? ''")).toBe(false);
   });
 
   /**
