@@ -22,6 +22,7 @@
  * all four run, with no edit to this file. The spec directly below is what keeps that honest — it
  * always runs, and fails if `/` is in any state other than the two named here.
  */
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import {
   ADMIN_EMAIL,
@@ -35,6 +36,31 @@ import {
   NEWCOMER_PASSWORD,
   programIdByName,
 } from './helpers.js';
+
+/**
+ * The ARDC record the writing desk binds an overlay to — the same one `writing.spec.ts` names.
+ * "Apply for a Grant" is the page title ardc.net publishes; it is looked up by name for the reason
+ * `programIdByName` exists, and never transcribed as an id.
+ */
+const ARDC_PROGRAM_NAME = 'Apply for a Grant';
+
+/**
+ * Read the system clipboard from inside the page.
+ *
+ * DEVIATION FROM THE TASK BRIEF (2026-08-04). The brief writes
+ * `page.evaluate(() => navigator.clipboard.readText())`, which does not compile: this repository's
+ * ROOT tsconfig ships no `dom` lib and `npm run typecheck` covers `e2e/`, so `navigator` is
+ * `TS2304: Cannot find name 'navigator'` — the same wall `writing.spec.ts` documents for
+ * `document`. The body of this function is evaluated in Chromium, where `navigator.clipboard`
+ * really is there; only the TYPE has to be supplied here, and it is supplied narrowly rather than
+ * with an `any` so a misspelt method is still a compile error.
+ */
+function readClipboard(): Promise<string> {
+  const { navigator } = globalThis as unknown as {
+    navigator: { clipboard: { readText(): Promise<string> } };
+  };
+  return navigator.clipboard.readText();
+}
 
 const SPA_PENDING =
   'The SPA fallback is not mounted: GET / is still Plan 1\'s JSON 404 envelope. Plan 5 Task 17 ' +
@@ -300,4 +326,154 @@ test('an admin manages users, configures a source, and triggers a crawl', async 
   // this walks the whole crawl path and reaches no third-party site.
   await page.getByRole('button', { name: 'Run crawl now' }).click();
   await expect(page.getByRole('status')).toContainText(/Crawled 1 source/, { timeout: 60_000 });
+});
+
+/**
+ * SPEC §14, ALL NINE STEPS, IN ONE SESSION.
+ *
+ * Deliberately one long test rather than nine short ones: what is being asserted is that the steps
+ * COMPOSE — that a profile saved in step 2 is the profile the export in step 6 is computed
+ * against, and that the programme starred in step 4 is still starred when the calendar reads it.
+ * Nine isolated tests prove nine screens render and nothing about the chain between them.
+ *
+ * DEVIATIONS FROM THE TASK BRIEF (2026-08-04), each measured against the running server:
+ *
+ *   a. The brief navigates to `/o/arrl-foundation-scholarships` and `/o/ardc-grants`. Neither id
+ *      exists. Programme ids are minted by the normalizer and carry a content hash of the source
+ *      record — the two real ids are `arrl-scholarship-program--scholarship-program--7b29405e` and
+ *      `ardc-grants--apply--b04e6201` — so both `goto`s land on the detail route's "not found" and
+ *      the star step asserts against a page with no Watch button. `programIdByName` is the lookup
+ *      `helpers.ts` exists to provide and `writing.spec.ts` already uses.
+ *   b. `getByRole('link', { name: 'Profile' })` resolves to two nodes: the rail entry and the
+ *      browse banner's "Set up a profile". `exact: true`, as Plan 3's journey above already does.
+ *   c. `getByLabel('Draft')` needs `exact: true` (the screen also labels "Draft title"), and a
+ *      controlled textarea's text is its `value`, so the assertion is `toHaveValue` and not
+ *      `toContainText` — `textContent` on a React-controlled textarea is empty and the brief's
+ *      form passes for the wrong reason or fails for one that is not the product's.
+ */
+test('spec §14: log in, profile, browse, star, calendar, ICS, template, prompt, prose check', async ({
+  page,
+}) => {
+  // 1 — log in
+  await signIn(page, MEMBER_EMAIL, MEMBER_PASSWORD);
+  await expect(page.getByRole('heading', { name: 'Browse opportunities' })).toBeVisible();
+
+  // 2 — set a profile
+  await page.getByRole('link', { name: 'Profile', exact: true }).click();
+  await page.getByLabel('Callsign').fill('W8UM');
+  await page.getByLabel('License class').selectOption('GENERAL');
+  await page.getByLabel('State').fill('MI');
+  await page.getByLabel('Degree level').selectOption('BACH');
+  await page.getByLabel('Stage').selectOption('UNDERGRAD');
+  await page.getByLabel('Citizenship').selectOption('US_CITIZEN');
+  await page.getByRole('button', { name: /save student profile/i }).click();
+  await expect(page.getByRole('status')).toContainText('saved');
+
+  // 3 — browse with verdicts
+  await page.getByRole('link', { name: 'Browse', exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Opportunities' })).toBeVisible();
+  await expect(page.getByText(/you are ineligible for \d+ of these/i)).toBeVisible();
+
+  // 4 — star a program
+  const arrlId = programIdByName(ARRL_SCHOLARSHIP_NAME);
+  await page.goto(`/o/${arrlId}`);
+  await page.getByRole('button', { name: 'Watch this program' }).click();
+  await expect(page.getByRole('button', { name: 'Stop watching this program' })).toBeVisible();
+  // The brief is printable, which is how spec §11.3 delivers "Opportunity brief | PDF".
+  await expect(page.getByRole('button', { name: 'Print brief' })).toBeVisible();
+
+  // 5 — calendar
+  await page.getByRole('link', { name: 'Calendar', exact: true }).click();
+  await expect(page.getByRole('list', { name: 'Agenda' })).toBeVisible();
+
+  // 6 — export ICS, through the UI a user actually has
+  await page.getByRole('link', { name: 'Exports', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Take it with you' })).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link', { name: /one-off \.ics$/i }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^grantspotter-deadlines-\d{4}-\d{2}-\d{2}\.ics$/);
+  const icsPath = await download.path();
+  const ics = readFileSync(icsPath, 'utf8');
+  expect(ics.startsWith('BEGIN:VCALENDAR')).toBe(true);
+  expect(ics).toContain('BEGIN:VEVENT');
+  // The subscribable feed is the one that keeps working; prove it is creatable and serves.
+  await page.getByRole('button', { name: /create a calendar feed/i }).click();
+  const feedUrl = await page.getByLabel(/subscribe url/i).inputValue();
+  expect(feedUrl).toMatch(/\/calendar\/[A-Za-z0-9_-]{40,}\.ics$/);
+  const feed = await page.request.get(feedUrl);
+  expect(feed.status()).toBe(200);
+  expect(feed.headers()['content-type']).toContain('text/calendar');
+  expect(await feed.text()).toMatch(/^BEGIN:VCALENDAR/);
+
+  // 7 — open a template, from the program so the funder overlay resolves
+  const ardcId = programIdByName(ARDC_PROGRAM_NAME);
+  await page.goto(`/o/${ardcId}`);
+  await page.getByRole('link', { name: 'Start an application for this program' }).click();
+  await expect(page).toHaveURL(new RegExp(`/applications\\?programId=${ardcId}`));
+  await page.getByRole('button', { name: 'New draft' }).click();
+  const draft = page.getByLabel('Draft', { exact: true });
+  await page
+    .getByRole('region', { name: 'Insert a section' })
+    .getByRole('button', { name: /^Need statement/ })
+    .click();
+  await expect(draft).toHaveValue(/\[TODO:/);
+
+  // 8 — copy an AI prompt, and check what actually reached the clipboard
+  await page.getByRole('button', { name: 'Copy AI Prompt — includes AI-detection avoidance' }).click();
+  // Wait for the button's own "Copied N characters" before reading the clipboard. The click
+  // returns as soon as it is dispatched, and the handler fetches the composed prompt from the
+  // server before it writes — so the brief's immediate read races it and returns `''`, which is
+  // what an empty assertion failure looked like here first time round.
+  await expect(page.getByRole('status')).toContainText(/^Copied [\d,]+ characters\./);
+  const clipboard = await page.evaluate(readClipboard);
+  expect(clipboard).toContain('ARDC');
+  expect(clipboard.length).toBeGreaterThan(400);
+
+  // 9 — run the prose check
+  await draft.fill(
+    "In today's rapidly evolving landscape, our organization delves into the transformative " +
+      'potential of amateur radio, underscoring our unwavering commitment to educate, empower and inspire.',
+  );
+  await draft.blur();
+  await page.getByRole('button', { name: 'Run prose check' }).click();
+  await expect(page.getByRole('heading', { name: 'Prose check' })).toBeVisible();
+  await expect(page.getByText(/has no proper noun and no figure in it/i)).toBeVisible();
+});
+
+/**
+ * Playwright's `webServer` is the real entrypoint, so the same four guarantees `spa.test.ts` pins
+ * on a hand-built app are worth one more check against the thing the browser is actually talking
+ * to. `request` rather than `page`, because two of the four are about what is *not* HTML.
+ *
+ * Relative paths resolve against playwright.config.ts's baseURL, which points at the
+ * same single process the container runs.
+ */
+test('the single process serves the SPA on / and still answers JSON on /api', async ({ request }) => {
+  const root = await request.get('/');
+  expect(root.status()).toBe(200);
+  expect(root.headers()['content-type']).toContain('text/html');
+  const shell = await root.text();
+  expect(shell).toContain('<div id="root">');
+
+  // A deep client-side route returns the SAME shell: that is what makes a hard
+  // refresh on /browse work, and it is Plan 5 Task 17's line that provides it.
+  const deep = await request.get('/browse');
+  expect(deep.status()).toBe(200);
+  expect(await deep.text()).toBe(shell);
+
+  // The history fallback must not have swallowed the API.
+  const unknown = await request.get('/api/unknown');
+  expect(unknown.status()).toBe(404);
+  expect(unknown.headers()['content-type']).toContain('application/json');
+  const envelope = (await unknown.json()) as { error: { code: string }; requestId: string };
+  expect(envelope.error.code).toBe('not_found');
+  expect(typeof envelope.requestId).toBe('string');
+
+  // Only a GET gets the shell; a POST falls through to the JSON 404.
+  const posted = await request.post('/', { data: {} });
+  expect(posted.status()).toBe(404);
+  expect(posted.headers()['content-type']).toContain('application/json');
+  expect(await posted.text()).not.toContain('<div id="root">');
 });

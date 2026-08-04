@@ -131,6 +131,32 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/disputed/i);
   });
 
+  /**
+   * ADDED BY THE SPEC §14 FLOW WALK (Task 22). The corpus table above measures the committed
+   * fixtures; a `docker compose up` installs the seed, and the two are different sizes. Boot on a
+   * clean DATA_DIR prints "Imported 143 programs (143 publishable, 0 suppressed) from 26 funders",
+   * so a reader who took 150/553 as "what I will have after installing" was wrong by 7 records and
+   * by the entire suppressed set. The README now says both, and this binds the second one.
+   */
+  it('separates the fixture measurements from what a fresh install actually imports', () => {
+    expect(readme).toMatch(/fresh install/i);
+    expect(readme).toMatch(/143 programmes \(143 publishable, 0 suppressed\)/);
+    expect(readme).toMatch(/7 of the 143/);
+  });
+
+  /**
+   * There is no sign-up form and no first-run screen: `createBootstrapState` prints a one-time
+   * token to the log and `POST /api/auth/bootstrap` is the only thing that spends it. An operator
+   * who is told to "read the log for the token" and nothing else has a browser showing a sign-in
+   * box with no account to sign in as, which is step 1 of the product's own flow, unreachable.
+   */
+  it('says how to spend the bootstrap token, not just where to find it', () => {
+    expect(readme).toContain('/api/auth/bootstrap');
+    // `\s+` and not a space: the sentence wraps mid-phrase in the source, and a regex that
+    // assumes one line would fail on a reflow that changed nothing a reader can see.
+    expect(readme).toMatch(/no\s+sign-?up\s+form/i);
+  });
+
   it('gives the deploy path including the workflow_dispatch gotcha', () => {
     expect(readme).toContain('ghcr.io/atvriders/grantspotter');
     expect(readme).toContain('HOST_PORT');

@@ -79,6 +79,14 @@ describe('ExportsRoute', () => {
     expect(await screen.findByText(/4 of the 243 dated windows/i)).toBeInTheDocument();
   });
 
+  it('says that the subscribable feed narrows to the watchlist once something is starred', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ error: { code: 'not_found', message: 'none' } }, 404));
+    render(<MemoryRouter><ExportsRoute /></MemoryRouter>);
+    expect(await screen.findByText(/feed follows your watchlist/i)).toBeInTheDocument();
+    // The URL staying the same is the surprising half, and it is the half a subscriber needs.
+    expect(screen.getByText(/URL does not change/i)).toBeInTheDocument();
+  });
+
   it('surfaces a 409 from the eligibility export as the profile prompt', async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ hasToken: true }));
     render(<MemoryRouter><ExportsRoute /></MemoryRouter>);

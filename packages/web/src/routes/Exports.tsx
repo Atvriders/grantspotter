@@ -87,6 +87,21 @@ export function ExportsRoute(): JSX.Element {
           date. The subscribable feed is the one that keeps working — your phone re-reads it about
           every twelve hours.
         </p>
+        {/*
+          The feed's SCOPE follows the watchlist, and saying so is not optional. `/calendar/:token`
+          serves every publishable deadline while the watchlist is empty and only the watched
+          programmes as soon as it is not — measured on a fresh install: 252 events with nothing
+          starred, 2 with one programme starred, 252 again after un-starring it. The URL never
+          changes, so a subscriber who stars their first programme sees their calendar collapse
+          overnight with nothing on screen to explain it. The one-off downloads let the user pick
+          between the two; the feed decides for them, so the feed has to say what it decided.
+        */}
+        <p className="export-note">
+          The feed follows your watchlist. While you are watching nothing it carries every deadline
+          here; star one programme and it narrows to what you star. The URL does not change when it
+          switches, so a calendar you subscribed to earlier will simply start showing fewer events.
+          Use the one-off downloads below to take a copy of either.
+        </p>
         <p className="export-note">
           Only 4 of the 243 dated windows in this corpus are dates a funder has actually published;
           the rest are this pipeline&rsquo;s projection from a prior cycle. Every projected event in

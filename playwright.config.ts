@@ -11,6 +11,9 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     trace: 'retain-on-failure',
+    // The copy-prompt step asserts what actually landed on the clipboard rather than that a
+    // button was pressed, and Chromium refuses `navigator.clipboard.readText()` without this.
+    permissions: ['clipboard-read', 'clipboard-write'],
   },
   webServer: {
     // Build the SPA, seed a throwaway database, then run the real server.

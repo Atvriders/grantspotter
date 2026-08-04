@@ -28,6 +28,15 @@ committed fixtures by `npm run profile-corpus`:
 | Funders | 26 |
 | Records stored but never published | **553** |
 
+**What a fresh install actually contains is smaller than that, and the difference is not a bug.**
+The table above measures the committed fixtures — every page ever captured, past-award tables
+included. What ships in the container is the curated seed, and a first boot prints exactly what it
+imported. Measured on a clean `DATA_DIR` at 0.1.0: **143 programmes (143 publishable, 0 suppressed)
+from 26 funders**, 111 of them from `arrl.org/scholarship-descriptions`, and **7 of the 143 badged
+open** — the rest are `closed`, `contact_only`, `dormant`, `discontinued`, `no_application` or
+`unknown`, inherited from the funder's own page. The 553 suppressed rows arrive with the first
+crawl that reads a past-award table, not with the seed, so a new installation has none of them.
+
 The federal APIs are excellent and nearly ham-free: `"amateur radio"` returns 57 Grants.gov hits
 and `"cubesat"` returns one. So GrantSpotter re-reads about 25 hand-curated sources nightly, hashes
 the *parsed entries* rather than the raw HTML, and puts every change in front of a human before it
@@ -281,8 +290,20 @@ docker compose pull
 docker compose up -d
 ```
 
-Then open `http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and read the container log
-for the one-time admin bootstrap token.
+Then read the container log for the one-time admin bootstrap token and spend it. **There is no
+sign-up form and no first-run screen** — the browser only ever shows a sign-in box, so the first
+account has to be created over the API:
+
+```bash
+docker compose logs grantspotter | grep -A4 'first-run setup'
+curl -X POST http://127.0.0.1:3030/api/auth/bootstrap \
+  -H 'content-type: application/json' \
+  -d '{"token":"<the token from the log>","email":"you@example.org","password":"<a long passphrase>"}'
+```
+
+A fresh token is printed on every restart until an account exists. Now open
+`http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and sign in with those credentials;
+every further account is created from **Admin → User accounts**.
 
 `HOST_PORT` is a variable because **3030** is a popular default and is frequently already claimed on
 a busy host. Change it in `.env`, never in `docker-compose.yml`.
