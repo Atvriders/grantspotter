@@ -17,10 +17,16 @@ import { SOURCES } from './sources/registry.js';
 // carries it is constructed once below and shared by both.
 import { simplerAuthHeaders } from './federal/simplerGrants.js';
 import type { RouterDeps } from './api/deps.js';
-// NOTE (RESOLUTIONS R25): there are deliberately NO imports here from
-// api/applications.ts, api/templates.ts, api/prose.ts, api/prompts.ts (Plan 4),
-// api/exports.ts, exports/dataSource.ts or api/spa.ts (Plan 5). Those plans add
-// their own import lines when they add their own mount lines. Adding them now
+// Plan 4's four routers, added here with their mount lines below, exactly as
+// R25 prescribes: the import and the `a.use(...)` land in the same commit, so
+// the build never references a module that is not yet mounted or vice versa.
+import { createApplicationsRouter } from './api/applications.js';
+import { createTemplatesRouter } from './api/templates.js';
+import { createProseRouter } from './api/prose.js';
+import { createPromptsRouter } from './api/prompts.js';
+// NOTE (RESOLUTIONS R25): there are still deliberately NO imports here from
+// api/exports.ts, exports/dataSource.ts or api/spa.ts (Plan 5). That plan adds
+// its own import lines when it adds its own mount lines. Adding them now
 // breaks `npm run build`, and a broken build takes the e2e suite with it.
 //
 // DEVIATION FROM THE TASK BRIEF (2026-08-04): `createAiAssist` is imported from
@@ -130,12 +136,16 @@ function main(): void {
       // Nothing is EVER mounted after createApp returns: this callback is the
       // whole seam, and Plan 1 seals the app with notFoundHandler() the moment
       // it hands the app back (RESOLUTIONS R5).
-      //
-      // Plan 4 Task 17 Step 5 adds, with the FULL routerDeps (R17):
-      //     a.use('/api/applications', createApplicationsRouter(routerDeps));
-      //     a.use('/api/templates',    createTemplatesRouter(routerDeps));
-      //     a.use('/api/prose',        createProseRouter(routerDeps));
-      //     a.use('/api/prompts',      createPromptsRouter(routerDeps));
+
+      // --- Plan 4: application drafts, templates, prose analysis, AI prompts ---
+      // FULL routerDeps (R17). `createTemplatesRouter` takes an optional second
+      // argument (a `templatesRoot` test seam); production passes none, so the
+      // shipped `content/` tree is always what serves.
+      a.use('/api/applications', createApplicationsRouter(routerDeps));
+      a.use('/api/templates', createTemplatesRouter(routerDeps));
+      a.use('/api/prose', createProseRouter(routerDeps));
+      a.use('/api/prompts', createPromptsRouter(routerDeps));
+
       // Plan 5 Task 9 Step 9 adds, with an exportDeps satisfying ExportDeps and
       // reading `req.auth?.id` (R22 — there is no express-session in this stack):
       //     a.use('/api', createExportsRouter(exportDeps));
