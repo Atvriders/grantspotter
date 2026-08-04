@@ -275,3 +275,127 @@ describe('extractFieldOfStudy — preference handling is unchanged by this round
     ]);
   });
 });
+
+/**
+ * Round 4 — A GPA FLOOR FILED UNDER `Field of Study`, AND THE PREFERENCE BESIDE IT.
+ *
+ * Charles Clarke Cordle's `Field of Study` value is two statements about two different axes:
+ *
+ *   "GPA of 2.5 or higher; preference to students of electronics, communications, or related fields"
+ *
+ * The half the funder REQUIRES is a GPA floor, which names no field of study at all and is
+ * `gpa.ts`'s business — that axis already publishes `min: 2.5` for this entry, read from the same
+ * text through its `rawText` fallback. The half that names fields is explicitly a PREFERENCE.
+ *
+ * So this axis DECLINES the requirement half rather than inventing something out of it. Two ways
+ * of "using" it were both rejected: minting a `fields[]` entry from GPA wording is a filter no
+ * applicant can satisfy (the fabrication defect this whole file guards), and synthesising a GPA
+ * constraint here would duplicate `gpa.ts` from an axis that has no business owning a GPA floor —
+ * two extractors publishing the same requirement is how they drift. Declining is the honest
+ * answer, and it leaves exactly one constraint: the preference, soft, carrying the funder's own
+ * wording.
+ *
+ * That softness is now a property of the constraint's own text ("preference to students of…"),
+ * not of `makeConstraint`'s preference-derived-spec guard.
+ */
+describe('round 4 — a requirement and a preference in one Field of Study value', () => {
+  const constraintsOf = (fieldOfStudy: string) => {
+    const raw: RawOpportunity = {
+      sourceId: 'arrl-scholarship-descriptions',
+      externalKey: 'k',
+      name: 'n',
+      rawFields: { 'Field of Study': fieldOfStudy },
+      sourceUrl: 'https://example.test/x',
+      rawText: fieldOfStudy,
+    };
+    return extractFieldOfStudy(raw);
+  };
+
+  const CORDLE =
+    'GPA of 2.5 or higher; preference to students of electronics, communications, or related fields';
+
+  it('Cordle — one SOFT constraint holding the preferred fields, scoped to the preference clause', () => {
+    const cs = constraintsOf(CORDLE);
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].fallbackRank).toBe(0);
+    expect(cs[0].rawText).toBe(
+      'preference to students of electronics, communications, or related fields',
+    );
+    expect(cs[0].spec).toEqual({
+      axis: 'field_of_study',
+      fields: ['electronics', 'communications', 'related fields'],
+      excludedFields: [],
+    });
+  });
+
+  it('Cordle — the GPA half is declined outright: no field, no exclusion, no hard constraint', () => {
+    // Stated as a property so it survives any future reshaping of the output: nothing this axis
+    // emits for Cordle may bar anyone, and no fragment of the GPA sentence may become a field.
+    for (const c of constraintsOf(CORDLE)) {
+      expect(c.hard).toBe(false);
+      const spec = c.spec as { fields: string[]; excludedFields: string[] };
+      for (const value of [...spec.fields, ...spec.excludedFields]) {
+        expect(value).not.toMatch(/gpa|2\.5|higher/i);
+      }
+    }
+  });
+
+  it('MARCO is unchanged: a preference sentence naming no field adds no second constraint', () => {
+    // The regression this round's own sweep caught. Run on its own, MARCO's degree-level
+    // preference sentence hits the "every sentence dropped" safety net and mines three fabricated
+    // fields out of its commas ("Preference will be given to undergraduate students", …). The
+    // preference half is therefore extracted WITHOUT that safety net, so it yields nothing, and
+    // with nothing to separate the value is left exactly as it was: one hard constraint whose
+    // rawText is the whole funder value.
+    const value =
+      'Field of study must be leading to a career in the healing arts, including, but not ' +
+      'necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, ' +
+      'or Radiology technician. Preference will be given to undergraduate students and those in ' +
+      'certificate programs, but graduate students may apply.';
+    const cs = constraintsOf(value);
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].rawText).toBe(value);
+    expect(cs[0].spec).toEqual({
+      axis: 'field_of_study',
+      fields: [
+        'Medicine',
+        'Dentistry',
+        'Veterinary Medicine',
+        'Nursing',
+        'Pharmacy',
+        'EMT',
+        'Radiology technician',
+      ],
+      excludedFields: [],
+    });
+  });
+
+  it('Holt is unchanged: a value that is nothing but a preference stays one soft constraint', () => {
+    // There is no requirement half to scope to, so there is nothing to split. Pinned here as well
+    // as in licenseFloorContract.test.ts because that audit asserts this exact rawText.
+    const cs = constraintsOf('Preference for an Engineering discipline');
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].rawText).toBe('Preference for an Engineering discipline');
+    expect(cs[0].spec).toEqual({
+      axis: 'field_of_study',
+      fields: ['Engineering'],
+      excludedFields: [],
+    });
+  });
+
+  it('the corpus\'s one real exclusion is unchanged and still HARD (Rick Hughes)', () => {
+    // An exclusion is a requirement, and it must never be handed to a soft, preference-scoped
+    // constraint. This value carries no preference at all, so it takes the untouched path.
+    const cs = constraintsOf('Any, except for Liberal Arts');
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toEqual({
+      axis: 'field_of_study',
+      fields: [],
+      excludedFields: ['Liberal Arts'],
+    });
+  });
+});

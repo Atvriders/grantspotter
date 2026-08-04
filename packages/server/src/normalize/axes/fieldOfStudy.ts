@@ -1,6 +1,11 @@
-import type { Constraint, RawOpportunity } from '@grantspotter/core';
+import type { Constraint, ConstraintSpec, RawOpportunity } from '@grantspotter/core';
 import { sentenceEndBoundaries } from './clauses.js';
-import { isPreferenceText, makeConstraint } from './preference.js';
+import {
+  isPreferenceText,
+  makeConstraint,
+  preferenceScope,
+  requirementText,
+} from './preference.js';
 
 const EXCEPT = /\bexcept(?:\s+for)?\b\s*(.+)$/i;
 const GPA_ISH = /\bGPA\b|grade[- ]?point\s*average/i;
@@ -274,6 +279,80 @@ function cleanedSentenceOrDrop(sentence: string): string | undefined {
   return stripListIntro(stripDegreeIntro(afterPreamble));
 }
 
+/**
+ * Every field name stated in `part`.
+ *
+ * `safetyNet` decides what happens when every sentence was dropped. For a WHOLE captured value
+ * that would mean the extractor understood none of it, and falling back to the untouched text is
+ * the conservative answer (the per-fragment filters in `splitFields` still apply, so it can
+ * restore text but never scaffolding). For a scoped HALF of a value it is the opposite: the half
+ * was isolated precisely because something else in the sentence governs it, and "every sentence
+ * dropped" is the correct answer rather than a failure to parse. MARCO's preference half —
+ * "Preference will be given to undergraduate students and those in certificate programs, but
+ * graduate students may apply." — is a degree-level statement naming no field at all, and with
+ * the safety net on it mines three fabricated fields out of its own commas.
+ */
+function fieldsIn(part: string, safetyNet: boolean): string[] {
+  const kept = splitSentences(part)
+    .flatMap(splitClauses)
+    .map(cleanedSentenceOrDrop)
+    .filter((s): s is string => s !== undefined);
+  const segments = kept.length > 0 ? kept : safetyNet ? [part] : [];
+  return segments.flatMap((s) => (UNCONSTRAINED_SEGMENT.test(s) ? [] : splitFields(s)));
+}
+
+function fieldSpec(fields: string[], excludedFields: string[]): ConstraintSpec {
+  return { axis: 'field_of_study', fields, excludedFields };
+}
+
+/**
+ * ONE FIELD, TWO STATEMENTS — and here the required half is not a field of study at all.
+ *
+ * Charles Clarke Cordle's whole `Field of Study` value is
+ *
+ *   "GPA of 2.5 or higher; | preference to students of electronics, communications, or related fields"
+ *
+ * The half the funder REQUIRES is a GPA floor. It is MISFILED rather than mis-scoped: a GPA floor
+ * is `gpa.ts`'s business, and that axis already publishes `min: 2.5` for this entry, reading the
+ * same words through its `rawText` fallback (this corpus files requirements under `Field of Study`
+ * often enough that `institution.ts` reads 19 of the 111 entries' degree rules out of it too).
+ * So this axis DECLINES that half: it names no field, and the two ways of "using" it anyway are
+ * both worse than nothing — minting a `fields[]` entry out of GPA wording is a filter no applicant
+ * can satisfy (the fabrication defect this file exists to prevent), and synthesising a GPA
+ * constraint from the field axis would make two extractors own one requirement, which is how they
+ * drift apart.
+ *
+ * What is left is the preference, and it is emitted as its own soft constraint carrying the
+ * funder's own wording, rather than as a whole-value constraint that `makeConstraint`'s
+ * preference-derived-spec guard has to hold down. Where BOTH halves name fields, both constraints
+ * are emitted: required hard, preferred soft.
+ *
+ * Returns `undefined` — "nothing to scope, use the whole value as before" — for everything else:
+ * an explicit cascade or a whole-value preference (`isPreferenceText`, e.g. Holt's "Preference for
+ * an Engineering discipline", which has no requirement half to scope to), a value with no
+ * preference at all, and a preference half that names no field (MARCO). An exclusion is a
+ * REQUIREMENT and must never ride on the soft constraint, so a value that carries one but states
+ * no required field is left whole too.
+ */
+function scopedConstraints(requiredPart: string, excludedFields: string[]): Constraint[] | undefined {
+  if (isPreferenceText(requiredPart)) return undefined;
+  const required = requirementText(requiredPart);
+  const preferred = preferenceScope(requiredPart).governed.join(' ').trim();
+  if (required === '' || preferred === '') return undefined;
+
+  const preferredFields = fieldsIn(preferred, false);
+  if (preferredFields.length === 0) return undefined;
+  const requiredFields = fieldsIn(required, false);
+  if (requiredFields.length === 0) {
+    if (excludedFields.length > 0) return undefined;
+    return [makeConstraint('field_of_study', preferred, fieldSpec(preferredFields, []), 0)];
+  }
+  return [
+    makeConstraint('field_of_study', required, fieldSpec(requiredFields, excludedFields), 0),
+    makeConstraint('field_of_study', preferred, fieldSpec(preferredFields, []), 1),
+  ];
+}
+
 export function extractFieldOfStudy(raw: RawOpportunity): Constraint[] {
   const text = raw.rawFields['Field of Study'];
   if (!text || text.trim() === '') return [];
@@ -281,18 +360,9 @@ export function extractFieldOfStudy(raw: RawOpportunity): Constraint[] {
   const excludedFields = except ? splitFields(except[1]) : [];
   const requiredPart = except ? text.slice(0, except.index) : text;
 
-  const kept = splitSentences(requiredPart)
-    .flatMap(splitClauses)
-    .map(cleanedSentenceOrDrop)
-    .filter((s): s is string => s !== undefined);
-  // Safety net: if every sentence looked like pure preference prose (should not happen on real
-  // data — "Any" and plain lists never trigger isPreferenceText), fall back to the untouched
-  // required part rather than silently emptying the field list. The per-fragment filters in
-  // splitFields still apply to it, so this can restore text but never scaffolding.
-  const segments = kept.length > 0 ? kept : [requiredPart];
-
-  const fields = segments.flatMap((s) => (UNCONSTRAINED_SEGMENT.test(s) ? [] : splitFields(s)));
-  return [
-    makeConstraint('field_of_study', text, { axis: 'field_of_study', fields, excludedFields }, 0),
-  ];
+  return (
+    scopedConstraints(requiredPart, excludedFields) ?? [
+      makeConstraint('field_of_study', text, fieldSpec(fieldsIn(requiredPart, true), excludedFields), 0),
+    ]
+  );
 }

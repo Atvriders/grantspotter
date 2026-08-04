@@ -1,6 +1,6 @@
 import { ARRL_DIVISIONS, ARRL_SECTIONS } from '@grantspotter/core';
 import type { Constraint, GeoSpec, RawOpportunity } from '@grantspotter/core';
-import { makeConstraint } from './preference.js';
+import { isPreferenceText, makeConstraint, preferenceScope, requirementText } from './preference.js';
 import { RADIUS_CENTERS } from './radiusCenters.js';
 
 const STATE_BY_NAME: Record<string, string> = {
@@ -335,8 +335,81 @@ function geoFrom(text: string): GeoSpec {
   return { type: 'any', values: [] };
 }
 
+// ---------- requirement vs preference ----------
+
+/**
+ * The funder's own words for what it PREFERS: the spans a preference marker governs, per
+ * `preferenceScope`. The mirror image of `requirementText`, which returns everything else.
+ *
+ * A two-line local rather than an export from preference.ts because that module is shared by
+ * every axis and this is the only pair of axes that needs it; `preferenceScope` is the exported
+ * primitive, and both halves are read from the same call so they can never disagree about where
+ * the boundary is.
+ */
+function preferenceTextOf(text: string): string {
+  return preferenceScope(text).governed.join(' ').trim();
+}
+
+function geoConstraint(text: string, geo: GeoSpec, index: number): Constraint {
+  return makeConstraint('geography', text, { axis: 'geography', geo }, index);
+}
+
+/**
+ * ONE FIELD, TWO STATEMENTS — the requirement hard, the preference soft, each read from the
+ * clause that states it.
+ *
+ * `preference.ts` fixed half of this defect class: a preference clause no longer softens the
+ * requirement clause beside it. The other half lived here. This axis read its SPEC off the whole
+ * captured field, and when the preference names the NARROWER area, the preference's area is what
+ * the spec described:
+ *
+ *   Orlando HamCation  "Resident of Florida, | with preference given to residents of Central
+ *                       Florida (Orange, Seminole, Osceola, Lake, Volusia, Brevard and Polk
+ *                       Counties)"                          -> geo county[Orange, Seminole, …]
+ *   K6GO               "Preference is given to residents of San Diego County …, followed by
+ *                       Orange and Los Angeles Counties …. ‖ Award must go to a California
+ *                       student."                           -> geo county[San Diego, Orange, …]
+ *
+ * `makeConstraint`'s `specStatedOnlyAsPreference` guard holds a spec like that SOFT, and rightly:
+ * hardening seven preferred counties would bar every other Floridian from an award the funder
+ * states they may have. But soft means nobody enforces the requirement either, so an applicant in
+ * any state at all was shown a Florida-only award. Both errors at once, from one fused constraint.
+ *
+ * So each half is extracted from its own clause and emitted as its own constraint, with that
+ * clause as its `rawText` — which is also what an applicant is shown, per the same reasoning
+ * `institution.ts` gives for its `Field of Study`-derived constraint. Their hard/soft status then
+ * follows from each constraint's own text: "Resident of Florida" carries no preference language
+ * and is hard; "preference given to residents of Central Florida (…)" is preference prose start to
+ * finish and is soft. The guard is no longer what is holding either of them.
+ *
+ * NEVER SPLIT AN EXPLICIT CASCADE. `isPreferenceText` is true for "State of Indiana; if no
+ * qualified applicant is identified, preference given to applicants from the ARRL Central
+ * Division" because the funder has said in its own words that the Indiana criterion excludes
+ * nobody. Reading "State of Indiana" as a requirement and hardening it would bar the Illinois
+ * applicant that sentence explicitly invites — the over-hardening direction, arrived at from the
+ * opposite side. Those entries keep exactly the single soft `fallbackRank: 1` constraint they had.
+ *
+ * Returns `undefined` — meaning "nothing to scope, use the whole field as before" — unless the
+ * field really does state two DIFFERENT areas, one required and one preferred. A preference that
+ * names no area of its own (or names the same one) changes no verdict and is not worth a second
+ * constraint, so those values stay byte-for-byte what they were.
+ */
+function scopedConstraints(text: string): Constraint[] | undefined {
+  if (isPreferenceText(text)) return undefined;
+  const required = requirementText(text);
+  const preferred = preferenceTextOf(text);
+  if (required === '' || preferred === '') return undefined;
+
+  const requiredGeo = geoFrom(required);
+  const preferredGeo = geoFrom(preferred);
+  if (requiredGeo.type === 'any' || preferredGeo.type === 'any') return undefined;
+  if (JSON.stringify(requiredGeo) === JSON.stringify(preferredGeo)) return undefined;
+
+  return [geoConstraint(required, requiredGeo, 0), geoConstraint(preferred, preferredGeo, 1)];
+}
+
 export function extractGeography(raw: RawOpportunity): Constraint[] {
   const text = raw.rawFields.Region ?? raw.rawFields.counties ?? raw.rawFields.region;
   if (!text || text.trim() === '') return [];
-  return [makeConstraint('geography', text, { axis: 'geography', geo: geoFrom(text) }, 0)];
+  return scopedConstraints(text) ?? [geoConstraint(text, geoFrom(text), 0)];
 }

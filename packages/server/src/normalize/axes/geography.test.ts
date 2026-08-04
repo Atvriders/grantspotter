@@ -319,3 +319,213 @@ describe('round 3 — the real Austin ARC page: an Oxford-comma county list', ()
     ).toEqual({ type: 'county', values: ['Hernando', 'Pasco'] });
   });
 });
+
+/**
+ * Round 4 — A REQUIREMENT AND A PREFERENCE IN ONE `Region` VALUE.
+ *
+ * `preference.ts` already stopped a preference clause from softening the requirement beside it.
+ * That left the other half of the same defect open on this axis: the SPEC was still read off the
+ * whole field, so where the preference names the narrower area, the preference's area is what the
+ * spec described. `makeConstraint`'s `specStatedOnlyAsPreference` guard held those constraints
+ * soft — correct as a stopgap, because hardening the spec as-written would have published the
+ * preference as the bar — but it left the funder's actual requirement enforced by nobody, and the
+ * preference recorded nowhere.
+ *
+ * Both directions are live here, and the two entries below are the two directions:
+ *
+ *   OVER-HARDENING  Orlando HamCation requires Florida residency and PREFERS seven Central Florida
+ *   counties. Hardening the county list would bar every other Floridian from an award the funder
+ *   states they may have.
+ *
+ *   OVER-SOFTENING  the same entry, left whole, enforces nothing at all: an applicant in any state
+ *   is shown an award restricted to Florida residents.
+ *
+ * So each half is now extracted from the clause that states it and emitted as its OWN constraint,
+ * with that clause as its `rawText` — the requirement hard, the preference soft. Neither half is
+ * fused into the other and neither is discarded, and both statuses now follow from each
+ * constraint's own text rather than from the guard.
+ */
+describe('round 4 — the spec comes from the requirement clause; the preference stays a preference', () => {
+  const constraintsFor = (region: string) => extractGeography(raw({ Region: region }));
+
+  // Verbatim, fixtures/arrl-scholarship-descriptions/00-www-arrl-org-scholarship-descriptions.html.
+  const HAMCATION =
+    'Resident of Florida, with preference given to residents of Central Florida (Orange, ' +
+    'Seminole, Osceola, Lake, Volusia, Brevard and Polk Counties)';
+  const K6GO =
+    'Preference is given to residents of San Diego County (especially Vista Unified School ' +
+    'District and Fallbrook Union High School District), followed by Orange and Los Angeles ' +
+    'Counties (especially Orange Unified School District, Whittier Union High School District, ' +
+    'Huntington Beach Union High School District). Award must go to a California student.';
+
+  it('Orlando HamCation — Florida is REQUIRED; the seven counties are only PREFERRED', () => {
+    const cs = constraintsFor(HAMCATION);
+    expect(cs).toHaveLength(2);
+
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].fallbackRank).toBe(0);
+    expect(cs[0].rawText).toBe('Resident of Florida');
+    expect(cs[0].spec).toEqual({ axis: 'geography', geo: { type: 'state', values: ['FL'] } });
+
+    expect(cs[1].hard).toBe(false);
+    expect(cs[1].fallbackRank).toBe(0);
+    expect(cs[1].rawText).toBe(
+      'preference given to residents of Central Florida (Orange, Seminole, Osceola, Lake, ' +
+        'Volusia, Brevard and Polk Counties)',
+    );
+    expect(cs[1].spec).toEqual({
+      axis: 'geography',
+      geo: {
+        type: 'county',
+        values: ['Orange', 'Seminole', 'Osceola', 'Lake', 'Volusia', 'Brevard', 'Polk'],
+      },
+    });
+  });
+
+  it('Orlando HamCation — no HARD constraint carries a county, so a Floridian elsewhere is not barred', () => {
+    // The over-hardening direction, asserted as a property rather than by position: any future
+    // shape of this output still fails here if a county list ever becomes a bar.
+    for (const c of constraintsFor(HAMCATION)) {
+      if (!c.hard) continue;
+      expect((c.spec as { geo: GeoSpec }).geo.type).not.toBe('county');
+    }
+  });
+
+  it('K6GO — "Award must go to a California student" is the requirement; the counties are preferred', () => {
+    const cs = constraintsFor(K6GO);
+    expect(cs).toHaveLength(2);
+
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].fallbackRank).toBe(0);
+    expect(cs[0].rawText).toBe('Award must go to a California student');
+    expect(cs[0].spec).toEqual({ axis: 'geography', geo: { type: 'state', values: ['CA'] } });
+
+    expect(cs[1].hard).toBe(false);
+    expect(cs[1].fallbackRank).toBe(0);
+    expect(cs[1].rawText).toBe(
+      'Preference is given to residents of San Diego County (especially Vista Unified School ' +
+        'District and Fallbrook Union High School District), followed by Orange and Los Angeles ' +
+        'Counties (especially Orange Unified School District, Whittier Union High School ' +
+        'District, Huntington Beach Union High School District).',
+    );
+    expect(cs[1].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'county', values: ['San Diego', 'Orange', 'Los Angeles'] },
+    });
+  });
+
+  it('Lois Manley — the Division stays the requirement, and Oregon stops being discarded', () => {
+    // Swept, not reported: this entry already published the right HARD answer (the Division), so
+    // the whole-field read happened to be correct — but the funder's Oregon preference was thrown
+    // away entirely. Scoping keeps the requirement exactly as it was and records the preference.
+    const cs = constraintsFor(
+      'ARRL Northwestern Division (Washington, Oregon, Idaho, Montana, Alaska), with preference ' +
+        'given to residents of Oregon',
+    );
+    expect(cs).toHaveLength(2);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].rawText).toBe('ARRL Northwestern Division (Washington, Oregon, Idaho, Montana, Alaska)');
+    expect(cs[0].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'arrl_division', values: ['Northwestern'] },
+    });
+    expect(cs[1].hard).toBe(false);
+    expect(cs[1].rawText).toBe('preference given to residents of Oregon');
+    expect(cs[1].spec).toEqual({ axis: 'geography', geo: { type: 'state', values: ['OR'] } });
+  });
+
+  it('Francis Walton — a preference stated BEFORE the requirement is still the preference', () => {
+    // The hinge here is a semicolon and the order is reversed: the preference comes first. Scope
+    // is decided by which clause carries the marker, never by position in the sentence.
+    const cs = constraintsFor(
+      'Preference given to applicants residing in Illinois; Applicant must be a resident of the ' +
+        'ARRL Central Division (IL, IN, WI)',
+    );
+    expect(cs).toHaveLength(2);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].rawText).toBe('Applicant must be a resident of the ARRL Central Division (IL, IN, WI)');
+    expect(cs[0].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'arrl_division', values: ['Central'] },
+    });
+    expect(cs[1].hard).toBe(false);
+    expect(cs[1].rawText).toBe('Preference given to applicants residing in Illinois');
+    expect(cs[1].spec).toEqual({ axis: 'geography', geo: { type: 'state', values: ['IL'] } });
+  });
+});
+
+/**
+ * The over-softening guard rail for round 4. An explicit cascade is the funder saying in its own
+ * words that the first-named area does NOT exclude anyone — "State of Indiana; if no qualified
+ * applicant is identified, preference given to applicants from the ARRL Central Division". A
+ * scoping rule that reads "State of Indiana" as a requirement and hardens it would bar the
+ * Illinois applicant the funder has just said may win. So a cascade is never split: the whole
+ * field stays ONE soft constraint with `fallbackRank: 1`, exactly as before this round.
+ */
+describe('round 4 — an explicit cascade is never split or hardened', () => {
+  const constraintsFor = (region: string) => extractGeography(raw({ Region: region }));
+
+  it.each([
+    [
+      'Indianapolis',
+      'State of Indiana; if no qualified applicant is identified, preference given to applicants ' +
+        'from the ARRL Central Division (Illinois, Indiana and Wisconsion)',
+      { type: 'arrl_division', values: ['Central'] },
+    ],
+    [
+      'North Fulton',
+      'Residence in GA. If no qualified applicant, preference will be awarded to an applicant ' +
+        'from the ARRL Southeastern Division (Alabama, Florida, Georgia, Puerto Rico and the US ' +
+        'Virgin Islands)',
+      { type: 'arrl_division', values: ['Southeastern'] },
+    ],
+    [
+      'MMARSI',
+      'State of Maryland; if no qualified applicant is identified, preference will be given to ' +
+        'applicants from the states of Virginia, Delaware, The District of Columbia, ' +
+        'Pennsylvania, and West Virginia, and then the remaining USA.',
+      { type: 'state', values: ['DE', 'DC', 'MD', 'PA', 'VA', 'WV'] },
+    ],
+  ] as const)('%s: one soft constraint over the whole field, fallbackRank 1', (_name, text, geo) => {
+    const cs = constraintsFor(text);
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].fallbackRank).toBe(1);
+    expect(cs[0].rawText).toBe(text);
+    expect(cs[0].spec).toEqual({ axis: 'geography', geo });
+  });
+
+  it('the canonical Louisiana cascade is still one soft constraint, not two', () => {
+    const cs = constraintsFor(
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
+        'identified, the scholarship may be awarded to an applicant from the Delta Division ' +
+        '(Arkansas, Louisiana, Mississippi, Tennessee).',
+    );
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].fallbackRank).toBe(1);
+    expect(cs[0].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'arrl_division', values: ['Delta'] },
+    });
+  });
+
+  it('a whole-value preference with no requirement beside it stays one soft constraint', () => {
+    // Palomar, verbatim: there is nothing outside the preference to scope to, so nothing to split.
+    const cs = constraintsFor('Preference is given to applicants residing in San Diego or Imperial Counties, CA');
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'county', values: ['San Diego', 'Imperial'] },
+    });
+  });
+
+  it('a plain requirement with no preference at all is untouched: one hard constraint', () => {
+    const cs = constraintsFor('Resident of GA or AL');
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].rawText).toBe('Resident of GA or AL');
+    expect(cs[0].spec).toEqual({ axis: 'geography', geo: { type: 'state', values: ['GA', 'AL'] } });
+  });
+});
