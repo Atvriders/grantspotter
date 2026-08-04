@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Profile, Program } from '@grantspotter/core';
 import { orgProfileSchema, studentProfileSchema } from '@grantspotter/core';
 import { createProgramRepo } from '../db/repositories/programs.js';
+import { isDoNotPublish } from '../normalize/index.js';
 import type { RouterDeps } from './deps.js';
 import { AppError } from './errors.js';
 import {
@@ -12,9 +13,24 @@ import {
 } from './profileStore.js';
 import { computeCompleteness, emptyCompleteness } from './completeness.js';
 
-/** RESOLUTIONS R1: whole records only ever come from Plan 1's repository. */
+/**
+ * RESOLUTIONS R1: whole records only ever come from Plan 1's repository.
+ *
+ * FILTERED, and found by Task 26's end-to-end seed (2026-08-04). `reindexBrowse`, the opportunity
+ * detail route, the watchlist and the calendar all call `isDoNotPublish` before showing a record;
+ * this was the one read surface that did not, and it is the one that turns the corpus into a
+ * number the user reads as a score. Against a database holding the corpus's real 150 publishable
+ * records plus its 553 suppressed ones, the meter reported `58 of 703 programs still return an
+ * unknown verdict` and a completeness of **92%**, where the same profile against the 150 records
+ * the user can actually reach is `58 of 150` and **61%**. The suppressed records are past awards
+ * and cross-check rows: they match trivially, so every one of them silently inflates the score.
+ * Same shared predicate as every other surface, so a newly classified record type drops out here
+ * in the same commit it drops out of browse.
+ */
 function loadCorpus(db: RouterDeps['db']): Program[] {
-  return createProgramRepo(db).list();
+  return createProgramRepo(db)
+    .list()
+    .filter((program) => !isDoNotPublish(program));
 }
 
 export function createProfileRouter(deps: RouterDeps): Router {

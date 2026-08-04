@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "e2e:seed": "tsx e2e/seed.ts",
     "dev": "concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @grantspotter/server",
     "dev:web": "npm run dev -w @grantspotter/web",
@@ -22,6 +23,7 @@
     "profile-corpus": "tsx scripts/profile-corpus.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "20.19.43",
     "concurrently": "10.0.4",
     "tsx": "^4.23.5",

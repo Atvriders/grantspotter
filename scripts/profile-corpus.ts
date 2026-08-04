@@ -128,6 +128,18 @@ export interface CorpusLoad {
   skipped: Array<{ sourceId: string; why: string }>;
   /** Total records normalize produced that carry `do_not_publish` and were excluded above. */
   suppressed: number;
+  /**
+   * The records that count above, kept rather than only counted (added 2026-08-04 for `e2e/seed.ts`).
+   *
+   * They are stored evidence — past ARDC/NSF/USAspending awards, the ARRL clubs already funded —
+   * and every read surface in the product refuses them by name: `reindexBrowse`, the opportunity
+   * detail route, the watchlist and the calendar each call `isDoNotPublish` before showing a
+   * record. That refusal is only testable end-to-end against a database that actually holds one,
+   * and the detail route DID answer 200 for all of them until someone put one in front of it.
+   * Carrying the array costs nothing (they were already normalized) and re-deriving it elsewhere
+   * would be the second copy of the gate this file exists to prevent.
+   */
+  suppressedPrograms: Program[];
   /** Total records excluded by the adjacency gate — real opportunities, just not for a radio club. */
   belowAdjacency: number;
 }
@@ -151,6 +163,7 @@ function payloadFor(sourceId: string, file: string, url: string): FetchedPayload
  */
 export async function loadCorpus(): Promise<CorpusLoad> {
   const programs: Program[] = [];
+  const suppressedPrograms: Program[] = [];
   const loaded: CorpusLoad['loaded'] = [];
   const skipped: CorpusLoad['skipped'] = [];
   let suppressed = 0;
@@ -220,6 +233,7 @@ export async function loadCorpus(): Promise<CorpusLoad> {
     produced.forEach((program, i) => {
       if (isDoNotPublish(program)) {
         suppressedHere += 1;
+        suppressedPrograms.push(program);
         return;
       }
       const raw = raws[i];
@@ -240,7 +254,7 @@ export async function loadCorpus(): Promise<CorpusLoad> {
     });
   }
 
-  return { programs, loaded, skipped, suppressed, belowAdjacency };
+  return { programs, suppressedPrograms, loaded, skipped, suppressed, belowAdjacency };
 }
 
 // ---------------------------------------------------------------- profiles

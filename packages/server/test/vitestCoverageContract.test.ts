@@ -92,14 +92,33 @@ const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
  * Files that look like a test to vitest but legitimately belong to another runner (a Playwright
  * `*.spec.ts`, say), keyed by repo-relative POSIX path.
  *
- * IT IS EMPTY, AND AN ENTRY IS EXPENSIVE ON PURPOSE. The guards below refuse a vacuous one: the
- * path must exist on disk, must STILL be matched by no vitest project (so an entry cannot outlive
- * the condition it excuses — the "allow-listed as a known defect while being cited as proof of
- * health" trap this repo has already sprung once), and the reason must be a real sentence. This
- * exists so that the response to a red from the check above is either to wire the file into a
- * project or to sign a statement, never to quietly re-narrow `TEST_FILE`.
+ * AN ENTRY IS EXPENSIVE ON PURPOSE. The guards below refuse a vacuous one: the path must exist on
+ * disk, must STILL be matched by no vitest project (so an entry cannot outlive the condition it
+ * excuses — the "allow-listed as a known defect while being cited as proof of health" trap this
+ * repo has already sprung once), and the reason must be a real sentence. This exists so that the
+ * response to a red from the check above is either to wire the file into a project or to sign a
+ * statement, never to quietly re-narrow `TEST_FILE`.
+ *
+ * The two Playwright suites below are the first entries, added with the e2e harness on 2026-08-04.
+ * This is the case the file's own comment anticipated ("a Playwright `*.spec.ts`, say"), and it is
+ * signed rather than dodged: renaming them to something `TEST_FILE` does not enumerate would have
+ * made them invisible to this invariant AND to vitest, which is defect 5 with extra steps.
  */
-const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([]);
+const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
+  [
+    'e2e/api.spec.ts',
+    'Playwright, not vitest: `test`, `expect` and the `request` fixture come from @playwright/test, ' +
+      'and the suite only means anything against the real built server that `playwright.config.ts`' +
+      "'s `webServer` boots. `npm run test:e2e` runs it; vitest would fail to collect it. Adding " +
+      'an `e2e` project to vitest.workspace.ts would make `npm test` try to run it and fail.',
+  ],
+  [
+    'e2e/flow.spec.ts',
+    'Playwright, not vitest, for the same reason as e2e/api.spec.ts: it drives a real Chromium ' +
+      'through the built SPA against the built server, using @playwright/test\'s `page` fixture. ' +
+      'It is run by `npm run test:e2e`, never by `npm test`.',
+  ],
+]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */
 const CONFIG_NAMES = ['vitest.config.ts', 'vitest.config.js', 'vite.config.ts', 'vite.config.js'];

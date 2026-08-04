@@ -3,7 +3,9 @@ import express from 'express';
 import request from 'supertest';
 import type Database from 'better-sqlite3';
 import { openTestDb } from '../test/testDb.js';
-import { seedFixtureCorpus, seedTestUser } from '../test/fixtures/programs.js';
+import { arrlScholarship, seedFixtureCorpus, seedTestUser } from '../test/fixtures/programs.js';
+import { createProgramRepo } from '../db/repositories/programs.js';
+import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
 import { reindexBrowse } from './reindex.js';
 import { createProfileRouter, createMeRouter } from './profileRouter.js';
 import { AppError, errorHandler, requestIdMiddleware } from './errors.js';
@@ -107,6 +109,32 @@ describe('profiles API', () => {
       .send({ kind: 'student', callsign: 'K5UTD' });
     expect(res.body.completeness.total).toBe(5);
     expect(typeof res.body.completeness.score).toBe('number');
+  });
+
+  /**
+   * Found by Task 26's end-to-end seed, which is the first thing in this repo to put the corpus's
+   * 553 suppressed records in front of the API at the same time as its 150 publishable ones. The
+   * meter then read `58 of 703` and a completeness of 92%, where the same profile against the
+   * records a user can actually reach is `58 of 150` and 61%. A stored-evidence record is a past
+   * award with no constraints, so it matches trivially and can only ever inflate the score.
+   */
+  it('measures completeness against the publishable corpus, not the records the product hides', async () => {
+    createProgramRepo(db).upsert({
+      ...arrlScholarship,
+      id: 'arrl-foundation-2019-award',
+      name: 'ARRL Foundation — 2019 award (stored evidence, not an opportunity)',
+      tags: [...arrlScholarship.tags, DO_NOT_PUBLISH_TAG],
+    });
+
+    const res = await request(buildApp(db))
+      .put('/api/profiles/student')
+      .send({ kind: 'student', callsign: 'K5UTD' });
+    expect(res.body.completeness.total).toBe(5);
+
+    const me = await request(buildApp(db)).get('/api/me');
+    expect(me.body.completeness.total).toBe(5);
+    const listed = await request(buildApp(db)).get('/api/profiles');
+    expect(listed.body.completeness.total).toBe(5);
   });
 });
 
