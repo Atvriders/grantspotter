@@ -1,0 +1,26 @@
+# The build context. Everything the image needs is compiled inside the build stage,
+# so host build output and local state stay out: they are the wrong architecture as
+# often as not, and `data/*.sqlite` is somebody's real database.
+node_modules
+**/node_modules
+.git
+.gitignore
+.github
+dist
+**/dist
+coverage
+.env
+.env.local
+data/*.sqlite
+data/*.sqlite-*
+data/snapshots
+e2e
+playwright.config.ts
+playwright-report
+test-results
+# Specs, plans and research are for humans working in the repository, not for the
+# runtime image.
+docs
+.superpowers
+*.log
+.DS_Store

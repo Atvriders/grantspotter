@@ -1,0 +1,44 @@
+# GrantSpotter. Pulls the image published by GitHub Actions; it does not build.
+#
+#   cp .env.example .env      then fill in SESSION_SECRET and CONTACT_URL
+#   docker compose pull
+#   docker compose up -d
+#
+# HOST_PORT is a variable on purpose: 3030 is a popular default and is already
+# claimed by other stacks on a typical host. Change it in .env, not here.
+
+services:
+  grantspotter:
+    image: ghcr.io/atvriders/grantspotter:latest
+    container_name: grantspotter
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HOST_PORT:-3030}:3030"
+    environment:
+      PORT: 3030
+      DATA_DIR: /data
+      # Required. The container refuses to start without these two, and neither has a
+      # default anywhere in the image, the compose file or the code. A shared default
+      # session secret is not a secret; an anonymous crawler is one the ~25 small
+      # nonprofits it polls cannot identify or ask to stop.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env; there is no default}
+      CONTACT_URL: ${CONTACT_URL:?set CONTACT_URL in .env; it identifies your crawler to the sites it polls}
+      CRAWL_ENABLED: ${CRAWL_ENABLED:-true}
+      CRAWL_CRON: ${CRAWL_CRON:-17 3 * * *}
+      # Optional. Everything works without them.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SIMPLER_GRANTS_API_KEY: ${SIMPLER_GRANTS_API_KEY:-}
+    volumes:
+      # The SQLite database, the snapshots and the fixture cache. Without this the
+      # corpus is rebuilt from seed on every recreate and every local edit is lost.
+      - grantspotter-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('node:net').connect({host:'127.0.0.1',port:3030},()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));s.setTimeout(4000,()=>process.exit(1));"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+volumes:
+  grantspotter-data:
