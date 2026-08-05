@@ -273,6 +273,16 @@ There is a button beside the callsign field on the profile screen and on the fir
 screen. Press it and this server makes **one** request to `callook.info`, a free service that
 republishes the FCC amateur radio licence database, and offers back what that licence says.
 
+**One at a time, for the whole deployment, not for the whole session.** While a request to
+`callook.info` is in flight, a second press does not start a second one — it is refused with a
+sentence saying so. The limit belongs to the SOURCE rather than to the person pressing, and that
+distinction is the point: rationing per session would let a hundred accounts send a hundred
+simultaneous requests, each individually well-behaved, which is how a polite rule produces an
+impolite result. And when `callook.info` answers `429` or sends `Retry-After`, this server records
+the wait and answers subsequent presses without asking again until it has passed. Both were
+defects first — a race let eight concurrent presses through a limit meant to allow one, measured
+at 24 requests from 24 members before the fix and 1 after.
+
 **What it fills — four values, and only four**, named here by the form labels you will see them
 under: **Callsign**; **State**; **License class**, on a personal licence; and
 **Organization name**, on a club licence.
