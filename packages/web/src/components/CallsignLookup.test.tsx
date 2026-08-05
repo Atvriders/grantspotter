@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { CallsignLookup, type CallsignTarget } from './CallsignLookup.js';
+import { acceptedFrame, CallsignLookup, type CallsignTarget } from './CallsignLookup.js';
 import type { CallsignLookupResult, CallsignRecord } from '../api/callsign.js';
 import { auditA11y } from '../test/a11y.js';
 
@@ -432,6 +432,41 @@ describe('what the confirmation claims was filled in', () => {
     // check it. What is gone is the claim that it filled these in.
     expect(panel).toHaveTextContent(/callook\.info/i);
     expect(liveRegion(container)).toHaveTextContent(/none of it attributed to the FCC record/i);
+  });
+
+  /**
+   * THE SENTENCE FOR A KEY THIS PROFILE HAS NO FIELD FOR, WHICH THE PANEL CAN NO LONGER PRODUCE.
+   *
+   * `fillFromLookup`'s third list exists because two different reasons for "no marker" were being
+   * reported as one, and the panel's gates are what keep it empty — so this branch of the
+   * confirmation is unreachable through the component, and would ship as user-facing copy that no
+   * test has ever read. `acceptedFrame` is a pure exported function, so it is read here directly:
+   * the claim under test is that a field of the OTHER profile is named as one, rather than swept in
+   * with the applicant's own values as it was until 2026-08-04.
+   */
+  it('says a field this profile does not have was not filled in, rather than calling it yours', () => {
+    const one = acceptedFrame(
+      { marked: ['state'], unmarked: ['callsign'], unfillable: ['licenseClass'] },
+      'organization',
+    );
+    expect(one.body).toContain('State came from the record');
+    expect(one.body).toContain('Callsign carries no mark');
+    expect(one.body).toContain(
+      'License class is not a field this profile has, so nothing was recorded for it and no ' +
+        'source is named for it.',
+    );
+    // The claim that was made about exactly this key: it is not the applicant's, and the record
+    // did state it.
+    expect(one.body).not.toMatch(/License class[^.]*so it is yours/);
+
+    const many = acceptedFrame(
+      { marked: [], unmarked: [], unfillable: ['licenseClass', 'orgName'] },
+      'student',
+    );
+    expect(many.body).toContain(
+      'License class and Organization name are not fields this profile has, so nothing was ' +
+        'recorded for them and no source is named for them.',
+    );
   });
 
   it('names an organisation profile’s own fields, on the tab that has them', async () => {
