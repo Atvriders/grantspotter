@@ -11,6 +11,7 @@ import { createChannelRouter } from './channelRouter.js';
 import { createCalendarRouter } from './calendarRouter.js';
 import { createInboxRouter } from './inboxRouter.js';
 import { createAdminUsersRouter } from './adminUsersRouter.js';
+import { createEnrollmentRouter } from './enrollment.js';
 import { createSourcesRouter } from './sourcesRouter.js';
 
 /**
@@ -58,5 +59,15 @@ export function mountProductApi(
   app.use('/api/calendar', createCalendarRouter(deps));
   app.use('/api/inbox', createInboxRouter(deps));
   app.use('/api/admin/users', createAdminUsersRouter(deps));
+  // Issuing, listing and revoking enrollment codes. `POST /api/auth/enroll` — the half a code
+  // holder uses — lives in the auth router with the other unauthenticated routes; this is the
+  // admin half, and the split is on purpose: one side is reachable without credentials and the
+  // other must never be.
+  //
+  // It was built unmounted, and a verifier caught it: 122 tests passed against a feature a
+  // deployed instance could not use, because each test file mounts its own express app. The
+  // composed app is a separate claim from the routers, which is what `mount.test.ts` is for —
+  // this line is asserted there rather than only here.
+  app.use('/api/admin/enrollment-codes', createEnrollmentRouter(deps));
   app.use('/api/sources', createSourcesRouter(deps, crawl));
 }

@@ -29,8 +29,12 @@
  * `webServer` entry cannot be talked into.
  *
  *   THE BOOT LOG IS EVIDENCE HERE, not noise. The one-time admin token exists nowhere but stdout —
- *   there is no sign-up form, and `/api/auth/bootstrap-status` will tell you a token is needed but
- *   never what it is — and the `[seed] …` sentence the operator reads is asserted verbatim.
+ *   nothing can mint the FIRST account but that token, and `/api/auth/bootstrap-status` will tell
+ *   you a token is needed but never what it is — and the `[seed] …` sentence the operator reads is
+ *   asserted verbatim. (This said "there is no sign-up form" until enrollment codes shipped. There
+ *   is one now, but it cannot help here: a code has to be issued by an administrator, and on a
+ *   first boot there is no administrator to issue one. The token remains the only way in, which is
+ *   what this harness depends on.)
  *   Playwright prefixes a `webServer`'s output with `[WebServer]` and prints it through the
  *   reporter; no fixture hands it to a spec.
  *

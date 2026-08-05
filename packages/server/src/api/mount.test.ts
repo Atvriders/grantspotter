@@ -254,6 +254,15 @@ describe('mountRoutes composition', () => {
       { method: 'patch', path: '/api/admin/users/no-such-user/disabled', body: { disabled: true } },
       { method: 'post', path: '/api/admin/users/no-such-user/reset-password', body: {} },
       { method: 'delete', path: '/api/admin/users/no-such-user' },
+      // Enrollment codes. These matter twice over: they are admin-only, and until this list named
+      // them the ROUTER WAS NOT MOUNTED AT ALL and nothing noticed. 122 tests passed against a
+      // feature no deployed instance could reach, because every other test file mounts its own
+      // express app — so a member probe returning 404-because-absent is indistinguishable from
+      // 403-because-refused unless something asserts the composed app. That is this file's whole
+      // job, and it only does it for routes somebody remembered to add here.
+      { method: 'get', path: '/api/admin/enrollment-codes' },
+      { method: 'post', path: '/api/admin/enrollment-codes', body: { label: 'probe' } },
+      { method: 'post', path: '/api/admin/enrollment-codes/no-such-code/revoke', body: {} },
       { method: 'patch', path: '/api/sources/no-such-source', body: { enabled: false } },
       { method: 'post', path: '/api/sources/crawl', body: {} },
       { method: 'post', path: '/api/inbox/no-such-item/decision', body: { decision: 'approved' } },
