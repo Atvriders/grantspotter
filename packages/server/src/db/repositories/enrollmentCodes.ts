@@ -134,21 +134,27 @@ export interface EnrollmentCodeRepo {
   /** Is there at least one code a person could redeem right now? Never says which, or how many. */
   anyOpen(nowISO: string): boolean;
   /**
-   * Which code this is, if it is one that could be redeemed at `nowISO` — and `undefined` for
-   * every code that could not, whether because it was never issued, was revoked, expired or ran
-   * out. READ-ONLY: it spends nothing, writes nothing, and its answer is stale the instant it
-   * returns, which is why `redeem` re-tests every one of these conditions in the write itself and
-   * remains the only thing that decides who gets a place.
+   * What this deployment would say about `plaintext` at `nowISO`, WITHOUT SPENDING ANYTHING.
    *
-   * IT EXISTS FOR ONE CALLER AND ONE REASON. `api/auth.ts` has to decide whether to tell somebody
-   * that their address already has an account, and that answer is rationed per code — so it needs
-   * to know WHICH code is asking before it does the expensive part of the work, in the same
-   * synchronous stretch as the rationing, or the rationing has an `await` in the middle of it and
-   * is the very defect it was added to close. Nothing here may be used to answer a caller about
-   * the code itself: `redeem`'s refusal messages are the only thing that describes a code to the
-   * person holding it.
+   * READ-ONLY: it writes nothing, and its answer is stale the instant it returns, which is why
+   * `redeem` re-tests every one of these conditions in the write itself and remains the only thing
+   * that decides who gets a place.
+   *
+   * IT ANSWERS BOTH HALVES because its caller needs both before it does anything expensive.
+   * `api/auth.ts` uses `ok: true` — which code is asking — to ration the "that address already has
+   * an account" answer per code, in one synchronous stretch, because a rationing with an `await`
+   * in the middle is the defect this module is shaped against. It uses `ok: false` to answer the
+   * caller about the CODE and go no further: a code this deployment will not honour must not reach
+   * an argon2id hash, and until 2026-08-05 every wrong guess paid for one.
+   *
+   * The refusal it reports is the same value `redeem` would report, from the same function, so the
+   * two can never disagree — but `redeem`'s is the authoritative one and is what a response is
+   * built from when a redemption is actually attempted.
    */
-  redeemableNow(plaintext: string, nowISO: string): { id: string; label: string } | undefined;
+  inspect(
+    plaintext: string,
+    nowISO: string,
+  ): { ok: true; id: string; label: string } | { ok: false; refusal: EnrollmentRefusal };
   redeem<T>(
     input: { plaintext: string; nowISO: string },
     createAccount: CreateAccount<T>,
@@ -302,14 +308,17 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
       return anyOpenStmt.get(nowISO) !== undefined;
     },
 
-    redeemableNow(plaintext, nowISO) {
-      if (normalizeEnrollmentCode(plaintext) === '') return undefined;
+    inspect(plaintext, nowISO) {
+      // A code that normalises to nothing is `unknown`, exactly as `redeem` treats it: an empty
+      // body and a wrong guess have to be the same event or the difference is a free answer.
+      if (normalizeEnrollmentCode(plaintext) === '') return { ok: false, refusal: 'unknown' };
       const row = byHashStmt.get(hashEnrollmentCode(plaintext)) as CodeRow | undefined;
-      if (row === undefined) return undefined;
+      if (row === undefined) return { ok: false, refusal: 'unknown' };
       // The same four conditions `redeem` reads, from the same function, so the two can never
       // disagree about what "could be redeemed" means.
-      if (refusalFor(row, nowISO) !== undefined) return undefined;
-      return { id: row.id, label: row.label };
+      const refusal = refusalFor(row, nowISO);
+      if (refusal !== undefined) return { ok: false, refusal };
+      return { ok: true, id: row.id, label: row.label };
     },
 
     /**

@@ -329,6 +329,33 @@ describe('every way enrolment fails has its own words', () => {
     expect(alert).not.toHaveTextContent(/was not accepted/i);
   });
 
+  /**
+   * THE NUMBER THE SERVER SENT, NOT ONE OF OURS.
+   *
+   * `apiFetch` parses `details` and hands it over, and this screen used to drop it and print "wait
+   * a minute" for every 429 — including one the server had said was fifteen minutes. A refusal a
+   * person cannot plan around is a refusal they retry immediately, which is the behaviour every
+   * limit on this route is trying to reduce, and "wait a minute" for a nine-hundred-second pause is
+   * simply a false statement.
+   */
+  it('says how long the server actually asked for, rounded up', async () => {
+    const alert = await failWith(
+      errorResponse(429, 'rate_limited', 'Too many enrollment codes have been tried.', {
+        retryAfterSec: 842,
+      }),
+    );
+    // 842 s is 14.03 minutes; rounding DOWN would send them back to a second refusal.
+    expect(alert).toHaveTextContent(/try again in 15 minutes/i);
+    expect(alert).not.toHaveTextContent(/wait a minute/i);
+    // And it says whose problem this is not, because on this route it is never the code's fault.
+    expect(alert).toHaveTextContent(/nothing is wrong with your code/i);
+  });
+
+  it('says nothing about time when the server named no number', async () => {
+    const alert = await failWith(errorResponse(429, 'rate_limited', 'Too many attempts.'));
+    expect(alert).not.toHaveTextContent(/try again in \d/i);
+  });
+
   it('does not blame the code when the API never answered', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     const { onAuthenticated } = renderEnroll();

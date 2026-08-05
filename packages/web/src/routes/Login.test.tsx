@@ -89,6 +89,31 @@ describe('Login', () => {
     expect(alert).not.toHaveTextContent(/not recognised/i);
   });
 
+  /** The same correction as `Enroll.test.tsx`: the server's own number, not a guess of ours. */
+  it('repeats the server’s retryAfterSec rather than inventing a minute', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({
+          error: {
+            code: 'rate_limited',
+            message: 'Too many sign-in attempts.',
+            details: { retryAfterSec: 900 },
+          },
+          requestId: 'req-test-1',
+        }),
+      }),
+    );
+    renderLogin();
+    await signIn();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/try again in 15 minutes/i);
+    expect(alert).not.toHaveTextContent(/wait a minute/i);
+  });
+
   it('does not blame the credentials when the API never answered', async () => {
     // "That email or password was not recognised" for a transport failure is a
     // false statement about the user's password. The two are different failures

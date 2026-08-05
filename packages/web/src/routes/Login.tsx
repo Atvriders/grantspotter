@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { apiSend, ApiError } from '../api/client.js';
+import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
 
 /**
  * The signed-out page's ONE `main` landmark.
@@ -39,8 +40,17 @@ function messageFor(err: unknown): string {
   switch (err.code) {
     case 'unauthorized':
       return 'That email or password was not recognised.';
-    case 'rate_limited':
-      return 'Too many attempts. Wait a minute and try again.';
+    /*
+      The server sends `details.retryAfterSec` with this and this screen used to throw it away,
+      printing "wait a minute" for a pause the server had already said was fifteen. The same
+      correction as `Enroll.tsx`, from the same helper; see `lib/retryAfter.ts`.
+    */
+    case 'rate_limited': {
+      const wait = retryAfterSecOf(err.details);
+      return wait === null
+        ? 'Too many attempts. Wait a minute and try again.'
+        : `Too many attempts. Try again in ${humanRetryAfter(wait)}.`;
+    }
     case 'validation_failed':
     case 'bad_request':
       return 'Enter an email address and the password for that account.';

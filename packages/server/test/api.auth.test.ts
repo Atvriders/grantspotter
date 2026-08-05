@@ -1,8 +1,9 @@
+import { Agent as httpAgent } from 'node:http';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createBootstrapState } from '../src/auth/bootstrap.js';
-import { createRateLimiter } from '../src/auth/rateLimit.js';
+import { coarseOrigin, createConcurrencyGate, createRateLimiter } from '../src/auth/rateLimit.js';
 import { SESSION_COOKIE } from '../src/auth/session.js';
 import { loadConfig } from '../src/config.js';
 import { createSessionRepo } from '../src/db/repositories/sessions.js';
@@ -134,6 +135,81 @@ describe('rate limiter', () => {
       // 1000 ms from the first.
       expect(limiter.check('k', 1500).allowed).toBe(true);
     });
+  });
+});
+
+/**
+ * THE OTHER KIND OF LIMIT, and the reason it is a separate primitive rather than a second option on
+ * the one above: a budget refuses, a gate waits. Confusing the two is what answered twenty of
+ * thirty students with a valid enrollment code "Too many enrollment attempts. Try again later."
+ */
+describe('concurrency gate', () => {
+  it('never runs more than the ceiling at once, and still runs everything', async () => {
+    const gate = createConcurrencyGate(3);
+    let live = 0;
+    let peak = 0;
+    const done: number[] = [];
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_unused, i) =>
+        gate.run(async () => {
+          live += 1;
+          peak = Math.max(peak, live);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          live -= 1;
+          done.push(i);
+        }),
+      ),
+    );
+
+    expect(peak).toBe(3);
+    expect(done).toHaveLength(20);
+    // Drained: a slot leaked by a thrown body would show up here as a gate that never empties.
+    expect(gate.inFlight).toBe(0);
+    expect(gate.waiting).toBe(0);
+  });
+
+  it('gives the slot back when the work throws, so one failure is not a permanent hole', async () => {
+    const gate = createConcurrencyGate(1);
+    await expect(
+      gate.run(() => Promise.reject(new Error('argon2 fell over'))),
+    ).rejects.toThrow('argon2 fell over');
+    expect(gate.inFlight).toBe(0);
+    await expect(gate.run(() => Promise.resolve('served'))).resolves.toBe('served');
+  });
+
+  it('serves waiters in the order they arrived, so nobody starves', async () => {
+    const gate = createConcurrencyGate(1);
+    const order: number[] = [];
+    await Promise.all(
+      Array.from({ length: 5 }, (_unused, i) =>
+        gate.run(async () => {
+          order.push(i);
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }),
+      ),
+    );
+    expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+/**
+ * What goes into an audit row about a limiter, and what deliberately does not: an operator has to be
+ * able to recognise their own campus NAT, and a row that outlives the incident must not be a record
+ * of where one named person was sitting.
+ */
+describe('coarsening an origin for the audit trail', () => {
+  it('keeps the network and drops the host', () => {
+    expect(coarseOrigin('203.0.113.7')).toBe('203.0.113.0/24');
+    // A v4 client on a dual-stack socket is a v4 client.
+    expect(coarseOrigin('::ffff:198.51.100.42')).toBe('198.51.100.0/24');
+    expect(coarseOrigin('2001:db8:abcd:1234::1')).toBe('2001:db8:abcd::/48');
+  });
+
+  it('writes nothing down for anything it does not recognise', () => {
+    expect(coarseOrigin(undefined)).toBe('unknown');
+    expect(coarseOrigin('')).toBe('unknown');
+    expect(coarseOrigin('not-an-address')).toBe('unknown');
   });
 });
 
@@ -310,8 +386,9 @@ describe('login, me and logout', () => {
   // Fix round 1: the reviewer demonstrated that keying the limiter on
   // `${req.ip}|${email}` let an attacker mint unlimited fresh buckets
   // against one account by rotating X-Forwarded-For (trust proxy is set in
-  // app.ts, so req.ip follows that header). The lockout must be keyed on the
-  // account alone, so no header the client controls can reset it.
+  // app.ts, so req.ip follows that header). Nothing the client writes may
+  // appear in this key — which is still true, and is why the key uses the TCP
+  // peer rather than req.ip: see the handler, and the test below this one.
   it('does not let rotating X-Forwarded-For reset the per-account lockout', async () => {
     const { app, bootstrap } = build();
     await seedAdmin(app, bootstrap);
@@ -330,6 +407,52 @@ describe('login, me and logout', () => {
       .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
     expect(stillBlocked.status).toBe(429);
     expect(stillBlocked.body.error.code).toBe('rate_limited');
+  }, 20_000);
+
+  /**
+   * THE OTHER HALF OF THE TEST ABOVE, and the reason both are needed.
+   *
+   * Keyed on the account alone, that lockout was a weapon: the email is a value the CALLER supplies,
+   * so five wrong guesses at a name a stranger picked refused that person's own correct password.
+   * MEASURED, 2026-08-05: 24 requests held one named officer out of their own account for an hour,
+   * and there was no way for them to clear it — `reset()` only runs on a success, which is the thing
+   * being refused.
+   *
+   * So the key carries the TCP PEER as well. A header cannot change it (the test above), and a
+   * stranger's failures therefore pile up against the stranger's own connection.
+   *
+   * The two clients here are two real sockets with different source addresses — 127.0.0.0/8 is all
+   * local on Linux, so `localAddress` gives a genuinely different peer without a second machine.
+   *
+   * WHAT THIS DOES NOT CLAIM, and it is written into the handler as well: behind a reverse proxy
+   * every client shares one peer, so on the documented deployment shape the composite collapses
+   * back to the account and the lockout is reachable again. There is no per-client value that
+   * survives a proxy and is not a header, and keying on a header is the defect the test above pins.
+   */
+  it('lets an account be signed into from another connection while one is locked out', async () => {
+    const { app, bootstrap } = build();
+    await seedAdmin(app, bootstrap);
+    const attacker = new httpAgent({ localAddress: '127.0.0.2' });
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await request(app)
+        .post('/api/auth/login')
+        .agent(attacker)
+        .send({ email: 'admin@example.org', password: 'wrong-password-here' });
+    }
+    // The attacker has spent their own budget…
+    const attackerNow = await request(app)
+      .post('/api/auth/login')
+      .agent(attacker)
+      .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(attackerNow.status).toBe(429);
+
+    // …and the owner of the account, on their own connection, signs in.
+    const owner = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(owner.status).toBe(200);
+    expect(owner.body.user.email).toBe('admin@example.org');
   }, 20_000);
 
   it('does not expose a signup route', async () => {

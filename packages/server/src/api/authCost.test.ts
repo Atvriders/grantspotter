@@ -29,13 +29,26 @@ import { createTestDb, type TestDb } from '../../test/helpers/tempDb.js';
  */
 const argon2Calls = vi.hoisted(() => ({ hash: 0, verify: 0 }));
 
+/**
+ * A seam for watching hashes OVERLAP rather than merely counting them.
+ *
+ * Counting answers a different question from counting concurrency, and the difference is the whole
+ * subject of this file: the route's ceiling on in-flight work is a claim about what is running at
+ * one instant, and no total can confirm or refute it. A test that wants to know the peak has to be
+ * inside the call, so this hook wraps it — still the real argon2id underneath.
+ */
+const argon2Hooks = vi.hoisted(() => ({
+  onHash: null as null | ((run: () => Promise<string>) => Promise<string>),
+}));
+
 vi.mock('@node-rs/argon2', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@node-rs/argon2')>();
   return {
     ...actual,
     hash: (...args: Parameters<typeof actual.hash>) => {
       argon2Calls.hash += 1;
-      return actual.hash(...args);
+      const run = (): Promise<string> => actual.hash(...args);
+      return argon2Hooks.onHash === null ? run() : argon2Hooks.onHash(run);
     },
     verify: (...args: Parameters<typeof actual.verify>) => {
       argon2Calls.verify += 1;
@@ -280,53 +293,125 @@ describe('what a valid code tells its holder about other people', () => {
     }
   }
 
+  /** A 409 that NAMES the address is the specific answer; one that does not is the vague one. */
+  function namesAddress(res: request.Response, email: string): boolean {
+    return res.status === 409 && String(res.body?.error?.message ?? '').includes(email);
+  }
+
   /**
    * MEASURED before the fix: 200 probes with one `maxUses: null` code returned 200 answers that
    * separated "this address has an account" (409, naming it) from "this one does not" (201) — for
    * free, in one window, with nothing written down anywhere. A club officer's code, read out to
-   * thirty people, was a membership oracle for the whole deployment. After it: 5 answered, 195
-   * refused, and 5 rows in the audit log naming the code.
+   * thirty people, was a membership oracle for the whole deployment.
+   *
+   * WHAT THIS TEST USED TO ASSERT, AND WHY IT NO LONGER DOES. It counted every 409 as an answer
+   * "learned" and required 195 of the 200 to be 429 — that is, it pinned the behaviour where a code
+   * that has been probed five times refuses everybody who uses it for the next fifteen minutes,
+   * including the students it was issued for. That refusal was the denial-of-service primitive an
+   * adversarial reader demonstrated on 2026-08-05 (five presses by one honest returning student
+   * closed her club's intake), so the 429 is gone and the count of "learned" has to mean something
+   * narrower and truer: how many of those answers NAMED the person asked about.
+   *
+   * It also asserted `argon2Calls.hash === 0`, on the reasoning that a probe should be cheap for
+   * this process. That assertion is inverted here, deliberately and with the same care: a probe
+   * being cheap is exactly what made 2.4 million addresses an hour possible. Past the budget a
+   * probe now pays the same argon2id an enrolment pays, which is what the next test measures.
    */
-  it('answers a handful of already-registered addresses and then stops answering', async () => {
+  it('names a handful of already-registered addresses and then names nobody', async () => {
     const { code, plaintext } = issue();
     const app = build();
     await seedKnownMembers();
 
     argon2Calls.hash = 0;
-    const statuses: number[] = [];
+    const named: number[] = [];
+    const vague: number[] = [];
+    const refused: number[] = [];
     for (let i = 0; i < PROBES; i += 1) {
+      const email = `known-${String(i)}@example.org`;
       const res = await request(app)
         .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD });
-      statuses.push(res.status);
+        .send({ code: plaintext, email, password: GOOD_PASSWORD });
+      if (namesAddress(res, email)) named.push(i);
+      else if (res.status === 409) vague.push(i);
+      else refused.push(i);
     }
 
-    const learned = statuses.filter((s) => s === 409).length;
-    const refused = statuses.filter((s) => s === 429).length;
     console.log(
-      `[probe] probes=${String(PROBES)} learned(409)=${String(learned)} ` +
-        `refused(429)=${String(refused)} hashes=${String(argon2Calls.hash)}`,
+      `[probe] probes=${String(PROBES)} named=${String(named.length)} ` +
+        `vague=${String(vague.length)} other=${String(refused.length)} ` +
+        `hashes=${String(argon2Calls.hash)}`,
     );
 
-    // A person who genuinely already has an account is still told so, plainly. A caller who is
-    // asking the question about a list of addresses runs out of answers almost immediately.
-    expect(learned).toBeGreaterThan(0);
-    expect(learned).toBeLessThanOrEqual(5);
-    expect(learned + refused).toBe(PROBES);
-    // And every answered one is written down against the code that asked it, so an administrator
-    // can see which code is being used this way and revoke it.
+    // A person who genuinely already has an account is still told so, plainly. A caller asking the
+    // question about a LIST runs out of that answer almost immediately.
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.length).toBeLessThanOrEqual(5);
+    // Everybody else is still answered — no refusals at all — and told nothing about anybody.
+    expect(named.length + vague.length).toBe(PROBES);
+    expect(refused).toEqual([]);
+    // And every NAMED one is written down against the code that asked it, so an administrator can
+    // see which code is being used this way and revoke it.
     const trail = db
       .prepare("SELECT entity_id, detail FROM audit_log WHERE action = 'enrollment_code.conflict'")
       .all() as Array<{ entity_id: string; detail: string }>;
-    expect(trail).toHaveLength(learned);
+    expect(trail).toHaveLength(named.length);
     expect(trail.every((r) => r.entity_id === code.id)).toBe(true);
     // Never the address that was asked about: the trail must not become the list it is there to
     // stop somebody building.
     expect(JSON.stringify(trail)).not.toContain('known-0@example.org');
-    // A probe now costs no argon2id at all: the answer is decided from two indexed reads, before
-    // the hash. This number is here so that a future "tidy-up" that moves the check back below the
-    // hash shows up as a change in cost as well as a change in shape.
-    expect(argon2Calls.hash).toBe(0);
+    // One argon2id for every probe past the budget, and none for the ones inside it. The number is
+    // here so that a change which makes probing cheap again shows up as a change in cost.
+    expect(argon2Calls.hash).toBe(vague.length);
+  }, 180_000);
+
+  /**
+   * INDISTINGUISHABLE HAS TO INCLUDE THE COST, or it is a property of the status line only.
+   *
+   * Past the disclosure budget the two answers still differ — a member gets 409, a stranger gets
+   * 201 and an account — and they always will, because making them identical means refusing to
+   * create the account, which is the denial this whole change removes. What CAN be equalised is
+   * what the two cost, and here it is: both pay one argon2id, so the wall clock cannot be used to
+   * sort a list faster than the route can hash.
+   *
+   * MEASURED before the fix, with the address check above the password floor: 200 probes at 554/sec
+   * against 23/sec for a probe that had to carry a legal password — a 24x discount for asking about
+   * somebody who exists. The assertion below is a ratio rather than a rate because the absolute
+   * numbers belong to whichever machine runs it.
+   */
+  it('makes an already-registered address cost what a new one costs, past the budget', async () => {
+    const { plaintext } = issue();
+    const app = build();
+    await seedKnownMembers();
+
+    const SAMPLE = 12;
+    // Spend the disclosure budget first: this measures the past-the-budget path on both sides.
+    for (let i = 0; i < 6; i += 1) {
+      await request(app)
+        .post('/api/auth/enroll')
+        .send({ code: plaintext, email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD });
+    }
+
+    async function timeOf(emailAt: (i: number) => string): Promise<number> {
+      const started = Date.now();
+      for (let i = 0; i < SAMPLE; i += 1) {
+        await request(app)
+          .post('/api/auth/enroll')
+          .send({ code: plaintext, email: emailAt(i), password: GOOD_PASSWORD });
+      }
+      return (Date.now() - started) / SAMPLE;
+    }
+
+    const hit = await timeOf((i) => `known-${String(i + 20)}@example.org`);
+    const miss = await timeOf((i) => `stranger-${String(i)}@example.org`);
+    const ratio = hit / miss;
+    console.log(
+      `[cost] member=${hit.toFixed(1)}ms stranger=${miss.toFixed(1)}ms ratio=${ratio.toFixed(2)}`,
+    );
+
+    // Both paths are one argon2id plus a few indexed statements; a factor of two either way is
+    // noise on a shared machine, and anything outside it means one of them stopped hashing.
+    expect(ratio).toBeGreaterThan(0.5);
+    expect(ratio).toBeLessThan(2);
   }, 180_000);
 
   /**
@@ -338,7 +423,7 @@ describe('what a valid code tells its holder about other people', () => {
    * read a budget at zero and be answered. It is charged in the same synchronous stretch as it is
    * read instead, which is why concurrency makes no difference to this number.
    */
-  it('is not any more informative when the 200 probes arrive at once', async () => {
+  it('names no more people when the 200 probes arrive at once', async () => {
     const { plaintext } = issue();
     const app = build();
     await seedKnownMembers();
@@ -355,14 +440,67 @@ describe('what a valid code tells its holder about other people', () => {
       ),
     );
 
-    const learned = responses.filter((r) => r.status === 409).length;
-    const refused = responses.filter((r) => r.status === 429).length;
+    const named = responses.filter((r, i) => namesAddress(r, `known-${String(i)}@example.org`));
+    const conflicts = responses.filter((r) => r.status === 409);
     console.log(
-      `[probe-burst] probes=${String(PROBES)} learned(409)=${String(learned)} ` +
-        `refused(429)=${String(refused)}`,
+      `[probe-burst] probes=${String(PROBES)} named=${String(named.length)} ` +
+        `conflicts=${String(conflicts.length)}`,
     );
-    expect(learned).toBe(5);
-    expect(learned + refused).toBe(PROBES);
+    expect(named).toHaveLength(5);
+    // Everybody was answered, and nobody was refused.
+    expect(conflicts).toHaveLength(PROBES);
+  }, 180_000);
+});
+
+/**
+ * THE CEILING ON WORK, WHICH IS NOT THE CEILING ON PEOPLE.
+ *
+ * `MAX_CONCURRENT_HASHES` in `api/auth.ts` claims that this process never has more than four
+ * argon2id operations in flight, across both unauthenticated routes that run one, and that nothing
+ * is refused to make that true. Both halves are asserted here, because a queue that silently
+ * becomes a refusal under load is the defect this whole change is about and it would not show up in
+ * any status code until the day it did.
+ */
+describe('how much argon2id one burst can have running at once', () => {
+  const BURST = 40;
+
+  it('never exceeds four concurrent hashes, and still enrols all forty', async () => {
+    const { code, plaintext } = issue({ maxUses: BURST });
+    const app = build();
+
+    let live = 0;
+    let peak = 0;
+    const previous = argon2Hooks.onHash;
+    argon2Hooks.onHash = async (run) => {
+      live += 1;
+      peak = Math.max(peak, live);
+      try {
+        return await run();
+      } finally {
+        live -= 1;
+      }
+    };
+
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: BURST }, (_unused, i) =>
+          request(app)
+            .post('/api/auth/enroll')
+            .send({
+              code: plaintext,
+              email: `crowd-${String(i)}@example.org`,
+              password: GOOD_PASSWORD,
+            }),
+        ),
+      );
+      console.log(`[gate] burst=${String(BURST)} peakConcurrentHashes=${String(peak)}`);
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(4);
+      expect(responses.filter((r) => r.status === 201)).toHaveLength(BURST);
+      expect(codes.findById(code.id)?.uses).toBe(BURST);
+    } finally {
+      argon2Hooks.onHash = previous;
+    }
   }, 180_000);
 });
 

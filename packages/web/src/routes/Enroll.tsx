@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { ApiError } from '../api/client.js';
 import { postEnroll } from '../api/enrollment.js';
 import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
+import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
 import { SignedOutPage } from './Login.js';
 
 /**
@@ -143,8 +144,28 @@ function messageForEnroll(err: unknown): string {
     case 'validation_failed':
     case 'bad_request':
       return err.message;
-    case 'rate_limited':
-      return 'Too many attempts. Wait a minute and try again.';
+    /*
+      THE SERVER'S OWN NUMBER, AND ONLY WHEN IT SENT ONE.
+
+      This branch used to read "Too many attempts. Wait a minute and try again." for every
+      `rate_limited` answer, while `apiFetch` had already parsed `details.retryAfterSec` and handed
+      it over. Three conditions read as one sentence and two of them were false: a per-code pause
+      answered 900 seconds and a queue answered 1, and the screen said sixty to all of them.
+
+      There is now one rate-limited condition on this route — too many wrong CODES from this
+      connection — and it is the only one, because nothing else here refuses anybody: the per-code
+      conflict budget makes the answer vaguer instead of stopping the enrolment, and the hash gate
+      queues. So this says what it is, whose fault it is not, and how long the server said.
+    */
+    case 'rate_limited': {
+      const wait = retryAfterSecOf(err.details);
+      const opening =
+        'Too many attempts from this connection. Nothing is wrong with your code or your details, ' +
+        'and no other club is affected.';
+      return wait === null
+        ? `${opening} Wait a little and try again.`
+        : `${opening} Try again in ${humanRetryAfter(wait)}.`;
+    }
     default:
       return err.status === 0
         ? 'The GrantSpotter API could not be reached, so nothing was sent.'
