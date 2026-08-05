@@ -496,8 +496,20 @@ a second supervised process, and its arm64 build under emulation is a recurring 
 ## Accounts
 
 Local accounts, argon2id password hashing, httpOnly session cookies. First-run admin bootstrap
-prints a one-time token to the container log. No public signup by default, and login is
-rate-limited.
+prints a one-time token to the container log, and sign-in is rate-limited.
+
+**Three things can bring an account into existence, and not one of them is open registration.**
+
+| Path | Who starts it | What it produces |
+|---|---|---|
+| The first-run token, printed to the container log | the operator, once, against a database with no accounts | the first **administrator** |
+| **Admin → User accounts**, which generates a password shown once | an administrator | a member or an administrator, whichever is chosen |
+| An [enrollment code](#enrollment-codes), redeemed by whoever holds it | the person joining, using a code an administrator issued | a **member**, always |
+
+Only the third lets a person create their own account, and the distinction it turns on is the
+entire design: **there is no open sign-up.** The form exists and it is inert without a code that an
+administrator issued, bounded with whatever limits they set, and revocable the moment they change
+their mind. Registration for whoever finds the URL was never available here and still is not.
 
 | Capability | admin | member |
 |---|---|---|
@@ -510,6 +522,79 @@ rate-limited.
 Members see the review queue read-only on purpose: knowing that a deadline change is *pending
 review* is useful, and hiding it invites the "why is this list wrong" complaint the trust surfaces
 exist to prevent.
+
+### Enrollment codes
+
+A club officer bringing fifteen new members onto an instance does not want to type fifteen
+passwords and hand them over one at a time, and the fifteen do not want to be handed one. An
+enrollment code is the third path: an administrator issues one, gives it to the people it is for,
+and each of them creates their own account with it.
+
+An administrator issues a code under **Admin → Enrollment codes** with a label saying what it is for —
+"W1MX autumn 2026 intake" — and two bounds, both optional and both worth setting:
+
+- **A use limit.** How many accounts this code may create. Leave it empty for no limit; even then
+  the code is still bounded by its expiry and by your ability to revoke it.
+- **An expiry**, given as a number of days. A code with no limit and no expiry is a permanent
+  password to your instance held by everyone you ever gave it to, so set at least one of the two.
+
+**The code is shown exactly once, on the screen that issues it.** After that only a hash of it is
+stored — the same arrangement as the [calendar feed token](#exports), for the same reason: a copy of
+`grantspotter.sqlite`, a backup or the JSON export must not hand out working credentials. The list
+of codes shows you the label, the use count, the expiry, who created it and when it was last
+redeemed, and it cannot show you the code itself, because the instance no longer has it. If you
+lose it, revoke it and issue another; that is cheaper than any recovery path and it is the one that
+leaves a record. Revocation stamps the row rather than deleting it, so what remains is the evidence
+that this code existed and when it was switched off.
+
+**Enrolment produces a member. The role is not a parameter of the request**, so there is nothing to
+tamper with: an enrolled account gets `member`, and the only way to a second administrator is an
+existing administrator promoting one. The account's password is the enroller's own choice and is
+held to the same 12-character floor as every other password here, checked by the same policy.
+
+**A wrong code and a code that was never issued get the same answer.** Enrolment tells you nothing
+about codes you do not hold: not whether one exists, not how many there are, not who has one.
+Expired, revoked and used-up codes *do* say which they are, because those are the three states a
+legitimate holder needs explained before they give up and email somebody. The endpoint is rate
+limited by the same limiter that guards sign-in, counting failures against enrolment as a whole
+rather than against the caller: an attacker who rotates their address or the email they are
+enrolling with does not get a fresh allowance for doing it, and the price of that is that a burst of
+wrong guesses makes the next honest person wait. Only a wrong code is charged to it: a code that
+really was issued here and has since expired, been revoked or run out is a holder failing, not an
+attacker probing, and locking them out for it teaches nobody anything. That limit is what makes a
+code's length mean anything — a secret you can only attack by guessing is worth the
+number of guesses allowed.
+
+**That promise is about codes, and not about email addresses.** Enrolling with an address that
+already has an account is told so, plainly, because the alternative is someone who signed up last
+term being unable to work out why the form will not take them. On an instance where every account
+needs a code you issued, that is a trade worth making and not a leak worth pretending about.
+
+**Two people redeeming a single-use code at the same instant get one account, not two.** The use
+count and the new account are written in one transaction, so the limit holds under concurrency
+rather than only in a demo. That is stated because the opposite has shipped here before, one floor
+down: the [callsign lookup](#the-callsign-lookup)'s guard against two simultaneous requests to one
+host could not see a request that had not answered yet, and eight simultaneous presses produced
+eight requests where one was intended — measured on 2026-08-04, with the guard present and every
+one of its own tests green. A limit checked before an `await` and written after it is not a limit.
+
+| Route | Who | What it does |
+|---|---|---|
+| `GET /api/admin/enrollment-codes` | admin | lists codes; carries no plaintext, ever |
+| `POST /api/admin/enrollment-codes` | admin | issues one from `{ label, maxUses, expiresInDays }`; the only response in the product that carries `plaintext` |
+| `POST /api/admin/enrollment-codes/:id/revoke` | admin | stamps `revokedAt`; the row stays |
+| `GET /api/auth/enrollment-open` | public | `{ open: boolean }` — whether *some* usable code exists, and nothing else |
+| `POST /api/auth/enroll` | public | redeems a code, creates the member, signs them in |
+
+`maxUses: null` means no limit, `expiresAt: null` means no expiry, and a code is usable only while
+it is unrevoked, unexpired and under its limit. The sign-in screen offers the enrolment path only
+when `GET /api/auth/enrollment-open` says yes, which is a single boolean about the instance and not
+a fact about any particular code — an instance with no usable codes looks exactly like an instance
+that has never issued one.
+
+**Enrolment does not replace the first-run token and cannot stand in for it.** Issuing a code takes
+an administrator, and on a fresh database there is no administrator to take it, so the first one
+still comes out of the container log exactly as [below](#deploying).
 
 ---
 
@@ -548,11 +633,13 @@ actually switch that instance off. It does not have to be elaborate, and it does
 instance itself — a club page, a department page or a personal page that says who runs this and how
 to reach you is enough. [Environment](#environment) has the rules it must pass.
 
-Then read the container log for the one-time admin bootstrap token. There is still no sign-up form
-for the public, but there **is** a first-run screen: open the app and, because no accounts exist yet,
-it offers **Set up GrantSpotter** instead of a sign-in box, asking for that token, an email address
-and a password of at least 12 characters. On success you are signed in as an administrator. There
-is no password reset for the first administrator, so store it somewhere you can find it again.
+Then read the container log for the one-time admin bootstrap token. The **first administrator always
+comes from the log**: a fresh database has no accounts, so it has nobody who could issue an
+[enrollment code](#enrollment-codes), and enrolment therefore cannot bootstrap an instance. What you
+get is a first-run screen: open the app and, because no accounts exist yet, it offers **Set up
+GrantSpotter** instead of a sign-in box, asking for that token, an email address and a password of
+at least 12 characters. On success you are signed in as an administrator. There is no password reset
+for the first administrator, so store it somewhere you can find it again.
 
 If you would rather do it over the API:
 
@@ -566,8 +653,11 @@ curl -X POST http://127.0.0.1:3030/api/auth/bootstrap \
 ```
 
 A fresh token is printed on every restart until an account exists. Now open
-`http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and sign in with those credentials;
-every further account is created from **Admin → User accounts**.
+`http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and sign in with those credentials.
+From here an account is made one of two ways: you create it from **Admin → User accounts**, with the
+role you choose and a generated password you hand over, or somebody creates their own by redeeming
+an [enrollment code](#enrollment-codes) you issued, which always makes a member. Nobody arrives
+without an administrator having done something first.
 
 `HOST_PORT` is the one setting still interpolated rather than written out, because **3030** is a
 popular default and is frequently already claimed on a busy host. Change the left-hand number of the

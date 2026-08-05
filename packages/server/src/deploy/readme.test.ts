@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { firstRunBanner } from '../auth/bootstrap.js';
 import { PLACEHOLDER_MARKER } from '../config.js';
 
 /**
@@ -347,28 +349,36 @@ describe('README honesty surfaces', () => {
   });
 
   /**
-   * There is no sign-up form for the public — but there IS a first-run screen now, and this comment
-   * used to say there wasn't.
+   * THE ASSERTION THAT USED TO BE HERE WAS NOT WRONG. THE PRODUCT CHANGED UNDER IT.
    *
-   * When it was written that was accurate and was the point: `createBootstrapState` printed a
-   * one-time token to the log, `POST /api/auth/bootstrap` was the only thing that could spend it,
-   * and an operator told to "read the log for the token" and nothing else was left looking at a
-   * sign-in box with no account to sign in as — step 1 of the product's own flow, unreachable from
-   * a browser. That gap is now closed by `routes/FirstRun.tsx`, so the README describes the screen
-   * and keeps the curl as the alternative rather than the only way in.
+   * It required the README to say `no sign-up form`, and for the life of this project that was an
+   * accurate description of a deliberate design: `createBootstrapState` printed a one-time token to
+   * the log, `POST /api/auth/bootstrap` was the only thing that could spend it, and every later
+   * account came from an administrator typing it into **Admin → User accounts**. The comment above
+   * it said the claim was "unchanged and still meaningful", and it was.
    *
-   * The assertion below is unchanged and still meaningful: no public signup is a real property of
-   * this product, and the README must keep saying so, because "there is a setup screen" could
-   * otherwise be misread as "anyone can make themselves an account".
+   * Enrollment codes make it false. A person holding a code an administrator issued now creates
+   * their own account, at a form, without an administrator present. So the sentence goes — but the
+   * property it was protecting does not, and losing it in the edit would be the actual regression:
+   * "GrantSpotter has sign-up now" is exactly the wrong summary of this change. What is true is
+   * narrower and harder, and it is what the `enrolment is a third door` block below holds:
+   * registration is impossible without a secret an administrator issued, limited, and can revoke.
+   *
+   * So this test keeps the two claims about the bootstrap path that are still true — the token has
+   * a documented way to spend it, and the first administrator comes from the log and cannot come
+   * from anywhere else — and hands the sign-up question to gates written for the new design.
    */
   it('says how to spend the bootstrap token, not just where to find it', () => {
     expect(readme).toContain('/api/auth/bootstrap');
-    // `\s+` and not a space: the sentence wraps mid-phrase in the source, and a regex that
-    // assumes one line would fail on a reflow that changed nothing a reader can see.
-    expect(readme).toMatch(/no\s+sign-?up\s+form/i);
     // The screen exists; a README that still called it API-only would be the product's front page
     // contradicting the product.
     expect(readme).toMatch(/first-run screen/i);
+    // `\s+` and not a space throughout: these sentences wrap mid-phrase in the source, and a regex
+    // that assumes one line would fail on a reflow that changed nothing a reader can see.
+    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+the\s+log/i);
+    // …and why it cannot be otherwise, which is the sentence that stops enrolment being mistaken
+    // for a way to stand an instance up.
+    expect(readme).toMatch(/enrolment\s+(therefore\s+)?cannot\s+bootstrap/i);
   });
 
   /**
@@ -655,5 +665,225 @@ describe('README: nine means nine, wherever the chain goes', () => {
     expect(readme).toMatch(/www\.arrl\.org/);
     expect(readme).toMatch(/measure-pacing twoOriginsOneHost/);
     expect(readme).toMatch(/rules nobody gave us/i);
+  });
+});
+
+/**
+ * ENROLMENT IS A THIRD DOOR, AND THE README HAS TO KEEP SAYING IT IS A DOOR WITH A LOCK ON IT.
+ *
+ * These gates replace `expect(readme).toMatch(/no\s+sign-?up\s+form/i)`, which is documented at its
+ * old site above. Two opposite failures are now possible and this block has to fail on both.
+ *
+ * The first is the one the retired assertion was written for: a README that still says there is no
+ * sign-up form while the product ships one. That is a front page contradicting the screen the
+ * reader is looking at, and it is how somebody later "restores" the old behaviour on the grounds
+ * that the docs say it is supposed to work that way.
+ *
+ * The second is the overcorrection, and it is the more expensive one: "GrantSpotter now has
+ * sign-up". An operator who reads that puts an instance on the open internet believing
+ * registration is a feature they enabled and can disable, when what actually gates it is a secret
+ * they issue, limit and revoke. Blurring those two is how an instance ends up with accounts nobody
+ * meant to allow.
+ *
+ * So the negative gates name the sentences, in both directions, and the positive ones name the
+ * mechanism — an issuer, a limit, an expiry, a revocation, a hash, a rate limit, a transaction —
+ * because "we take security seriously" is satisfiable by wording and none of these are.
+ */
+describe('README: enrolment is a third door, not an open one', () => {
+  it('no longer claims there is no way for a user to create an account', () => {
+    // Every form of the retired claim, starting with the exact one this file asserted for the
+    // whole life of the project up to this change.
+    expect(readme).not.toMatch(/no\s+sign-?up\s+form/i);
+    expect(readme).not.toMatch(/there\s+is\s+no\s+public\s+sign-?up/i);
+    expect(readme).not.toMatch(/no\s+public\s+sign-?up\s+by\s+default/i);
+    expect(readme).not.toMatch(/only\s+an?\s+admin\w*\s+can\s+(create|make)\s+an?\s+account/i);
+    expect(readme).not.toMatch(/cannot\s+(create|make)\s+(their|your)\s+own\s+account/i);
+    // And the capability that replaced them, said plainly enough to find.
+    expect(readme).toMatch(/creates?\s+their\s+own\s+account/i);
+    expect(readme).toMatch(/\benrol/i);
+  });
+
+  it('does not claim sign-up is open', () => {
+    expect(readme).not.toMatch(/any(one|body)\s+can\s+(create|register|sign\s?-?\s?up|make)/i);
+    expect(readme).not.toMatch(/(sign-?up|registration)\s+is\s+(now\s+)?(open|public|enabled)/i);
+    expect(readme).not.toMatch(/now\s+has\s+(public\s+)?sign-?up/i);
+    expect(readme).not.toMatch(/open\s+to\s+(the\s+public|anyone)/i);
+    // The qualifier that carries the design, in the words that mean it rather than an adjective.
+    expect(readme).toMatch(/no\s+open\s+sign-?up/i);
+    expect(readme).toMatch(/code\s+(that\s+)?an\s+administrator\s+issued/i);
+    // The three paths, counted, so a fourth cannot appear in the product without appearing here.
+    expect(readme).toMatch(/three things can bring an account into existence/i);
+    expect(readme).toMatch(/not one of them is open registration/i);
+  });
+
+  it('keeps the first-run token as the only way to the first administrator', () => {
+    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+the\s+log/i);
+    expect(readme).toMatch(/nobody\s+who\s+could\s+issue\s+an?\s*\n?\s*\[?enrollment code/i);
+    // The in-page link the Deploying section leans on. A dangling anchor is how the qualifier gets
+    // lost from the one section an operator actually reads.
+    expect(readme).toContain('(#enrollment-codes)');
+    expect(readme).toMatch(/^### Enrollment codes$/m);
+  });
+
+  /**
+   * The README tells an administrator where to go, so it is bound to the heading that screen
+   * actually carries — the same arrangement as `names exactly the fields the lookup actually
+   * fills`, which reads `callsignFill.ts` rather than trusting a sentence. A renamed panel and an
+   * unrenamed instruction is a small lie that costs somebody a real search.
+   */
+  it('names the admin screen by the heading that screen actually carries', () => {
+    const panel = readFileSync(
+      resolve(REPO_ROOT, 'packages/web/src/components/EnrollmentCodes.tsx'),
+      'utf8',
+    );
+    const heading = /<h2>([^<]+)<\/h2>/.exec(panel)?.[1];
+    expect(heading, 'no <h2> found in the enrollment codes panel').toBeTruthy();
+    expect(readme).toContain(`**Admin → ${heading}**`);
+  });
+
+  it('says the code is shown once and is then unreadable, like every other secret here', () => {
+    expect(readme).toMatch(/shown\s+exactly\s+once/i);
+    expect(readme).toMatch(/only\s+a\s+hash\s+of\s+it\s+is\s*\n?\s*stored/i);
+    expect(readme).toMatch(/cannot\s+show\s+you\s+the\s+code/i);
+    // The precedent, named: `POST /api/admin/users` has done this since it shipped, and a reader
+    // meeting the second instance of a rule should be told it is the same rule.
+    expect(readme).toMatch(/password\s+shown\s+once/i);
+    // No recovery path may be implied, because none exists.
+    expect(readme).not.toMatch(/(view|read|retrieve|recover)\s+the\s+code\s+(again|later)/i);
+    expect(readme).toMatch(/revoke it and issue another/i);
+    // Revocation is stamped rather than deleted — the same shape as `ics_tokens.revoked_at`.
+    expect(readme).toMatch(/stamps? the row rather than deleting it/i);
+  });
+
+  it('says enrolment produces a member and that the request cannot ask for more', () => {
+    expect(readme).toMatch(/role\s+is\s+not\s+a\s+parameter\s+of\s+the\s+request/i);
+    expect(readme).toMatch(/gets\s+`member`/);
+    expect(readme).toMatch(/only\s+way\s+to\s+a\s+second\s+administrator/i);
+    // The password floor is one policy in this codebase, and the README must not read as if
+    // enrolment brought its own.
+    expect(readme).toMatch(/same\s+12-character\s+floor/i);
+  });
+
+  it('states the two properties that make a typed-in secret worth anything', () => {
+    // A code is guessable only by trying, so the limiter is what gives its length meaning.
+    expect(readme).toMatch(/rate\s*\n?\s*limited by the same limiter that guards sign-in/i);
+    expect(readme).toMatch(/worth the\s*\n?\s*number of guesses allowed/i);
+    // The shape of the bucket, because it is visible to a user: enrolment is limited as a whole,
+    // so a burst of wrong guesses is felt by the next honest person. Documenting only the benefit
+    // and not that cost is the kind of half-sentence this file exists to stop.
+    expect(readme).toMatch(/against enrolment as a whole\s*\n?\s*rather than against the caller/i);
+    expect(readme).toMatch(/makes the next honest person wait/i);
+    // Atomicity, as a claim a reader can check rather than a reassurance, and with the defect it
+    // is guarding against named — this project shipped exactly this bug in the callsign lookup.
+    expect(readme).toMatch(/at the same instant get one account, not two/i);
+    expect(readme).toMatch(/one transaction/i);
+    // The precedent, with the measurement rather than a paraphrase of it. `callsign.test.ts`
+    // measured eight simultaneous presses making eight requests on 2026-08-04, and the README must
+    // retell that as what it was — a guard that could not see an unanswered request — rather than
+    // as a per-user limit, which is a different mechanism that was not the defect.
+    expect(readme).toMatch(/eight simultaneous presses produced\s*\n?\s*eight requests/i);
+    expect(readme).toMatch(/checked before an `await` and written after it is not a limit/i);
+  });
+
+  it('describes the non-enumeration rule, including what it deliberately does say', () => {
+    expect(readme).toMatch(/wrong code and a code that was never issued get the same answer/i);
+    expect(readme).toMatch(/not whether one exists, not how many/i);
+    // The exception is not a leak and has to be documented as the deliberate thing it is: a
+    // legitimate holder of a dead code needs to know which kind of dead it is.
+    expect(readme).toMatch(/expired,?\s+revoked\s+and\s+used-up/i);
+    // …and the public boolean must not be oversold into a fact about a particular code.
+    expect(readme).toMatch(/single boolean about the instance/i);
+    expect(readme).toMatch(/never issued one/i);
+    // The limit of the promise, stated by the README rather than discovered by a reader who
+    // assumed "no enumeration" covered everything. Enrolling with an address that already has an
+    // account is told so, and a doc that implied otherwise would be overselling this.
+    expect(readme).toMatch(/about codes, and not about email addresses/i);
+    expect(readme).toMatch(/not a leak worth pretending about/i);
+    // The limiter's exemption, which is a promise to the honest holder of a dead code.
+    expect(readme).toMatch(/only a wrong code is charged to it/i);
+  });
+
+  it('documents every route in the contract, with the one that returns the plaintext marked', () => {
+    for (const route of [
+      'GET /api/admin/enrollment-codes',
+      'POST /api/admin/enrollment-codes',
+      'POST /api/admin/enrollment-codes/:id/revoke',
+      'GET /api/auth/enrollment-open',
+      'POST /api/auth/enroll',
+    ]) {
+      expect(readme, route).toContain(route);
+    }
+    expect(readme).toMatch(/only response in the product that carries `plaintext`/i);
+    expect(readme).toMatch(/carries no plaintext, ever/i);
+    // The two nullable knobs, with the meaning of `null` spelled out. "maxUses?: number|null" is
+    // ambiguous to everyone who has not read the handler.
+    expect(readme).toContain('`maxUses: null` means no limit');
+    expect(readme).toContain('`expiresAt: null` means no expiry');
+    expect(readme).toMatch(/unrevoked, unexpired and under its limit/i);
+  });
+});
+
+/**
+ * THE BANNER IS THE OTHER DOCUMENT THAT CARRIED THE RETIRED CLAIM, AND ITS READER CANNOT ASK A
+ * FOLLOW-UP QUESTION.
+ *
+ * It is printed once, into a container log, to an operator who has just started an image they did
+ * not write. `There is no public signup.` was the last line they read, and after this change it
+ * would be a lie told to the person least able to check it. `firstRunBanner` is exported precisely
+ * so this file can hold it to the same standard as the README rather than trusting a code comment.
+ *
+ * The awk test at the bottom is the one that has failed for real. The README's command was
+ * `grep -A4 'first-run setup'` when the banner was five lines, and printed everything except the
+ * token by the time it was eight — the standard failure of a fixed-line-count reader. This change
+ * grew the banner again, from 18 lines to 20, which is exactly the edit that used to break it. So
+ * the command is not described here, it is extracted from the README and run.
+ */
+describe('the first-boot banner an operator reads in a container log', () => {
+  const token = 'a1b2c3d4'.repeat(6); // the shape `randomBytes(24).toString('hex')` produces
+  const banner = firstRunBanner(token);
+  const lines = banner.split('\n');
+
+  it('no longer tells the operator there is no public signup', () => {
+    expect(banner).not.toMatch(/no public sign-?up/i);
+    // What replaced it: the second door is named, and it is still not an open one.
+    expect(banner).toMatch(/enrollment code/i);
+    expect(banner).toMatch(/no open sign-?up/i);
+    // It must stay a statement about who acts first, not a boast about security.
+    expect(banner).toMatch(/an admin/i);
+  });
+
+  it('stays short and plain enough for a log', () => {
+    // No line wider than the rule it is printed under; the banner's own delimiter is the budget.
+    expect(lines[0]).toMatch(/^={20,}$/);
+    for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(lines[0]!.length);
+    expect(lines.length).toBeLessThanOrEqual(24);
+    // ASCII only. This lands in journald, `docker logs`, a CI transcript and somebody's PuTTY.
+    expect(banner).toMatch(/^[\x20-\x7e\n]+$/);
+  });
+
+  it('still yields the token to the exact command the README prints', () => {
+    const program = /\| awk '([^']+)'/.exec(readme)?.[1];
+    expect(
+      program,
+      "the README's log-reading command is no longer an awk one-liner this test can run; if it " +
+        'changed shape, this test has to change with it rather than be deleted',
+    ).toBeTruthy();
+
+    // Fed the way the operator feeds it: a log with the banner somewhere in the middle of it.
+    // Running it against the banner alone would pass with no closing delimiter at all — awk would
+    // simply print to EOF — and "prints the rest of your log" is a different broken command.
+    const log = [
+      '2026-08-04T09:00:00Z GrantSpotter 0.1.0 starting',
+      banner,
+      '2026-08-04T09:00:01Z listening on 0.0.0.0:3030',
+      '2026-08-04T09:00:09Z GET /api/auth/me 401',
+    ].join('\n');
+    const printed = execFileSync('awk', [program!], { input: log, encoding: 'utf8' });
+
+    expect(printed).toContain(token);
+    expect(printed).toContain('GrantSpotter first-run setup');
+    // It stops at the closing delimiter instead of running on.
+    expect(printed).not.toContain('listening on');
+    expect(printed.trimEnd().split('\n').at(-1)).toMatch(/^={20,}$/);
   });
 });

@@ -21,6 +21,13 @@ export interface BootstrapState {
  * keeps the two in step if this array grows again.
  *
  * The first and last lines are the delimiters that command matches. Keep them.
+ *
+ * The closing line said "There is no public signup." until enrollment codes shipped. That sentence
+ * was true, was deliberate, and is now false: a person holding a code an administrator issued
+ * creates their own account. What replaced it has to keep the distinction the old line was really
+ * making — an operator reading this at 2am needs to know that nothing self-serve exists WITHOUT an
+ * administrator acting first — while no longer denying the door that now exists. See
+ * `deploy/readme.test.ts`, which holds both halves against this text and against the README.
  */
 export function firstRunBanner(token: string): string {
   return [
@@ -39,7 +46,9 @@ export function firstRunBanner(token: string): string {
     ' { "token": "...", "email": "...", "password": "..." }',
     '',
     ' A fresh token is printed on every restart until an admin',
-    ' account exists. There is no public signup.',
+    ' account exists. After that an admin makes accounts, or',
+    ' issues an enrollment code somebody signs up with. There is',
+    ' no open signup.',
     '============================================================',
   ].join('\n');
 }
