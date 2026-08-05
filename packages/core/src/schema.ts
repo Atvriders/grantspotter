@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type {
   Constraint,
   Cycle,
+  EnrollmentCode,
   Funder,
   Profile,
   ProfileFieldSource,
@@ -435,6 +436,27 @@ export const profileSchema = z.discriminatedUnion('kind', [
   orgProfileSchema,
 ]);
 
+/**
+ * An enrollment code as it is allowed to be serialised — which is to say, without the code.
+ *
+ * NULLABLE, NOT OPTIONAL, in all four places `EnrollmentCode` says `| null`. A missing key and a
+ * key holding null are the same value to a JavaScript reader and different values on the wire, and
+ * this shape is read by an admin screen that renders "no limit" and "never expires" from exactly
+ * those nulls. `maxUses` is additionally `.positive()`: a zero-use code is not a code with a limit
+ * of zero, it is a code that can never be redeemed, and the table's own CHECK refuses to store one.
+ */
+export const enrollmentCodeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  maxUses: z.number().int().positive().nullable(),
+  uses: z.number().int().nonnegative(),
+  expiresAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  createdAt: z.string(),
+  createdByUserId: z.string(),
+  lastUsedAt: z.string().nullable(),
+});
+
 // Compile-time drift guards. If types.ts and schema.ts ever disagree, these
 // stop compiling. Bidirectional assignability is checked, not exact identity,
 // because zod's inferred optionals are structurally equivalent but not identical.
@@ -457,6 +479,9 @@ const _inferredCycleIsCycle: Cycle = null as unknown as z.infer<typeof cycleSche
 const _cycleIsInferredCycle: z.infer<typeof cycleSchema> = null as unknown as Cycle;
 const _inferredFunderIsFunder: Funder = null as unknown as z.infer<typeof funderSchema>;
 const _funderIsInferredFunder: z.infer<typeof funderSchema> = null as unknown as Funder;
+const _inferredCodeIsCode: EnrollmentCode = null as unknown as z.infer<typeof enrollmentCodeSchema>;
+const _codeIsInferredCode: z.infer<typeof enrollmentCodeSchema> =
+  null as unknown as EnrollmentCode;
 void _inferredProgramIsProgram;
 void _programIsInferredProgram;
 void _inferredConstraintIsConstraint;
@@ -469,3 +494,5 @@ void _inferredCycleIsCycle;
 void _cycleIsInferredCycle;
 void _inferredFunderIsFunder;
 void _funderIsInferredFunder;
+void _inferredCodeIsCode;
+void _codeIsInferredCode;

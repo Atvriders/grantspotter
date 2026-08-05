@@ -602,3 +602,39 @@ export interface ReviewItem {
   confidence: number;
   rejectKey?: string;
 }
+
+// ---------- accounts ----------
+
+/**
+ * A shared secret an administrator issues so that a person can create their own account.
+ *
+ * THE THIRD WAY IN, and the first one that does not require an administrator to be present. Until
+ * this existed there were two: the first-run token, which makes exactly one administrator and is
+ * then spent forever, and `POST /api/admin/users`, where an admin generates a password and hands
+ * it over. Neither scales to "the club has an intake of thirty students in September".
+ *
+ * NOTHING HERE IS THE SECRET. The plaintext code is shown once, at creation, and only its SHA-256
+ * digest is stored — the same contract `/api/admin/users` has for `generatedPassword` and the
+ * `ics_tokens` table has for a calendar feed URL — so this record can be listed on an admin screen,
+ * serialised into a JSON response, and read out of a database backup without handing anyone a way
+ * to make an account. The three fields that BOUND a code (`maxUses`, `expiresAt`, `revokedAt`) are
+ * public for the opposite reason: an officer who cannot see how many uses are left cannot tell a
+ * student whether to expect the code to work.
+ */
+export interface EnrollmentCode {
+  id: string;
+  /** What it is for, e.g. "W1MX autumn 2026 intake". Written by the admin, shown only to admins. */
+  label: string;
+  /** null = no limit; expiry or revocation still bound it. */
+  maxUses: number | null;
+  uses: number;
+  /** ISO. */
+  expiresAt: string | null;
+  /** ISO. */
+  revokedAt: string | null;
+  /** ISO. */
+  createdAt: string;
+  createdByUserId: string;
+  /** ISO. */
+  lastUsedAt: string | null;
+}

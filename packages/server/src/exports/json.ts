@@ -67,6 +67,18 @@ export const BACKUP_TABLES = [
   'template_instances',
   'audit_log',
   'ics_tokens',
+  // Migration 091. AFTER `users`, because `created_by_user_id` references it and this list is
+  // walked forwards to insert.
+  //
+  // BACKED UP, and the decision is the same one `ics_tokens` above forced: the table holds a
+  // SHA-256 digest and no code, so a backup file is not a bundle of working credentials, and the
+  // alternative is worse in a way nobody would find out about until it had already happened. An
+  // operator who restores mid-intake would otherwise silently invalidate every code their club has
+  // handed out — thirty students, each answered "that enrollment code is not valid", with nothing
+  // on either side of the screen to explain why, and the officer unable to reproduce it because
+  // the code they are holding is the one that stopped existing. Revocation and expiry are what
+  // ends a code; a restore is not.
+  'enrollment_codes',
 ] as const;
 
 /**
