@@ -347,7 +347,15 @@ export function listSourceHealth(db: Database.Database): SourceHealthRow[] {
 export function appendAuditLog(
   db: Database.Database,
   entry: {
-    userId: string;
+    /**
+     * `null` for an event no signed-in person caused. `audit_log.actor_user_id` has always been
+     * nullable (001-init.sql) and has no foreign key; this type simply said `string` because until
+     * self-service enrolment every audited act was performed by an account. The refused-enrolment
+     * row written by `api/auth.ts` is the first that is not: its actor is an anonymous caller
+     * holding a code, and naming any user there — the code's issuer, say — would be a false
+     * statement in the one record that exists to be believed.
+     */
+    userId: string | null;
     action: string;
     entityType: string;
     entityId: string;

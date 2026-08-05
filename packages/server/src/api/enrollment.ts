@@ -7,20 +7,12 @@ import type { RouterDeps } from './deps.js';
 import { AppError } from './errors.js';
 
 /**
- * A deliberately conservative email check, and A SECOND COPY OF ONE THIS REPOSITORY ALREADY HAS.
- *
- * `api/adminUsersRouter.ts` declares the identical pattern, with the identical reasoning: the real
- * gate is the unique index on `users.email_normalized`, and this only rejects input that could
- * never be an address, so a typo produces 422 rather than a permanently unusable account. That one
- * is not exported and that file is outside this change's territory, so the choice was to duplicate
- * eleven characters or to let a self-service sign-up form accept `not-an-address` and hand somebody
- * an account they can never receive a password reset for.
- *
- * IT IS EXPORTED so that the enrolment route in `api/auth.ts` uses this one rather than minting a
- * third. Two copies is a reported defect, not a design: the pair should become one exported
- * constant the moment `adminUsersRouter.ts` can be edited.
+ * The email check this file used to declare a second copy of is now `EMAIL_SHAPE`, exported from
+ * `api/adminUsersRouter.ts` — the older of the two routes that create user rows — and imported by
+ * `api/auth.ts`. Nothing in this file ever used it: it was declared here only because the route
+ * that needed it could not reach the original. Deleted on 2026-08-05 with the copy's own comment
+ * as the instruction.
  */
-export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * The upper bounds on a code, and neither is arbitrary.

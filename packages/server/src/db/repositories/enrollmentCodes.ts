@@ -133,6 +133,22 @@ export interface EnrollmentCodeRepo {
   revoke(id: string, nowISO: string): EnrollmentCode | undefined;
   /** Is there at least one code a person could redeem right now? Never says which, or how many. */
   anyOpen(nowISO: string): boolean;
+  /**
+   * Which code this is, if it is one that could be redeemed at `nowISO` — and `undefined` for
+   * every code that could not, whether because it was never issued, was revoked, expired or ran
+   * out. READ-ONLY: it spends nothing, writes nothing, and its answer is stale the instant it
+   * returns, which is why `redeem` re-tests every one of these conditions in the write itself and
+   * remains the only thing that decides who gets a place.
+   *
+   * IT EXISTS FOR ONE CALLER AND ONE REASON. `api/auth.ts` has to decide whether to tell somebody
+   * that their address already has an account, and that answer is rationed per code — so it needs
+   * to know WHICH code is asking before it does the expensive part of the work, in the same
+   * synchronous stretch as the rationing, or the rationing has an `await` in the middle of it and
+   * is the very defect it was added to close. Nothing here may be used to answer a caller about
+   * the code itself: `redeem`'s refusal messages are the only thing that describes a code to the
+   * person holding it.
+   */
+  redeemableNow(plaintext: string, nowISO: string): { id: string; label: string } | undefined;
   redeem<T>(
     input: { plaintext: string; nowISO: string },
     createAccount: CreateAccount<T>,
@@ -284,6 +300,16 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
 
     anyOpen(nowISO) {
       return anyOpenStmt.get(nowISO) !== undefined;
+    },
+
+    redeemableNow(plaintext, nowISO) {
+      if (normalizeEnrollmentCode(plaintext) === '') return undefined;
+      const row = byHashStmt.get(hashEnrollmentCode(plaintext)) as CodeRow | undefined;
+      if (row === undefined) return undefined;
+      // The same four conditions `redeem` reads, from the same function, so the two can never
+      // disagree about what "could be redeemed" means.
+      if (refusalFor(row, nowISO) !== undefined) return undefined;
+      return { id: row.id, label: row.label };
     },
 
     /**

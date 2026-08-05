@@ -70,6 +70,71 @@ describe('rate limiter', () => {
     limiter.reset('a');
     expect(limiter.check('a', 0).allowed).toBe(true);
   });
+
+  /**
+   * THE HALF THAT `check` + `recordFailure` CANNOT EXPRESS.
+   *
+   * Both auth routes do tens of milliseconds of argon2id between deciding that an attempt is
+   * allowed and finding out whether it failed, and for as long as a limiter counts only the ones
+   * that have already finished, everything that arrives during that window is uncounted. These four
+   * cases are the whole contract `begin` adds: a started attempt occupies the budget, releasing
+   * gives the slot back without recording anything, charging converts it into a failure, and an
+   * attempt settles exactly once however many times the handler says so.
+   */
+  describe('attempts in flight', () => {
+    it('counts a started attempt against the budget before its outcome is known', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 2 });
+      const first = limiter.begin('k', 0);
+      const second = limiter.begin('k', 0);
+      expect(first.started).toBe(true);
+      expect(second.started).toBe(true);
+
+      const third = limiter.begin('k', 0);
+      expect(third.started).toBe(false);
+      // Nothing is recorded yet, so the wait is one hash rather than one window: the honest answer
+      // is "a moment", and 1000 ms of window would have said "a second" here anyway — a longer
+      // window makes the difference visible, which is what the next assertion is for.
+      const longer = createRateLimiter({ windowMs: 900_000, maxFailures: 1 });
+      longer.begin('k', 0);
+      const blocked = longer.begin('k', 0);
+      expect(blocked.started === false && blocked.retryAfterSec).toBe(1);
+    });
+
+    it('gives the slot back on release, and records nothing', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 1 });
+      const attempt = limiter.begin('k', 0);
+      expect(limiter.begin('k', 0).started).toBe(false);
+      if (attempt.started) attempt.release();
+      expect(limiter.check('k', 0).allowed).toBe(true);
+    });
+
+    it('turns the slot into a recorded failure on charge, and the window then applies', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 1 });
+      const attempt = limiter.begin('k', 0);
+      if (attempt.started) attempt.charge(0);
+      const blocked = limiter.check('k', 10);
+      expect(blocked.allowed).toBe(false);
+      // Charged at 0, so the budget frees at the window's end and not a hash later.
+      expect(blocked.retryAfterSec).toBe(1);
+      expect(limiter.check('k', 1500).allowed).toBe(true);
+    });
+
+    it('settles once: a release after a charge does not un-record the failure', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 1 });
+      const attempt = limiter.begin('k', 0);
+      if (attempt.started) {
+        attempt.charge(0);
+        // Exactly what the enrolment handler's `finally` does on every path, including the charged
+        // one. If this gave the slot back, the budget would be one larger than it says forever.
+        attempt.release();
+        attempt.charge(0);
+      }
+      expect(limiter.check('k', 10).allowed).toBe(false);
+      // …and one failure, not two: the second charge was a no-op, so the window still clears at
+      // 1000 ms from the first.
+      expect(limiter.check('k', 1500).allowed).toBe(true);
+    });
+  });
 });
 
 describe('first-run bootstrap', () => {

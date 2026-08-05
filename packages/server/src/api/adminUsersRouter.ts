@@ -37,11 +37,18 @@ const roleSchema = z.enum(['admin', 'member']);
  * or zod's `.email()`. The real gate is the unique index on
  * `users.email_normalized`; this only rejects input that could never be an
  * address, so a typo produces 422 rather than a permanently unusable account.
+ *
+ * EXPORTED, AND THIS FILE IS WHERE IT LIVES because this is the older of the two routes that put a
+ * row in `users`. Self-service enrolment (`api/auth.ts`) is the second, it must apply the same rule
+ * as the first, and for a fortnight it did so by declaring an identical regular expression in
+ * `api/enrollment.ts` — whose own comment said, in full, that two copies of one rule was a reported
+ * defect waiting for this file to be editable. One rule, one declaration: the two routes cannot now
+ * drift into accepting different addresses.
  */
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const createBodySchema = z.object({
-  email: z.string().trim().min(3).max(254).regex(EMAIL, 'Not an email address.'),
+  email: z.string().trim().min(3).max(254).regex(EMAIL_SHAPE, 'Not an email address.'),
   role: roleSchema,
   displayName: z.string().trim().max(120).optional(),
 });
