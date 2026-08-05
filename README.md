@@ -25,8 +25,17 @@ committed fixtures by `npm run profile-corpus`:
 | From one page — `arrl.org/scholarship-descriptions` | **111 of the 150**, roughly **three-quarters** (74%) |
 | Ham-relevant sources exposing a real API | **exactly one** — ARDC's WordPress REST endpoint |
 | Curated sources polled | ~25 (27 registered modules, one of them signal-only) |
-| Funders | 26 |
 | Records stored but never published | **553** |
+
+<!--
+  There was a "Funders | 26" row here, under a heading that says these figures are what
+  `npm run profile-corpus` measures against the committed fixtures. That command prints no funder
+  count at all — `npm run profile-corpus | grep -ci funder` returns 0 — and 26 is the SEED corpus's
+  funder count, which is a different corpus. A true number filed under a false attribution is the
+  same defect as a false number, because a reader who checks finds nothing where they were told to
+  look. The seed figure is stated below, where the seed is what is being described.
+-->
+
 
 **What a fresh install actually contains is smaller than that, and the difference is not a bug.**
 The table above measures the committed fixtures — every page ever captured, past-award tables
@@ -743,7 +752,7 @@ image:
 | **Tokens written (output)** | **17,787,418** |
 | Tokens processed, total | 4,913,894,439 |
 | — of which prompt-cache reads | 4,766,093,732 (97.0%) |
-| Tests at completion | 4,270 unit and integration, 35 end-to-end |
+| Tests at that commit | 4,270 unit and integration, 35 end-to-end |
 
 **Read those two token figures carefully, because one of them flatters.** The 17.8 million output
 tokens are what was actually composed: code, tests, comments, commit messages, reports. The 4.91
@@ -756,9 +765,19 @@ Both figures come from the session transcripts under `~/.claude/projects/`, summ
 `message.usage` over the main loop and all 290 subagent files, counting each record's top-level
 fields once and ignoring the `iterations` array that repeats them.
 
-Unlike the corpus counts this README deliberately does **not** quote, these numbers describe a
-finished event rather than live data, so they cannot drift: nothing that happens to the corpus, the
-clock or the deployment can make them untrue.
+**Every figure above is a snapshot taken at commit `7c3fd9d`, and the work did not stop there.**
+
+That sentence replaces one claiming these numbers "describe a finished event rather than live data,
+so they cannot drift: nothing that happens to the corpus, the clock or the deployment can make them
+untrue." It was written in the same commit that removed other numbers from this file *for* drifting,
+and it was wrong within the hour. An adversarial review measured it: commits 230 → 247, wall clock
+38 h 42 m → over 47 h, tests 4,270 → 4,668 and moving. The reasoning failed because the event was
+not finished — it was merely finished *so far*, which is not the same thing and is the easier thing
+to believe about your own work.
+
+So: the table is true of `7c3fd9d` and is not maintained. Recompute it yourself if you want the
+current numbers — the method is above, and it is why the method is stated rather than only the
+result.
 
 What that effort mostly went on is worth knowing, because it is not the feature list. The recurring
 work was finding places where a green test or a confident sentence was pointing at something untrue:
