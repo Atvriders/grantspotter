@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiSend, ApiError } from '../api/client.js';
+import { EnrollmentCodes } from '../components/EnrollmentCodes.js';
 import { useSession } from '../store/session.js';
 import { useApi } from '../store/useApi.js';
 import { formatDate } from '../lib/trust.js';
@@ -66,7 +67,16 @@ function readFileText(file: File): Promise<string> {
   });
 }
 
-export function Admin(): JSX.Element {
+export interface AdminProps {
+  /**
+   * The instant the enrollment-code table judges expiry against, passed straight through. Optional
+   * and normally absent — `Browse` and `Calendar` take the same prop for the same reason, which is
+   * that a test cannot assert "expired" about a row whose state depends on when the suite runs.
+   */
+  now?: string;
+}
+
+export function Admin({ now }: AdminProps): JSX.Element {
   const { user } = useSession();
   const users = useApi<UsersResponse>('/api/admin/users');
 
@@ -521,6 +531,8 @@ export function Admin(): JSX.Element {
           </div>
         )}
       </section>
+
+      <EnrollmentCodes now={now} />
 
       <section className="admin-section card" aria-label="Calendar feed">
         <h2>Calendar feed link</h2>

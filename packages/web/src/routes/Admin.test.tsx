@@ -509,3 +509,66 @@ describe('Admin console — backup, restore and ICS tokens', () => {
     expect(await screen.findByText(/only your own/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * ENROLLMENT CODES ON THE ADMIN SCREEN.
+ *
+ * The section itself is exercised in `components/EnrollmentCodes.test.tsx`. What is asserted here
+ * is that the console mounts it, and that the instant it judges expiry against comes from this
+ * screen rather than from the clock the suite happens to run on.
+ */
+const ENROLLMENT_CODE = {
+  id: 'code-1',
+  label: 'W1MX autumn 2026 intake',
+  maxUses: 5,
+  uses: 2,
+  expiresAt: '2026-08-03T00:00:00.000Z',
+  revokedAt: null,
+  createdAt: '2026-08-01T00:00:00.000Z',
+  createdByUserId: 'u-admin',
+  lastUsedAt: null,
+};
+
+function stubWithCodes(codes: unknown[] = [ENROLLMENT_CODE]) {
+  return stubFetch((url, init) =>
+    url === '/api/admin/enrollment-codes' && init?.method === 'GET'
+      ? { ok: true, status: 200, json: async () => ({ codes }) }
+      : undefined,
+  );
+}
+
+function renderAdminAt(now: string) {
+  return render(
+    <MemoryRouter>
+      <SessionContext.Provider
+        value={makeSessionValue({
+          user: { id: 'u-admin', email: 'admin@example.com', role: 'admin' },
+        })}
+      >
+        <Admin now={now} />
+      </SessionContext.Provider>
+    </MemoryRouter>,
+  );
+}
+
+describe('Admin console — enrollment codes', () => {
+  it('offers code management beside the accounts it is an alternative to', async () => {
+    stubWithCodes();
+    renderAdminAt('2026-08-02T12:00:00.000Z');
+
+    const table = await screen.findByRole('table', { name: /enrollment codes/i });
+    expect(within(table).getByText('W1MX autumn 2026 intake')).toBeInTheDocument();
+    // Both ways of creating an account are on one screen, and neither replaced the other.
+    expect(screen.getByRole('table', { name: /user accounts/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/new account email/i)).toBeInTheDocument();
+  });
+
+  it('judges an expiry against the instant it is given, not the clock the suite runs on', async () => {
+    stubWithCodes();
+    renderAdminAt('2026-08-04T12:00:00.000Z');
+
+    const table = await screen.findByRole('table', { name: /enrollment codes/i });
+    const row = within(table).getByText('W1MX autumn 2026 intake').closest('tr') as HTMLElement;
+    expect(within(row).getByText('Expired')).toBeInTheDocument();
+  });
+});

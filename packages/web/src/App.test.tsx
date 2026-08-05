@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { App } from './App.js';
 
 /**
@@ -165,6 +166,7 @@ function payloadFor(rawUrl: string): unknown {
     return { rows: [], summary: { total: 0, healthy: 0, unhealthy: 0 }, canConfigure: false };
   }
   if (path === '/api/admin/users') return { rows: [] };
+  if (path === '/api/admin/enrollment-codes') return { codes: [] };
 
   // Recorded rather than thrown. A rejected fetch is indistinguishable from an outage to
   // `useApi`, so the route would render its perfectly correct "could not be reached" state and
@@ -291,6 +293,57 @@ describe('App', () => {
     // rather than opening a second landmark, which is what keeps `routes/Login.tsx` the
     // only route named in `AppShell.test.tsx`'s MAY_RENDER_MAIN.
     expect(container.querySelectorAll('main')).toHaveLength(1);
+  });
+
+  /**
+   * THE THIRD WAY IN, COMPOSED.
+   *
+   * `routes/FirstRun.test.tsx` proves the gate swaps its forms and that enrolment calls back;
+   * only this file can prove what the callback is worth. Enrolment sets the session cookie, so
+   * the refresh it triggers must land the new member on the ordinary first screen INSIDE the
+   * shell — the same place a sign-in lands them — rather than on a signed-out page that no
+   * longer applies.
+   */
+  it('lands an enrolled member inside the shell, where a sign-in would have landed them', async () => {
+    let enrolled = false;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const path = new URL(url, 'http://localhost').pathname;
+        if (path === '/api/auth/bootstrap-status') return jsonResponse(200, { required: false });
+        if (path === '/api/auth/enrollment-open') return jsonResponse(200, { open: true });
+        if (path === '/api/auth/enroll') {
+          enrolled = true;
+          return jsonResponse(201, {
+            user: { id: 'u-9', email: 'member@example.com', role: 'member' },
+          });
+        }
+        if (path === '/api/me') {
+          return enrolled
+            ? me('member')
+            : jsonResponse(401, {
+                error: { code: 'unauthorized', message: 'Sign in to continue.' },
+                requestId: 'req-test-1',
+              });
+        }
+        return jsonResponse(200, payloadFor(url));
+      }),
+    );
+    renderAt('/');
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: /i have an enrollment code/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/enrollment code/i), 'JOIN-W1MX-2026');
+    await userEvent.type(screen.getByLabelText(/^email$/i), 'member@example.com');
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
+    await userEvent.click(screen.getByRole('button', { name: /create my account/i }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Browse opportunities' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /primary/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /create your account/i })).not.toBeInTheDocument();
   });
 
   it('renders Browse inside the shell for a signed-in member', async () => {

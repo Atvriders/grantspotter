@@ -56,6 +56,7 @@ function messageFor(err: unknown): string {
 export function Login({
   onAuthenticated,
   notice,
+  onEnrol,
 }: {
   onAuthenticated: () => void;
   /**
@@ -66,6 +67,13 @@ export function Login({
    * whoever chose to show this form, not to the form.
    */
   notice?: ReactNode;
+  /**
+   * Switch to the enrolment form. Optional, and absent is meaningful: WHETHER a deployment
+   * accepts enrollment codes is a question only the server can answer (`GET
+   * /api/auth/enrollment-open`), the gate is what asks it, and a sign-in form that offers a
+   * way in that does not exist is worse than one that offers none.
+   */
+  onEnrol?: () => void;
 }): JSX.Element {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -132,6 +140,20 @@ export function Login({
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
+
+      {/*
+        OUTSIDE the form, so pressing Enter in the password field still signs in rather than
+        landing on a second submit. It is a button and not a link because there is no second
+        address to go to: the signed-out gate swaps which form it is showing.
+      */}
+      {onEnrol !== undefined && (
+        <p style={{ marginTop: 'var(--s-5)' }}>
+          Been given an enrollment code?{' '}
+          <button type="button" className="btn" onClick={onEnrol}>
+            I have an enrollment code
+          </button>
+        </p>
+      )}
     </SignedOutPage>
   );
 }

@@ -62,13 +62,34 @@ describe('SignedOut gate', () => {
   });
 
   it('shows the ordinary sign-in form, with nothing added, when bootstrap is not required', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => okResponse({ required: false })));
+    /*
+      A router rather than one body for every call, because the gate now asks TWO questions: is
+      this a fresh install, and does this deployment accept enrollment codes. Answering the second
+      with `{ required: false }` would leave the enrolment offer standing (that is what an
+      unreadable answer means, deliberately — see `SignedOut`), and this test is about the screen
+      with NOTHING added, so it is answered with the definite no it describes.
+    */
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url === '/api/auth/enrollment-open'
+          ? okResponse({ open: false })
+          : okResponse({ required: false }),
+      ),
+    );
     renderGate();
 
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /set up grantspotter/i })).not.toBeInTheDocument();
     // `required: false` is a definite answer, so there is nothing to warn about.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // And `open: false` is a definite answer too: a deployment that issues no codes offers no
+    // way in that ends in "that code was not accepted".
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: /i have an enrollment code/i }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('draws neither form while the check is still in flight', () => {
@@ -565,5 +586,141 @@ describe('looking a callsign up during first-run setup', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /continue to grantspotter/i }));
     expect(onAuthenticated).toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE THIRD SIGNED-OUT SCREEN.
+ *
+ * The gate used to answer one question — is this a fresh install? — and choose between two forms.
+ * It now asks a second, `GET /api/auth/enrollment-open`, and the two questions are not equal:
+ * the first decides which form is TRUE, so nothing is drawn until it is answered, while the
+ * second only decides whether a secondary way in is offered beside a form that is already usable.
+ */
+
+/** One router, so each of the gate's questions is answered as its own endpoint. */
+function stubGate(options: { required?: boolean; open?: unknown; openFails?: boolean } = {}) {
+  const fetchMock = vi.fn((url: string) => {
+    if (url === '/api/auth/bootstrap-status') {
+      return Promise.resolve(okResponse({ required: options.required ?? false }));
+    }
+    if (url === '/api/auth/enrollment-open') {
+      if (options.openFails === true) return Promise.reject(new TypeError('Failed to fetch'));
+      return Promise.resolve(
+        options.open === undefined ? okResponse({}) : okResponse({ open: options.open }),
+      );
+    }
+    if (url === '/api/auth/enroll') {
+      return Promise.resolve(
+        okResponse({ user: { id: 'u-9', email: 'student@example.edu', role: 'member' } }, 201),
+      );
+    }
+    return Promise.resolve(okResponse({}));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function enrolLink(): Promise<HTMLElement> {
+  return screen.findByRole('button', { name: /i have an enrollment code/i });
+}
+
+describe('the enrolment branch of the signed-out gate', () => {
+  it('offers enrolment beside the sign-in form when the deployment accepts codes', async () => {
+    stubGate({ open: true });
+    renderGate();
+
+    expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
+    expect(await enrolLink()).toBeInTheDocument();
+  });
+
+  it('asks nothing about enrolment on a deployment with no accounts at all', async () => {
+    // Only an admin can issue a code, and a fresh install has no admin. Asking would be a
+    // request whose answer could not change what this screen does.
+    const fetchMock = stubGate({ required: true, open: true });
+    renderGate();
+
+    await screen.findByRole('heading', { name: /set up grantspotter/i });
+    expect(fetchMock.mock.calls.map((call) => call[0])).not.toContain('/api/auth/enrollment-open');
+  });
+
+  /**
+   * The two mistakes are not symmetric, which is why "we could not tell" is not folded into "no".
+   * Hiding the way in from somebody holding a valid code strands them with no way past the
+   * screen; showing it to somebody without one costs a line they ignore.
+   */
+  it('leaves the offer standing when the question could not be answered', async () => {
+    stubGate({ openFails: true });
+    renderGate();
+    expect(await enrolLink()).toBeInTheDocument();
+  });
+
+  it('leaves the offer standing when the server answers without saying', async () => {
+    stubGate({ open: 'yes' });
+    renderGate();
+    expect(await enrolLink()).toBeInTheDocument();
+  });
+
+  it('takes the offer away only on a definite no', async () => {
+    stubGate({ open: false });
+    renderGate();
+
+    await screen.findByRole('button', { name: /^sign in$/i });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: /i have an enrollment code/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('swaps the sign-in form for the enrolment form, and back again', async () => {
+    stubGate({ open: true });
+    renderGate();
+
+    await userEvent.click(await enrolLink());
+    expect(await screen.findByRole('heading', { name: /create your account/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^sign in$/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /already have an account/i }));
+    expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
+  });
+
+  it('lands a new member exactly where a sign-in lands them', async () => {
+    stubGate({ open: true });
+    const onAuthenticated = vi.fn();
+    renderGate(onAuthenticated);
+
+    await userEvent.click(await enrolLink());
+    await userEvent.type(screen.getByLabelText(/enrollment code/i), 'JOIN-W1MX-2026');
+    await userEvent.type(screen.getByLabelText(/^email$/i), 'student@example.edu');
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
+    await userEvent.click(screen.getByRole('button', { name: /create my account/i }));
+
+    await waitFor(() => {
+      expect(onAuthenticated).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The gate has something to say when it could not check for a fresh install, and a trip to the
+   * enrolment form and back must not lose it: the deployment is still in the state that made the
+   * sentence true.
+   */
+  it('keeps the gate’s own notice through a visit to the enrolment form', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/auth/bootstrap-status') {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return Promise.resolve(okResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderGate();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not check/i);
+    await userEvent.click(await enrolLink());
+    await screen.findByRole('heading', { name: /create your account/i });
+    await userEvent.click(screen.getByRole('button', { name: /already have an account/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not check/i);
   });
 });

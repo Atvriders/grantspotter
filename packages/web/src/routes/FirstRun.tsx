@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiSend, ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
+import { getEnrollmentOpen } from '../api/enrollment.js';
 import { CallsignLookup } from '../components/CallsignLookup.js';
 import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
+import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
+import { Enroll } from './Enroll.js';
 import { Login, SignedOutPage } from './Login.js';
 
 /**
@@ -19,21 +22,11 @@ import { Login, SignedOutPage } from './Login.js';
  * dead code, called from nowhere. This file is their caller.
  */
 
-/**
- * Mirrors `MIN_PASSWORD_LENGTH` in `packages/server/src/auth/password.ts`, which is the
- * source of truth and the only thing that can actually refuse a password. Restated rather
- * than imported because the import direction is one-way — web may import from core, never
- * from server — the same reason `client.ts` restates the API error codes. The server-side
- * test `api/auth.test.ts` asserts the refusal message names this number, so a change there
- * that this file missed shows up as a screen promising one rule and a server enforcing
- * another, rather than silently.
+/*
+ * The password floor and its check now live in `lib/passwordPolicy.ts`. They were declared here
+ * when this was the only screen where somebody chose their own password; enrolment is the second,
+ * and two copies of the number would be two policies with one of them free to go stale.
  */
-const MIN_PASSWORD_LENGTH = 12;
-
-/** Trimmed, because `assertPasswordPolicy` trims before it counts. Twelve spaces is not a password. */
-function meetsFloor(password: string): boolean {
-  return password.trim().length >= MIN_PASSWORD_LENGTH;
-}
 
 /**
  * What to tell the operator, per failure.
@@ -154,7 +147,7 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
       setError('The two passwords do not match.');
       return;
     }
-    if (!meetsFloor(password)) {
+    if (!meetsPasswordFloor(password)) {
       setError(`Password must be at least ${String(MIN_PASSWORD_LENGTH)} characters.`);
       return;
     }
@@ -362,33 +355,69 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
 /**
  * Which screen an unauthenticated visitor gets.
  *
- * Four states, because a self-hoster meets all four and only one of them is the ordinary
- * one. The check is a request, so it can be in flight, and it can fail — a server that is
- * still opening its database answers nothing at all, and guessing in that moment is how a
- * screen ends up lying: offering setup on a deployment that has accounts, or a sign-in form
- * on one that has none.
+ * Five states now, because a self-hoster meets all of them and only one is the ordinary one. The
+ * check is a request, so it can be in flight, and it can fail — a server that is still opening its
+ * database answers nothing at all, and guessing in that moment is how a screen ends up lying:
+ * offering setup on a deployment that has accounts, or a sign-in form on one that has none.
  */
 type Gate =
   | { kind: 'checking' }
   | { kind: 'first-run' }
   /** `notice` is null for the ordinary case: accounts exist, nothing to explain. */
-  | { kind: 'sign-in'; notice: string | null };
+  | { kind: 'sign-in'; notice: string | null }
+  /**
+   * Enrolment. It carries the sign-in notice it interrupted so that going back does not
+   * silently drop something the gate had to say — "we could not check", most of all.
+   */
+  | { kind: 'enrol'; notice: string | null };
+
+/**
+ * Whether to offer the enrolment form at all.
+ *
+ * `unasked` while the first-run question is still outstanding, because there is no sign-in form to
+ * put the answer on yet; `unknown` when the server answered something other than a boolean, or
+ * did not answer.
+ */
+type EnrolmentOffer = 'unasked' | 'open' | 'closed' | 'unknown';
 
 export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }): JSX.Element {
   const [gate, setGate] = useState<Gate>({ kind: 'checking' });
+  const [offer, setOffer] = useState<EnrolmentOffer>('unasked');
   const [attempt, setAttempt] = useState(0);
 
   const recheck = useCallback(() => {
     setGate({ kind: 'checking' });
+    setOffer('unasked');
     setAttempt((n) => n + 1);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     getBootstrapStatus()
-      .then((status) => {
+      .then(async (status) => {
         if (cancelled) return;
-        setGate(status.required ? { kind: 'first-run' } : { kind: 'sign-in', notice: null });
+        if (status.required) {
+          // A deployment with no accounts has no admin, and only an admin can issue an
+          // enrollment code — so there is nothing to ask about and nobody to ask for.
+          setGate({ kind: 'first-run' });
+          return;
+        }
+        setGate({ kind: 'sign-in', notice: null });
+        /*
+          The second question, asked only once the first one has settled on a sign-in form.
+          The form is already on screen while this is outstanding: an unanswered question about
+          a secondary way in must not hold up the ordinary one.
+
+          A null answer — the server said something that was not a boolean, or said nothing —
+          leaves the offer STANDING rather than hiding it. The two mistakes are not symmetric.
+          Hiding the link from somebody holding a valid code is a dead end with no way past it,
+          and the enrol form is perfectly honest on a deployment that issues no codes: it says
+          the code was not accepted, which is true. Showing it to somebody without a code costs
+          a line they ignore.
+        */
+        const open = await getEnrollmentOpen().catch(() => null);
+        if (cancelled) return;
+        setOffer(open === null ? 'unknown' : open ? 'open' : 'closed');
       })
       .catch(() => {
         if (cancelled) return;
@@ -408,6 +437,10 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
             'Could not check whether this deployment has been set up yet — the server may ' +
             'still be starting. If this is a fresh install, retry to reach the setup screen.',
         });
+        // Nothing was learned about enrolment either, and the same asymmetry applies: an
+        // unanswered question is not a "no", and hiding the way in from a code holder here
+        // would strand them on the one screen that already admits it is unsure.
+        setOffer('unknown');
       });
     return () => {
       cancelled = true;
@@ -437,6 +470,16 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
   }
 
   const { notice } = gate;
+
+  if (gate.kind === 'enrol') {
+    return (
+      <Enroll
+        onAuthenticated={onAuthenticated}
+        onCancel={() => setGate({ kind: 'sign-in', notice })}
+      />
+    );
+  }
+
   return (
     <Login
       onAuthenticated={onAuthenticated}
@@ -449,6 +492,12 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
             </button>
           </p>
         )
+      }
+      // 'closed' is the server's definite no, and the only answer that takes the offer away.
+      onEnrol={
+        offer === 'open' || offer === 'unknown'
+          ? () => setGate({ kind: 'enrol', notice })
+          : undefined
       }
     />
   );
