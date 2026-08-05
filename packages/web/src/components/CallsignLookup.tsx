@@ -109,6 +109,13 @@ interface Attribution {
   marked: string[];
   /** Profile fields written with no mark at all: the applicant's own, however they got there. */
   unmarked: string[];
+  /**
+   * Keys written that this profile has no field for at all — a licence class on an organisation, an
+   * organisation name on a person. The panel gates both, so this is normally empty; it is carried
+   * anyway because the alternative is what happened before, which is that such a key was quietly
+   * counted as one of the applicant's own and named to them as a field of the profile they are on.
+   */
+  unfillable: string[];
 }
 
 type Phase =
@@ -163,13 +170,35 @@ export function frameFor(status: CallsignLookupResult['status'], callsign: strin
           'This says nothing about your callsign — it is not missing, it is unreadable for a few ' +
           'minutes. Try again shortly, or fill the form in yourself.',
       };
+    /*
+     * THE ONE STATUS THAT IS NOT ONE THING, SO ITS FRAME MAY NOT CLAIM TO BE.
+     *
+     * This said "The lookup did not get an answer" over "GrantSpotter could not reach callook.info",
+     * and `unavailable` is the status the server uses for at least seven different endings. Two of
+     * them make both of those sentences false. callook.info ANSWERING — with a redirect, with a
+     * status, with bytes that are not a licence record — is an answer, and reporting it as
+     * unreachable tells the reader the source is down when it is up. A cooldown hold is stronger
+     * still: the source was never asked, because it had asked us not to, and "we could not reach
+     * them" describes a failure where what happened was this product doing as it was told. The same
+     * is true of the lane refusal beside it and of a host the operator has blocklisted.
+     *
+     * So the frame states only what is true of every one of them — no record, nothing filled in,
+     * nothing claimed about the callsign — and the server's own sentence, rendered directly beneath
+     * this by `NonFoundPanel`, is what says which ending it was. That division already exists in
+     * this module ("This copy is what the SCREEN promises; that message is what the SERVER
+     * observed"); this case was the one that had quietly taken over the server's half and got it
+     * wrong. The body cannot lean on that sentence either, because `found`-with-no-record renders
+     * this frame with no message at all, so it has to stand up on its own.
+     */
     case 'unavailable':
       return {
-        heading: 'The lookup did not get an answer',
+        heading: `Nothing was filled in for ${callsign}`,
         body:
-          'GrantSpotter could not reach callook.info, so it is not telling you anything about ' +
-          'this callsign either way. Nothing on this form was changed. Try again, or fill it in ' +
-          'yourself.',
+          'The lookup ended without a licence record, so GrantSpotter is not telling you anything ' +
+          'about this callsign either way. That does not necessarily mean the source was ' +
+          'unreachable — it may have answered with something GrantSpotter could not use, or ' +
+          'GrantSpotter may have decided not to ask it at all. Nothing on this form was changed. ' +
+          'Try again, or fill it in yourself: nothing in GrantSpotter depends on this lookup.',
       };
   }
 }
@@ -191,7 +220,7 @@ export function frameFor(status: CallsignLookupResult['status'], callsign: strin
  * stores — a guarantee that the two agree rather than a second opinion.
  */
 export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): Frame {
-  const { marked, unmarked } = attribution;
+  const { marked, unmarked, unfillable } = attribution;
   const one = marked.length === 1;
   const mine =
     unmarked.length === 0
@@ -199,6 +228,19 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       : ` ${profileFieldLabelList(unmarked, kind)} ${unmarked.length === 1 ? 'carries' : 'carry'} no mark: ` +
         `the record either did not state ${unmarked.length === 1 ? 'it' : 'them'}, or you changed ` +
         `what it said, so ${unmarked.length === 1 ? 'it is yours' : 'they are yours'}.`;
+  /**
+   * Named WITHOUT the profile kind, which is the one place in this file that is deliberate: these
+   * keys are fields of the OTHER profile, and asking `profileFieldLabel` for this one's name for
+   * them would be asking a question with no answer. The registry falls through to the kind that
+   * does have the field, and the sentence says that is what happened rather than pretending the
+   * field is on the screen the applicant is reading.
+   */
+  const elsewhere =
+    unfillable.length === 0
+      ? ''
+      : ` ${profileFieldLabelList(unfillable)} ${unfillable.length === 1 ? 'is not a field' : 'are not fields'} ` +
+        `this profile has, so nothing was recorded for ${unfillable.length === 1 ? 'it' : 'them'} ` +
+        `and no source is named for ${unfillable.length === 1 ? 'it' : 'them'}.`;
 
   if (marked.length > 0) {
     return {
@@ -206,7 +248,7 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       body:
         `${profileFieldLabelList(marked, kind)} came from the record rather than from you, and ` +
         `${one ? 'the field stays' : 'those fields stay'} marked that way until you edit ` +
-        `${one ? 'it' : 'them'}.${mine} Nothing has been saved yet.`,
+        `${one ? 'it' : 'them'}.${mine}${elsewhere} Nothing has been saved yet.`,
     };
   }
 
@@ -219,7 +261,7 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
           `${unmarked.length === 1 ? 'your own value' : 'your own values'}. `) +
       'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
       'is now in it, and that is true of none of these — either the record had nothing to state, ' +
-      'or you changed what it said. Nothing has been saved yet.',
+      `or you changed what it said.${elsewhere} Nothing has been saved yet.`,
   };
 }
 
@@ -393,7 +435,11 @@ export function CallsignLookup({
             setPhase({
               kind: 'accepted',
               record,
-              attribution: { marked: Object.keys(fill.fieldSources), unmarked: fill.unmarked },
+              attribution: {
+                marked: Object.keys(fill.fieldSources),
+                unmarked: fill.unmarked,
+                unfillable: fill.unfillable,
+              },
             });
           }}
           onDiscard={() => setPhase({ kind: 'idle' })}
@@ -543,7 +589,15 @@ function FoundPanel({
       callsign: callsignFromRecord(record.callsign, typed),
       type: record.type,
       ...(trimmedState === '' ? {} : { state: fromSource(record.state, trimmedState) }),
-      ...(licenseClass !== '' && isLicenseClass(licenseClass)
+      // `offersLicenseClass` GATES THE VALUE AS WELL AS THE SELECT, which it did not until
+      // 2026-08-04 — its neighbour below has had the matching guard since it was written. Without
+      // it, an ORGANIZATION lookup of a PERSON record emitted the class: the select is not
+      // rendered, so nobody saw it, but `licenseClass` is seeded from `record.operClass` and left
+      // there. An organisation profile has no such field, so the value went into a draft that could
+      // never save it and the confirmation told a club that "License class" was one of the values
+      // it had just been given — a field of somebody else's profile, named in a sentence about
+      // theirs. A value the user was never shown may not leave the panel the user is looking at.
+      ...(offersLicenseClass && licenseClass !== '' && isLicenseClass(licenseClass)
         ? { licenseClass: fromSource(record.operClass, licenseClass) }
         : {}),
       // A club record's NAME is the organisation name; a person's name is not, and the day this

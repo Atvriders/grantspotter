@@ -6,6 +6,7 @@ import {
   fromSource,
   type AcceptedCallsign,
 } from './callsignFill.js';
+import { callsignFillableFields } from './profileFields.js';
 
 /**
  * THE ONE PLACE A "READ FROM callook.info" MARKER IS BUILT.
@@ -136,6 +137,70 @@ describe('building the values and the markers a host writes', () => {
     expect(fill.values.licenseClass).toBe('GENERAL');
     expect(fill.fieldSources).not.toHaveProperty('licenseClass');
   });
+
+  /**
+   * TWO REASONS FOR "NO MARKER" ARE NOW TWO LISTS.
+   *
+   * `unmarked` was documented as "the applicant's own values" and computed as "everything that did
+   * not get a marker", which is not the same set: a value the SOURCE stated, on a field this
+   * profile kind cannot hold, landed there too. The host reads that list to the applicant — "the
+   * record either did not state it, or you changed what it said, so it is yours" — and every clause
+   * of that sentence is false about a licence class callook.info stated in full for a club profile
+   * that has no such field. A list that means two things gets described as one of them.
+   */
+  it('separates a value this profile cannot hold from a value the applicant stated', () => {
+    const fill = fillFromLookup(
+      accepted({
+        type: 'CLUB',
+        state: { value: 'OH', origin: 'user' },
+        licenseClass: { value: 'GENERAL', origin: 'source' },
+        orgName: { value: 'A UNIVERSITY RADIO CLUB', origin: 'source' },
+      }),
+      'organization',
+    );
+
+    // Theirs: a field this profile has, holding what they typed.
+    expect(fill.unmarked).toEqual(['callsign', 'state']);
+    // callook.info stated this one in full. What is missing is anywhere on an organisation profile
+    // to record that — a different fact, and no longer reported as the same one.
+    expect(fill.unfillable).toEqual(['licenseClass']);
+    expect(fill.fieldSources).toEqual({
+      orgName: { ...PROVENANCE, value: 'A UNIVERSITY RADIO CLUB' },
+    });
+  });
+
+  /**
+   * The structural half, asserted over both kinds: `unmarked` and the marked set are what a host
+   * NAMES TO THE APPLICANT as fields of the profile they are looking at, so every key in either has
+   * to be one. This is what stops the same defect arriving through a different door — a fifth
+   * accepted field, or a panel that forgets a gate.
+   */
+  it.each(['student', 'organization'] as const)(
+    'never puts a field the %s profile does not have among that profile’s own values',
+    (kind) => {
+      const fill = fillFromLookup(
+        accepted({
+          type: 'CLUB',
+          state: { value: 'MI', origin: 'source' },
+          licenseClass: { value: 'GENERAL', origin: 'source' },
+          orgName: { value: 'A UNIVERSITY RADIO CLUB', origin: 'source' },
+        }),
+        kind,
+      );
+      const fillable = callsignFillableFields(kind);
+
+      for (const key of [...fill.unmarked, ...Object.keys(fill.fieldSources)]) {
+        expect(fillable, `${kind} names ${key} as its own`).toContain(key);
+      }
+      // Vacuity guard: this accepted value carries a field of the OTHER kind either way round.
+      expect(fill.unfillable.length, kind).toBeGreaterThan(0);
+      for (const key of fill.unfillable) expect(fillable, `${kind}: ${key}`).not.toContain(key);
+      // Every accepted key is accounted for exactly once, whichever list it lands in.
+      expect(
+        [...Object.keys(fill.fieldSources), ...fill.unmarked, ...fill.unfillable].sort(),
+      ).toEqual(Object.keys(fill.values).sort());
+    },
+  );
 
   /**
    * The end of the chain, asserted rather than assumed: what this builds has to survive core's own

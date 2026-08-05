@@ -157,6 +157,81 @@ describe('createHostCooldown', () => {
   });
 });
 
+/**
+ * THE LANE, WHICH IS THE HALF THE HOLD COULD NOT DO.
+ *
+ * A hold is written when an answer arrives and read before a request leaves, so it can only ever
+ * stop presses that come AFTER an answer. Presses that overlap the request all read an empty ledger
+ * and all send. Measured 2026-08-04 through the real client against a loopback stand-in answering
+ * `429 Retry-After: 120`, eight presses fired with `Promise.all`: eight requests, with the cooldown
+ * present and passing every test above it.
+ */
+describe('createHostCooldown: one request at a time, per host', () => {
+  const HOST = 'https://callook.info';
+
+  it('answers that nobody is asking a host it has never heard of', () => {
+    expect(createHostCooldown().isAsking(HOST)).toBe(false);
+  });
+
+  it('gives the lane to the first press and refuses the second', () => {
+    const cooldown = createHostCooldown();
+
+    const release = cooldown.beginAsking(HOST);
+    expect(release).toBeTypeOf('function');
+    expect(cooldown.isAsking(HOST)).toBe(true);
+    expect(cooldown.beginAsking(HOST)).toBeUndefined();
+  });
+
+  it('reopens the lane when the press holding it is done', () => {
+    const cooldown = createHostCooldown();
+
+    const release = cooldown.beginAsking(HOST);
+    release?.();
+
+    expect(cooldown.isAsking(HOST)).toBe(false);
+    expect(cooldown.beginAsking(HOST)).toBeTypeOf('function');
+  });
+
+  /**
+   * A release called twice must not free a lane the SECOND press is holding. `callook.ts` releases
+   * in a `finally`, and a `finally` is exactly the shape that runs once too often when somebody
+   * later adds an early return with a release of its own beside it.
+   */
+  it('ignores a stale release rather than freeing a lane somebody else now holds', () => {
+    const cooldown = createHostCooldown();
+
+    const first = cooldown.beginAsking(HOST);
+    first?.();
+    const second = cooldown.beginAsking(HOST);
+    first?.();
+
+    expect(second).toBeTypeOf('function');
+    expect(cooldown.isAsking(HOST)).toBe(true);
+    expect(cooldown.beginAsking(HOST)).toBeUndefined();
+  });
+
+  /** Two deployments, two loopback stand-ins, two sources. Asking one is not asking the other. */
+  it('keeps hosts apart', () => {
+    const cooldown = createHostCooldown();
+    cooldown.beginAsking('http://127.0.0.1:8081');
+
+    expect(cooldown.isAsking('http://127.0.0.1:8082')).toBe(false);
+    expect(cooldown.beginAsking('http://127.0.0.1:8082')).toBeTypeOf('function');
+  });
+
+  /** Two different facts about one host, and neither is read off the other. */
+  it('does not read a hold as a request in flight, or the reverse', () => {
+    const cooldown = createHostCooldown();
+
+    cooldown.hold(HOST, 120_000, NOW);
+    expect(cooldown.isAsking(HOST)).toBe(false);
+
+    const other = createHostCooldown();
+    other.beginAsking(HOST);
+    expect(other.remainingMs(HOST, NOW)).toBe(0);
+  });
+});
+
 describe('cooldownKey', () => {
   /**
    * The trailing-dot host has walked past four hand-written host checks in this repository. A hold

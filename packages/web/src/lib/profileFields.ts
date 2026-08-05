@@ -125,11 +125,30 @@ for (const field of PROFILE_FIELDS) {
   BY_KIND_KEY.set(`${field.kind}:${field.key}`, field);
 }
 
+/**
+ * The registry entry for a key, preferring the caller's kind and falling through to the other.
+ *
+ * THE FALL-THROUGH WAS RE-EXAMINED ON 2026-08-04 AND KEPT, and the reasoning is worth writing down
+ * because it looked like the bug. A confirmation on an ORGANIZATION profile printed the label
+ * "License class" — a student field — and it got that label from here: `organization:licenseClass`
+ * misses, and this hands back the student entry rather than refusing.
+ *
+ * Refusing would not have fixed it. `profileFieldLabel` falls back to the RAW KEY, so the same
+ * sentence would have read "licenseClass carries no mark" — a worse thing to show an applicant, and
+ * still a field of somebody else's profile named in a sentence about theirs. It would also have
+ * broken the one caller that needs this exactly as it is: `profileFieldHref` sends the user to the
+ * tab that HAS the field, which is the entire reason a wrong-kind lookup is answered at all rather
+ * than producing a dead anchor (asserted in `profileFields.test.ts`).
+ *
+ * What this function answers is "where does this field live, and what is it called there". That is
+ * a question about the registry, and it has the same answer whoever asks. "Is this field one of
+ * MINE" is a different question with a different answer per kind, and the caller that needed it was
+ * asking this one instead — see `callsignFillableFields`, which is the predicate that decides it,
+ * and `fillFromLookup`, which now partitions on that predicate before it names anything to anybody.
+ */
 function lookup(key: string, kind?: ProfileFieldKind): ProfileFieldMeta | undefined {
   if (kind !== undefined) {
     const exact = BY_KIND_KEY.get(`${kind}:${key}`);
-    // Falling through to the other kind is deliberate: a student-profile page asking for an
-    // org-only field must still land on an input that exists, not on a dead anchor.
     if (exact !== undefined) return exact;
   }
   return BY_KEY.get(key);

@@ -395,20 +395,41 @@ describe('lookupCallsign: failures', () => {
 
     expect(result.status).toBe('unavailable');
     expect(result.message).toContain('503');
+    // The sentence that is TRUE of a 5xx, and which the redirect case below no longer borrows.
+    expect(result.message).toMatch(/source having trouble/);
     // Still no retry on a status, and now no second request on the NEXT press either when the
     // source asked for one — see the cooldown block below.
     expect(calls).toHaveLength(1);
   });
 
-  it('does not follow a redirect', async () => {
+  /**
+   * A REDIRECT IS OUR DECISION, AND THE MESSAGE SAYS SO SINCE 2026-08-04.
+   *
+   * It used to fall into the status message above and read "callook.info answered with HTTP 301
+   * instead of a licence record… That is the source having trouble". A 301 is not trouble: it is a
+   * good answer meaning "it is over here", and the only reason the lookup ends there is that this
+   * client sets `redirect: 'manual'` ON PURPOSE, because following one would request a host that
+   * has never been past `assertNotBlocked` and would make "one press, one request, one host" false.
+   * Blaming a source for a rule of ours is the same class of mistake as attributing an unread body
+   * to it, which this module already refuses to make.
+   */
+  it.each([301, 302, 307, 308])('does not follow a %d, and does not blame the source for it', async (status) => {
     const { deps, calls } = serve('', {
-      status: 301,
+      status,
       headers: { location: 'https://example.invalid/W1AW/json' },
     });
     const result = await lookupCallsign('W1AW', deps);
 
     expect(result.status).toBe('unavailable');
     expect(calls).toHaveLength(1);
+    expect(result.message).toContain(`redirect (HTTP ${String(status)})`);
+    expect(result.message).toMatch(/rule of GrantSpotter/);
+    expect(result.message).toMatch(/nothing is wrong with your callsign/i);
+    // The two claims that were false. It answered; it is not having trouble.
+    expect(result.message).not.toMatch(/source having trouble/);
+    expect(result.message).not.toMatch(/instead of a licence record/);
+    // And the destination is not quoted at a person who has no use for it.
+    expect(result.message).not.toContain('example.invalid');
   });
 
   it.each([
@@ -521,6 +542,18 @@ describe('lookupCallsign: when the source asks us to wait', () => {
     return messages;
   }
 
+  /**
+   * The same presses OVERLAPPING rather than queued, which is what two people are — and what one
+   * person with two tabs is. `press` above waits for each answer before making the next press, so
+   * every one of its presses reads a ledger the previous answer has already written to. That is the
+   * friendly case, and it was the only one measured until 2026-08-04.
+   */
+  function pressTogether(harness: WaitHarness, times: number): Promise<string[]> {
+    return Promise.all(
+      Array.from({ length: times }, async () => (await lookupCallsign('W1AW', harness.deps)).message ?? ''),
+    );
+  }
+
   it('turns eight presses at a 429 into ONE request', async () => {
     const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
     const messages = await press(harness, 8);
@@ -532,6 +565,120 @@ describe('lookupCallsign: when the source asks us to wait', () => {
     for (const message of messages) expect(message).toMatch(/asked GrantSpotter to wait/);
     expect(messages[0]).toMatch(/nothing was filled in this time/);
     expect(messages[7]).toMatch(/no request was sent this time/);
+  });
+
+  /**
+   * THE SAME NUMBER, FOR PRESSES THAT DO NOT WAIT THEIR TURN.
+   *
+   * Measured 2026-08-04 with the cooldown in place and every test above it green: eight presses
+   * fired with `Promise.all` at a stand-in answering `429 Retry-After: 120` produced EIGHT
+   * requests. `refuseBeforeRequest` reads the hold before the `await` on the transport and
+   * `cooldown.hold` writes it after the response arrives, so every press that starts inside that
+   * window passes a check that the press already in flight is about to make false.
+   */
+  it('turns eight SIMULTANEOUS presses at a 429 into ONE request', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
+    const messages = await pressTogether(harness, 8);
+
+    // The whole of the defect, in one number. It was eight.
+    expect(harness.calls).toHaveLength(1);
+    expect(messages).toHaveLength(8);
+    // One press asked and was told to wait; the other seven were told, truthfully, that this
+    // product was already waiting on an answer — never that the source had refused them anything.
+    expect(messages.filter((m) => /asked GrantSpotter to wait/.test(m))).toHaveLength(1);
+    expect(messages.filter((m) => /already waiting on an answer/.test(m))).toHaveLength(7);
+    for (const message of messages) expect(message).toMatch(/nothing is wrong with your callsign/i);
+  });
+
+  /**
+   * The lane on its own, with no hold to hide behind: a 200 arms nothing, so ONE request here is
+   * the lane and nothing else. Seven presses at a healthy source are still refused, and that cost
+   * is the point rather than an accident — one button, one source, one question at a time.
+   */
+  it('sends one request for eight simultaneous presses even when the source is perfectly happy', async () => {
+    const harness = stubbornSource({ status: 200 });
+    const messages = await pressTogether(harness, 8);
+
+    expect(harness.calls).toHaveLength(1);
+    expect(messages.filter((m) => /already waiting on an answer/.test(m))).toHaveLength(7);
+    // A press refused for our own reason says so, and does not describe the source at all.
+    const refused = messages.find((m) => /already waiting on an answer/.test(m)) ?? '';
+    expect(refused).toMatch(/rule of GrantSpotter/);
+    expect(refused).not.toMatch(/could not|failed|error|trouble|slow/i);
+  });
+
+  /** The lane is a moment, not a switch-off: the press after the answer asks again. */
+  it('gives the lane back the moment the answer lands', async () => {
+    const harness = stubbornSource({ status: 200 });
+
+    await pressTogether(harness, 4);
+    expect(harness.calls).toHaveLength(1);
+
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(2);
+  });
+
+  /**
+   * A lane never given back is this fix becoming a worse outage than the defect it closes: every
+   * later press for the life of the process would be answered "already asking".
+   */
+  it('gives the lane back when the request fails, and not only when it succeeds', async () => {
+    let attempts = 0;
+    const deps: CallsignLookupDeps = {
+      now: () => Date.parse(AT),
+      cooldown: createHostCooldown(),
+      transport: () => {
+        attempts += 1;
+        return Promise.reject(new Error('ECONNRESET'));
+      },
+    };
+
+    const first = await lookupCallsign('W1AW', deps);
+    const second = await lookupCallsign('W1AW', deps);
+
+    expect(attempts).toBe(2);
+    for (const result of [first, second]) {
+      expect(result.message).toMatch(/could not reach callook\.info/);
+      expect(result.message).not.toMatch(/already waiting on an answer/);
+    }
+  });
+
+  /** One lane per HOST. Two stand-ins are two sources, and neither waits for the other. */
+  it('holds a lane per host rather than one for the whole process', async () => {
+    const cooldown = createHostCooldown();
+    const first = stubbornSource({ status: 200, baseUrl: 'http://127.0.0.1:8081', cooldown });
+    const second = stubbornSource({ status: 200, baseUrl: 'http://127.0.0.1:8082', cooldown });
+
+    await Promise.all([pressTogether(first, 4), pressTogether(second, 4)]);
+
+    expect(first.calls).toHaveLength(1);
+    expect(second.calls).toHaveLength(1);
+  });
+
+  /**
+   * THE HALF THE PERSON FEELS, for the lane rather than for the hold. `api/callsign.ts` charges a
+   * press only when it would cost callook.info a request, and losing a race costs it nothing.
+   */
+  it('reports through wouldReachTheSource that a press during a request in flight costs nothing', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const deps: CallsignLookupDeps = {
+      now: () => Date.parse(AT),
+      cooldown: createHostCooldown(),
+      transport: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    };
+
+    expect(wouldReachTheSource('W1AW', deps)).toBe(true);
+    const inFlight = lookupCallsign('W1AW', deps);
+    // Claimed synchronously, before the first `await` — which is what lets the route ask this
+    // question and act on the answer with nothing able to run in between.
+    expect(wouldReachTheSource('W1AW', deps)).toBe(false);
+
+    answer(new Response(loadFixture('callook', '00-callook-info-w1aw-json.json'), { status: 200 }));
+    expect((await inFlight).status).toBe('found');
+    expect(wouldReachTheSource('W1AW', deps)).toBe(true);
   });
 
   it('says how long, in words a person can act on, and blames nobody', async () => {

@@ -132,14 +132,34 @@ export interface CallsignFill {
    */
   fieldSources: Record<string, ProfileFieldSource>;
   /**
-   * The keys written that got no marker: the applicant's own values, whichever of them the record
-   * happens to agree with.
+   * THE APPLICANT'S OWN VALUES, and nothing else — a field of THIS profile that a lookup may fill,
+   * written with no marker because the person rather than the record stated what is in it.
    *
    * A host uses this to say so — see `acceptedFrame` in `components/CallsignLookup.tsx`, which
    * builds the confirmation sentence from this list and from `fieldSources` so that "filled in
    * from the FCC record" cannot be printed over a set of values the record stated none of.
+   *
+   * IT MEANT TWO THINGS UNTIL 2026-08-04, AND THAT IS WHY {@link unfillable} NOW EXISTS. Every key
+   * that did not get a marker landed here, for either of two unrelated reasons: the value was the
+   * applicant's, or the value was the SOURCE'S and this profile kind has nowhere to record that. The
+   * doc comment said the first; the code did both. So an organisation confirmation could read
+   * "License class carries no mark: the record either did not state it, or you changed what it
+   * said, so it is yours" — about a value callook.info had stated in full, on a field an
+   * organisation profile does not have, that the applicant had never seen. A list that means two
+   * things gets described as one of them, and the description is wrong half the time.
    */
   unmarked: string[];
+  /**
+   * The keys written that this profile kind has no fillable field for — whoever stated them.
+   *
+   * `callsignFillableFields` is the test, so this is exactly the complement of the marked and
+   * unmarked sets: a licence class handed to an organisation profile, an organisation name handed
+   * to a student's. Both panels gate those at source, and this is what makes the gate checkable
+   * rather than merely present — a host that says anything about these keys has to say something
+   * true about a field the applicant is not looking at, which is the sentence
+   * `acceptedFrame` writes for them.
+   */
+  unfillable: string[];
 }
 
 /**
@@ -173,19 +193,29 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
   const values: Record<string, string> = {};
   const fieldSources: Record<string, ProfileFieldSource> = {};
   const unmarked: string[] = [];
+  const unfillable: string[] = [];
 
   for (const [key, entry] of acceptedValues(accepted)) {
     values[key] = entry.value;
-    if (entry.origin === 'source' && fillable.has(key)) {
-      fieldSources[key] = {
-        source: accepted.provenance.source,
-        fetchedAt: accepted.provenance.fetchedAt,
-        value: entry.value,
-      };
+    // WHOSE PROFILE THE FIELD IS ON IS ASKED FIRST, AND ORIGIN ONLY AFTER. The two questions are
+    // independent — "did the record state this" and "can this profile hold it" — and asking them in
+    // one condition is what collapsed them into a single answer. Splitting them here is what makes
+    // `unmarked` a set of THIS profile's fields by construction, so a host naming them to the
+    // applicant cannot name a field of the other kind.
+    if (!fillable.has(key)) {
+      unfillable.push(key);
       continue;
     }
-    unmarked.push(key);
+    if (entry.origin !== 'source') {
+      unmarked.push(key);
+      continue;
+    }
+    fieldSources[key] = {
+      source: accepted.provenance.source,
+      fetchedAt: accepted.provenance.fetchedAt,
+      value: entry.value,
+    };
   }
 
-  return { values, fieldSources, unmarked };
+  return { values, fieldSources, unmarked, unfillable };
 }

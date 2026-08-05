@@ -82,13 +82,19 @@ export interface CallsignRouterDeps {
   /** Passed through to the client. Production leaves it at the client's own default. */
   timeoutMs?: number;
   /**
-   * Where "callook.info asked us to wait" is remembered. Optional, and defaulted PER ROUTER
-   * rather than to a module-level singleton.
+   * Where "callook.info asked us to wait" and "callook.info is answering us right now" are
+   * remembered. Optional, and defaulted PER ROUTER rather than to a module-level singleton.
    *
    * Per router is one per process where it counts — the composition root builds this router once —
    * and one per app where it also counts, because a module-level ledger would carry one test's
    * `429 Retry-After: 120` into the next test's lookup and make a suite that answers questions
    * about bursts depend on the order it happens to run in.
+   *
+   * ONE PER PROCESS IS ALSO WHAT MAKES THE HOST'S LANE MEAN ANYTHING. Two routers would be two
+   * lanes, and two lanes at one host is two simultaneous requests — which is the number this
+   * bounds. Nothing here can enforce that on a caller who builds two routers; what it can do is
+   * make the shared object the obvious thing to pass, which is why the composition root passes
+   * nothing and takes this default.
    */
   cooldown?: HostCooldown;
 }
@@ -116,13 +122,14 @@ export interface CallsignRouterDeps {
  * nothing is wrong with their licence. Telling them that eight times and then locking the form is
  * the opposite of what it says.
  *
- * THERE ARE NOW THREE WAYS A PRESS COSTS THE SOURCE NOTHING, and the third arrived with the
- * cooldown on 2026-08-04: a callsign that is not a US prefix, a base URL on the hard blocklist, and
- * a host whose `Retry-After` has not run out. The third matters most to the person: being told "the
- * source asked us to wait two minutes" and ALSO being charged for hearing it would mean a member
- * who pressed the button eight times during a cooldown came out the other side of it with no
- * allowance left and still nothing filled in. A source asking to be left alone is not the user
- * spending their share.
+ * THERE ARE NOW FOUR WAYS A PRESS COSTS THE SOURCE NOTHING, and the last two arrived on
+ * 2026-08-04: a callsign that is not a US prefix, a base URL on the hard blocklist, a host whose
+ * `Retry-After` has not run out, and a host this process is already mid-question with. The third
+ * matters most to the person: being told "the source asked us to wait two minutes" and ALSO being
+ * charged for hearing it would mean a member who pressed the button eight times during a cooldown
+ * came out the other side of it with no allowance left and still nothing filled in. A source asking
+ * to be left alone is not the user spending their share, and neither is another person's press
+ * getting to the one lane first.
  *
  * `wouldReachTheSource` is the predicate, and it is EXPORTED BY THE CLIENT rather than restated
  * here: it is the same function `lookupCallsign` reads for its own short-circuits, over the same
@@ -256,6 +263,14 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
         // and would have opened a worse hole — `check` and `recordFailure` are synchronous
         // neighbours today, so nothing can interleave between them; with an `await` in the middle,
         // eight concurrent presses would all pass a check that none of them had yet paid for.
+        //
+        // THE SAME PROPERTY IS WHY THE PREDICATE ABOVE CAN BE TRUSTED ABOUT THE HOST'S LANE. There
+        // is no `await` anywhere between `wouldReachTheSource` and `lookupCallsign`'s claim of it —
+        // an async function's body runs synchronously up to its first `await`, and the claim is
+        // before that one — so a press cannot be charged here and then find the lane taken. If an
+        // `await` is ever introduced between these two lines the failure is one press charged for a
+        // request it did not make, never an unbounded request, because the claim is the authority
+        // and it refuses.
         limiter.recordFailure(rateKey);
       }
 

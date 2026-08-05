@@ -164,14 +164,47 @@ describe('the five statuses, each answered in its own words', () => {
     expect(panel.textContent ?? '').not.toMatch(/not found|no record/i);
   });
 
-  it('says nothing either way when the source could not be reached', async () => {
-    stubResult({ status: 'unavailable', message: 'We could not reach callook.info.' });
+  /**
+   * `unavailable` IS NOT ONE THING, SO ITS FRAME MAY NOT CLAIM TO BE.
+   *
+   * It read "The lookup did not get an answer" over "GrantSpotter could not reach callook.info",
+   * and the server uses this status for at least seven different endings. Two kinds of them make
+   * both sentences false: callook.info ANSWERING — with a redirect, a status, or bytes that are not
+   * a licence record — is not a failure to reach it; and a cooldown hold is GrantSpotter
+   * deliberately not asking a source that asked to be left alone, which is the opposite of being
+   * unable to. Telling a user the source was unreachable when it replied, or when we chose not to
+   * ask, is this product describing its own behaviour wrongly.
+   *
+   * The frame now says only what is true of all of them, and the server's own sentence — the half
+   * that knows which ending it was — is rendered beneath it unedited, as it always was.
+   */
+  it.each([
+    ['a genuine network failure', 'We could not reach callook.info, so nothing was filled in.'],
+    [
+      'a hold the source asked for',
+      'callook.info asked GrantSpotter to wait before asking it again, so no request was sent this time.',
+    ],
+    [
+      'a redirect GrantSpotter chose not to follow',
+      'callook.info answered with a redirect (HTTP 301) rather than a licence record, and GrantSpotter did not follow it.',
+    ],
+    [
+      'a body that arrived unreadable',
+      'callook.info answered with something we could not read as a licence record.',
+    ],
+  ])('frames %s without claiming the source was unreachable', async (_what, message) => {
+    stubResult({ status: 'unavailable', message });
     renderLookup();
     await lookUp();
 
-    const panel = await screen.findByRole('region', { name: /did not get an answer/i });
+    const panel = await screen.findByRole('region', { name: /nothing was filled in for W8UM/i });
     expect(panel).toHaveTextContent(/not telling you anything about this callsign either way/i);
     expect(panel).toHaveTextContent(/nothing on this form was changed/i);
+    // The claim that was false for three of these four, and is now made about none of them.
+    expect(panel.textContent ?? '').not.toMatch(/GrantSpotter could not reach callook\.info, so it/);
+    expect(panel).toHaveTextContent(/does not necessarily mean the source was unreachable/i);
+    // The server's sentence is what says which ending it was, and it is not paraphrased.
+    expect(panel).toHaveTextContent(message);
   });
 
   /** A refusal from our own API is not an answer about the callsign either. */
@@ -441,6 +474,36 @@ describe('a club station, which is what a collegiate club holds', () => {
     expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('licenseClass');
   });
 
+  /**
+   * A PERSONAL LICENCE LOOKED UP ON THE ORGANIZATION TAB, WHICH IS WHAT HAPPENS THE FIRST TIME
+   * SOMEBODY TYPES THEIR OWN CALLSIGN THERE.
+   *
+   * `offersLicenseClass` has always hidden the select for this case — a licence class is a person's
+   * and only the student profile has a field for one — but until 2026-08-04 it gated the SELECT
+   * only. `licenseClass` is seeded from `record.operClass`, so GENERAL left the panel anyway,
+   * labelled as callook.info's (it was), for a profile with nowhere to put it and from an input
+   * nobody had seen. The confirmation then named "License class" to a club — a student field, on a
+   * sentence about an organisation's profile — because a missing `organization:licenseClass` falls
+   * through the registry to the student entry. Its neighbour `orgName` has carried exactly this
+   * guard since it was written; this is the same guard on the same line's twin.
+   */
+  it('does not hand an organisation profile a licence class it has no field for', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    const { onAccept } = renderLookup({ target: 'organization' });
+    await lookUp();
+
+    // Never on screen, and now it does not leave either.
+    expect(screen.queryByLabelText(/license class to fill in/i)).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('licenseClass');
+
+    const panel = await screen.findByRole('region', { name: /filled in from the FCC record/i });
+    expect(panel).toHaveTextContent(/State came from the record/i);
+    expect(panel).toHaveTextContent(/Callsign carries no mark/i);
+    // The label that used to reach an organisation's confirmation.
+    expect(panel.textContent ?? '').not.toMatch(/licen[cs]e class/i);
+  });
+
   it('does not offer an organisation name on the student profile, which has no such field', async () => {
     stubResult({ status: 'found', record: CLUB });
     const { onAccept } = renderLookup({ target: 'student' });
@@ -590,8 +653,8 @@ describe('a record found under a different callsign', () => {
     const { container } = renderLookup({ callsign: 'W8UM' });
     await lookUp();
 
-    await screen.findByRole('region', { name: /did not get an answer/i });
-    expect(liveRegion(container)).toHaveTextContent(/did not get an answer/i);
+    await screen.findByRole('region', { name: /nothing was filled in for W8UM/i });
+    expect(liveRegion(container)).toHaveTextContent(/nothing was filled in for W8UM/i);
     expect(liveRegion(container).textContent ?? '').not.toMatch(/FCC record for/i);
   });
 });

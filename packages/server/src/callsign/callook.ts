@@ -111,7 +111,8 @@ export interface CallsignLookupDeps {
    */
   transport: (url: string, init: RequestInit) => Promise<Response>;
   /**
-   * Where "this host asked us to wait" is remembered between two presses of the button.
+   * Where "this host asked us to wait" is remembered between two presses of the button, and where
+   * "we are asking this host something right now" is remembered between two presses that OVERLAP.
    *
    * REQUIRED, for the same reason `transport` is. A stateless lookup cannot honour `Retry-After`
    * at all — backing off is a fact about the previous request — and until 2026-08-04 this module
@@ -120,8 +121,9 @@ export interface CallsignLookupDeps {
    * one line out, and the caller here is a route that a person presses a button on.
    *
    * ONE LEDGER PER PROCESS in production (`api/callsign.ts` builds it once per router, and the
-   * composition root builds one router). The hold belongs to the HOST, not to the user: callook.info
-   * asking to be left alone is not an instruction that one member has used up their share of.
+   * composition root builds one router). Both facts belong to the HOST, not to the user: callook.info
+   * asking to be left alone is not an instruction that one member has used up their share of, and
+   * "one request at a time" counted per member would let a hundred members make a hundred.
    */
   cooldown: HostCooldown;
   /** Defaults to {@link DEFAULT_TIMEOUT_MS}. */
@@ -249,7 +251,8 @@ function targetUrl(wanted: string, deps: ReachDeps): string {
 type Refusal =
   | { kind: 'not_us' }
   | { kind: 'blocked'; error: unknown }
-  | { kind: 'cooling'; remainingMs: number };
+  | { kind: 'cooling'; remainingMs: number }
+  | { kind: 'busy' };
 
 function refuseBeforeRequest(callsign: string, deps: ReachDeps): Refusal | undefined {
   const wanted = normalise(callsign);
@@ -268,18 +271,26 @@ function refuseBeforeRequest(callsign: string, deps: ReachDeps): Refusal | undef
   }
 
   const now = deps.now ?? Date.now;
-  const remainingMs = deps.cooldown.remainingMs(cooldownKey(url), now());
-  return remainingMs > 0 ? { kind: 'cooling', remainingMs } : undefined;
+  const key = cooldownKey(url);
+  const remainingMs = deps.cooldown.remainingMs(key, now());
+  if (remainingMs > 0) return { kind: 'cooling', remainingMs };
+
+  // A hold that has not been WRITTEN yet still binds this press, and that is the whole of the
+  // in-flight lane: the request already running may be about to learn that this host wants to be
+  // left alone for two minutes, and a press that starts before it finds out is a press the hold
+  // can never reach. Read here rather than claimed — this function is also the rate limiter's
+  // predicate and must be able to answer without becoming the request it is asked about.
+  return deps.cooldown.isAsking(key) ? { kind: 'busy' } : undefined;
 }
 
 /**
  * Does pressing the button, right now, cost callook.info a request?
  *
  * EXPORTED FOR THE THING THAT RATIONS REQUESTS. `api/callsign.ts` limits how often one person may
- * make this software ask somebody else's server a question, and the three ways a press can cost
- * that server nothing — a callsign that is not a US prefix, a base URL on the hard blocklist, and
- * a host that has asked us to wait and whose wait has not run out — are all decided here, in this
- * process, before any socket exists.
+ * make this software ask somebody else's server a question, and the four ways a press can cost
+ * that server nothing — a callsign that is not a US prefix, a base URL on the hard blocklist, a
+ * host that has asked us to wait and whose wait has not run out, and a host we are already
+ * mid-question with — are all decided here, in this process, before any socket exists.
  *
  * Until 2026-08-04 the route had no way to ask, so it charged every press. Nine `DL1ABC` presses
  * from one member spent the whole allowance without a single request leaving the process, and the
@@ -471,6 +482,25 @@ function askedToWaitMessage(remainingMs: number, sent: boolean): string {
 }
 
 /**
+ * "Somebody else's press got there first" — which is a fact about GrantSpotter, and says so.
+ *
+ * The other three pre-request refusals are about the callsign, the operator's configuration, or
+ * something the source said. This one is about a rule of ours, so it does not borrow any of their
+ * explanations: callook.info has not refused anything, is not slow, and may not even be involved by
+ * the time this is read. Naming ourselves is also the only honest way to explain why a second
+ * person pressing the same button at the same moment is told to wait a beat.
+ */
+function alreadyAskingMessage(): string {
+  return (
+    'GrantSpotter was already waiting on an answer from callook.info when you pressed, and it asks ' +
+    'that source one question at a time, so this press did not send a second request. Nothing is ' +
+    'wrong with your callsign and nothing is wrong with the source — this is a rule of ' +
+    'GrantSpotter’s own. Press the button again in a moment, or type your licence details in and ' +
+    'carry on; nothing here depends on this lookup.'
+  );
+}
+
+/**
  * The message for a host this installation is configured to refuse to contact.
  *
  * Shared by {@link lookupCallsign} and nothing else, but written beside its siblings so that the
@@ -521,6 +551,14 @@ function blockedMessage(error: unknown): string {
  * existed: eight presses at a stand-in answering `429 Retry-After: 120` produced eight requests in
  * 69 ms. The site whose robots.txt says `Disallow: /` was the one being hammered, which is the
  * exact inverse of the argument this feature is defended with.
+ *
+ * AND ONE PRESS AT A TIME PER HOST, which is what makes the paragraph above true of presses that
+ * OVERLAP rather than only of presses that queue politely behind each other. The hold is written
+ * when an answer arrives; every press that starts before then reads a ledger that is still empty.
+ * Measured 2026-08-04 against the same stand-in, eight presses fired concurrently rather than in
+ * sequence: EIGHT requests, with the cooldown in place and working exactly as its own tests
+ * describe. `beginAsking` closes that window — see `cooldown.ts` for why the lane belongs to the
+ * host rather than to the session, and why the losing press is refused rather than parked.
  */
 export async function lookupCallsign(
   callsign: string,
@@ -552,8 +590,48 @@ export async function lookupCallsign(
   if (refusal?.kind === 'cooling') {
     return unavailable(askedToWaitMessage(refusal.remainingMs, false));
   }
+  if (refusal?.kind === 'busy') return unavailable(alreadyAskingMessage());
 
   const url = targetUrl(wanted, deps);
+
+  /*
+   * THE LANE, CLAIMED BEFORE ANY SOCKET EXISTS AND RELEASED WHATEVER HAPPENS TO IT.
+   *
+   * `refuseBeforeRequest` above only READ this, because `wouldReachTheSource` shares it and a
+   * predicate that claimed a lane would be a predicate with a side effect. The claim is here, and
+   * it is a check-and-take in one call: nothing may run between deciding the lane is free and
+   * taking it.
+   *
+   * A SECOND REFUSAL RATHER THAN AN ASSERTION, and today it is unreachable — node runs one thing at
+   * a time and there is no `await` between the read above and this line, nor between the route's
+   * own `wouldReachTheSource` and this function's first statement. That is a property of code
+   * somebody could edit, so the belt is here as well as the braces, and it fails towards refusing a
+   * press rather than towards sending a request nobody bounded.
+   */
+  const release = deps.cooldown.beginAsking(cooldownKey(url));
+  if (release === undefined) return unavailable(alreadyAskingMessage());
+  try {
+    return await askTheSource(wanted, url, deps);
+  } finally {
+    // `finally` and not a line at each exit: this function has ten of them and a thrown error is an
+    // eleventh. A lane never released is a lookup that answers "already asking" for the life of the
+    // process, which would be this fix turning into a worse outage than the defect it closes.
+    release();
+  }
+}
+
+/**
+ * The request itself, and everything that can be said about what came back.
+ *
+ * Split from {@link lookupCallsign} on 2026-08-04 so the host's lane is held across the WHOLE of
+ * it — the request, the body read and the parse — by one `try`/`finally` around one call, rather
+ * than by a release repeated at each of the ten places this can return.
+ */
+async function askTheSource(
+  wanted: string,
+  url: string,
+  deps: CallsignLookupDeps,
+): Promise<CallsignLookupResult> {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const now = deps.now ?? Date.now;
 
@@ -602,6 +680,32 @@ export async function lookupCallsign(
       deps.cooldown.hold(cooldownKey(url), held, now());
       return unavailable(askedToWaitMessage(held, true));
     }
+  }
+
+  /*
+   * A REDIRECT IS OUR DECISION, NOT THE SOURCE'S FAULT, AND THE SENTENCE NOW SAYS WHOSE IT IS.
+   *
+   * This used to fall into the status message below and read "callook.info answered with HTTP 301
+   * instead of a licence record… That is the source having trouble". A 301 is not trouble. It is a
+   * perfectly good answer meaning "the thing you asked for is over here", and the only reason it
+   * ends the lookup is that four lines up we set `redirect: 'manual'` ON PURPOSE — following one
+   * would mean requesting a host that has never been past `assertNotBlocked`, and would make a
+   * feature defended in public as "one press, one request, one host" into two requests to two
+   * hosts. Blaming the source for a rule of ours is the same class of mistake as attributing an
+   * unread body to it, which this file already refuses to make one paragraph down.
+   *
+   * The `Location` is deliberately not quoted: it is a value from outside addressed to a person who
+   * cannot act on it, and the operator's copy of it is in the source's own logs, not in a form.
+   */
+  if (response.status >= 300 && response.status < 400) {
+    return unavailable(
+      `callook.info answered with a redirect (HTTP ${response.status}) rather than a licence ` +
+        `record, and GrantSpotter did not follow it, so nothing was filled in. That is a rule of ` +
+        `GrantSpotter’s own rather than a fault at callook.info: one press of this button is one ` +
+        `request to one host that has been checked, and following a redirect would make it a ` +
+        `second request to a host that has not been. Nothing is wrong with your callsign — type ` +
+        `your licence details in and carry on; nothing here depends on this lookup.`,
+    );
   }
 
   if (response.status !== 200) {

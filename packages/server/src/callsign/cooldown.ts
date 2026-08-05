@@ -26,6 +26,31 @@ import { canonicalOrigin } from '../net/hosts.js';
  * person without a request. In memory only, per process, lost on restart — a durable ledger would
  * be a promise this software cannot keep across a container rebuild, and the honest scale of the
  * problem is one person pressing one button a few times in a row.
+ *
+ * AND THE SECOND FACT, ADDED 2026-08-04: WHETHER WE ARE ASKING THAT HOST RIGHT NOW.
+ *
+ * The hold above is written when the answer ARRIVES and read before the request LEAVES, and for a
+ * day those two moments had a gap between them wide enough to drive the whole defect through. Every
+ * press that started while the first request was still in flight read an empty ledger, passed the
+ * check, and sent its own request — so the hold could only ever stop the presses that came after an
+ * answer, never the ones racing it. Measured on this host, 2026-08-04, against a loopback server
+ * answering `429 Retry-After: 120`: eight presses fired with `Promise.all` produced EIGHT requests,
+ * exactly as they had before any of this existed. The per-session ration next door bounds one
+ * member at eight; several members racing is not bounded at all, because the hold is the only
+ * mechanism that is about the HOST and it was the one that could not see them.
+ *
+ * So a host also has a lane, and there is one of it. A press that arrives while a request to that
+ * host is in flight does not send a second one; it is answered from here, in this process, with the
+ * sentence `callook.ts` writes for it. ONE LANE PER HOST IS THE RIGHT UNIT because it is the unit
+ * the promise is made in: the README defends querying a site that publishes `Disallow: /` on the
+ * ground that this is one person, one button, one request to one host — not one request per person,
+ * which is what "bounded per session" would mean. A lane per user would leave a hundred accounts
+ * able to make a hundred simultaneous requests, each of them individually polite.
+ *
+ * IT IS STILL NOT A QUEUE. The losing press is refused, not parked: parking it would make somebody
+ * wait out another person's eight-second timeout on top of their own, which breaks `callook.ts`'s
+ * published promise — "the worst case a user can experience is this budget ONCE" — from a new
+ * direction. Refusing costs the loser one press, tells them so, and charges them nothing.
  */
 
 /**
@@ -58,12 +83,39 @@ export const COOLDOWN_FLOOR_MS = 60_000;
  */
 export const COOLDOWN_CAP_MS = 24 * 60 * 60 * 1000;
 
-/** When a host said it would like to be asked again, remembered for this process only. */
+/**
+ * What this process knows about one host between two presses: when it asked to be left alone, and
+ * whether we are asking it something right now. Remembered for this process only.
+ *
+ * BOTH FACTS, ONE OBJECT, and that is not tidiness. They are read in the same breath — a press is
+ * refused if EITHER is true — and a caller who wired up one and forgot the other would rebuild
+ * exactly the defect the other was added to close. `CallsignLookupDeps` requires one thing, so
+ * there is one line to leave out and it does not compile.
+ */
 export interface HostCooldown {
   /** How much of `key`'s hold is left at `nowMs`, or 0 when there is none. */
   remainingMs(key: string, nowMs: number): number;
   /** Hold `key` for `ms` from `nowMs`. Never shortens a hold that is already longer. */
   hold(key: string, ms: number, nowMs: number): void;
+  /**
+   * Is a request to `key` in flight right now?
+   *
+   * READ-ONLY, and it claims nothing — this is the question `wouldReachTheSource` asks on behalf of
+   * the rate limiter next door, which needs to know whether a press will cost the source a request
+   * without becoming that request itself.
+   */
+  isAsking(key: string): boolean;
+  /**
+   * Claim `key`'s one lane: the release when this press got it, `undefined` when a request to that
+   * host is already in flight.
+   *
+   * CHECK AND CLAIM IN ONE CALL, deliberately. Two calls — ask, then take — is the shape of the
+   * defect this closes, one level further down: nothing may be able to run between the reading and
+   * the taking, and the only way to promise that of a function anybody can call is not to offer the
+   * two halves separately. The release is idempotent, because a lane reopened by a second release
+   * while its request is still running is a lane that is not one.
+   */
+  beginAsking(key: string): (() => void) | undefined;
 }
 
 /**
@@ -80,6 +132,11 @@ export function cooldownKey(url: string): string {
 
 export function createHostCooldown(): HostCooldown {
   const until = new Map<string, number>();
+  /**
+   * The hosts we are mid-question with. A Set and not a counter: the whole rule is that the count
+   * may not exceed one, and a counter is a thing that can be incremented.
+   */
+  const asking = new Set<string>();
   return {
     remainingMs(key, nowMs) {
       const at = until.get(key);
@@ -99,6 +156,19 @@ export function createHostCooldown(): HostCooldown {
       // arrive and one asks for two minutes and the other for ten seconds, ten seconds is not the
       // answer: the longer instruction was still given and has not expired.
       if (existing === undefined || at > existing) until.set(key, at);
+    },
+    isAsking(key) {
+      return asking.has(key);
+    },
+    beginAsking(key) {
+      if (asking.has(key)) return undefined;
+      asking.add(key);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        asking.delete(key);
+      };
     },
   };
 }

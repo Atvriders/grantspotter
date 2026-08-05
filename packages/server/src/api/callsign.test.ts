@@ -4,8 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { createCallsignRouter, LOOKUP_MAX_PER_WINDOW, type CallsignCaller } from './callsign.js';
-import type { HostCooldown } from '../callsign/cooldown.js';
+import {
+  createCallsignRouter,
+  LOOKUP_MAX_PER_WINDOW,
+  LOOKUP_WINDOW_MS,
+  type CallsignCaller,
+} from './callsign.js';
+import { createRateLimiter, type RateLimiter } from '../auth/rateLimit.js';
+import { createHostCooldown, type HostCooldown } from '../callsign/cooldown.js';
 import { errorHandler, requestIdMiddleware } from './errors.js';
 
 /**
@@ -316,6 +322,117 @@ describe('POST /api/callsign/lookup — rate limit', () => {
   });
 
   /**
+   * PRESSES THAT OVERLAP, WHICH IS WHAT SEVERAL PEOPLE ARE.
+   *
+   * The test above presses sixteen times in sequence, so every press after the first reads a hold
+   * the previous answer has already written. Fire them together and none of them can: measured
+   * 2026-08-04 through this router, eight simultaneous presses at a stand-in answering
+   * `429 Retry-After: 120` produced EIGHT requests, with the cooldown present and every one of its
+   * own tests green. The per-session ration bounds one member at eight; it does not bound two
+   * members at all, and the hold — the only mechanism here that is about the HOST — could not see a
+   * request that had not answered yet.
+   *
+   * The transport is deliberately slow so the presses genuinely overlap rather than happening to
+   * queue. A machine slow enough to space these 200 ms apart fails this test loudly, which is the
+   * right direction: the number it would print is the number of requests a stranger's server got.
+   */
+  it('sends ONE request for eight presses that overlap, from one member', async () => {
+    const { app, transport } = buildApp({
+      user: MEMBER,
+      respond: () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(
+            () => resolve(new Response(JSON.stringify(VALID_BODY), { status: 200 })),
+            200,
+          );
+        }),
+    });
+
+    const answers = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' }),
+      ),
+    );
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    // Nobody is told the source failed them: seven get GrantSpotter's own sentence, one gets the
+    // record. Every one of them is answered — a refusal here is not an HTTP error either.
+    for (const answer of answers) expect(answer.status).toBe(200);
+    expect(answers.filter((a) => a.body.status === 'found')).toHaveLength(1);
+    const refused = answers.filter((a) => a.body.status === 'unavailable');
+    expect(refused).toHaveLength(7);
+    for (const answer of refused) {
+      expect(answer.body.message).toMatch(/already waiting on an answer from callook\.info/);
+    }
+  });
+
+  /**
+   * THE CASE THE RATION CANNOT REACH AT ALL. Eight members pressing at once have eight untouched
+   * allowances between them, so the only thing that can bound them is a rule about the host — and
+   * until 2026-08-04 the only such rule could not see a request that had not answered yet.
+   *
+   * The second half matters as much as the first: losing a race must not cost the loser a press.
+   * Seven members are refused here, and each of them still has their whole allowance afterwards.
+   */
+  it('sends ONE request for eight presses from eight different members, and charges only the one that asked', async () => {
+    let seat = 0;
+    // The real limiter, watched. Counting `recordFailure` is how "the press that lost the race was
+    // not charged" is asserted precisely rather than inferred from an allowance that eight
+    // different members have eight separate copies of.
+    const inner = createRateLimiter({ windowMs: LOOKUP_WINDOW_MS, maxFailures: LOOKUP_MAX_PER_WINDOW });
+    const charged: string[] = [];
+    const limiter: RateLimiter = {
+      check: (key, nowMs) => inner.check(key, nowMs),
+      recordFailure: (key, nowMs) => {
+        charged.push(key);
+        inner.recordFailure(key, nowMs);
+      },
+      reset: (key) => {
+        inner.reset(key);
+      },
+    };
+    const transport = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(
+            () => resolve(new Response(JSON.stringify(VALID_BODY), { status: 200 })),
+            200,
+          );
+        }),
+    );
+    const app = express();
+    app.use(express.json());
+    app.use(requestIdMiddleware());
+    app.use(
+      '/api/callsign',
+      createCallsignRouter({
+        transport,
+        limiter,
+        setupToken: () => SETUP_TOKEN,
+        // A different signed-in member per request, which is what the rate limiter counts by.
+        sessionUser: () => {
+          seat += 1;
+          return { id: `u-member-${String(seat)}`, role: 'member' };
+        },
+      }),
+    );
+    app.use(errorHandler({ logger: () => undefined }));
+
+    const answers = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' }),
+      ),
+    );
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    for (const answer of answers) expect(answer.status).toBe(200);
+    expect(answers.filter((a) => a.body.status === 'unavailable')).toHaveLength(7);
+    // One request was made, and exactly one person paid for it. Charging the other seven would be
+    // the `not_us` mistake in a third costume: a press that cost callook.info nothing.
+    expect(charged).toHaveLength(1);
+  });
+
+  /**
    * The carve-out is exactly as wide as its reason. Fifteen free presses during a hold buy nothing
    * once the hold lifts: the allowance resumes from the ONE request that was actually made, and the
    * refusal lands where it always did.
@@ -325,7 +442,11 @@ describe('POST /api/callsign/lookup — rate limit', () => {
    */
   it('resumes the allowance from what was actually spent once the wait lifts', async () => {
     let heldMs = 0;
+    // The real ledger, with ONLY the wait faked. `isAsking`/`beginAsking` are the host's one-request
+    // lane and are left exactly as they ship: a stub of those would be this test quietly answering
+    // the question the next test asks. What is replaced here is the clock, and nothing else.
     const cooldown: HostCooldown = {
+      ...createHostCooldown(),
       remainingMs: () => heldMs,
       hold: (_key, ms) => {
         heldMs = ms;
