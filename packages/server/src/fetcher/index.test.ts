@@ -773,29 +773,32 @@ describe('every request that reaches the network passes the host gate exactly on
 });
 
 /**
- * THE BUDGET BELONGS TO THE SERVER, THE ROBOTS CACHE BELONGS TO THE ORIGIN, AND THEY ARE DIFFERENT
- * KEYS ON PURPOSE.
+ * THE BUDGET BELONGS TO THE FETCH, THE ROBOTS CACHE BELONGS TO THE ORIGIN, AND ONLY ONE OF THEM HAS
+ * A KEY.
  *
- * The pacing lane has always keyed on `normalizeHost` (scheme and port dropped) and the robots
- * cache on `canonicalOrigin` (scheme and port kept). Both are right for their own job — RFC 9309
- * §2.3 puts `/robots.txt` at the authority's root, so a service on :8443 publishes its own file —
- * but the request PURSE was keyed like the second when it is a fact about the first. Every origin a
- * fetch touched therefore bought a fresh nine-request allowance from the same machine, and the
- * `/robots.txt` read for each one was not counted against the page's allowance at all.
+ * The purse was keyed twice and wrong twice. Keyed per ORIGIN, every scheme or port a machine
+ * answered on bought a fresh nine, and the `/robots.txt` read was not counted against the page at
+ * all. Keyed per HOSTNAME — the fix of 516bcab — an apex that 301s to `www` bought a second nine,
+ * because two names are two keys and one machine. There is no third key that is right: a URL does
+ * not say who owns it (see `newFetchState` in the module under test for what was considered and why
+ * each guess is worse than the disease). So the purse is now per LOGICAL FETCH and has no key at
+ * all, which makes the published sentence true for shapes nobody has enumerated.
  *
- * Measured with `npm run measure-pacing` against loopback HTTP servers, ONE page fetch, at commit
- * 2c098d9 and then at this one:
+ * Measured with `npm run measure-pacing` against loopback servers, ONE page fetch, at 2c098d9 /
+ * 8ec9873 / this commit:
  *
- *   one host, one origin, robots + page both at full purse    18 -> 9
- *   one host, http -> https (real TLS on loopback)            20 -> 9
- *   one host, five hops across six origins                    63 -> 9   (7 x the published bound)
- *   one host, two origins, both blocked by robots.txt          2 -> 2   (the shipped arrl.org shape)
- *   one host, one page fetch across a port change, healthy      4 -> 4   (the ordinary case)
+ *   ceilingOneOrigin      one origin, robots + page at full purse    18 -> 9  -> 9
+ *   schemeChange          http -> https, real TLS on loopback        20 -> 9  -> 9
+ *   ceilingManyOrigins    five hops across six origins               63 -> 9  -> 9
+ *   twoNamesOneMachine    apex -> www, both names in distress         - -> 18 -> 9
+ *   nameChangeHealthy     apex -> www, healthy                        - ->  4 ->  4  (handover 4 ms -> over a second)
+ *   twoOriginsOneHost     two origins, both blocked by robots.txt     2 ->  2 ->  2  (the arrl.org shape)
+ *   portChangeHealthy     one page fetch across a port change          4 ->  4 ->  4  (the ordinary case)
  *
- * The last two are the point of the last two: the fix costs the ordinary case nothing, and the two
- * keys were NOT merged.
+ * The last three are the point of the last three: the fix costs the ordinary cases nothing, and the
+ * robots cache's key was NOT merged into the purse's absence of one.
  */
-describe('one purse per server, not per origin', () => {
+describe('one purse per fetch, not per origin and not per name', () => {
   const FLOOR = 1_000;
 
   function paced(handler: (url: string) => Response, extra: Record<string, unknown> = {}) {
@@ -908,11 +911,24 @@ describe('one purse per server, not per origin', () => {
   });
 
   /**
-   * NOT A LOOPHOLE — THE DEFINITION. A different host is a different machine, owned by somebody
-   * else, and the promise is made to each of them separately. If this ever becomes one purse for a
-   * whole chain, an apex-to-`www` redirect would spend `www`'s allowance on the apex's failures.
+   * THE CLAIM THIS TEST USED TO MAKE WAS "gives a genuinely different host its own nine", AND IT IS
+   * NOT TRUE ANY MORE — deliberately, and this is the reasoning rather than a note that it changed.
+   *
+   * The old rationale was that a different host is a different machine owned by somebody else, so
+   * each is entitled to a full allowance. What that argument could not survive is that a URL does
+   * not say who owns it: `example.org` and `www.example.org` are two hosts by the same test and one
+   * machine in almost every deployment on the internet, and the "entitlement" was worth 18 requests
+   * to one kernel (`npm run measure-pacing twoNamesOneMachine` at 8ec9873). Every way of telling the
+   * two cases apart is a guess that fails badly in the other direction — see `newFetchState`.
+   *
+   * So the entitlement is gone and what replaces it is stricter: nine per FETCH, wherever it wanders.
+   * The assertions below are the ones that always mattered and they are unchanged — a healthy chain
+   * across two hosts pays two requests at each, and neither paid for the other.
+   *
+   * What this costs is stated rather than hidden: a chain that crosses hosts and hits trouble can
+   * run out and be skipped for the run, which the next test pins.
    */
-  it('gives a genuinely different host its own nine', async () => {
+  it('charges a chain across two hosts to one purse, and the healthy case still costs four', async () => {
     const t = paced((url) => {
       if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
       return url.includes('k4abc')
@@ -929,6 +945,118 @@ describe('one purse per server, not per origin', () => {
     const perHost = (needle: string): number =>
       t.transport.mock.calls.filter(([u]) => (u as string).includes(needle)).length;
     expect([perHost('w9xyz'), perHost('k4abc')]).toEqual([2, 2]);
+    // …and the handover is paced like everything else, which it was not until this commit.
+    expect(t.gaps()).toEqual([FLOOR, FLOOR, FLOOR]);
+  });
+
+  /**
+   * THE MEASURED DEFECT, PINNED: one machine, two names, one page fetch, eighteen requests.
+   *
+   * `npm run measure-pacing twoNamesOneMachine` runs this shape against two loopback ADDRESSES
+   * (127.0.0.1 and 127.0.0.2 are two hostnames and one kernel, which is the relationship an apex has
+   * with its `www`). At 8ec9873 it printed 18 requests to the one machine and 1 of its 17 gaps under
+   * the 1000 ms floor; at this commit, 9 and 0 of 8.
+   *
+   * The construction spends the purse at the first name with the LAST of the nine being the
+   * redirect, which is what maximises the second name's share. The second name's `/robots.txt` is
+   * the expensive kind, so anything left would go on it — and the assertion is that the second name
+   * is never contacted at all.
+   */
+  it('does not buy a second allowance by crossing to another NAME on one machine', async () => {
+    const seen = new Map<string, number>();
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      const n = (seen.get(url) ?? 0) + 1;
+      seen.set(url, n);
+      if (n <= 3) return res('slow down', { status: 429, headers: { 'retry-after': '0' } });
+      const hop = Number(/\/p(\d+)$/.exec(url)?.[1] ?? '0');
+      // The fourth request to each page is its redirect: /p0 -> /p1 -> the machine's other name.
+      return res('', {
+        status: 301,
+        headers: { location: hop === 0 ? 'https://w9xyz-club.org/p1' : 'https://www.w9xyz-club.org/p' },
+      });
+    });
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p0',
+      method: 'GET',
+      accept: 'html',
+    });
+    // 1 robots + 4 + 4 = 9, the ninth being the redirect there is nothing left to follow, so the
+    // 3xx becomes the payload exactly as it does when the hop count runs out.
+    expect(payload.status).toBe(301);
+    expect(t.at).toHaveLength(maxRequestsPerFetch(5, 3));
+    expect(t.transport.mock.calls.filter(([u]) => (u as string).includes('www.'))).toEqual([]);
+    const gaps = t.gaps();
+    expect(gaps.every((gap) => gap >= FLOOR), `gaps were ${gaps.join(', ')} ms`).toBe(true);
+  });
+
+  /**
+   * THE FLOOR ACROSS THE HANDOVER, which is the half of this finding that is about politeness rather
+   * than about arithmetic — and the half that is measurable in an ordinary healthy site.
+   *
+   * A lane that has never run a request has nothing to pace against, which is right for the first
+   * request of a nightly run and wrong in the middle of a redirect chain. Measured at 8ec9873 with
+   * `npm run measure-pacing nameChangeHealthy`: the apex -> `www` handover landed 4 ms after the
+   * redirect, against the 1000 ms floor this project publishes to the sites it polls. One of four
+   * requests, in the commonest redirect there is.
+   */
+  it('paces the handover when a page redirects from one of a machine’s names to another', async () => {
+    const t = paced((url) => {
+      if (url.endsWith('/robots.txt')) return res('User-agent: *\n');
+      return url.startsWith('https://www.')
+        ? res('<p>end</p>')
+        : res('', { status: 301, headers: { location: 'https://www.w9xyz-club.org/p' } });
+    });
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p',
+      method: 'GET',
+      accept: 'html',
+    });
+    expect(payload.status).toBe(200);
+    // apex robots, apex page, www robots, www page — rules are per origin, so the second read is the
+    // RFC doing its job rather than a duplicate.
+    expect(t.transport.mock.calls.map(([u]) => u)).toEqual([
+      'https://w9xyz-club.org/robots.txt',
+      'https://w9xyz-club.org/p',
+      'https://www.w9xyz-club.org/robots.txt',
+      'https://www.w9xyz-club.org/p',
+    ]);
+    expect(t.gaps()).toEqual([FLOOR, FLOOR, FLOOR]);
+  });
+
+  /**
+   * THE DIRECTION THE FIRST ATTEMPT AT THIS FIX MISSED: the way BACK.
+   *
+   * Pacing at the point of redirect covers apex -> `www`. It does not cover what happens next when
+   * the redirect was the `/robots.txt` chain: the rules are read at `www` and then the PAGE is
+   * fetched from the apex, whose lane last ran a request before the handover and is therefore free
+   * to fire immediately. Two requests, one machine, same millisecond. Pacing at the point of
+   * REQUEST — every request against wherever this fetch's previous one went — is what covers both,
+   * and this test fails if anyone moves it back to the redirect site.
+   */
+  it('paces the way back, when a robots.txt at one name is answered at another', async () => {
+    const t = paced((url) => {
+      if (url === 'https://w9xyz-club.org/robots.txt') {
+        return res('', {
+          status: 301,
+          headers: { location: 'https://www.w9xyz-club.org/robots.txt' },
+        });
+      }
+      if (url === 'https://www.w9xyz-club.org/robots.txt') return res('User-agent: *\n');
+      return res('<p>ok</p>');
+    });
+    const payload = await t.fetcher.fetch({
+      url: 'https://w9xyz-club.org/p',
+      method: 'GET',
+      accept: 'html',
+    });
+    expect(payload.status).toBe(200);
+    expect(t.transport.mock.calls.map(([u]) => u)).toEqual([
+      'https://w9xyz-club.org/robots.txt',
+      'https://www.w9xyz-club.org/robots.txt',
+      'https://w9xyz-club.org/p',
+    ]);
+    expect(t.gaps()).toEqual([FLOOR, FLOOR]);
   });
 
   /**

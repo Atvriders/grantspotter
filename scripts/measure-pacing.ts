@@ -9,16 +9,39 @@
  * servers on loopback, and prints the millisecond gap between consecutive requests each server
  * ACTUALLY RECEIVED. Every figure quoted in those two documents comes from here.
  *
- * It is a measurement harness and not a test: it takes about two minutes (one scenario waits out a
- * `Retry-After: 30`), which is why the same properties are also pinned deterministically in
+ * It is a measurement harness and not a test: it takes a little over two minutes — 2m14s for the
+ * whole set on the machine this sentence was written on, most of it spent waiting out one
+ * `Retry-After: 30` — which is why the same properties are also pinned deterministically in
  * `packages/server/src/fetcher/index.test.ts` against an injected clock. That file is the guard;
  * this is the evidence.
  *
- *   npm run measure-pacing              # every scenario
- *   npm run measure-pacing -- happy     # one of them
+ *   npm run measure-pacing                    # every scenario
+ *   npm run measure-pacing -- happy           # one of them
+ *
+ * THREE SCENARIOS NEED SOMETHING OF THE MACHINE THEY RUN ON, in two ways, and all three say so and
+ * skip rather than failing when they do not get it, because this file is quoted at a stranger
+ * reading their own access log and a crash would read as "the claim is false":
+ *
+ *   `schemeChange` needs an `openssl` binary on PATH, to make the throwaway certificate that lets
+ *   one of the two origins speak https. Nothing is committed and nothing outlives the run.
+ *
+ *   `twoNamesOneMachine` and `nameChangeHealthy` need `127.0.0.2` to be bindable, which is how two
+ *   HOSTNAMES are put in front of one machine without asking the reader to edit `/etc/hosts`. Linux
+ *   routes all of `127.0.0.0/8` to the loopback interface and needs nothing; macOS answers only on
+ *   `127.0.0.1` until somebody runs `sudo ifconfig lo0 alias 127.0.0.2 up`.
  */
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from 'node:http';
+import { createServer as createTlsServer, type Server as TlsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { buildUserAgent, resolveContactUrl } from '../packages/server/src/config.js';
 import { createFetcher } from '../packages/server/src/fetcher/index.js';
 
@@ -99,50 +122,194 @@ async function withServer<T>(
   }
 }
 
+/** Key material that exists only while one run of this harness does. */
+interface Certificate {
+  key: Buffer;
+  cert: Buffer;
+}
+
 /**
- * ONE SERVER ANSWERING ON SEVERAL PORTS, which is the only shape in which a loopback harness can
- * put two ORIGINS in front of one MACHINE.
+ * WHERE THE CERTIFICATE COMES FROM, AND WHY THIS SCRIPT RUNS ITSELF TWICE TO GET ONE.
+ *
+ * The scheme-change figure the README and the crawler-contact template publish (`20 -> 9`) needs one
+ * of two origins on this machine to speak https, because `http` -> `https` on one host is the shape
+ * a site owner recognises. Until 2026-08-04 that number was taken with a scratchpad script and a
+ * certificate that was never in this repository — so both documents called a figure reproducible
+ * that nobody could reproduce, which is the same class of defect as the bound it was written to
+ * prove.
+ *
+ * A certificate generated one second ago is in nobody's trust store, and there are exactly three
+ * ways to make a client accept one. Two are bad: `NODE_TLS_REJECT_UNAUTHORIZED=0` turns verification
+ * off for everything the process ever talks to, which is a thing this repository should not teach
+ * anybody to run; and an `Agent` carrying a `ca` option means depending on `undici` as a package,
+ * which the server does not do. The third is `NODE_EXTRA_CA_CERTS`, which trusts exactly this one
+ * certificate and nothing else — but Node reads it once, at process start, which is before any code
+ * here exists.
+ *
+ * So the parent process makes the certificate, launches THIS SAME SCRIPT again with that variable
+ * set, lets the child do the measuring, and deletes the key material when the child exits. The child
+ * runs with certificate verification fully ON, including the hostname check against the SAN below,
+ * which makes the scenario evidence about the real TLS path rather than about a disabled one.
+ *
+ * WHY `openssl` AND NOT `node:crypto`. Node can generate a KEY PAIR and can parse an X.509
+ * certificate; it cannot issue one. The alternatives were a new npm dependency (refused) or
+ * hand-rolling ASN.1 DER in a measurement script, whose bugs would look like fetcher bugs.
+ * `openssl` is already a documented prerequisite of deploying this software — the README's
+ * `SESSION_SECRET` instruction is `openssl rand -hex 32` — so the harness asks for it, and says so
+ * plainly when it is not there instead of failing in a way that reads as "the claim is false".
+ */
+const CERT_DIR_ENV = 'GRANTSPOTTER_PACING_CERT_DIR';
+
+/** In the child: the material the parent generated and taught this one process to trust. */
+function inheritedCertificate(): Certificate | null {
+  const dir = process.env[CERT_DIR_ENV];
+  if (dir === undefined) return null;
+  return { key: readFileSync(path.join(dir, 'key.pem')), cert: readFileSync(path.join(dir, 'cert.pem')) };
+}
+
+/**
+ * Resolved once, at the bottom of this file, before any scenario runs — and read by `schemeChange`,
+ * which is the only scenario that needs TLS and the only one that can be skipped for want of it.
+ */
+let certificate: Certificate | null = null;
+let noCertificateBecause = 'this run did not ask for a certificate';
+
+/**
+ * In the parent: generate, re-launch, clean up. Returns the child's exit code, or the reason there
+ * is no certificate — in which case the caller carries on in THIS process and the one scenario that
+ * needs TLS prints why it produced no number.
+ */
+function measureInAChildThatTrustsAThrowawayCertificate(): { code: number } | { unavailable: string } {
+  let dir: string;
+  try {
+    dir = mkdtempSync(path.join(tmpdir(), 'grantspotter-pacing-tls-'));
+  } catch (err) {
+    return { unavailable: `no writable temporary directory: ${(err as Error).message}` };
+  }
+  const certFile = path.join(dir, 'cert.pem');
+  try {
+    execFileSync(
+      'openssl',
+      [
+        'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes',
+        '-keyout', path.join(dir, 'key.pem'), '-out', certFile,
+        '-subj', '/CN=127.0.0.1',
+        // Both loopback addresses this harness ever binds, so the hostname check passes wherever a
+        // TLS origin is used.
+        '-addext', 'subjectAltName=IP:127.0.0.1,IP:127.0.0.2',
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    const e = err as NodeJS.ErrnoException;
+    return {
+      unavailable:
+        e.code === 'ENOENT'
+          ? 'no `openssl` on PATH, and this repository commits no key material to fall back on'
+          : `openssl failed: ${e.message}`,
+    };
+  }
+  try {
+    // `execArgv` carries the tsx loader flags, so the child parses TypeScript exactly as this
+    // process did. `argv[1]` is this file; the scenario names the reader asked for follow it.
+    const child = spawnSync(
+      process.execPath,
+      [...process.execArgv, process.argv[1] as string, ...process.argv.slice(2)],
+      { stdio: 'inherit', env: { ...process.env, NODE_EXTRA_CA_CERTS: certFile, [CERT_DIR_ENV]: dir } },
+    );
+    if (child.error !== undefined) return { unavailable: `could not re-launch: ${child.error.message}` };
+    return { code: child.status ?? 0 };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** One listener in front of the one machine every scenario below is about. */
+interface Origin {
+  /**
+   * The loopback address to bind. Two ADDRESSES is the only way this harness can put two
+   * HOSTNAMES in front of one machine: `127.0.0.1` and `127.0.0.2` are two `normalizeHost` keys,
+   * one kernel, one access log — and neither needs a name server or a line in `/etc/hosts`, which
+   * is what an apex/`www` pair would need and what a stranger running this cannot be asked for.
+   */
+  address?: string;
+  /** Serve https instead of http, with a certificate that will not outlive the scenario. */
+  tls?: Certificate;
+}
+
+/** N ordinary http listeners on 127.0.0.1 — several ORIGINS, one host, one bandwidth bill. */
+const plainOrigins = (count: number): Origin[] => Array.from({ length: count }, () => ({}));
+
+class OriginUnavailable extends Error {}
+
+/**
+ * ONE MACHINE ANSWERING ON SEVERAL ORIGINS, which is what every ceiling scenario below is about.
  *
  * `http://127.0.0.1:A` and `http://127.0.0.1:B` are two origins to RFC 9309 (§2.3 puts
  * `/robots.txt` at the authority's root, and the authority includes the port) and one host to the
- * person paying for the bandwidth. Every listener here pushes into the SAME `hits` array, so the
- * count a scenario prints is the count a single site owner would see in a single access log — the
- * question the whole "at most N requests to your server" claim is about.
- *
- * A scheme change (`http` -> `https`) keys identically: `canonicalOrigin` keeps the scheme,
- * `normalizeHost` drops it, exactly as they do with the port. Ports are what a harness with no
- * certificate authority can serve, so ports are what is measured here; `fetcher/index.test.ts`
- * pins the scheme-crossing case against an injected transport where no TLS is needed.
+ * person paying for the bandwidth. `https://127.0.0.1:C` is a third, and `http://127.0.0.2:D` is a
+ * fourth that is also a different HOSTNAME. Every listener here pushes into the SAME `hits` array,
+ * so the count a scenario prints is the count a single site owner would see in a single access
+ * log — the question the whole "at most N requests to your server" claim is about.
  */
 async function withOrigins<T>(
-  count: number,
+  origins: readonly Origin[],
   handler: (req: IncomingMessage, res: ServerResponse, index: number) => void,
   body: (bases: string[], hits: Hit[]) => Promise<T>,
 ): Promise<T> {
   const hits: Hit[] = [];
-  const servers = Array.from({ length: count }, (_unused, index) => {
-    const server = createServer((req, res) => {
+  const servers: (HttpServer | TlsServer)[] = origins.map((origin, index) => {
+    const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
       hits.push({ at: Date.now(), path: `:${index}${req.url ?? ''}` });
       handler(req, res, index);
-    });
+    };
+    const server =
+      origin.tls === undefined
+        ? createServer(onRequest)
+        : createTlsServer({ key: origin.tls.key, cert: origin.tls.cert }, onRequest);
     server.keepAliveTimeout = 120_000;
     server.headersTimeout = 125_000;
     return server;
   });
-  await Promise.all(
-    servers.map((server) => new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))),
-  );
-  const bases = servers.map((server) => `http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  const started: (HttpServer | TlsServer)[] = [];
   try {
+    for (const [index, server] of servers.entries()) {
+      const address = origins[index]?.address ?? '127.0.0.1';
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', (err: NodeJS.ErrnoException) =>
+          reject(
+            err.code === 'EADDRNOTAVAIL'
+              ? new OriginUnavailable(
+                  `this machine will not bind ${address} (${err.code}). On macOS: ` +
+                    `sudo ifconfig lo0 alias ${address} up`,
+                )
+              : err,
+          ),
+        );
+        server.listen(0, address, resolve);
+      });
+      started.push(server);
+    }
+    const bases = servers.map((server, index) => {
+      const origin = origins[index] as Origin;
+      const scheme = origin.tls === undefined ? 'http' : 'https';
+      return `${scheme}://${origin.address ?? '127.0.0.1'}:${(server.address() as AddressInfo).port}`;
+    });
     return await body(bases, hits);
   } finally {
     await Promise.all(
-      servers.map((server) => {
+      started.map((server) => {
         server.closeAllConnections();
         return new Promise<void>((resolve) => server.close(() => resolve()));
       }),
     );
   }
+}
+
+/** Say why a scenario produced no number, in the same shape as the scenarios that did. */
+function skipped(name: string, why: string): void {
+  console.log(`\n### ${name}\n  NOT MEASURED HERE: ${why}`);
 }
 
 /**
@@ -425,15 +592,18 @@ async function ceilingOneOrigin(): Promise<void> {
  *
  * The page chain walks the maximum five redirects, and every hop lands on an origin the robots
  * cache has never seen — so each one is a fresh `/robots.txt` read. Six ports on 127.0.0.1 is the
- * loopback spelling of a chain that switches scheme or port; a chain that switched HOST would be
- * six different site owners, which is a different question and not this one.
+ * loopback spelling of a chain that switches scheme or port; the chain that switches HOSTNAME is
+ * `twoNamesOneMachine` below, and since 2026-08-04 it costs the same nine.
+ *
+ * The `by origin` line is the interesting one: the allowance is gone before the chain leaves the
+ * first origin, so the other five listeners never hear from us at all.
  */
 async function ceilingManyOrigins(): Promise<void> {
   const seen = new Map<string, number>();
   // Assigned once `listen(0)` has handed out ports, which is after the handler below is built.
   let origins: string[] = [];
   await withOrigins(
-    6,
+    plainOrigins(6),
     (req, res, index) => {
       const url = req.url ?? '';
       if (serveExpensiveRobots(seen, `${index}`, url, res)) return;
@@ -468,7 +638,7 @@ async function ceilingManyOrigins(): Promise<void> {
  */
 async function twoOriginsOneHost(): Promise<void> {
   await withOrigins(
-    2,
+    plainOrigins(2),
     (req, res) => {
       if (req.url === '/robots.txt') return text(res, 200, 'User-agent: GrantSpotter\nDisallow: /\n');
       return html(res, '<p>should never be fetched</p>');
@@ -501,7 +671,7 @@ async function twoOriginsOneHost(): Promise<void> {
 async function portChangeHealthy(): Promise<void> {
   let origins: string[] = [];
   await withOrigins(
-    2,
+    plainOrigins(2),
     (req, res, index) => {
       if (req.url === '/robots.txt') return text(res, 200, ALLOW_ALL);
       if (index === 1) return html(res, '<p>end</p>');
@@ -515,6 +685,187 @@ async function portChangeHealthy(): Promise<void> {
         .fetch({ url: `${bases[0] ?? ''}/p`, method: 'GET', accept: 'html' })
         .then((p) => `payload status ${p.status}`, explain);
       reportFootprint('ORDINARY: one page fetch across a port change, healthy robots.txt', hits, FLOOR, note);
+    },
+  );
+}
+
+/**
+ * ONE MACHINE ANSWERING http AND https, OVER REAL TLS, WHICH IS THE WHOLE POINT OF THE CERTIFICATE.
+ *
+ * `http://example.org` redirecting to `https://example.org` is two origins to RFC 9309 and one
+ * machine to the person paying for it, and it is the redirect a site owner is likeliest to have
+ * configured deliberately. The README and the crawler-contact template have published a figure for
+ * this shape since 2026-08-04 and called it reproducible while the harness in this repository could
+ * not serve https at all — the number was taken with a scratchpad script and a certificate nobody
+ * else had. This is that scenario, shipped.
+ *
+ * The http origin's page is in distress (three 429s, then the redirect) and the https origin's
+ * `/robots.txt` is too (three 429s, then the file), so the allowance is gone by the time the page
+ * under it could be asked for. What it costs the machine is the number printed; what it does NOT do
+ * is start again at nine because the scheme changed.
+ */
+async function schemeChange(): Promise<void> {
+  const name = 'SCHEME CHANGE: http -> https on ONE machine, over real TLS';
+  if (certificate === null) return skipped(name, noCertificateBecause);
+  const seen = new Map<string, number>();
+  let origins: string[] = [];
+  await withOrigins(
+    [{}, { tls: certificate }],
+    (req, res, index) => {
+      const url = req.url ?? '';
+      const key = `${index}${url}`;
+      if (index === 1 && url !== '/robots.txt') return html(res, '<p>end</p>');
+      if (index === 0 && url === '/robots.txt') return text(res, 200, ALLOW_ALL);
+      const n = (seen.get(key) ?? 0) + 1;
+      seen.set(key, n);
+      if (n <= 3) return text(res, 429, 'slow down', { 'retry-after': '0' });
+      if (index === 1) return text(res, 200, ALLOW_ALL);
+      res.writeHead(301, { location: `${origins[1] ?? ''}/p` });
+      return res.end();
+    },
+    async (bases, hits) => {
+      origins = bases;
+      const f = fetcher();
+      const note = await f
+        .fetch({ url: `${bases[0] ?? ''}/p`, method: 'GET', accept: 'html' })
+        .then((p) => `payload status ${p.status}`, explain);
+      reportFootprint(name, hits, FLOOR, `:1 is ${bases[1]?.split(':').slice(0, 2).join(':')}; ${note}`);
+    },
+  );
+}
+
+/**
+ * TWO HOSTNAMES, ONE MACHINE — the apex-to-`www` redirect, which is the commonest redirect there is.
+ *
+ * `127.0.0.1` and `127.0.0.2` are two different `normalizeHost` keys and one kernel, one access log,
+ * one bandwidth bill. That is the same relationship `example.org` and `www.example.org` have, and it
+ * is the one shape a loopback harness can produce without a name server or a line in the reader's
+ * `/etc/hosts`.
+ *
+ * WHAT THIS CAUGHT. Until 2026-08-04 the request purse was keyed by hostname, so crossing from one
+ * of a machine's names to another bought a whole second allowance: measured HERE, at commit 8ec9873,
+ * 18 requests to one machine against a published ceiling of nine — and the crossover gap was 10 ms
+ * against a 1000 ms floor, because the second name's lane had never run a request and so had no
+ * floor to compute from. Both are fixed; the numbers this prints now are in the README.
+ *
+ * The construction spends the whole purse at the first name with the LAST of the nine being the
+ * redirect, which is the arrangement that maximises what the second name can be charged. The second
+ * name's `/robots.txt` is then the expensive one, so anything left would be spent immediately.
+ */
+async function twoNamesOneMachine(): Promise<void> {
+  const name = 'CEILING: one machine answering to TWO NAMES (the apex -> www redirect)';
+  const seen = new Map<string, number>();
+  let origins: string[] = [];
+  try {
+    await withOrigins(
+      [{}, { address: '127.0.0.2' }],
+      (req, res, index) => {
+        const url = req.url ?? '';
+        if (index === 1) {
+          if (serveExpensiveRobots(seen, '1', url, res)) return;
+          return html(res, '<p>end</p>');
+        }
+        if (url === '/robots.txt') return text(res, 200, ALLOW_ALL);
+        const hop = Number(/^\/p(\d+)$/.exec(url)?.[1] ?? '0');
+        const n = (seen.get(url) ?? 0) + 1;
+        seen.set(url, n);
+        if (n <= 3) return text(res, 429, 'slow down', { 'retry-after': '0' });
+        // The fourth request to each page is the redirect: /p0 -> /p1 -> the machine's other name.
+        res.writeHead(301, { location: hop === 0 ? '/p1' : `${origins[1] ?? ''}/p` });
+        return res.end();
+      },
+      async (bases, hits) => {
+        origins = bases;
+        const f = fetcher();
+        const note = await f
+          .fetch({ url: `${bases[0] ?? ''}/p0`, method: 'GET', accept: 'html' })
+          .then((p) => `payload status ${p.status}`, explain);
+        reportFootprint(name, hits, FLOOR, note);
+      },
+    );
+  } catch (err) {
+    if (err instanceof OriginUnavailable) return skipped(name, err.message);
+    throw err;
+  }
+}
+
+/**
+ * THE ORDINARY VERSION OF THE ABOVE, AND THE ONE THE FLOOR FIX IS ACTUALLY ABOUT: a healthy site
+ * whose apex redirects to `www`. Four requests — a `/robots.txt` and a page at each name, since
+ * rules are per origin — and the number that matters is the middle GAP, where one name hands over to
+ * the other. Measured at 8ec9873 it was 5 ms against a 1000 ms floor; the lane for a name we have
+ * never contacted has nothing to pace against, and a redirect is exactly the moment we already know
+ * we are about to ask the same machine for something else.
+ */
+async function nameChangeHealthy(): Promise<void> {
+  const name = 'ORDINARY: apex -> www on one machine, healthy robots.txt at both names';
+  let origins: string[] = [];
+  try {
+    await withOrigins(
+      [{}, { address: '127.0.0.2' }],
+      (req, res, index) => {
+        if (req.url === '/robots.txt') return text(res, 200, ALLOW_ALL);
+        if (index === 1) return html(res, '<p>end</p>');
+        res.writeHead(301, { location: `${origins[1] ?? ''}/p` });
+        return res.end();
+      },
+      async (bases, hits) => {
+        origins = bases;
+        const f = fetcher();
+        const note = await f
+          .fetch({ url: `${bases[0] ?? ''}/p`, method: 'GET', accept: 'html' })
+          .then((p) => `payload status ${p.status}`, explain);
+        report(name, hits, () => FLOOR, note);
+      },
+    );
+  } catch (err) {
+    if (err instanceof OriginUnavailable) return skipped(name, err.message);
+    throw err;
+  }
+}
+
+/**
+ * THE arrl.org SHAPE WITH THE ONE THING THE MEASURED SCENARIO LEAVES OUT: a `/robots.txt` that
+ * redirects.
+ *
+ * `twoOriginsOneHost` above measures two requests a night for a two-origin site that blocks us, and
+ * that is exact — for a site that serves `/robots.txt` directly at both origins. The shipped registry
+ * names `http://www.arrl.org` twice and `https://www.arrl.org` six times, and a site that answers
+ * `http://` at all in 2026 is overwhelmingly likely to 301 it to `https://`. If arrl.org does, the
+ * nightly cost of a `Disallow: /` there is THREE requests and not two: the `http` origin's read is a
+ * redirect plus the file at the far end, and the `https` origin still reads its own copy, because the
+ * rules we fetched across that redirect are attributed to the origin we ASKED.
+ *
+ * Which of the two shapes arrl.org actually has is not measured here and this project will not poll
+ * them to find out for a footnote. What is measured here is what EACH shape costs, so the README can
+ * say which number is measured and which is inferred instead of quietly printing the flattering one.
+ */
+async function twoOriginsRedirectingRobots(): Promise<void> {
+  let origins: string[] = [];
+  await withOrigins(
+    plainOrigins(2),
+    (req, res, index) => {
+      if (req.url !== '/robots.txt') return html(res, '<p>should never be fetched</p>');
+      if (index === 1) return text(res, 200, 'User-agent: GrantSpotter\nDisallow: /\n');
+      res.writeHead(301, { location: `${origins[1] ?? ''}/robots.txt` });
+      return res.end();
+    },
+    async (bases, hits) => {
+      origins = bases;
+      const f = fetcher();
+      const notes: string[] = [];
+      for (const [i, p] of ['/news/rss', '/etp-grants'].entries()) {
+        const note = await f
+          .fetch({ url: `${bases[i] ?? ''}${p}`, method: 'GET', accept: 'html' })
+          .then(() => 'FETCHED — the Disallow was not obeyed', explain);
+        notes.push(note);
+      }
+      reportFootprint(
+        "REGISTRY SHAPE: two origins where the first one's robots.txt 301s to the second",
+        hits,
+        FLOOR,
+        notes.join('; '),
+      );
     },
   );
 }
@@ -534,16 +885,37 @@ const SCENARIOS: Record<string, () => Promise<void>> = {
     crawlDelay(['/a'], 'Crawl-delay: 5 across a 503 retry', 2),
   ceilingOneOrigin,
   ceilingManyOrigins,
+  schemeChange,
+  twoNamesOneMachine,
+  nameChangeHealthy,
   twoOriginsOneHost,
+  twoOriginsRedirectingRobots,
   portChangeHealthy,
 };
 
 const wanted = process.argv.slice(2);
 const names = wanted.length > 0 ? wanted : Object.keys(SCENARIOS);
-for (const name of names) {
+// Every name is checked BEFORE anything runs, and before the re-launch below: a typo should cost a
+// message, not two minutes followed by a message.
+const runs = names.map((name) => {
   const run = SCENARIOS[name];
   if (run === undefined) {
     throw new Error(`no scenario "${name}". Known: ${Object.keys(SCENARIOS).join(', ')}`);
   }
+  return run;
+});
+
+certificate = inheritedCertificate();
+if (certificate === null && names.includes('schemeChange')) {
+  // The parent half of the arrangement described at CERT_DIR_ENV: make a certificate, run this
+  // whole script again in a child that trusts that one certificate and nothing else, and take the
+  // child's exit code as ours. If there is no certificate to be had, fall through and measure
+  // everything else in this process — `schemeChange` will print why it produced no number.
+  const outcome = measureInAChildThatTrustsAThrowawayCertificate();
+  if ('code' in outcome) process.exit(outcome.code);
+  noCertificateBecause = outcome.unavailable;
+}
+
+for (const run of runs) {
   await run();
 }

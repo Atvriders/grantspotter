@@ -56,39 +56,70 @@ things that are all normal:
      names your site under two spellings — `http://` and `https://`, or apex and `www` — you will
      see **two** `/robots.txt` requests a night, one per origin, and both will be obeyed. One of
      the sites this ships with is in exactly that state today, so this is a measured fact and not a
-     hypothetical. Serving the file on every host and scheme you answer on is what makes each of
-     them a single, final request.
+     hypothetical (`npm run measure-pacing twoOriginsOneHost`). And if the `http://` one *redirects*
+     to the `https://` one, as most sites that still answer `http://` do, it is **three**: the
+     redirect, the file at the far end, and then the `https://` origin's own copy — because rules we
+     fetched across a redirect belong to the origin we asked, not to the one that answered
+     (`npm run measure-pacing twoOriginsRedirectingRobots`). Serving the file directly on every host
+     and scheme you answer on is what makes each of them a single, final request.
    - **A redirect is followed.** If `/robots.txt` 301s — apex to `www`, `http` to `https` — each hop
      is a request, up to five of them. Serving the file directly on every host and scheme you answer
      on removes this entirely.
    - **A failed read is retried,** up to four attempts, if the connection drops or you answer 429 or
      5xx. That is the same budget any other request gets, and it is deliberate: a file that governs
      a whole origin should not be the least-retried thing we ask for.
-   - **Nine requests is the hard ceiling, and it now covers everything one fetch can cost your
-     server.** The `/robots.txt` read, every redirect hop, and every retry of any of them spend
-     **one** shared budget, so they cannot multiply: a `/robots.txt` that redirects five times
-     *and* answers 429 at every hop costs **nine** requests, not 5 x 4 = 24, and when the budget
-     runs out we stop and skip your site for the night. Every one of the nine is at least a second
-     after the one before it, and longer if you send `Retry-After` or publish a `Crawl-delay` —
-     whichever of the three is longest wins, and they are never added together.
+   - **Nine requests is the hard ceiling, and it covers everything one page fetch can cost —
+     you, and anywhere you redirect us to.** The `/robots.txt` read, every redirect hop, and every
+     retry of any of them spend **one** shared budget, so they cannot multiply: a `/robots.txt` that
+     redirects five times *and* answers 429 at every hop costs **nine** requests, not 5 x 4 = 24,
+     and when the budget runs out we stop and skip your site for the night. Every one of the nine is
+     at least a second after the one before it, and longer if you send `Retry-After` or publish a
+     `Crawl-delay` — whichever of the three is longest wins, and they are never added together.
 
      **Until 2026-08-04 the two budgets multiplied and this paragraph did not say so.** Measured
      against a test server that redirected five times and 429'd at every hop: 19 requests in 6052
-     ms, 12 of the 18 gaps under 5 ms. The same scenario now costs 9 requests over 8024 ms with
-     every gap over a second.
+     ms, 12 of the 18 gaps under 5 ms. The same scenario now costs 9 requests over about 8 seconds
+     with every gap over a second (`npm run measure-pacing redirectChainThat429s`).
 
-     **And later the same day, a second one: the ceiling was nine for the page and another nine for
-     the `robots.txt` that authorised it, and a fresh nine again for every scheme or port your one
-     machine answered on.** That is fixed too, and the number the ceiling counts is what changed —
-     it is nine to your *server*, not nine per thing we happen to be fetching. Constructed and
-     counted, one page fetch, before → after: **18 → 9** for a plain host; **20 → 9** where
-     `http://` redirects to `https://`; **63 → 9** across six origins of one machine. A redirect to
-     somebody *else's* host gets that host its own nine, which is deliberate — it is a different
-     server with a different owner.
+     **And then twice more the same day, because "nine to whom" turned out to be the hard part.**
+     First the ceiling was nine for the page and another nine for the `robots.txt` that authorised
+     it, and a fresh nine again for every scheme or port your one machine answered on — counted, one
+     page fetch: **18** for a plain host, **20** where `http://` redirected to `https://`, and
+     **63** across six origins of one machine. Then, after that was fixed, it was still a fresh nine
+     for every NAME your machine answered to — so an apex that 301s to `www`, which is the commonest
+     redirect there is, cost **18**, and the handover from one of your names to the other arrived
+     4 ms after the redirect instead of a second later. Both are fixed, and the fix was to stop
+     trying to work out which of your names are yours: the budget now belongs to the **fetch**, not
+     to a host, so it is nine requests wherever they land. A redirect to somebody *else's* host
+     spends the same nine rather than opening a new one.
 
-     Those are real numbers off real sockets, and you can reproduce them — `npm run measure-pacing`
-     in this repository prints the millisecond gap between every request a throwaway HTTP server
-     receives.
+     Those are real numbers off real sockets, and **you can reproduce every one of them on your own
+     machine** — that is the point of publishing them. In a clone of this repository:
+
+     ```
+     npm run measure-pacing twoNamesOneMachine   # apex -> www, both names in distress:   9
+     npm run measure-pacing nameChangeHealthy    # apex -> www, healthy:                   4
+     npm run measure-pacing schemeChange         # http -> https, over real TLS:           9
+     npm run measure-pacing ceilingManyOrigins   # five redirects, six origins:            9
+     npm run measure-pacing                      # all of it, about two minutes
+     ```
+
+     It drives the real crawler against throwaway servers on your loopback interface and prints the
+     millisecond gap between every request each one actually received. The `schemeChange` line
+     generates its own certificate with `openssl` and deletes it afterwards; the two `Name` lines
+     bind `127.0.0.2` as well as `127.0.0.1`, which is how two hostnames are put in front of one
+     machine. Any scenario that cannot get what it needs says so and skips instead of failing.
+
+     The "before" figures above are the exception and are labelled as one: the 19 requests in 6052
+     ms, and the 18 and 20 and 63, were measured at commits `2c098d9` and `8ec9873`, and cannot be
+     re-measured from the current code because the code that produced them is gone. Everything in
+     the block above is what this software does today.
+
+     One of those numbers was worse than unreproducible and it is worth saying so on the page that
+     asks you to trust the others: the `20` was taken with a throwaway script and a self-signed
+     certificate that was **never committed**, while this paragraph said you could reproduce it with
+     `npm run measure-pacing`. You could not — the harness had no way to serve https. It makes its
+     own certificate now, which is what the `schemeChange` line above runs.
    - Nothing else. There is no second file, no probing, and no request at all to a path you have
      disallowed. (One request in this software is not the crawler and is not governed by
      `robots.txt`. It goes to `callook.info` and to no other host in the world, so unless you run

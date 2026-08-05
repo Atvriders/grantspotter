@@ -215,7 +215,13 @@ describe('README honesty surfaces', () => {
     // Composition, in the direction that cannot be argued into polling more.
     expect(readme).toMatch(/compose by MAX|never replace each other/i);
     // The ceiling, and that it is not the product of two limits.
-    expect(readme).toMatch(/at most nine requests/i);
+    //
+    // This asserted `/at most nine requests/` until 2026-08-04. The sentence it was holding —
+    // "nine requests to your server" — was measured false the same day for a machine answering to
+    // two names (18, `npm run measure-pacing twoNamesOneMachine`), so the assertion moves with the
+    // claim and is strictly harder: the README must now say the ceiling counts EVERY request the
+    // fetch makes, not merely the ones aimed at one server.
+    expect(readme).toMatch(/at most nine HTTP requests in total/i);
     expect(readme).toMatch(/not 5 x 4 = 24|rather than two that multiply/i);
     // And where the numbers came from, so the claim is reproducible rather than asserted.
     expect(readme).toMatch(/npm run measure-pacing/);
@@ -535,29 +541,105 @@ describe('README: the callsign lookup, described against itself', () => {
 });
 
 /**
- * THE PUBLISHED CEILING, AFTER THE SECOND ROUND OF MEASURING IT.
+ * THE PUBLISHED CEILING, AFTER THE THIRD ROUND OF MEASURING IT.
  *
  * `states the pacing rules a polled site can check against its own logs` above holds the number.
- * This holds what the number COUNTS, which is what was wrong: the README said "one page fetch, or
- * one `/robots.txt` read, costs at most nine requests" and that `or` licensed 9 + 9 — plus a fresh
- * nine for every scheme or port one machine answered on. A site owner counting nine against their
- * access log would have found sixty-three.
+ * This holds what the number COUNTS, which is what has been wrong every time. The README said "one
+ * page fetch, or one `/robots.txt` read, costs at most nine requests" and that `or` licensed 9 + 9,
+ * plus a fresh nine per origin — sixty-three, measured. It then said "nine to your server", and a
+ * server answering to an apex AND a `www` was measured at eighteen. The claim that survives is the
+ * one with no "to whom" in it at all, and these gates hold that.
  */
-describe('README: nine means nine to one server', () => {
+describe('README: nine means nine, wherever the chain goes', () => {
   it('counts the robots.txt read inside the ceiling, not beside it', () => {
-    expect(readme).toMatch(/at most nine requests to your server in total/);
-    expect(readme).toMatch(/`\/robots\.txt` read\s*\n?\s*included/);
-    expect(readme).toMatch(/however many origins \(schemes or ports\)/);
+    expect(readme).toMatch(/at most nine HTTP requests in total/);
+    expect(readme).toMatch(/`\/robots\.txt` read included/);
     // The `or` that licensed the doubling must not come back.
     expect(readme).not.toMatch(/One page fetch, or one `\/robots\.txt` read, costs/);
-    // The measured before → after, so the claim is checkable rather than asserted.
-    expect(readme).toMatch(/18 → 9/);
-    expect(readme).toMatch(/20 → 9/);
-    expect(readme).toMatch(/63 → 9/);
+    // Nor may the scoped version, which is the sentence that was measured false on 2026-08-04.
+    expect(readme).not.toMatch(/at most nine requests to your server/);
+    // The measured before-figures stay, because a reader deciding whether to trust the number is
+    // owed the history — but see the test below for the condition attached to printing them.
+    expect(readme).toMatch(/18, 20, 63 and 18/);
   });
 
-  it('says a different host gets its own nine, so the bound is not oversold', () => {
-    expect(readme).toMatch(/\*different host\* still gets that host its own nine/i);
+  /**
+   * THE ASSERTION THIS REPLACES IS THE ONE THE ROUND WAS ABOUT, AND IT IS NOW INVERTED.
+   *
+   * It required the README to say a redirect to a *different host* gets that host its own nine, on
+   * the reasoning that a different host is a different owner entitled to a full allowance. That
+   * reasoning could not survive the measurement: a URL does not say who owns it, `example.org` and
+   * `www.example.org` are different hosts by that test and one machine in practice, and the
+   * entitlement was worth 18 requests to one kernel. The purse is now per fetch and has no key, so
+   * the README must NOT make the old promise, and must state the cost of the new rule rather than
+   * only its benefit.
+   */
+  it('does not promise a fresh allowance to whatever it is redirected to', () => {
+    expect(readme).not.toMatch(/still gets that host its own nine/i);
+    expect(readme).toMatch(/one fetch, nine requests, wherever they land/i);
+    // The cost, said in the README rather than discovered by an operator wondering why a source
+    // was skipped.
+    expect(readme).toMatch(/can cost \*us\* a source for a\s*\n?\s*night/i);
+  });
+
+  /**
+   * "REAL NUMBERS OFF REAL SOCKETS, AND YOU CAN REPRODUCE THEM" WAS FALSE FOR ONE OF THEM.
+   *
+   * Both documents published a figure for an `http://` -> `https://` redirect and said the harness
+   * in this repository would reproduce it. `scripts/measure-pacing.ts` could not serve https at all:
+   * that number came from a scratchpad script with a self-signed certificate that was never
+   * committed. The harness generates its own certificate now — so the gate is that the claim and the
+   * capability travel together, in BOTH directions: every scenario named in either document must
+   * exist in the harness, and the figures that genuinely cannot be reproduced must be labelled.
+   */
+  it('names only scenarios the shipped harness actually has', () => {
+    const harness = readFileSync(resolve(REPO_ROOT, 'scripts/measure-pacing.ts'), 'utf8');
+    const block = /const SCENARIOS: Record<string, \(\) => Promise<void>> = \{([\s\S]*?)\n\};/.exec(
+      harness,
+    );
+    expect(block, 'could not find the SCENARIOS map in scripts/measure-pacing.ts').not.toBeNull();
+    const shipped = new Set(
+      [...(block?.[1] ?? '').matchAll(/^\s{2}([A-Za-z0-9]+)[,:]/gm)].map((m) => m[1] as string),
+    );
+    expect(shipped.size).toBeGreaterThan(10);
+
+    const template = readFileSync(
+      resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
+      'utf8',
+    );
+    const named = [...`${readme}\n${template}`.matchAll(/measure-pacing ([A-Za-z0-9]+)/g)].map(
+      (m) => m[1] as string,
+    );
+    expect(named.length).toBeGreaterThan(5);
+    for (const scenario of new Set(named)) {
+      expect([...shipped], `npm run measure-pacing ${scenario}`).toContain(scenario);
+    }
+    // The scenario that carries the reproducibility claim for the https figure has to be one of
+    // them, and it has to be the one that actually speaks TLS.
+    expect(shipped).toContain('schemeChange');
+    expect(harness).toMatch(/createServer as createTlsServer/);
+  });
+
+  it('labels the figures that cannot be reproduced from this tree, instead of implying they can', () => {
+    const template = readFileSync(
+      resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
+      'utf8',
+    );
+    for (const doc of [readme, template]) {
+      // `\s+` and not a space: both sentences wrap mid-phrase in their source, and a regex that
+      // assumed one line would fail on a reflow that changed nothing a reader can see.
+      expect(doc).toMatch(/cannot be\s+(reproduced|re-measured)\s+from\s+(this|the current)/i);
+      // The commits they WERE measured at, so "not reproducible" is a fact with an address rather
+      // than an excuse.
+      expect(doc).toContain('2c098d9');
+      expect(doc).toContain('8ec9873');
+      // And the provenance of the one that was published as reproducible while it was not.
+      expect(doc).toMatch(/never committed/i);
+    }
+    // …and the claim that was false must not come back in the form that made it false.
+    expect(template).not.toMatch(
+      /Those are real numbers off real sockets, and you can reproduce them — `npm run measure-pacing`\s*\n\s*in this repository/,
+    );
   });
 
   /**

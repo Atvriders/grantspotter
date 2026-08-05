@@ -54,7 +54,7 @@ export const ROBOTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
  *
  * Fifteen minutes is chosen against the two bounds that actually exist rather than picked. Below:
  * the entry must outlive the run that created it, and one failing origin costs at most the whole
- * per-server purse (9 at the shipped defaults — see `createFetcher`'s `purseSize`), each request
+ * per-fetch purse (9 at the shipped defaults — see `createFetcher`'s `purseSize`), each request
  * bounded by DEFAULT_TIMEOUT_MS and separated by at least the host interval — a few minutes at the
  * default settings — against a nightly run of ~25 sources.
  * Above: it must be short enough that a human who fixes the problem and re-triggers does not meet
@@ -88,14 +88,18 @@ export const ROBOTS_UNREAD_CACHE_TTL_MS = 15 * 60 * 1000;
  * NOT A PER-ORIGIN-PER-RUN BUDGET, which was the other candidate, and the reason is arithmetic
  * rather than taste. Measured over the shipped source registry (27 sources, 17 hosts), one crawl
  * run legitimately makes 30 requests to `api.grants.gov` (5 searches + up to 25 detail fetches,
- * `MAX_DETAIL_FETCHES`), 12 to `www.ardc.net` and 9 to `www.arrl.org`. A single flat per-origin cap
+ * `MAX_DETAIL_FETCHES`), 12 to `www.ardc.net` and 10 to `www.arrl.org` — the last of those being
+ * eight source URLs (six spelled `https://`, two still `http://`) plus one `/robots.txt` read at
+ * each of the two origins that spelling puts them under. (It read "9" until 2026-08-04, which
+ * counted the pages and one robots read; two origins means two reads, and three if the `http://`
+ * one redirects.) A single flat per-origin cap
  * would therefore have to sit at 40-plus to avoid truncating a legitimate federal crawl — far above
  * anything a volunteer-run club site could ever see, so it would bound nothing that anyone is
  * worried about while being able to silently cut a crawl short. The per-fetch purse is the tighter
  * bound where it matters: a site that publishes `Disallow: /` is fetched once per run and its whole
  * nightly footprint is this number.
  *
- * IT IS ONE PURSE PER SERVER PER FETCH, AND IT WAS TWO KINDS OF PURSE UNTIL 2026-08-04.
+ * IT IS ONE PURSE PER LOGICAL FETCH, AND IT HAS BEEN THREE DIFFERENT THINGS IN ONE DAY.
  * `fetchOne` opened one for the page and `readRobots` opened another for EVERY origin the fetch
  * touched, so the number below bounded neither of the two things the README says it bounds.
  * Measured at 2c098d9 with `npm run measure-pacing`, against loopback servers, one page fetch:
@@ -104,8 +108,13 @@ export const ROBOTS_UNREAD_CACHE_TTL_MS = 15 * 60 * 1000;
  *   schemeChange        one host, http -> https                20 requests
  *   ceilingManyOrigins  one host, five hops across 6 origins   63 requests   (7 x 9)
  *
- * See {@link createFetcher}'s `purses` for the key that fixes it and why the robots cache keeps a
- * different one. The same three scenarios now measure 9, 9 and 9.
+ * Keying one purse per HOSTNAME fixed those three and left the commonest redirect on the internet
+ * uncovered: an apex that 301s to `www` is one machine answering to two names, and two names were
+ * two purses. Measured at 8ec9873, `npm run measure-pacing twoNamesOneMachine`: 18 requests to one
+ * machine, and the crossover gap 4 ms against a 1000 ms floor.
+ *
+ * See {@link createFetcher}'s `newFetchState` for what replaced the key — nothing, which is the
+ * point — and why the robots cache still keys on the origin. Every one measures 9 now.
  */
 export function maxRequestsPerFetch(maxHops: number, maxRetries: number): number {
   return maxHops + maxRetries + 1;
@@ -172,6 +181,11 @@ export class HttpStatusError extends Error {
  * Reachable when the `/robots.txt` read at the head of a hop consumes the last of the allowance —
  * a site that has just answered `429` or `503` several times in a row. The page is not requested,
  * which is the whole point.
+ *
+ * `host` is where the fetch STOPPED, which is not necessarily where the allowance went: one purse
+ * now covers a whole redirect chain (see `newFetchState`), so a chain that spent eight requests at an
+ * apex and stopped at `www` names `www` here and the URL beside it says the rest. Both are in the
+ * message because an operator reading a log needs the second to make sense of the first.
  */
 export class RequestBudgetExhaustedError extends Error {
   readonly url: string;
@@ -179,9 +193,9 @@ export class RequestBudgetExhaustedError extends Error {
   readonly limit: number;
   constructor(url: string, host: string, limit: number) {
     super(
-      `Request budget exhausted for ${host} (${url}): one fetch may cost ${host} at most ` +
-        `${limit} HTTP requests, including the /robots.txt read it needs first. Skipping this ` +
-        `source for the run.`,
+      `Request budget exhausted at ${host} (${url}): one fetch may cost at most ${limit} HTTP ` +
+        `requests in total — every redirect hop, every retry, and the /robots.txt read at each ` +
+        `origin it touches, across every host in the chain. Skipping this source for the run.`,
     );
     this.name = 'RequestBudgetExhaustedError';
     this.url = url;
@@ -302,7 +316,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
   const robotsCache = new Map<string, { expiresAtMs: number; rules: Promise<RobotsRules> }>();
 
   /**
-   * How large one server's purse is, and why it is not simply `maxRequestsPerFetch(maxRedirects, …)`.
+   * How large one fetch's purse is, and why it is not simply `maxRequestsPerFetch(maxRedirects, …)`.
    *
    * The purse now pays for the `/robots.txt` read as well as the page, and `ROBOTS_MAX_REDIRECTS`
    * is deliberately NOT configurable (see `robots.ts`: it is a floor RFC 9309 §2.3.1.2 puts on
@@ -314,48 +328,104 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    */
   const purseSize = maxRequestsPerFetch(Math.max(maxRedirects, ROBOTS_MAX_REDIRECTS), maxRetries);
 
-  /** What one server has left to spend on one logical fetch. */
-  interface Purse {
+  /**
+   * WHAT ONE LOGICAL FETCH CARRIES WITH IT WHEREVER ITS CHAIN GOES: an allowance, and a memory of
+   * where the last request went. Both of the properties this file publishes — a ceiling on requests
+   * and a floor between them — are facts about the CHAIN, and a chain is free to wander across
+   * origins and hostnames, so neither can be stored per address.
+   */
+  interface FetchState {
+    /** The purse: what this fetch has left to spend, anywhere. See {@link newFetchState}. */
     remaining: number;
+    /** The lane the previous request of this fetch went out on; undefined before the first one. */
+    lastHost?: string;
   }
 
   /**
-   * THE PURSES FOR ONE LOGICAL FETCH, ONE PER PHYSICAL SERVER, KEYED BY `normalizeHost`.
+   * ONE PURSE PER LOGICAL FETCH, WITH NO KEY AT ALL — which is the third answer this question has
+   * had in one day, and the only one that does not require guessing who owns what.
    *
-   * WHICH KEY, AND WHY THE OTHER ONE IS STILL RIGHT WHERE IT IS. Two questions in this file look
-   * like the same question and are not:
+   * The purse exists to make one sentence in the README true: a page fetch costs at most nine HTTP
+   * requests. Every version of it has failed on the same move — the chain crosses to somewhere the
+   * key says is new, and a whole second allowance appears. Keyed per ORIGIN it was a scheme or a
+   * port (measured 18, 20 and 63 at commit 2c098d9). Keyed per HOSTNAME it was a second NAME on the
+   * same machine: `npm run measure-pacing twoNamesOneMachine` at 8ec9873 printed 18 requests to one
+   * kernel, because `example.org` and `www.example.org` are two hostnames, and an apex that 301s to
+   * `www` is the commonest redirect on the internet.
    *
-   *   "Whose bandwidth am I spending?" — `normalizeHost`, scheme and port DROPPED. This is the key
-   *   a site owner would recognise as "my server": `http://example.org`, `https://example.org` and
-   *   `https://example.org:8443` are one machine, one access log, one person deciding whether we
-   *   are being rude. It is the key the pacing lane has always used, and the purse now uses it too,
-   *   because a budget and an interval are answers to the same question.
+   * WHY NOT KEY IT BY THE SITE, THEN. Because a URL does not say who owns it, and every available
+   * way of guessing is wrong in a direction that hurts somebody who cannot tell it is happening:
    *
-   *   "Whose rules am I reading?" — `canonicalOrigin`, scheme and port KEPT. RFC 9309 §2.3 scopes
-   *   `/robots.txt` to a scheme/host/port triple, so a service on :8443 publishes its own file and
-   *   must not inherit :443's. `robotsCache` keys on that and MUST keep doing so; merging the two
-   *   keys would make us obey the wrong file, which is the opposite of a fix.
+   *   Registrable domain (eTLD+1) is the textbook answer and needs the Public Suffix List, which is
+   *   a dependency this repository will not take for a politeness heuristic and which is a
+   *   downloaded file that goes stale. Deriving it without one means "the last two labels", and
+   *   that merges `alice.github.io` with `bob.github.io` and every `*.co.uk` in existence into a
+   *   single nine-request budget — different owners, different servers, one purse, and our crawl of
+   *   one club's site truncated because another club's site was flaky. Nobody can see that happen
+   *   and nobody can fix it from outside.
    *
-   * THE DEFECT THIS REPLACES. `readRobots` opened a fresh nine-request purse per ORIGIN and
-   * `fetchOne` opened a separate one for the page, so a fetch that crossed http/https or a port
-   * bought the whole allowance again from the same machine. Measured against loopback servers
-   * (`npm run measure-pacing`) at commit 2c098d9, ONE page fetch: 18 requests on a
-   * single origin, 20 across an http -> https hop, and 63 across five hops over six origins on one
-   * host — against a published ceiling of nine. All three are nine now.
+   *   Resolving both names and comparing addresses is network I/O inside a politeness decision, it
+   *   cannot run in a unit suite that makes no requests, and it answers wrongly in both directions
+   *   behind a CDN (one address, many owners) and behind round-robin DNS (one owner, many
+   *   addresses).
    *
-   * A chain that crosses to a DIFFERENT host does get a fresh purse, and that is not a loophole:
-   * that is a different server, owned by somebody else, seeing its own first nine requests.
+   *   Stripping a leading `www.` is the narrow version of the same guess. It is right almost always
+   *   and it still leaves `example.org` -> `example-club.net` on one box uncovered, so it buys a
+   *   special case without buying the property.
+   *
+   * So the bound is expressed as the thing we actually know: this is ONE FETCH, and one fetch may
+   * cost nine requests wherever they land. No key, nothing to be wrong about, and the published
+   * sentence is true for every shape including the ones nobody has thought of yet.
+   *
+   * WHAT IT COSTS, SAID PLAINLY. A redirect chain that legitimately crosses several hosts can now
+   * run out partway and be skipped for the run, where before each host had its own allowance. That
+   * costs US a source for a night; it never costs a stranger a request, which is the direction this
+   * trade has to point. The case is also rare and already pathological — a healthy apex -> `www`
+   * hop costs four requests against a purse of nine — and when it happens it is explicit
+   * ({@link RequestBudgetExhaustedError}) rather than silent.
+   *
+   * THE ROBOTS CACHE STILL KEYS ON `canonicalOrigin`, SCHEME AND PORT KEPT, and that is not an
+   * inconsistency. "How much may I spend?" and "whose rules am I reading?" are different questions:
+   * RFC 9309 §2.3 puts `/robots.txt` at the authority's root, so a service on :8443 publishes its
+   * own file and must not inherit :443's. Merging those two keys would make us obey rules the site
+   * never wrote for that service, which is the opposite of a fix.
    */
-  function newPurses(): (url: string) => Purse {
-    const byHost = new Map<string, Purse>();
-    return (url: string): Purse => {
-      const host = normalizeHost(url);
-      const existing = byHost.get(host);
-      if (existing !== undefined) return existing;
-      const fresh: Purse = { remaining: purseSize };
-      byHost.set(host, fresh);
-      return fresh;
-    };
+  function newFetchState(): FetchState {
+    return { remaining: purseSize };
+  }
+
+  /**
+   * Carry this fetch's pacing across a change of hostname, so the handover is spaced like every
+   * other gap in the chain.
+   *
+   * WHAT THIS FIXES. `HostQueue` paces per lane, and a lane that has never run a request has nothing
+   * to pace against — right for the first request of a nightly run, and wrong in the middle of a
+   * redirect chain, because the machine about to answer may well be the machine that just answered.
+   * `example.org` and `www.example.org` are two lanes to this file and one kernel to the person
+   * whose bandwidth it is. Measured at 8ec9873: `npm run measure-pacing nameChangeHealthy` put the
+   * apex -> `www` handover 4 ms after the redirect against a 1000 ms floor, and
+   * `twoNamesOneMachine` had 1 of its 17 gaps under the floor for the same reason.
+   *
+   * We cannot know whether the next request is the same machine (see `newFetchState` for why every
+   * way of guessing is worse), so we pace as though it were. When it is, the site owner gets the
+   * interval we published. When it is not, the cost is one second of OUR time, once, at the exact
+   * moment we already know we are being sent somewhere else.
+   *
+   * IT IS DONE HERE, NOT AT THE REDIRECT, and the difference is a case the first version of this
+   * missed: a chain that goes apex -> `www` and BACK. A `/robots.txt` at the apex that 301s to
+   * `www` is read at `www`, and then the page under it is fetched from the apex — whose own lane
+   * last ran a request before the handover and is therefore free immediately. Pacing at the point
+   * of redirect covers one direction; pacing at the point of REQUEST covers every direction, and
+   * this is the single place every request in this file passes through.
+   *
+   * `defer` and not a sleep: the wait belongs to the lane, so a page queued behind this one waits
+   * too, and it composes with `Retry-After` and `Crawl-delay` by MAX rather than replacing them.
+   */
+  function paceAcrossHostChange(state: FetchState, host: string): void {
+    if (state.lastHost !== undefined && state.lastHost !== host) {
+      queue.defer(host, queue.minIntervalFor(host));
+    }
+    state.lastHost = host;
   }
 
   function headers(
@@ -404,14 +474,14 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    * got four, and a dropped connection manufactured a 404 that opened the whole origin), then it
    * wrapped a whole retry loop in one queue slot (bursts of 2-5 ms against a 1000 ms floor).
    *
-   * IT NO LONGER OWNS THE PURSE, which was the third round of the same bug. `purses` belongs to the
+   * IT NO LONGER OWNS THE PURSE, which was the third round of the same bug. `purse` belongs to the
    * logical fetch that needed these rules and is shared with the page under them, so a read cannot
    * buy a machine a second allowance by being aimed at a second origin on it. That also means the
    * purse can be empty when this is called — `gatedRequest` throws `RequestBudgetExhaustedError`,
    * which lands in the same `catch` as a dropped connection and produces the same verdict, because
    * it means the same thing: we did not read this site's rules.
    */
-  async function readRobots(origin: string, purses: (url: string) => Purse): Promise<RobotsRules> {
+  async function readRobots(origin: string, state: FetchState): Promise<RobotsRules> {
     const stamp = (): string => new Date(now()).toISOString();
     let url = `${origin}/robots.txt`;
     assertNotBlocked(url);
@@ -420,9 +490,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       let body = '';
       try {
         const request: FetchRequest = { url, method: 'GET', accept: 'html' };
-        // Looked up per hop, not once: RFC 9309 §2.3.1.2 has this chain following redirects
-        // "across authorities", so hop two can be a different machine with its own allowance.
-        response = await gatedRequest(url, request, purses(url));
+        response = await gatedRequest(url, request, state);
         if (response.status === 200) body = await response.text();
       } catch (err) {
         if (err instanceof HttpStatusError) {
@@ -467,28 +535,32 @@ export function createFetcher(opts: FetchOptions): Fetcher {
         // site's rules, so we do not get to act as if they permit us.
         return robotsFromResponse(response.status, '', AGENT_TOKEN, stamp());
       }
+      // RFC 9309 §2.3.1.2 has this chain following redirects "across authorities", so hop two can
+      // be a different hostname. Nothing is done about that here: `gatedRequest` paces every request
+      // against wherever this fetch's previous one went, which covers this hop, the page under it,
+      // and the way back.
       url = next;
     }
   }
 
   /**
-   * KEYED BY ORIGIN, WHICH IS NOT THE KEY THE PURSE USES, ON PURPOSE. RFC 9309 §2.3 puts
+   * KEYED BY ORIGIN, WHICH IS THE ONLY KEY LEFT IN THIS FILE, ON PURPOSE. RFC 9309 §2.3 puts
    * `/robots.txt` at the authority's root, so the file that governs `https://example.org:8443` is
    * a different file from the one that governs `https://example.org`, and reading one as the other
-   * would be obeying rules the site never wrote for that service. See `newPurses` for the other
-   * half of the pair.
+   * would be obeying rules the site never wrote for that service. The purse deliberately has no key
+   * at all — see `newFetchState` for why those two facts are consistent rather than in tension.
    *
-   * `purses` belongs to whichever logical fetch got here first and is spent by the read it starts.
+   * `purse` belongs to whichever logical fetch got here first and is spent by the read it starts.
    * A second fetch that arrives while that read is in flight shares the promise and pays nothing,
    * which is right: the requests happened once, so they are charged once.
    */
-  async function robotsFor(origin: string, purses: (url: string) => Purse): Promise<RobotsRules> {
+  async function robotsFor(origin: string, state: FetchState): Promise<RobotsRules> {
     const cached = robotsCache.get(origin);
     // Cached for the run, never for the life of the process. `now()` is injected, so this is the
     // same clock the host queue and the payload timestamps use.
     if (cached && now() < cached.expiresAtMs) return cached.rules;
     const readAtMs = now();
-    const promise = readRobots(origin, purses);
+    const promise = readRobots(origin, state);
     // Optimistic: assume the read will succeed, so a second page queued against this origin while
     // the first read is still in flight shares it rather than starting a second one.
     const entry = { expiresAtMs: readAtMs + robotsTtlMs, rules: promise };
@@ -548,29 +620,33 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    * asking us to stop asking, and the next request to that host is exactly what it was asking
    * about, even if that request belongs to a different page.
    *
-   * `purse` is what this fetch has left to spend AT THIS SERVER (see `newPurses`). Every attempt
-   * costs one, whichever hop of whichever chain it belongs to, and whether it is a page or the
-   * `/robots.txt` above it. An empty purse is refused here rather than silently returning nothing,
-   * because this is the single place every request in this file passes through.
+   * `state.remaining` is what this whole fetch has left to spend, anywhere (see `newFetchState`).
+   * Every attempt
+   * costs one, whichever hop of whichever chain it belongs to, whether it is a page or the
+   * `/robots.txt` above it, and whichever host it is aimed at. An empty purse is refused here rather
+   * than silently returning nothing, because this is the single place every request in this file
+   * passes through.
    */
   async function gatedRequest(
     url: string,
     req: FetchRequest,
-    purse: Purse,
+    state: FetchState,
   ): Promise<Response> {
     // The pacing lane is keyed by CANONICAL HOSTNAME, port and trailing root dots removed, so
-    // `example.org`, `example.org.` and `example.org:8443` are one budget and not three. The two
+    // `example.org`, `example.org.` and `example.org:8443` are one lane and not three. The two
     // host-derived values in this file were the last places that still compared raw
     // `URL.host` — four copies of the trailing-dot bug have been found in this repository, one of
     // them in a blocklist check, so there is exactly one spelling of it now (`net/hosts.ts`).
     // Dropping the port deliberately errs towards polling less: two ports are two servers to HTTP
-    // and one machine to the person whose bandwidth it is. `newPurses` keys on the same value, so
-    // the lane and the allowance now agree about what "one server" means.
+    // and one machine to the person whose bandwidth it is. What the lane cannot see is a machine
+    // answering to two NAMES, which is what the line below is for.
     const host = normalizeHost(url);
-    if (purse.remaining <= 0) throw new RequestBudgetExhaustedError(url, host, purseSize);
+    if (state.remaining <= 0) throw new RequestBudgetExhaustedError(url, host, purseSize);
+    // Before the gate, not inside it: this raises the lane's floor, and the gate is what waits on it.
+    paceAcrossHostChange(state, host);
     let last: Attempted | undefined;
-    for (let i = 0; i <= maxRetries && purse.remaining > 0; i += 1) {
-      purse.remaining -= 1;
+    for (let i = 0; i <= maxRetries && state.remaining > 0; i += 1) {
+      state.remaining -= 1;
       const outcome = await queue.run(host, async (): Promise<Attempted> => {
         try {
           const response = await attempt(url, req);
@@ -610,19 +686,19 @@ export function createFetcher(opts: FetchOptions): Fetcher {
    * the hop count have to be one piece of state that every hop shares rather than an argument each
    * level is free to reset.
    *
-   * THE PURSES ARE CREATED HERE AND PASSED DOWN INTO `robotsFor`, so the read that authorises a hop
-   * is charged to the same server the hop itself is charged to. That single line is what makes the
-   * published ceiling true; before it, `readRobots` opened its own nine per ORIGIN and one page
+   * THE PURSE IS CREATED HERE AND PASSED DOWN INTO `robotsFor`, so the read that authorises a hop
+   * is charged to the same allowance the hop itself is charged to. That single line is what makes
+   * the published ceiling true; before it, `readRobots` opened its own nine per ORIGIN and one page
    * fetch could cost one machine 63 requests.
    */
   async function fetchOne(startUrl: string, req: FetchRequest): Promise<FetchedPayload> {
-    const purses = newPurses();
+    const state = newFetchState();
     let url = startUrl;
     let response: Response;
     for (let hop = 0; ; hop += 1) {
       assertNotBlocked(url);
       const parsed = new URL(url);
-      const rules = await robotsFor(canonicalOrigin(parsed), purses);
+      const rules = await robotsFor(canonicalOrigin(parsed), state);
       if (!isPathAllowed(rules, `${parsed.pathname}${parsed.search}`)) {
         throw new RobotsDisallowedError(url);
       }
@@ -635,10 +711,10 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       }
 
       // May throw `RequestBudgetExhaustedError` if the robots read above spent the last of this
-      // server's allowance. Throwing beats returning the 3xx that brought us here: we did not read
+      // fetch's allowance. Throwing beats returning the 3xx that brought us here: we did not read
       // the page, and handing a redirect body to a parser as though it were the page is exactly the
       // kind of "derived value presented as a stated one" this codebase exists to refuse.
-      response = await gatedRequest(url, req, purses(url));
+      response = await gatedRequest(url, req, state);
 
       if (response.status < 300 || response.status >= 400) break;
       const location = response.headers.get('location');
@@ -650,9 +726,8 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       // Re-assert on every hop. This is what stops farweb.org -> batualam.org and any
       // future takeover chain from reaching a parser.
       assertNotBlocked(next);
-      // Out of purse at the server the next hop points at — which may be this one or a fresh one.
-      // Same outcome as running out of hops: stop, and let the 3xx be the payload.
-      if (purses(next).remaining <= 0) break;
+      // Out of allowance. Same outcome as running out of hops: stop, and let the 3xx be the payload.
+      if (state.remaining <= 0) break;
       url = next;
     }
 

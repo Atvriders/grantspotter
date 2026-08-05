@@ -151,34 +151,80 @@ re-verifies quarterly.
   30 s and you get 30 s. Ask for 0 s and you still get the host interval. Publish a `Crawl-delay`
   and the longest of the three wins — nothing here adds two waits together, and nothing here lets a
   server talk us *below* our own floor.
-- **One page fetch costs at most nine requests to your server in total, the `/robots.txt` read
-  included** — however many origins (schemes or ports) that one server answers on. Redirect hops,
-  retries and the `robots.txt` read spend one shared budget rather than budgets that multiply, so a
-  chain that redirects five times *and* fails at every hop costs nine requests and not 5 x 4 = 24.
-  When the budget runs out we stop and skip the source for that run.
+- **One page fetch costs at most nine HTTP requests in total, the `/robots.txt` read included** —
+  and *in total* now means what it says: to you, and to anywhere the chain is redirected to.
+  Redirect hops, retries and the `robots.txt` read at each origin spend one shared budget rather
+  than budgets that multiply, so a chain that redirects five times *and* fails at every hop costs
+  nine requests and not 5 x 4 = 24. When the budget runs out we stop and skip the source for that
+  run.
 
-  Until 2026-08-04 this sentence read "one page fetch, **or** one `/robots.txt` read", and that
-  `or` was the defect: the two had independent budgets of nine, and the robots budget was opened
-  once per **origin** visited rather than once per server. Constructed and counted against real
-  loopback servers, one page fetch, before → after: one origin **18 → 9**; an `http` → `https`
-  redirect on the same host **20 → 9**; five hops across six origins of one host **63 → 9**. A
-  chain that redirects to a *different host* still gets that host its own nine, deliberately —
-  that is a different server, owned by somebody else.
+  **That bound has been wrong twice in the same way, and the second time was found after the first
+  fix had shipped.** It was once *per origin*, so every scheme or port one machine answered on
+  bought a fresh nine. It was then *per hostname*, so an apex that redirects to `www` — the
+  commonest redirect there is — bought a fresh nine: **measured at 18 requests to one machine**, and
+  the handover between the two names came 4 ms after the redirect against a 1000 ms floor. There is
+  no third key that would have been right, because a URL does not say who owns what:
+  `example.org` and `www.example.org` are two hostnames and one server almost always, while
+  `alice.github.io` and `bob.github.io` are two strangers that any "registrable domain" rule
+  computed without a public-suffix list would merge into one. Guessing wrong in that direction
+  would throttle somebody who could never find out why. So the budget is not keyed by anything at
+  all: **one fetch, nine requests, wherever they land.** A chain that crosses to somebody else's
+  host spends the same nine instead of opening a second one — which can cost *us* a source for a
+  night when a chain is long and troubled, and cannot cost a stranger a request.
+
+  Here is the whole ceiling, per shape, with the command that measures each one **on your machine,
+  against real sockets**:
+
+  | one page fetch against… | requests | measure it yourself |
+  |---|---|---|
+  | one origin, `/robots.txt` and page both in distress | 9 | `npm run measure-pacing ceilingOneOrigin` |
+  | `http://` redirecting to `https://` on one machine, over real TLS | 9 | `npm run measure-pacing schemeChange` |
+  | five redirects across six origins of one machine | 9 | `npm run measure-pacing ceilingManyOrigins` |
+  | an apex redirecting to `www`, both names in distress | 9 | `npm run measure-pacing twoNamesOneMachine` |
+  | an apex redirecting to `www`, healthy | 4 | `npm run measure-pacing nameChangeHealthy` |
+  | a page redirecting to another port, healthy | 4 | `npm run measure-pacing portChangeHealthy` |
+
+  Every gap in every one of those runs was over a second. Before the two fixes the first four
+  measured **18, 20, 63 and 18**; those figures were taken at commits `2c098d9` and `8ec9873` and
+  **cannot be reproduced from this tree**, because the code that produced them is gone. The column
+  above can be, by anyone, in about a minute each.
+
+  That distinction is not pedantry, and it is here because this page got it wrong: the `20` was
+  measured with a throwaway script and a self-signed certificate that was **never committed**, while
+  both this file and the crawler-contact template said the figure was reproducible with
+  `npm run measure-pacing`. The shipped harness could not speak https at all. It generates its own
+  certificate now, so the claim and the capability arrive together.
 - **A site that answers on more than one origin has its `robots.txt` read once per origin, and
   that is deliberate.** Rules are per origin: `https://www.example.org/robots.txt` says nothing
   about `http://` or about another port, so we have genuinely not read your rules for an origin
   until we ask that origin. A site publishing `Disallow: /` therefore costs **one request per
   origin we poll it under, per run**, not one flat. Today `www.arrl.org` is that case: of the eight
-  ARRL page URLs this software polls, six are spelled `https://` and two are still `http://`, so a
+  ARRL URLs this software polls, six are spelled `https://` and two are still `http://`, so a
   `Disallow: /` there would cost two requests a night rather than one.
   `npm run measure-pacing twoOriginsOneHost` prints that exact shape — 2 requests, both
   `/robots.txt`, one per origin. Reusing one origin's file for another would be cheaper and would
   be us obeying rules nobody gave us, which is the one thing this project will not do.
+
+  **Two is what we measure, and three is what we would expect in production, so both are printed
+  here rather than only the flattering one.** A site that still answers `http://` in 2026 very
+  likely redirects it to `https://`, and if arrl.org does, the nightly cost of a `Disallow: /`
+  there is **three** requests: the `http` origin's read is a redirect plus the file at the far end,
+  and the `https` origin still reads its own copy, because rules fetched across a redirect are
+  attributed to the origin we *asked*. `npm run measure-pacing twoOriginsRedirectingRobots` prints
+  that shape — 3 requests. Which of the two shapes arrl.org actually has is **inferred, not
+  measured**: this project will not poll them to settle a footnote.
 - These are measurements, not intentions. `npm run measure-pacing` drives the real fetcher against
-  throwaway loopback HTTP servers — happy path, `429` with `Retry-After` 0/1/30, `503` with no
-  header, a five-hop redirect chain, a chain that also 429s, and a host publishing `Crawl-delay: 5`
-  — and prints the millisecond gap between every request the server actually received, against the
-  floor that applies to each one.
+  throwaway loopback servers — happy path, `429` with `Retry-After` 0/1/30, `503` with no header, a
+  five-hop redirect chain, a chain that also 429s, a host publishing `Crawl-delay: 5`, and each of
+  the ceiling shapes tabled above — and prints the millisecond gap between every request the
+  server actually received, against the floor that applies to each one. It takes about two minutes.
+
+  Two of those scenarios need something of the machine you run them on, and say so and skip rather
+  than failing if they do not get it: `schemeChange` needs an `openssl` binary, to generate the
+  throwaway certificate that lets one origin speak https (nothing is committed and nothing outlives
+  the run); `twoNamesOneMachine` and `nameChangeHealthy` need `127.0.0.2` to be bindable, which is
+  how two hostnames are put in front of one machine without asking you to edit `/etc/hosts`. Linux
+  needs nothing; macOS needs `sudo ifconfig lo0 alias 127.0.0.2 up`.
 - `robots.txt` honoured, including `Crawl-delay: 5` on arrl.org, **from the first request it
   governs** — the page fetched immediately after reading the file, not the one after that. The agent token is
   `GrantSpotter`, so any site can stop any deployment of this with `User-agent: GrantSpotter` and
