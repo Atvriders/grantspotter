@@ -14,6 +14,9 @@ import {
   reservedContactName,
   resolveContactUrl,
 } from '../src/config.js';
+// The lookup's clause, imported rather than re-spelled: the value on the wire and the value this
+// suite compares against the crawler's must be the same object, or this test proves nothing.
+import { CALLSIGN_LOOKUP_PURPOSE } from '../src/callsign/callook.js';
 
 /**
  * NOT example.org, and — since 2026-08-04 — NOT loopback either.
@@ -866,6 +869,98 @@ describe('buildUserAgent', () => {
     expect(() => buildUserAgent('   ')).toThrow(/CONTACT_URL is required/);
     expect(() => loadConfig({ SESSION_SECRET: VALID.SESSION_SECRET })).toThrow(
       /CONTACT_URL is required/,
+    );
+  });
+});
+
+/**
+ * THE PURPOSE CLAUSE, AND THE TWO ACTIVITIES THAT MAY DIFFER IN IT.
+ *
+ * Two things in this software open a socket at a stranger's host: the nightly crawl and the
+ * user-initiated callsign lookup. Until 2026-08-04 they signed themselves identically, and what
+ * they both said was the crawler's sentence — `nightly grant-deadline change detector` — on a
+ * request that is not nightly, detects nothing, and is one licence record a person asked us to
+ * read about themselves. Being identified is half the courtesy the User-Agent exists for; being
+ * described accurately is the other half, and callook.info's owner was getting one of them.
+ *
+ * THE FIX HAD TO BE A PARAMETER OF THE ONE FACTORY (RESOLUTIONS R10). A second builder is exactly
+ * how this repository once ended up with two different strings on the wire, and "the crawler and
+ * the lookup need different wording" is precisely the pressure that produces one. So: same
+ * function, same version, same `+URL`, same contact sentence, same punctuation — one clause moves.
+ */
+describe('buildUserAgent: the purpose clause', () => {
+  const CRAWL = 'GrantSpotter/0.1.0 (+https://w9xyz-radio-club.org/grantspotter; ';
+  const CONTACT = '; contact the operator of this instance at that page)';
+
+  it('defaults to the crawler wording, so every existing caller is untouched', () => {
+    // The default is not merely "some default": it is byte-for-byte what this function returned
+    // before the parameter existed, which is what makes the change safe for the ~25 polled sites.
+    expect(buildUserAgent(VALID.CONTACT_URL)).toBe(
+      `${CRAWL}nightly grant-deadline change detector${CONTACT}`,
+    );
+    expect(buildUserAgent(loadConfig(VALID))).toBe(buildUserAgent(VALID.CONTACT_URL));
+  });
+
+  /**
+   * SIDE BY SIDE, WHICH IS THE ONLY WAY TO SEE THAT IT DIFFERS IN THE RIGHT WAY AND ONLY THERE.
+   * Everything a site owner uses to identify and reach us is identical; the description of what we
+   * came for is not.
+   */
+  it('differs from the crawl in the purpose clause and in nothing else', () => {
+    const crawl = buildUserAgent(loadConfig(VALID));
+    const lookup = buildUserAgent(loadConfig(VALID), CALLSIGN_LOOKUP_PURPOSE);
+
+    expect(lookup).toBe(`${CRAWL}${CALLSIGN_LOOKUP_PURPOSE}${CONTACT}`);
+    expect(lookup).not.toBe(crawl);
+    // Same product, same version, same contact URL, same instruction for reaching a human.
+    expect(crawl.startsWith(CRAWL)).toBe(true);
+    expect(lookup.startsWith(CRAWL)).toBe(true);
+    expect(crawl.endsWith(CONTACT)).toBe(true);
+    expect(lookup.endsWith(CONTACT)).toBe(true);
+    // And the difference is exactly one clause: strip it and the two are the same string.
+    expect(lookup.replace(CALLSIGN_LOOKUP_PURPOSE, '')).toBe(
+      crawl.replace('nightly grant-deadline change detector', ''),
+    );
+    // The false sentence is gone from the lookup's line, and still present on the crawl's.
+    expect(lookup).not.toContain('nightly');
+    expect(crawl).toContain('nightly grant-deadline change detector');
+  });
+
+  it('is still a legal single-line header value with the lookup clause in it', () => {
+    const lookup = buildUserAgent(loadConfig(VALID), CALLSIGN_LOOKUP_PURPOSE);
+    expect(lookup).not.toMatch(/[\r\n]/);
+    expect(lookup).toMatch(/^[\x20-\x7e]+$/);
+    // Three clauses, still: the `+URL`, the purpose, the contact instruction.
+    expect(lookup.split('; ')).toHaveLength(3);
+  });
+
+  /**
+   * The parameter is a wire value, so it faces the same treatment the contact URL does. Nothing
+   * outside this repository can reach it today — both callers pass a module constant — and that is
+   * the condition under which a guard is cheap. A `;` or a bracket is the interesting case: it
+   * would not break the header, it would forge a clause, and the result reads perfectly.
+   */
+  it('refuses a purpose clause that would split the header or forge another clause', () => {
+    for (const bad of [
+      '',
+      '   ',
+      'nightly\r\nX-Injected: yes',
+      'nightly\ncrawl',
+      'crawler; nightly grant-deadline change detector',
+      'crawler (nightly)',
+      'a purpose clause with a \u0007 bell in it',
+      'a purpose clause with a \u0000 null in it',
+      'a purpose clause with a \t tab in it',
+      'x'.repeat(121),
+    ]) {
+      expect(() => buildUserAgent(VALID.CONTACT_URL, bad), bad).toThrow(ConfigError);
+    }
+  });
+
+  it('still refuses an unusable contact URL whatever the purpose says', () => {
+    expect(() => buildUserAgent('', CALLSIGN_LOOKUP_PURPOSE)).toThrow(/CONTACT_URL is required/);
+    expect(() => buildUserAgent('https://example.org/x', CALLSIGN_LOOKUP_PURPOSE)).toThrow(
+      ConfigError,
     );
   });
 });

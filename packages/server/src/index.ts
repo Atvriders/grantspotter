@@ -12,6 +12,7 @@ import { requireAdmin, requireAuth } from './auth/middleware.js';
 import { createBootstrapState } from './auth/bootstrap.js';
 import { currentSessionUser, mountProductApi } from './api/mount.js';
 import { createCallsignRouter } from './api/callsign.js';
+import { CALLSIGN_LOOKUP_PURPOSE } from './callsign/callook.js';
 import { createVerifyRunner } from './api/verify.js';
 import { reindexBrowse } from './api/reindex.js';
 import { drainChangeEvents } from './api/notify.js';
@@ -177,14 +178,22 @@ function main(): void {
    * design on the rule that no outbound request is anonymous — a small site's owner must be able
    * to see who is asking and reach a human — and then made one request that was. callook.info is
    * a volunteer-run service answering these for free; it is entitled to the same courtesy, and to
-   * knowing which deployment to write to. It is now the SAME string, from the same factory, from
-   * the same `CONTACT_URL` the server refuses to start without.
+   * knowing which deployment to write to. It comes from the same factory as every crawl request,
+   * off the same `CONTACT_URL` the server refuses to start without.
+   *
+   * AND IT SAYS WHAT THIS ACTUALLY IS. Until later the same day it was byte-identical to the
+   * crawler's, purpose clause included — `nightly grant-deadline change detector`, on a request
+   * that is not nightly, detects nothing, and is about one licence a person asked us to read. A
+   * site owner reading that line was being identified at correctly and described at wrongly. The
+   * clause is a parameter of the ONE factory (RESOLUTIONS R10 — see `config.ts`), never a second
+   * factory, and the value is the lookup's own constant so that the sentence lives beside the code
+   * it describes.
    *
    * `Headers` rather than a spread of `init.headers`: the client sends a plain object today, and a
    * spread would silently drop the caller's `accept` the day it sends a `Headers` instance
    * instead. `set` (not `append`) so a transport-level identity can never end up doubled.
    */
-  const callsignUserAgent = buildUserAgent(config);
+  const callsignUserAgent = buildUserAgent(config, CALLSIGN_LOOKUP_PURPOSE);
   const callsignTransport = (url: string, init: RequestInit): Promise<Response> => {
     const headers = new Headers(init.headers);
     headers.set('user-agent', callsignUserAgent);

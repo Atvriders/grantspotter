@@ -134,9 +134,14 @@ const THE_WIRE_BOUNDARY = 'packages/server/src/fetcher/index.ts';
  *   therefore has to be built somewhere, and the somewhere has to be a file allowed to call
  *   `buildUserAgent` — which is this list's sibling above, and which is the point: until
  *   2026-08-04 the lookup went out as `user-agent: node`, the only anonymous request this
- *   software made. It is now the same identified string as every crawl request, from the same
- *   factory, off the same CONTACT_URL. Exempting this file is what let that be fixed WITHOUT
- *   minting a second User-Agent somewhere the rule above cannot see.
+ *   software made. It now comes off the same factory and the same CONTACT_URL as every crawl
+ *   request, differing in ONE clause: the one that says what the request is for, which for a
+ *   lookup is not `nightly grant-deadline change detector` (see `config.ts`, and
+ *   `CALLSIGN_LOOKUP_PURPOSE` in `callsign/callook.ts`). That clause is a PARAMETER of the single
+ *   factory and not a second factory — the check below still requires `buildUserAgent(config)` to
+ *   appear in this file and still refuses a hand-spelled `GrantSpotter/…`. Exempting this file is
+ *   what let the anonymous request be fixed WITHOUT minting a second User-Agent somewhere the rule
+ *   above cannot see.
  *
  *   WHAT THE EXEMPTION COSTS. index.ts can now open a socket without anything noticing, and it is
  *   the largest file on this list. That is bearable only because it is the composition root: it

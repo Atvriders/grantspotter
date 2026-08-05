@@ -501,19 +501,77 @@ export function loadConfig(env: Env = process.env): AppConfig {
  * looking at a log line from software they have never heard of, and what they want to know is
  * what it is, what it wants, and how to make it stop. So the string spells the action out.
  *
- * ONE CLAUSE, FIXED, FOR EVERY DEPLOYMENT. It briefly varied — a private `isGithubIssueTracker`
- * predicate switched the wording to "open an issue there to contact the maintainers" when the URL
- * was a GitHub issue tracker, which was true of the shared default and of nothing else. The default
- * is gone, so every URL that can reach this function belongs to whoever runs the instance, the
- * predicate had no remaining caller, and both are deleted. The sentence that replaces it has to be
- * true of a club's contact page, a university department page and a personal site alike, so it
- * names the operator rather than an action only one shape of page affords.
+ * THE CONTACT CLAUSE IS FIXED FOR EVERY DEPLOYMENT. It briefly varied — a private
+ * `isGithubIssueTracker` predicate switched the wording to "open an issue there to contact the
+ * maintainers" when the URL was a GitHub issue tracker, which was true of the shared default and of
+ * nothing else. The default is gone, so every URL that can reach this function belongs to whoever
+ * runs the instance, the predicate had no remaining caller, and both are deleted. The sentence that
+ * replaces it has to be true of a club's contact page, a university department page and a personal
+ * site alike, so it names the operator rather than an action only one shape of page affords.
+ *
+ * THE PURPOSE CLAUSE VARIES BY ACTIVITY, AND ONLY BY ACTIVITY (added 2026-08-04). It does not vary
+ * by deployment, by URL, or by anything an operator can set. There are exactly two activities in
+ * this software that open a socket at a stranger's host, and until this parameter existed they sent
+ * a byte-identical User-Agent describing only the first of them:
+ *
+ *   - the nightly crawl, which this function's default describes, and
+ *   - the callsign lookup, which is one request a person asked for about their own licence and is
+ *     none of "nightly", "grant-deadline" or "change detector"
+ *     (`callsign/callook.ts`: `CALLSIGN_LOOKUP_PURPOSE`).
+ *
+ * A site owner reading a log is entitled to be told which one came. THE FIX IS A PARAMETER AND NOT
+ * A SECOND FACTORY, and that is RESOLUTIONS R10 being obeyed rather than worked around: two
+ * definitions of this string once meant two different strings on the wire, and the answer to
+ * "the crawler and the lookup need different wording" must not be a second place that spells
+ * `GrantSpotter/` out. The version, the `+URL`, the punctuation and the contact sentence are still
+ * decided here, once. The default is today's crawler wording verbatim, so every existing caller and
+ * every test that pins the exact line is unaffected.
  */
-export function buildUserAgent(source: AppConfig | string): string {
+const CRAWLER_PURPOSE = 'nightly grant-deadline change detector';
+
+/**
+ * The purpose clause is interpolated into a header value, so it faces the same rules the contact
+ * URL does — for the same reason, one layer along.
+ *
+ * A `\r\n` here is header injection; a `;` or a bracket is a forged extra clause, which is worse
+ * than injection because it is legible: `…; nightly grant-deadline change detector)` smuggled into
+ * the purpose slot would print a User-Agent that reads correctly and is not what this software is
+ * doing. Nothing outside this repository can reach this parameter today — both callers pass a
+ * module constant — and that is exactly the condition under which a guard is cheap and gets
+ * written. `ConfigError`, not `TypeError`: whatever is wrong with a wire identity in this codebase
+ * is a configuration fault and refuses to start.
+ */
+function assertUsablePurpose(purpose: string): string {
+  const clause = purpose.trim();
+  if (clause === '') {
+    throw new ConfigError('The User-Agent purpose clause may not be empty.');
+  }
+  if (clause.length > 120) {
+    throw new ConfigError(
+      `The User-Agent purpose clause must be at most 120 characters; got ${String(clause.length)}.`,
+    );
+  }
+  if (!/^[\x20-\x7e]+$/.test(clause)) {
+    throw new ConfigError(
+      'The User-Agent purpose clause must be printable single-line ASCII: a control character or ' +
+        'a newline in it would split the header.',
+    );
+  }
+  if (/[;()]/.test(clause)) {
+    throw new ConfigError(
+      'The User-Agent purpose clause may not contain ";", "(" or ")": those are the punctuation ' +
+        'that separates the clauses of the User-Agent, and one inside a clause forges another.',
+    );
+  }
+  return clause;
+}
+
+export function buildUserAgent(source: AppConfig | string, purpose = CRAWLER_PURPOSE): string {
   // Re-validated on the string form as well as the config form, and cheap enough to do on every
   // call: this is the function that MINTS the wire value, so it is the last place that can refuse
   // one. `buildUserAgent('')` still throws "CONTACT_URL is required", which is the first branch of
   // the predicate — the message and the test that pins it are unchanged.
   const url = assertUsableContactUrl(typeof source === 'string' ? source : source.contactUrl);
-  return `GrantSpotter/${SERVER_VERSION} (+${url}; nightly grant-deadline change detector; contact the operator of this instance at that page)`;
+  const clause = assertUsablePurpose(purpose);
+  return `GrantSpotter/${SERVER_VERSION} (+${url}; ${clause}; contact the operator of this instance at that page)`;
 }

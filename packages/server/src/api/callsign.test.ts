@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { createCallsignRouter, LOOKUP_MAX_PER_WINDOW, type CallsignCaller } from './callsign.js';
+import type { HostCooldown } from '../callsign/cooldown.js';
 import { errorHandler, requestIdMiddleware } from './errors.js';
 
 /**
@@ -44,8 +45,11 @@ function buildApp(
     user?: CallsignCaller;
     setupToken?: string | null;
     respond?: () => Promise<Response>;
+    cooldown?: HostCooldown;
   } = {},
 ): Harness {
+  // Each app gets its own cooldown ledger by construction (`createCallsignRouter` builds one per
+  // router), so a 429 in one test cannot silence the lookup in the next.
   const respond = options.respond ?? (() => Promise.resolve(new Response(JSON.stringify(VALID_BODY), { status: 200 })));
   const transport = vi.fn(respond);
 
@@ -58,6 +62,7 @@ function buildApp(
       transport,
       setupToken: () => (options.setupToken === undefined ? SETUP_TOKEN : options.setupToken),
       sessionUser: () => options.user,
+      ...(options.cooldown === undefined ? {} : { cooldown: options.cooldown }),
     }),
   );
   app.use(errorHandler({ logger: () => undefined }));
@@ -276,6 +281,82 @@ describe('POST /api/callsign/lookup — rate limit', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('unauthorized');
     expect(transport).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE THIRD WAY A PRESS COSTS THE SOURCE NOTHING, ADDED WITH THE COOLDOWN.
+   *
+   * Measured before it existed: eight presses against a stand-in answering `429 Retry-After: 120`
+   * to everything produced EIGHT requests in 69 ms, gaps of 21, 9, 7, 8, 8, 8, 8 ms — the whole
+   * allowance spent, at the one host in this product that publishes `Disallow: /`, seven of them
+   * after it had said in writing not to.
+   *
+   * Both halves are asserted here because they are one decision. The requests collapse to one; and
+   * the presses that made none are not charged, so the member comes out of the hold with the
+   * allowance they went in with. Charging for them would repeat the `not_us` mistake next door with
+   * the source, rather than the callsign, as the reason nothing could be asked.
+   */
+  it('stops asking a source that asked to wait, and does not charge the person for the wait', async () => {
+    const { app, transport } = buildApp({
+      user: MEMBER,
+      respond: () =>
+        Promise.resolve(new Response('slow down', { status: 429, headers: { 'retry-after': '120' } })),
+    });
+
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW * 2; i += 1) {
+      const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+      expect(res.status, `press ${String(i + 1)}`).toBe(200);
+      expect(res.body.status).toBe('unavailable');
+      expect(res.body.message).toMatch(/asked GrantSpotter to wait/);
+      expect(res.body.message).toContain('about 2 minutes');
+    }
+
+    // Sixteen presses, one request. It was one request per press.
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The carve-out is exactly as wide as its reason. Fifteen free presses during a hold buy nothing
+   * once the hold lifts: the allowance resumes from the ONE request that was actually made, and the
+   * refusal lands where it always did.
+   *
+   * The ledger is injected so the wait can be ended without waiting two real minutes. It is the
+   * only place a clock is faked here — the requests, the limiter and the route are all real.
+   */
+  it('resumes the allowance from what was actually spent once the wait lifts', async () => {
+    let heldMs = 0;
+    const cooldown: HostCooldown = {
+      remainingMs: () => heldMs,
+      hold: (_key, ms) => {
+        heldMs = ms;
+      },
+    };
+    let answer = (): Response =>
+      new Response('slow down', { status: 429, headers: { 'retry-after': '120' } });
+    const { app, transport } = buildApp({
+      user: MEMBER,
+      cooldown,
+      respond: () => Promise.resolve(answer()),
+    });
+
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW * 2; i += 1) {
+      await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+    }
+    expect(transport).toHaveBeenCalledTimes(1);
+
+    heldMs = 0; // the wait callook.info named has run out
+    answer = () => new Response(JSON.stringify(VALID_BODY), { status: 200 });
+
+    // One request was made and one was charged, so seven of the eight remain.
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW - 1; i += 1) {
+      const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+      expect(res.status, `press ${String(i + 1)} after the wait`).toBe(200);
+      expect(res.body.status).toBe('found');
+    }
+    const refused = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+    expect(refused.status).toBe(429);
+    expect(refused.body.error.code).toBe('rate_limited');
+    expect(transport).toHaveBeenCalledTimes(LOOKUP_MAX_PER_WINDOW);
   });
 });
 

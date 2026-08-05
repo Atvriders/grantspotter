@@ -1,6 +1,14 @@
 import { callDistrictFromCallsign, type LicenseClass } from '@grantspotter/core';
 import { assertNotBlocked } from '../fetcher/blocklist.js';
 import { canonicalHostname } from '../net/hosts.js';
+import {
+  clampCooldownMs,
+  cooldownKey,
+  COOLDOWN_FLOOR_MS,
+  describeWait,
+  parseRetryAfterMs,
+  type HostCooldown,
+} from './cooldown.js';
 import type { CallsignLookupResult, CallsignRecord } from './types.js';
 
 /**
@@ -13,6 +21,12 @@ import type { CallsignLookupResult, CallsignRecord } from './types.js';
  * per-host pacing, snapshots, a contact-bearing User-Agent); a lookup a person triggers about
  * their own licence is a different act, and the differences are enumerated below rather than
  * assumed.
+ *
+ * IT DOES KEEP ONE THING, added 2026-08-04, and it is the opposite of a cache: not what the source
+ * SAID, which is never remembered, but when the source asked to be left alone. See
+ * {@link CallsignLookupDeps.cooldown} and `cooldown.ts`. A module that remembers nothing cannot
+ * honour `Retry-After`, and a feature that queries a host publishing `Disallow: /` and then ignores
+ * the one instruction that host can give a non-crawler has no argument left.
  *
  * WHY NOT THE FETCHER. Three reasons, and the third is the honest one.
  *   1. The fetcher exists to be polite to sites we visit uninvited, on a schedule, in bulk. This
@@ -33,7 +47,9 @@ import type { CallsignLookupResult, CallsignRecord } from './types.js';
  *      **The README's "Polite crawling" section describes the nightly crawl and says nothing about
  *      this path, which makes it incomplete rather than wrong — it needs a paragraph saying that
  *      one further request exists, that a person triggers it, and where it goes.** If the site
- *      ever asks us to stop, one request per button press is the whole of what there is to stop.
+ *      ever asks us to stop, one request per button press is the whole of what there is to stop —
+ *      and if it asks us to WAIT, which is the thing a 429 does, that is now heard: see the
+ *      cooldown below.
  *
  * WHY THE TRANSPORT IS REQUIRED RATHER THAN DEFAULTED. `FetchOptions.transport` in the fetcher is
  * optional and falls back to the platform's own fetch. Doing that here would make this the third
@@ -47,6 +63,24 @@ import type { CallsignLookupResult, CallsignRecord } from './types.js';
 
 /** The documented pretty-URL base: `https://callook.info/<CALL>/json`. */
 export const CALLOOK_BASE_URL = 'https://callook.info';
+
+/**
+ * WHAT THIS REQUEST IS, IN THE WORDS A SITE OWNER READS IN THEIR LOG.
+ *
+ * Passed to `buildUserAgent` — the ONE User-Agent factory (RESOLUTIONS R10) — as its purpose
+ * clause, by the composition root, which is the only file allowed to call that factory for this
+ * path. It is not a second User-Agent and this module does not build one: the version, the contact
+ * URL and the shape of the string are all still decided in `config.ts`, and this is the one clause
+ * that differs.
+ *
+ * MEASURED BYTE-IDENTICAL TO THE CRAWLER'S UNTIL 2026-08-04, including `nightly grant-deadline
+ * change detector`. Every word of that is false here: nothing about this is nightly, nothing about
+ * it detects a change, nothing about it is about a grant deadline, and it is not a crawl. The
+ * person it misinforms is exactly the reader the User-Agent exists for — callook.info's owner,
+ * looking at one line in a log and deciding what visited them. Being identified and being described
+ * wrongly are not the same courtesy.
+ */
+export const CALLSIGN_LOOKUP_PURPOSE = 'single user-initiated callsign lookup, not a crawl';
 
 /**
  * Eight seconds, not the crawler's thirty.
@@ -76,9 +110,23 @@ export interface CallsignLookupDeps {
    * that wants callook to see that identity adds it in the transport it supplies.
    */
   transport: (url: string, init: RequestInit) => Promise<Response>;
+  /**
+   * Where "this host asked us to wait" is remembered between two presses of the button.
+   *
+   * REQUIRED, for the same reason `transport` is. A stateless lookup cannot honour `Retry-After`
+   * at all — backing off is a fact about the previous request — and until 2026-08-04 this module
+   * had nowhere to keep one, so eight presses at a host answering `429 Retry-After: 120` sent
+   * eight requests in 69 ms. Defaulting this would mean a caller could re-create that by leaving
+   * one line out, and the caller here is a route that a person presses a button on.
+   *
+   * ONE LEDGER PER PROCESS in production (`api/callsign.ts` builds it once per router, and the
+   * composition root builds one router). The hold belongs to the HOST, not to the user: callook.info
+   * asking to be left alone is not an instruction that one member has used up their share of.
+   */
+  cooldown: HostCooldown;
   /** Defaults to {@link DEFAULT_TIMEOUT_MS}. */
   timeoutMs?: number;
-  /** Defaults to `Date.now`. Injected so `fetchedAt` is assertable. */
+  /** Defaults to `Date.now`. Injected so `fetchedAt` and the cooldown clock are both assertable. */
   now?: () => number;
   /**
    * Defaults to {@link CALLOOK_BASE_URL}. Tests set it to prove that the blocklist governs this
@@ -181,22 +229,67 @@ function normalise(callsign: string): string {
   return callsign.replace(/\s+/g, '').toUpperCase();
 }
 
+/** The pieces of {@link CallsignLookupDeps} that decide whether a press becomes a request. */
+export type ReachDeps = Pick<CallsignLookupDeps, 'cooldown' | 'baseUrl' | 'now'>;
+
+/** Where this press would go, if it went anywhere. */
+function targetUrl(wanted: string, deps: ReachDeps): string {
+  return `${deps.baseUrl ?? CALLOOK_BASE_URL}/${encodeURIComponent(wanted)}/json`;
+}
+
 /**
- * Does looking this callsign up cost callook.info a request?
+ * Why this press will not become a request, or `undefined` if it will.
+ *
+ * ONE OPINION, READ TWICE. {@link lookupCallsign} needs the REASON — each of these gets its own
+ * status and its own sentence, and flattening them would tell an international operator that
+ * callook.info is having trouble. `api/callsign.ts` needs only the yes/no, to decide whether to
+ * charge a press against the caller's allowance. Both read this function, so what is rationed and
+ * what is spent cannot drift apart, which is the property `api/callsign.ts` claims in prose.
+ */
+type Refusal =
+  | { kind: 'not_us' }
+  | { kind: 'blocked'; error: unknown }
+  | { kind: 'cooling'; remainingMs: number };
+
+function refuseBeforeRequest(callsign: string, deps: ReachDeps): Refusal | undefined {
+  const wanted = normalise(callsign);
+  // callook holds United States records only, so a non-US callsign has nothing to ask about.
+  // `callDistrictFromCallsign` decides; this file does not mint a second opinion about what a
+  // callsign looks like.
+  if (callDistrictFromCallsign(wanted) === undefined) return { kind: 'not_us' };
+
+  const url = targetUrl(wanted, deps);
+  try {
+    // The blocklist is not a crawler rule, it is a rule about what this software may contact, so
+    // it applies here too. Without this line a lookup would be a way around it.
+    assertNotBlocked(url);
+  } catch (error) {
+    return { kind: 'blocked', error };
+  }
+
+  const now = deps.now ?? Date.now;
+  const remainingMs = deps.cooldown.remainingMs(cooldownKey(url), now());
+  return remainingMs > 0 ? { kind: 'cooling', remainingMs } : undefined;
+}
+
+/**
+ * Does pressing the button, right now, cost callook.info a request?
  *
  * EXPORTED FOR THE THING THAT RATIONS REQUESTS. `api/callsign.ts` limits how often one person may
- * make this software ask somebody else's server a question, and a callsign that is not a US prefix
- * is refused here, in this process, before any socket exists — see the short-circuit in
- * {@link lookupCallsign}, which calls THIS function so that there is exactly one opinion about it
- * and the ration can never disagree with the request it is rationing.
+ * make this software ask somebody else's server a question, and the three ways a press can cost
+ * that server nothing — a callsign that is not a US prefix, a base URL on the hard blocklist, and
+ * a host that has asked us to wait and whose wait has not run out — are all decided here, in this
+ * process, before any socket exists.
  *
  * Until 2026-08-04 the route had no way to ask, so it charged every press. Nine `DL1ABC` presses
  * from one member spent the whole allowance without a single request leaving the process, and the
  * next press — with a real US callsign — was refused for ten minutes. That punished exactly the
- * international operators the `not_us` message exists to reassure.
+ * international operators the `not_us` message exists to reassure. The cooldown case is the same
+ * mistake waiting to happen from the other end: a source asking to be left alone must not also
+ * cost the person their allowance for the ten minutes they are being asked to wait.
  */
-export function wouldReachTheSource(callsign: string): boolean {
-  return callDistrictFromCallsign(normalise(callsign)) !== undefined;
+export function wouldReachTheSource(callsign: string, deps: ReachDeps): boolean {
+  return refuseBeforeRequest(callsign, deps) === undefined;
 }
 
 /**
@@ -354,6 +447,45 @@ function wasAborted(error: unknown): boolean {
 }
 
 /**
+ * "It asked us to wait" — never "it is broken" and never "your callsign is wrong".
+ *
+ * A 429 with a `Retry-After` is the most cooperative thing a source can do: it is telling us how
+ * often it wants to be asked, in a header written for exactly this. Reporting that as `HTTP 429
+ * instead of a licence record` — which is what this path did until 2026-08-04 — reads to the person
+ * in front of it as a failure, and reads to anybody debugging it as callook.info misbehaving. It is
+ * the opposite: the source is fine, the answer is fine, and the only thing that happened is that
+ * this software has been asked to slow down and has.
+ *
+ * `sent` is false when no request was made at all, because the previous answer's hold was still
+ * running. That distinction is the whole reason the hold exists, so the sentence says which it was.
+ */
+function askedToWaitMessage(remainingMs: number, sent: boolean): string {
+  return (
+    `callook.info asked GrantSpotter to wait before asking it again, so ` +
+    (sent ? 'nothing was filled in this time' : 'no request was sent this time') +
+    `. Nothing is wrong with your callsign and nothing is wrong with the source: it is telling us ` +
+    `how often it wants to be asked, and GrantSpotter is doing what it asked. Try the button ` +
+    `again in ${describeWait(remainingMs)}, or type your licence details in and carry on — ` +
+    `nothing here depends on this lookup.`
+  );
+}
+
+/**
+ * The message for a host this installation is configured to refuse to contact.
+ *
+ * Shared by {@link lookupCallsign} and nothing else, but written beside its siblings so that the
+ * three pre-request refusals are read together.
+ */
+function blockedMessage(error: unknown): string {
+  return (
+    `This installation is set up to look callsigns up somewhere GrantSpotter refuses to ` +
+    `contact, so nothing was checked. That is a setting on this server, not a problem with ` +
+    `your callsign — whoever runs it can fix it (${error instanceof Error ? error.message : String(error)}). ` +
+    `Type your details in meanwhile.`
+  );
+}
+
+/**
  * Look one US callsign up at callook.info.
  *
  * Resolves — it does not throw. Every failure is a status and a message, because the caller is a
@@ -381,16 +513,22 @@ function wasAborted(error: unknown): boolean {
  * is the one that leaves a promise worth having. A dropped connection now says so and offers the
  * button again, which is a retry the person decides on.
  *
- * An HTTP status is not retried either, for the reason it never was: a 429 or a 503 is the source
- * asking to be left alone, and this path has no backoff to honour it with, because it is not
- * allowed to sleep in front of a user.
+ * AN HTTP STATUS IS NOT RETRIED EITHER, and since 2026-08-04 a 429 is not merely not-retried: it
+ * is REMEMBERED. This path still has no backoff to sleep in — it is in front of a person watching
+ * a spinner — but "we cannot wait for you" was never a reason to keep asking. A 429, and a 503 that
+ * carries a `Retry-After` we can read, put the host in {@link CallsignLookupDeps.cooldown}, and the
+ * next press inside that window answers the person without a request at all. Measured before that
+ * existed: eight presses at a stand-in answering `429 Retry-After: 120` produced eight requests in
+ * 69 ms. The site whose robots.txt says `Disallow: /` was the one being hammered, which is the
+ * exact inverse of the argument this feature is defended with.
  */
 export async function lookupCallsign(
   callsign: string,
   deps: CallsignLookupDeps,
 ): Promise<CallsignLookupResult> {
   const wanted = normalise(callsign);
-  if (!wouldReachTheSource(callsign)) {
+  const refusal = refuseBeforeRequest(callsign, deps);
+  if (refusal?.kind === 'not_us') {
     // Quoted back so the reader can see what we read, but capped: this is the one message that can
     // be built from arbitrary input, and a pasted paragraph must not become a pasted paragraph
     // with an apology around it. No US callsign is longer than 6 characters.
@@ -406,22 +544,16 @@ export async function lookupCallsign(
         `issued somewhere this lookup cannot reach.`,
     };
   }
-
-  const base = deps.baseUrl ?? CALLOOK_BASE_URL;
-  const url = `${base}/${encodeURIComponent(wanted)}/json`;
-  try {
-    // The blocklist is not a crawler rule, it is a rule about what this software may contact, so
-    // it applies here too. Without this line a lookup would be a way around it.
-    assertNotBlocked(url);
-  } catch (error) {
-    return unavailable(
-      `This installation is set up to look callsigns up somewhere GrantSpotter refuses to ` +
-        `contact, so nothing was checked. That is a setting on this server, not a problem with ` +
-        `your callsign — whoever runs it can fix it (${error instanceof Error ? error.message : String(error)}). ` +
-        `Type your details in meanwhile.`,
-    );
+  if (refusal?.kind === 'blocked') return unavailable(blockedMessage(refusal.error));
+  // THE HOLD, READ BEFORE ANY SOCKET EXISTS. `unavailable` and not a status of its own: the five
+  // statuses are what `packages/web` knows how to render, a sixth would fall through its
+  // unknown-status guard and be reported as "the API answered with something that is not a lookup
+  // result", and the sentence is what carries the difference. See NOTES in this module's tests.
+  if (refusal?.kind === 'cooling') {
+    return unavailable(askedToWaitMessage(refusal.remainingMs, false));
   }
 
+  const url = targetUrl(wanted, deps);
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const now = deps.now ?? Date.now;
 
@@ -448,6 +580,30 @@ export async function lookupCallsign(
     );
   }
 
+  /*
+   * "PLEASE STOP", HEARD AND WRITTEN DOWN.
+   *
+   * 429 always, whatever the header says or fails to say: the status itself IS the instruction —
+   * "you are asking too often" — and a 429 with no readable `Retry-After` has still asked. A bare
+   * 503 is not that. It says "I am broken right now", which is trouble rather than an instruction,
+   * and it keeps the plain HTTP-status message below; only a 503 that carries a `Retry-After` we
+   * can actually read has told us anything about when to come back, and only that one arms a hold.
+   * Drawing the line at the header rather than at the status is what keeps this a matter of doing
+   * what the source said instead of guessing at what it meant.
+   *
+   * `Retry-After: 0` is not "ask me again now": it is "I am not asking for more than your own
+   * floor", exactly as the crawler reads it (`hostQueue.ts`). Our floor still applies, because the
+   * thing our floor exists to prevent is the eight-in-69-ms burst that was measured here.
+   */
+  if (response.status === 429 || response.status === 503) {
+    const asked = parseRetryAfterMs(response.headers.get('retry-after'), now());
+    if (response.status === 429 || asked !== undefined) {
+      const held = clampCooldownMs(asked ?? COOLDOWN_FLOOR_MS);
+      deps.cooldown.hold(cooldownKey(url), held, now());
+      return unavailable(askedToWaitMessage(held, true));
+    }
+  }
+
   if (response.status !== 200) {
     return unavailable(
       `callook.info answered with HTTP ${response.status} instead of a licence record, so ` +
@@ -456,9 +612,42 @@ export async function lookupCallsign(
     );
   }
 
+  /*
+   * TWO FAILURES THAT USED TO BE ONE, AND THE ONE THEY WERE BOTH REPORTED AS WAS A LIE.
+   *
+   * `JSON.parse(await response.text())` sat inside a single bare `catch {}`, so a timeout or a
+   * dropped socket DURING THE BODY READ came out as "callook.info answered with something we could
+   * not read as a licence record" — our own failure, attributed to the source as a statement it
+   * made. This product's entire discipline is not attributing to a source something it did not say,
+   * and an error message is not exempt from it: a person reading that sentence, or an operator
+   * reading it in a bug report, is being told callook.info served rubbish when what happened is
+   * that we never received the answer.
+   *
+   * So the read is its own step with its own failure. Below it, `JSON.parse` speaks only about
+   * bytes we actually hold, which is the only thing that entitles anyone to say what the source
+   * answered with.
+   */
+  let raw: string;
+  try {
+    raw = await response.text();
+  } catch (error) {
+    return unavailable(
+      wasAborted(error)
+        ? 'callook.info started answering, but the rest of the answer had not arrived by the time ' +
+          'GrantSpotter stopped waiting, so nothing was filled in. What it was going to say is ' +
+          'not known and has not been guessed at. That is the network or the source being slow, ' +
+          'not anything to do with your callsign — try again in a moment, or type your details ' +
+          'in and carry on.'
+        : 'The connection to callook.info dropped while its answer was still arriving, so ' +
+          'GrantSpotter never saw the whole of it and nothing was filled in. What it was going ' +
+          'to say is not known and has not been guessed at. That is our end or the network, not ' +
+          'your callsign — try again in a moment, or type your details in and carry on.',
+    );
+  }
+
   let body: unknown;
   try {
-    body = JSON.parse(await response.text());
+    body = JSON.parse(raw);
   } catch {
     return unavailable(
       'callook.info answered with something we could not read as a licence record, so nothing ' +

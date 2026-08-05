@@ -2,7 +2,12 @@ import { timingSafeEqual } from 'node:crypto';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { createRateLimiter, type RateLimiter } from '../auth/rateLimit.js';
-import { lookupCallsign, wouldReachTheSource } from '../callsign/callook.js';
+import {
+  lookupCallsign,
+  wouldReachTheSource,
+  type CallsignLookupDeps,
+} from '../callsign/callook.js';
+import { createHostCooldown, type HostCooldown } from '../callsign/cooldown.js';
 import type { CallsignLookupResult } from '../callsign/types.js';
 import { asyncHandler } from './asyncHandler.js';
 import { AppError } from './errors.js';
@@ -76,6 +81,16 @@ export interface CallsignRouterDeps {
   limiter?: RateLimiter;
   /** Passed through to the client. Production leaves it at the client's own default. */
   timeoutMs?: number;
+  /**
+   * Where "callook.info asked us to wait" is remembered. Optional, and defaulted PER ROUTER
+   * rather than to a module-level singleton.
+   *
+   * Per router is one per process where it counts — the composition root builds this router once —
+   * and one per app where it also counts, because a module-level ledger would carry one test's
+   * `429 Retry-After: 120` into the next test's lookup and make a suite that answers questions
+   * about bursts depend on the order it happens to run in.
+   */
+  cooldown?: HostCooldown;
 }
 
 /**
@@ -101,9 +116,17 @@ export interface CallsignRouterDeps {
  * nothing is wrong with their licence. Telling them that eight times and then locking the form is
  * the opposite of what it says.
  *
+ * THERE ARE NOW THREE WAYS A PRESS COSTS THE SOURCE NOTHING, and the third arrived with the
+ * cooldown on 2026-08-04: a callsign that is not a US prefix, a base URL on the hard blocklist, and
+ * a host whose `Retry-After` has not run out. The third matters most to the person: being told "the
+ * source asked us to wait two minutes" and ALSO being charged for hearing it would mean a member
+ * who pressed the button eight times during a cooldown came out the other side of it with no
+ * allowance left and still nothing filled in. A source asking to be left alone is not the user
+ * spending their share.
+ *
  * `wouldReachTheSource` is the predicate, and it is EXPORTED BY THE CLIENT rather than restated
- * here: it is the same call `lookupCallsign` makes for its own short-circuit, so the thing being
- * rationed and the thing being counted cannot drift apart.
+ * here: it is the same function `lookupCallsign` reads for its own short-circuits, over the same
+ * deps object, so the thing being rationed and the thing being counted cannot drift apart.
  *
  * The numbers are a judgement, not a measurement: this is a person typing one callsign, and a
  * few corrections to a typo is the widest honest use. Eight in ten minutes covers that with
@@ -152,6 +175,21 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
     deps.limiter ??
     createRateLimiter({ windowMs: LOOKUP_WINDOW_MS, maxFailures: LOOKUP_MAX_PER_WINDOW });
 
+  /**
+   * ONE deps OBJECT, BUILT ONCE, READ BY BOTH THE PREDICATE AND THE CALL.
+   *
+   * `wouldReachTheSource` answers "does this press cost callook.info a request" for the SAME
+   * configuration `lookupCallsign` is about to run under — the same base URL and the same cooldown
+   * ledger. Asking the question against a different object is how the thing being rationed and the
+   * thing being counted drift apart, which is the defect this route already had once, from the
+   * other direction, when it could not ask at all.
+   */
+  const lookupDeps: CallsignLookupDeps = {
+    transport: deps.transport,
+    cooldown: deps.cooldown ?? createHostCooldown(),
+    ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
+  };
+
   router.post(
     '/lookup',
     asyncHandler(async (req, res) => {
@@ -194,11 +232,12 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
        * who has genuinely spent their eight and then types a German callsign gets the `not_us`
        * sentence rather than a 429, because answering them costs callook.info nothing at all.
        *
-       * The cost of letting it past is local and bounded — a whitespace strip, an upper-case and a
-       * prefix test — and the caller is already authenticated or holds the one-time setup token,
-       * so this is not a door anyone can reach without one. Authorisation above; rationing here.
+       * The cost of letting it past is local and bounded — a whitespace strip, an upper-case, a
+       * prefix test, a URL parse against a ten-name blocklist and one map read — and the caller is
+       * already authenticated or holds the one-time setup token, so this is not a door anyone can
+       * reach without one. Authorisation above; rationing here.
        */
-      if (wouldReachTheSource(body.callsign)) {
+      if (wouldReachTheSource(body.callsign, lookupDeps)) {
         const decision = limiter.check(rateKey);
         if (!decision.allowed) {
           // Retry-After is a transport header; the body stays the one error envelope.
@@ -220,10 +259,7 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
         limiter.recordFailure(rateKey);
       }
 
-      const result: CallsignLookupResult = await lookupCallsign(body.callsign, {
-        transport: deps.transport,
-        ...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
-      });
+      const result: CallsignLookupResult = await lookupCallsign(body.callsign, lookupDeps);
 
       res.status(200).json(result);
     }),

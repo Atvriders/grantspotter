@@ -3,7 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_ROOT, loadFixture } from '../../test/fixtures.js';
-import { CALLOOK_BASE_URL, lookupCallsign, type CallsignLookupDeps } from './callook.js';
+import {
+  CALLOOK_BASE_URL,
+  CALLSIGN_LOOKUP_PURPOSE,
+  lookupCallsign,
+  wouldReachTheSource,
+  type CallsignLookupDeps,
+} from './callook.js';
+import { COOLDOWN_FLOOR_MS, createHostCooldown, type HostCooldown } from './cooldown.js';
 
 /**
  * Every case here is driven by a file in `fixtures/callook/` — a real capture where committing one
@@ -17,16 +24,23 @@ import { CALLOOK_BASE_URL, lookupCallsign, type CallsignLookupDeps } from './cal
 const FIXTURES = path.join(FIXTURE_ROOT, 'callook');
 const AT = '2026-08-04T22:07:30.000Z';
 
-/** A transport that answers every request with one body, and records what it was asked. */
+/**
+ * A transport that answers every request with one body, and records what it was asked.
+ *
+ * Every harness here gets its OWN cooldown ledger. `cooldown` is required on `CallsignLookupDeps`
+ * for the same reason `transport` is — a lookup that cannot remember what a host asked for cannot
+ * honour it — and a shared one would carry one test's 429 into the next test's lookup.
+ */
 function serve(
   body: string,
-  init: { status?: number; headers?: Record<string, string> } = {},
+  init: { status?: number; headers?: Record<string, string>; cooldown?: HostCooldown } = {},
 ): { deps: CallsignLookupDeps; calls: Array<{ url: string; init: RequestInit }> } {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   return {
     calls,
     deps: {
       now: () => Date.parse(AT),
+      cooldown: init.cooldown ?? createHostCooldown(),
       transport: (url, requestInit) => {
         calls.push({ url, init: requestInit });
         return Promise.resolve(
@@ -285,6 +299,7 @@ describe('lookupCallsign: failures', () => {
     const calls: RequestInit[] = [];
     const deps: CallsignLookupDeps = {
       timeoutMs: 20,
+      cooldown: createHostCooldown(),
       transport: (_url, init) => {
         calls.push(init);
         return new Promise<Response>((_resolve, reject) => {
@@ -328,6 +343,7 @@ describe('lookupCallsign: failures', () => {
     let attempts = 0;
     const deps: CallsignLookupDeps = {
       now: () => Date.parse(AT),
+      cooldown: createHostCooldown(),
       transport: () => {
         attempts += 1;
         // A second attempt WOULD have succeeded. That is the point: the old code took it, and
@@ -353,6 +369,7 @@ describe('lookupCallsign: failures', () => {
     const signals: unknown[] = [];
     const deps: CallsignLookupDeps = {
       timeoutMs: 1_000,
+      cooldown: createHostCooldown(),
       transport: (_url, init) => {
         signals.push(init.signal);
         return Promise.reject(new Error('ECONNRESET'));
@@ -364,14 +381,22 @@ describe('lookupCallsign: failures', () => {
     expect(result.status).toBe('unavailable');
   });
 
+  /**
+   * A BARE 503 IS TROUBLE, NOT AN INSTRUCTION, and that is why this case still reads the way it
+   * always did while the 429 case below no longer does. "Service unavailable" with no `Retry-After`
+   * says the source is having a bad minute; it does not say when to come back, and inventing a
+   * number and calling it "callook.info asked us to wait" would be this module attributing an
+   * instruction to a source that gave none — which is the one thing this product does not do.
+   * The 503 that DOES carry a header is handled with the 429s, where it belongs.
+   */
   it('reports an HTTP status as the source having trouble', async () => {
     const { deps, calls } = serve('<html>503</html>', { status: 503 });
     const result = await lookupCallsign('W1AW', deps);
 
     expect(result.status).toBe('unavailable');
     expect(result.message).toContain('503');
-    // No retry on a status: a 429 or a 503 is a request to be left alone, and this path has no
-    // backoff to honour it with.
+    // Still no retry on a status, and now no second request on the NEXT press either when the
+    // source asked for one — see the cooldown block below.
     expect(calls).toHaveLength(1);
   });
 
@@ -435,6 +460,330 @@ describe('lookupCallsign: failures', () => {
       expect(result.record?.type).toBe('CLUB');
     },
   );
+});
+
+/**
+ * WHAT A SOURCE ASKING TO BE LEFT ALONE COSTS IT, MEASURED IN REQUESTS.
+ *
+ * Before this block existed, a stand-in answering `429 Retry-After: 120` to everything received
+ * EIGHT requests in 69 ms from eight presses — consecutive gaps of 21, 9, 7, 8, 8, 8 and 8 ms. The
+ * rate limiter next door allows eight presses per ten minutes and cannot see how fast they arrive.
+ * The host being hammered was the one whose robots.txt says `Disallow: /`, which this product
+ * queries anyway on an argument that rests entirely on this being one request a person asked for.
+ *
+ * WHY THE ANSWER IS `unavailable` AND NOT A SIXTH STATUS. `packages/web` holds its own copy of the
+ * five-value union AND a runtime `KNOWN_STATUSES` guard; a status it does not know is reported to
+ * the user as "the API answered with something that is not a lookup result… a proxy, tunnel, or
+ * sign-in page may have answered instead". A sixth status would therefore have made the politest
+ * outcome in the product look like the most alarming one. The sentence carries the difference, and
+ * the sentence is what these tests pin.
+ */
+describe('lookupCallsign: when the source asks us to wait', () => {
+  interface WaitHarness {
+    deps: CallsignLookupDeps;
+    /** The clock reading at each request the transport actually received. */
+    calls: number[];
+    clock: { ms: number };
+  }
+
+  function stubbornSource(init: {
+    status: number;
+    headers?: Record<string, string>;
+    baseUrl?: string;
+    cooldown?: ReturnType<typeof createHostCooldown>;
+  }): WaitHarness {
+    const clock = { ms: Date.parse(AT) };
+    const calls: number[] = [];
+    return {
+      clock,
+      calls,
+      deps: {
+        now: () => clock.ms,
+        cooldown: init.cooldown ?? createHostCooldown(),
+        ...(init.baseUrl === undefined ? {} : { baseUrl: init.baseUrl }),
+        transport: () => {
+          calls.push(clock.ms);
+          return Promise.resolve(
+            new Response('slow down', { status: init.status, headers: init.headers ?? {} }),
+          );
+        },
+      },
+    };
+  }
+
+  /** Eight presses, as fast as the code will go, which is what a person leaning on a button is. */
+  async function press(harness: WaitHarness, times: number): Promise<string[]> {
+    const messages: string[] = [];
+    for (let i = 0; i < times; i += 1) {
+      const result = await lookupCallsign('W1AW', harness.deps);
+      messages.push(result.message ?? '');
+    }
+    return messages;
+  }
+
+  it('turns eight presses at a 429 into ONE request', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
+    const messages = await press(harness, 8);
+
+    // The whole of the defect, in one number. It was eight.
+    expect(harness.calls).toHaveLength(1);
+    // …and the seven that made no request still got an answer, not an error.
+    expect(messages).toHaveLength(8);
+    for (const message of messages) expect(message).toMatch(/asked GrantSpotter to wait/);
+    expect(messages[0]).toMatch(/nothing was filled in this time/);
+    expect(messages[7]).toMatch(/no request was sent this time/);
+  });
+
+  it('says how long, in words a person can act on, and blames nobody', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
+    const [first] = await press(harness, 1);
+
+    expect(first).toContain('about 2 minutes');
+    expect(first).toMatch(/nothing is wrong with your callsign/i);
+    expect(first).toMatch(/nothing is wrong with the source/i);
+    // Not a failure report: no HTTP status, no "could not", no "error".
+    expect(first).not.toContain('429');
+    expect(first).not.toMatch(/could not|failed|error|trouble/i);
+  });
+
+  it.each([
+    ['Retry-After: 0', { 'retry-after': '0' }, 'about 1 minute'],
+    ['Retry-After: 1', { 'retry-after': '1' }, 'about 1 minute'],
+    ['no Retry-After at all', {}, 'about 1 minute'],
+    ['an unparseable Retry-After', { 'retry-after': 'when we feel like it' }, 'about 1 minute'],
+    ['Retry-After: 120', { 'retry-after': '120' }, 'about 2 minutes'],
+    ['a Retry-After beyond the cap', { 'retry-after': '9999999' }, 'about 24 hours'],
+  ])('holds after a 429 with %s', async (_what, headers, expected) => {
+    const harness = stubbornSource({ status: 429, headers });
+    const messages = await press(harness, 8);
+
+    expect(harness.calls, _what).toHaveLength(1);
+    expect(messages[0], _what).toContain(expected);
+  });
+
+  it('reads a Retry-After given as a date', async () => {
+    const at = Date.parse(AT);
+    const harness = stubbornSource({
+      status: 429,
+      headers: { 'retry-after': new Date(at + 300_000).toUTCString() },
+    });
+    const messages = await press(harness, 4);
+
+    expect(harness.calls).toHaveLength(1);
+    expect(messages[0]).toContain('about 5 minutes');
+  });
+
+  /**
+   * The hold is a wait, not a switch-off. The feature has to come back on its own, or the first 429
+   * a deployment ever sees would end the lookup until somebody restarted the container.
+   */
+  it('asks again once the wait the source named has run out, and not one moment before', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(1);
+
+    harness.clock.ms += 119_999;
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(1);
+
+    harness.clock.ms += 1;
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(2);
+    // …and the second 429 re-arms it rather than leaving the door open.
+    await press(harness, 3);
+    expect(harness.calls).toHaveLength(2);
+  });
+
+  it('holds after a 503 that names a Retry-After, because that one did say when', async () => {
+    const harness = stubbornSource({ status: 503, headers: { 'retry-after': '300' } });
+    const messages = await press(harness, 5);
+
+    expect(harness.calls).toHaveLength(1);
+    expect(messages[0]).toContain('about 5 minutes');
+    expect(messages[0]).not.toContain('503');
+  });
+
+  /**
+   * The line is drawn at the HEADER, not at the status. A bare 503 has told us it is broken, which
+   * is not the same as telling us when to come back, and this module does not invent the second
+   * from the first. Five presses are therefore five requests — bounded by the ration next door,
+   * which is the mechanism that exists for "the source is failing", not by a hold nobody asked for.
+   */
+  it('does not invent a wait from a 503 that named none', async () => {
+    const harness = stubbornSource({ status: 503 });
+    const messages = await press(harness, 5);
+
+    expect(harness.calls).toHaveLength(5);
+    expect(messages[0]).toContain('503');
+    expect(messages[0]).not.toMatch(/asked GrantSpotter to wait/);
+  });
+
+  /** Every other status is unchanged: a 404 or a 500 is not an instruction either. */
+  it.each([301, 404, 418, 500])('does not hold on HTTP %d', async (status) => {
+    const harness = stubbornSource({ status, headers: { 'retry-after': '120' } });
+    await press(harness, 3);
+
+    expect(harness.calls).toHaveLength(3);
+  });
+
+  /**
+   * A HOLD IS ABOUT THE HOST, NOT ABOUT THE PRODUCT. Two deployments pointed at two different
+   * services must not silence each other, and — the case that actually matters — the loopback
+   * servers this repo measures against are separate sources rather than one.
+   */
+  it('holds the host that asked, and no other', async () => {
+    const cooldown = createHostCooldown();
+    const asked = stubbornSource({
+      status: 429,
+      headers: { 'retry-after': '120' },
+      baseUrl: 'http://127.0.0.1:8081',
+      cooldown,
+    });
+    const other = stubbornSource({
+      status: 200,
+      baseUrl: 'http://127.0.0.1:8082',
+      cooldown,
+    });
+
+    await press(asked, 4);
+    expect(asked.calls).toHaveLength(1);
+
+    await press(other, 2);
+    expect(other.calls).toHaveLength(2);
+  });
+
+  /**
+   * THE HALF THE PERSON FEELS. `api/callsign.ts` charges a press against the caller's allowance
+   * only when it would cost callook.info a request, and it asks THIS function. Eight presses during
+   * a two-minute hold must not leave a member with no allowance left and nothing filled in.
+   */
+  it('reports through wouldReachTheSource that a press during a hold costs the source nothing', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '120' } });
+
+    expect(wouldReachTheSource('W1AW', harness.deps)).toBe(true);
+    await press(harness, 1);
+    expect(wouldReachTheSource('W1AW', harness.deps)).toBe(false);
+
+    harness.clock.ms += 120_000;
+    expect(wouldReachTheSource('W1AW', harness.deps)).toBe(true);
+  });
+
+  it('agrees with itself about a blocked host and a foreign callsign', async () => {
+    const harness = stubbornSource({ status: 200 });
+
+    expect(wouldReachTheSource('DL1ABC', harness.deps)).toBe(false);
+    expect(
+      wouldReachTheSource('W1AW', { ...harness.deps, baseUrl: 'https://farweb.org' }),
+    ).toBe(false);
+  });
+
+  /** The floor is not a second's stutter: it is what stops a burst when the header says nothing. */
+  it('never holds for less than the published floor', async () => {
+    const harness = stubbornSource({ status: 429, headers: { 'retry-after': '0' } });
+    await press(harness, 1);
+
+    harness.clock.ms += COOLDOWN_FLOOR_MS - 1;
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(1);
+
+    harness.clock.ms += 1;
+    await press(harness, 1);
+    expect(harness.calls).toHaveLength(2);
+  });
+});
+
+/**
+ * OUR FAILURE IS NOT THE SOURCE'S STATEMENT.
+ *
+ * `JSON.parse(await response.text())` used to sit inside one bare `catch {}`, so a timeout or a
+ * dropped socket during the BODY READ came out as "callook.info answered with something we could
+ * not read as a licence record". Nothing had been answered with anything: the bytes never arrived.
+ * This product's whole discipline is not attributing to a source something it did not say, and an
+ * error message is not exempt — a user reading that sentence, or a maintainer reading it in a bug
+ * report, is being told callook.info served rubbish when the truth is that we never heard it.
+ */
+describe('lookupCallsign: which end the failure happened at', () => {
+  function bodyThatFails(reject: () => Error): CallsignLookupDeps {
+    return {
+      now: () => Date.parse(AT),
+      cooldown: createHostCooldown(),
+      transport: () =>
+        Promise.resolve(
+          // A Response whose body rejects mid-read is what a socket dying after the headers looks
+          // like. `Response.text()` on this stream rejects rather than resolving short.
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"status": "VA'));
+                controller.error(reject());
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+    };
+  }
+
+  it('says the connection dropped mid-answer, and claims nothing about what was in it', async () => {
+    const result = await lookupCallsign('W1AW', bodyThatFails(() => new Error('ECONNRESET')));
+
+    expect(result.status).toBe('unavailable');
+    expect(result.message).toMatch(/dropped while its answer was still arriving/);
+    expect(result.message).toMatch(/not known and has not been guessed at/);
+    // The sentence that was wrong: it says callook.info SAID something unreadable.
+    expect(result.message).not.toMatch(/answered with something we could not read/);
+    expect(result.message).toMatch(/not your callsign/);
+  });
+
+  it('says the answer ran out of time, and still claims nothing about what was in it', async () => {
+    const timeout = (): Error => {
+      const error = new Error('The operation was aborted due to timeout');
+      error.name = 'TimeoutError';
+      return error;
+    };
+    const result = await lookupCallsign('W1AW', bodyThatFails(timeout));
+
+    expect(result.status).toBe('unavailable');
+    expect(result.message).toMatch(/had not arrived by the time GrantSpotter stopped waiting/);
+    expect(result.message).not.toMatch(/answered with something we could not read/);
+  });
+
+  /**
+   * The other half of the split, and the reason it is a split rather than a rewording: when the
+   * bytes DID arrive and are not JSON, saying so is a true statement about what the source served.
+   * That sentence keeps its wording; it just no longer covers failures that are ours.
+   */
+  it('still says the source answered with something unreadable when it actually did', async () => {
+    const { deps } = serve('<html>hello</html>');
+    const result = await lookupCallsign('W1AW', deps);
+
+    expect(result.status).toBe('unavailable');
+    expect(result.message).toMatch(/answered with something we could not read/);
+    expect(result.message).toMatch(/ours to fix, not yours/);
+  });
+});
+
+/**
+ * THE CLAUSE THIS REQUEST SIGNS ITSELF WITH.
+ *
+ * The string itself is built by the one `buildUserAgent` in `config.ts` and is asserted there,
+ * against the crawler's, side by side. What belongs HERE is that the clause this module publishes
+ * is a legal clause — the User-Agent is punctuated with `;` and brackets, and a clause containing
+ * either would forge an extra one — and that it does not describe a crawl.
+ */
+describe('CALLSIGN_LOOKUP_PURPOSE', () => {
+  it('is true of one request a person asked for, and claims to be no kind of crawl', () => {
+    expect(CALLSIGN_LOOKUP_PURPOSE).not.toMatch(/nightly|deadline|detector/i);
+    expect(CALLSIGN_LOOKUP_PURPOSE).toMatch(/callsign lookup/);
+    expect(CALLSIGN_LOOKUP_PURPOSE).toMatch(/user-initiated/);
+    // It may name crawling, but only to deny it: strike the denial and no claim of one is left.
+    expect(CALLSIGN_LOOKUP_PURPOSE.replace(/not a crawl/g, '')).not.toMatch(/crawl/i);
+  });
+
+  it('cannot forge a second clause or split the header', () => {
+    expect(CALLSIGN_LOOKUP_PURPOSE).toMatch(/^[\x20-\x7e]+$/);
+    expect(CALLSIGN_LOOKUP_PURPOSE).not.toMatch(/[;()]/);
+  });
 });
 
 describe('lookupCallsign: values it will not pass on', () => {
