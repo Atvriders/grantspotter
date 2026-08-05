@@ -146,6 +146,20 @@ export function profileFieldHelp(key: string, kind?: ProfileFieldKind): string {
 }
 
 /**
+ * The labels for a set of field keys, joined for a sentence: "State", "State and License class",
+ * "Callsign, State and License class".
+ *
+ * One implementation, because two screens now name a set of fields TO THE APPLICANT — the lookup
+ * panel's confirmation and the editor's note about what a lookup left empty — and a second copy
+ * would eventually spell one of them differently from the form the applicant is reading it beside.
+ */
+export function profileFieldLabelList(keys: string[], kind?: ProfileFieldKind): string {
+  const labels = keys.map((key) => profileFieldLabel(key, kind));
+  if (labels.length < 2) return labels[0] ?? '';
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1] ?? ''}`;
+}
+
+/**
  * Deep link to the editor input that resolves this field.
  *
  * Pass `kind` whenever the caller knows which profile the verdict was computed against: four keys

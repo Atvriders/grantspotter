@@ -119,13 +119,25 @@ export function callsignFromRecord(recordCallsign: string, typed: string): Accep
 export interface CallsignFill {
   /** Profile field key → the value to write. Every accepted value, whoever stated it. */
   values: Record<string, string>;
-  /** Profile field key → marker, for the values the SOURCE stated and only those. */
+  /**
+   * Profile field key → marker, for the values the SOURCE stated and only those.
+   *
+   * THE COMPLETE SET, to REPLACE what a host is holding rather than to merge into it. Every marker
+   * a profile can hold names one licensee — the holder of the callsign that was looked up — so the
+   * set that describes this profile after accepting a record is exactly the set this record
+   * stated. Merging keeps the previous licensee's answers alive under the new one: accept a second
+   * record with an address callook could not parse and a legacy operator class, and the first
+   * licensee's `MI` and `GENERAL` stay in the form still marked as read from callook.info, which
+   * is two people's facts on one profile.
+   */
   fieldSources: Record<string, ProfileFieldSource>;
   /**
-   * The keys written that got no marker. A host holding markers from an EARLIER lookup must drop
-   * these: a value the user has now stated themselves must not keep an older record's attribution,
-   * and the arithmetic in `profileValueOrigin` cannot see the difference when the two strings
-   * happen to match.
+   * The keys written that got no marker: the applicant's own values, whichever of them the record
+   * happens to agree with.
+   *
+   * A host uses this to say so — see `acceptedFrame` in `components/CallsignLookup.tsx`, which
+   * builds the confirmation sentence from this list and from `fieldSources` so that "filled in
+   * from the FCC record" cannot be printed over a set of values the record stated none of.
    */
   unmarked: string[];
 }

@@ -343,6 +343,76 @@ describe('what is shown and what is kept', () => {
   });
 });
 
+/**
+ * THE CONFIRMATION IS A CLAIM, AND IT HAS TO BE TRUE OF WHAT JUST HAPPENED.
+ *
+ * The panel is an editor, and `fillFromLookup` marks only what the RECORD stated — so
+ * "Filled in from the FCC record" and "These are values GrantSpotter read, not values you stated"
+ * were printed over sets of values the record had stated none of: a licence class the applicant
+ * picked because the panel asked them to, a state they corrected, a callsign they typed. The
+ * sentence appeared whether or not anything had been attributed, which is worth nothing on the
+ * occasions when it is true.
+ */
+describe('what the confirmation claims was filled in', () => {
+  it('names the fields the record stated, and says which are the applicant’s own', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    const { container } = renderLookup();
+    await lookUp();
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+
+    const panel = await screen.findByRole('region', { name: /filled in from the FCC record/i });
+    expect(panel).toHaveTextContent(/State and License class came from the record/i);
+    // The callsign is the question the applicant asked, so the record agreeing with it attributes
+    // nothing — and the panel says so rather than sweeping it in with the other two.
+    expect(panel).toHaveTextContent(/Callsign carries no mark/i);
+    expect(liveRegion(container)).toHaveTextContent(/Filled in from the FCC record/i);
+  });
+
+  it('does not claim a record filled anything in when the record stated none of it', async () => {
+    stubResult({ status: 'found', record: LEGACY });
+    const { onAccept, container } = renderLookup();
+    await lookUp();
+
+    const state = await screen.findByLabelText(/state to fill in/i);
+    await userEvent.clear(state);
+    await userEvent.type(state, 'OH');
+    await userEvent.selectOptions(screen.getByLabelText(/license class to fill in/i), 'EXTRA');
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    // Every value that left is the applicant's: a state they corrected, a class they picked for a
+    // record whose ADVANCED maps onto none of GrantSpotter's four, and the callsign they typed.
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      callsign: { value: 'W8UM', origin: 'user' },
+      state: { value: 'OH', origin: 'user' },
+      licenseClass: { value: 'EXTRA', origin: 'user' },
+    });
+
+    expect(
+      screen.queryByRole('heading', { name: /filled in from the FCC record/i }),
+    ).not.toBeInTheDocument();
+    const panel = await screen.findByRole('region', { name: /none of it attributed/i });
+    expect(panel).toHaveTextContent(
+      /Callsign, State and License class went onto the form as your own values/i,
+    );
+    expect(panel).toHaveTextContent(/only where the record itself stated what is now in it/i);
+    // The record is still named and still linkable — it was read, and the applicant may want to
+    // check it. What is gone is the claim that it filled these in.
+    expect(panel).toHaveTextContent(/callook\.info/i);
+    expect(liveRegion(container)).toHaveTextContent(/none of it attributed to the FCC record/i);
+  });
+
+  it('names an organisation profile’s own fields, on the tab that has them', async () => {
+    stubResult({ status: 'found', record: CLUB });
+    renderLookup({ target: 'organization' });
+    await lookUp();
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+
+    const panel = await screen.findByRole('region', { name: /filled in from the FCC record/i });
+    // In `acceptedValues`' own order, which is written out there field by field.
+    expect(panel).toHaveTextContent(/State and Organization name came from the record/i);
+  });
+});
+
 describe('a club station, which is what a collegiate club holds', () => {
   it('offers the organisation name and no operator class at all', async () => {
     stubResult({ status: 'found', record: CLUB });
@@ -550,6 +620,20 @@ describe('accessibility', () => {
     );
     await lookUp();
     await screen.findByLabelText(/this record is mine/i);
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  it('has no violations with the confirmation on screen', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    const { container } = render(
+      <>
+        <h1>Profile</h1>
+        <CallsignLookup callsign="W8UM" target="student" onAccept={() => undefined} />
+      </>,
+    );
+    await lookUp();
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+    await screen.findByRole('region', { name: /filled in from the FCC record/i });
     expect(auditA11y(container)).toEqual([]);
   });
 

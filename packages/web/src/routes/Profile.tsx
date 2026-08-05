@@ -12,6 +12,7 @@ import {
 import {
   callsignFillableFields,
   callsignFillRefusal,
+  profileFieldLabelList,
   PROFILE_FIELDS,
   type ProfileFieldMeta,
 } from '../lib/profileFields.js';
@@ -201,23 +202,66 @@ export function toPayload(kind: ProfileKind, values: FormValues): Payload {
 const EMPTY_DRAFTS: Record<ProfileKind, FormValues> = { student: {}, organization: {} };
 
 /**
- * The provenance markers held per tab, in exactly the shape the profile is STORED with.
+ * The provenance markers held for one tab, WITH THE CALLSIGN WHOSE RECORD STATED THEM.
  *
- * Not a private bookkeeping structure: `ProfileFieldSource` is core's, it rides along with the
- * values it describes in the PUT body, and it comes back on the next load — so a licence class
- * a lookup wrote is still distinguishable from one the applicant typed a week later. Nothing
- * here clears a marker when the user edits a field: `profileValueOrigin` compares the marker's
- * stored value against what the field now holds, so an edit invalidates it by arithmetic rather
- * than by some code path remembering to.
+ * The markers themselves are core's and are in exactly the shape the profile is STORED with: they
+ * ride along with the values they describe in the PUT body and come back on the next load, so a
+ * licence class a lookup wrote is still distinguishable from one the applicant typed a week later.
+ * Nothing here clears a marker when the user edits a FIELD: `profileValueOrigin` compares the
+ * marker's stored value against what the field now holds, so an edit invalidates it by arithmetic
+ * rather than by some code path remembering to.
+ *
+ * What core's marker cannot say is WHO the value is about. It carries the source, the day and the
+ * value — never the licensee — and every value a lookup writes is a fact about ONE licensee: the
+ * holder of the callsign that was looked up. So a marker that outlives the callsign beside it stops
+ * describing this applicant altogether. Accept the record for W8UM, type K5UTD over the callsign,
+ * and the profile went on saying `state` was read from callook.info: true of W8UM's licensee, and a
+ * statement about somebody else on a profile that is now K5UTD's. The matcher reads `state` and
+ * `licenseClass`.
+ *
+ * Pairing the two in one value makes that unrepresentable — there is no way to install a marker set
+ * without saying which callsign it is about — and `liveMarks` compares that callsign against the one
+ * in the field rather than trusting any path to have remembered. It is the marker's own `value`
+ * device one level up: a marker self-invalidates when the VALUE changes, this pair when the SUBJECT
+ * does.
+ *
+ * `readFor` is not persisted, and does not need to be: markers are only ever SAVED while they agree
+ * with the callsign in the form (see `save`), so a stored set always describes the callsign stored
+ * beside it and `sourcesOf` rebuilds the pair from the two of them on the next load.
  */
-type FieldSources = Record<ProfileKind, Record<string, ProfileFieldSource>>;
+interface TabSources {
+  /** The callsign the record these markers were read from was for. */
+  readFor: string;
+  marks: Record<string, ProfileFieldSource>;
+}
 
-const NO_SOURCES: FieldSources = { student: {}, organization: {} };
+type FieldSources = Record<ProfileKind, TabSources>;
 
-/** The markers a stored profile arrived with, or none. */
-function sourcesOf(saved: Record<string, unknown> | null): Record<string, ProfileFieldSource> {
+const NO_SOURCES: FieldSources = {
+  student: { readFor: '', marks: {} },
+  organization: { readFor: '', marks: {} },
+};
+
+/** The markers a stored profile arrived with, paired with the callsign stored beside them. */
+function sourcesOf(saved: Record<string, unknown> | null): TabSources {
   const raw = saved?.fieldSources;
-  return typeof raw === 'object' && raw !== null ? (raw as Record<string, ProfileFieldSource>) : {};
+  const callsign = saved?.callsign;
+  return {
+    readFor: typeof callsign === 'string' ? callsign : '',
+    marks:
+      typeof raw === 'object' && raw !== null ? (raw as Record<string, ProfileFieldSource>) : {},
+  };
+}
+
+/**
+ * Callsign identity, which is neither case- nor whitespace-sensitive: `w8um ` and `W8UM` are one
+ * licence, and the lookup panel normalises exactly this way before asking about one. Comparing raw
+ * strings would take a whole tab's marks off because somebody released the shift key — a badge
+ * disappearing for a reason the user cannot see, which is the same class of defect pointed the
+ * other way.
+ */
+function sameCallsign(a: string, b: string): boolean {
+  return a.trim().toUpperCase() === b.trim().toUpperCase();
 }
 
 export function Profile(): JSX.Element {
@@ -336,6 +380,22 @@ export function Profile(): JSX.Element {
     if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
   }, [focusKey, kind]);
 
+  /**
+   * The markers that still describe THIS applicant — none of them, once the callsign in the form
+   * is no longer the one whose record stated them.
+   *
+   * The set is HELD rather than deleted and COMPARED rather than cleared, for the same reason
+   * `profileValueOrigin` compares the marker's value instead of trusting an `onChange` to clear a
+   * flag: nothing has to remember, and a callsign typed back is the same licence again, which
+   * callook did state these values for. A change of callsign destroys nothing — the VALUES a
+   * lookup wrote stay in the form either way, because they are on screen and the applicant may
+   * well have meant to keep them. What it takes away is the source's name on them, which was never
+   * about this callsign.
+   */
+  const liveMarks = sameCallsign(drafts[kind].callsign ?? '', sources[kind].readFor)
+    ? sources[kind].marks
+    : {};
+
   function setValue(key: string, value: string): void {
     setDrafts((current) => ({ ...current, [kind]: { ...current[kind], [key]: value } }));
     // No marker is touched here, and that is the design rather than an omission: a marker
@@ -357,18 +417,57 @@ export function Profile(): JSX.Element {
    * origin each value carries — see `lib/callsignFill.ts`, which is the only place a marker is
    * built, and which marks only what the source itself stated.
    *
-   * The markers it does NOT return are removed rather than left alone. A value the user has now
-   * stated themselves must not keep an earlier lookup's attribution: `profileValueOrigin` compares
-   * strings, so a marker left over from a previous record that happens to hold the same string
-   * would go on reading as "filled from callook.info".
+   * The markers it returns REPLACE the ones held, rather than merging into them, and they arrive
+   * paired with the callsign they are about. What this profile has read from a source is exactly
+   * what the record just accepted stated, for the licensee that record names — a marker left from
+   * an earlier record is either the same licensee's (in which case this record restated it and it
+   * is back) or somebody else's.
    */
   function applyLookup(accepted: AcceptedCallsign): void {
-    const { values, fieldSources, unmarked } = fillFromLookup(accepted, kind);
-    const marks: Record<string, ProfileFieldSource> = { ...sources[kind], ...fieldSources };
-    for (const key of unmarked) delete marks[key];
+    const { values, fieldSources } = fillFromLookup(accepted, kind);
+    const held = sources[kind].marks;
+    const draft = drafts[kind];
 
-    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...values } }));
-    setSources((current) => ({ ...current, [kind]: marks }));
+    /**
+     * The fields the PREVIOUS record filled that this one says nothing about.
+     *
+     * This is what "use these values" has to mean when the record's answer is nothing. A second
+     * lookup whose record is silent on a field — an address callook could not parse, one of the
+     * ~212k legacy operator classes that maps onto none of GrantSpotter's four — used to leave the
+     * first licensee's `MI` and `GENERAL` sitting in the form. Dropping the marker alone would fix
+     * the attribution and leave the value, which is the worse half of the same problem: the state
+     * the matcher reads would still be the other licensee's, now indistinguishable from something
+     * this applicant typed.
+     *
+     * A field is emptied ONLY where it still holds exactly what a marker says a lookup put there.
+     * `profileValueOrigin` is core's reader and answers `'typed'` the moment the applicant has
+     * changed it, so what this clears is the previous RECORD's answer and never the applicant's
+     * own — a state they typed before pressing the button survives a lookup that is silent on it.
+     */
+    const vacated: FormValues = {};
+    for (const [key, mark] of Object.entries(held)) {
+      if (values[key] !== undefined) continue;
+      if (profileValueOrigin(draft[key], mark) === 'looked_up') vacated[key] = '';
+    }
+
+    // Emptying a field the applicant can see is a change they are owed a sentence about, in the
+    // live region this form already keeps mounted. Silence here would be the same defect as the
+    // one above pointed the other way: a value that moves without the person being told.
+    const emptied = Object.keys(vacated);
+    setStatus(
+      emptied.length === 0
+        ? ''
+        : `The record you accepted does not state ${profileFieldLabelList(emptied, kind)}, so ` +
+            `${emptied.length === 1 ? 'that field is' : 'those fields are'} now empty. What was ` +
+            `in ${emptied.length === 1 ? 'it' : 'them'} came from the record read before it, not ` +
+            'from you. Nothing has been saved yet.',
+    );
+
+    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...vacated, ...values } }));
+    setSources((current) => ({
+      ...current,
+      [kind]: { readFor: accepted.callsign.value, marks: fieldSources },
+    }));
     setUlsUrls((current) => ({ ...current, [kind]: accepted.provenance.ulsUrl }));
   }
 
@@ -402,8 +501,13 @@ export function Profile(): JSX.Element {
      * user has since typed over, and every marker for a field that is now empty. Without it a
      * "read from callook.info" marker for a value nobody can see any more would sit in the
      * database waiting for the next reader to discount it.
+     *
+     * `liveMarks` is what is sent rather than the held set, and it is the half `pruneFieldSources`
+     * cannot do: core compares each marker against the VALUE beside it, so a marker describing
+     * another licensee's record survives that pass intact — the value it names is still in the
+     * field, it is just no longer a fact about the callsign on this profile.
      */
-    const marks = sources[kind];
+    const marks = liveMarks;
     const payload = pruneFieldSources(
       (Object.keys(marks).length === 0
         ? body
@@ -447,22 +551,23 @@ export function Profile(): JSX.Element {
   }
 
   const noun = kind === 'student' ? 'student' : 'organization';
-  const kindSources = sources[kind];
   /**
-   * Whether this field still holds the value a lookup wrote. `profileValueOrigin` is core's
-   * and is the only sanctioned reader: testing for a marker's presence would report "read from
-   * callook.info" for a value the user has typed over, which is the precise misattribution the
-   * marker's stored value exists to prevent.
+   * Whether this field still holds the value a lookup wrote FOR THE CALLSIGN NOW IN THE FORM.
+   * `profileValueOrigin` is core's and is the only sanctioned reader of the first half: testing
+   * for a marker's presence would report "read from callook.info" for a value the user has typed
+   * over, which is the precise misattribution the marker's stored value exists to prevent.
+   * `liveMarks` is the second half, which core's marker has no room to express — see
+   * {@link TabSources}.
    */
   function lookedUpSource(key: string): ProfileFieldSource | undefined {
-    const source = kindSources[key];
+    const source = liveMarks[key];
     return profileValueOrigin(drafts[kind][key], source) === 'looked_up' ? source : undefined;
   }
   // Every live marker on a tab came from one lookup, so any of them names the source and day.
   const firstFilled = callsignFillableFields(kind).find(
     (key) => lookedUpSource(key) !== undefined,
   );
-  const lookupMark = firstFilled === undefined ? null : (kindSources[firstFilled] ?? null);
+  const lookupMark = firstFilled === undefined ? null : (liveMarks[firstFilled] ?? null);
   const unevaluated = unevaluatedProfileKinds({
     hasStudentProfile: held.student,
     hasOrgProfile: held.organization,

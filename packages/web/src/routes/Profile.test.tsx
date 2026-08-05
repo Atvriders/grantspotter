@@ -32,6 +32,23 @@ const LEGACY_RECORD: CallsignRecord = {
   operClassRaw: 'ADVANCED',
 };
 
+/**
+ * A record with nothing to say about the two fields a previous one filled: callook returned no
+ * address it could parse a state out of, and the operator class is one of the legacy ones that map
+ * onto none of GrantSpotter's four. Both halves are ordinary — a PO-box-only record and an
+ * ADVANCED licence are not edge cases — and together they are what "the new record is silent"
+ * looks like in the wild.
+ */
+const SILENT_RECORD: CallsignRecord = {
+  ...PERSON_RECORD,
+  operClass: undefined,
+  operClassRaw: 'ADVANCED',
+  addressLine1: undefined,
+  city: undefined,
+  state: undefined,
+  zip: undefined,
+};
+
 const CLUB_RECORD: CallsignRecord = {
   callsign: 'W8UM',
   type: 'CLUB',
@@ -105,12 +122,21 @@ function stubFetch(
     putReport?: CompletenessReport;
     /** The answer `POST /api/callsign/lookup` gives, for the tests that press the button. */
     lookup?: CallsignLookupResult;
+    /**
+     * One answer per press, for the tests that look a second callsign up. The last entry is
+     * repeated once the queue runs out, so a test only has to name the answers it cares about.
+     */
+    lookups?: CallsignLookupResult[];
   } = {},
 ) {
+  const queued = [...(options.lookups ?? [])];
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === '/api/callsign/lookup') {
+      const next = queued.length > 1 ? queued.shift() : queued[0];
       return Promise.resolve(
-        jsonResponse(options.lookup ?? { status: 'unavailable', message: 'No stub was supplied.' }),
+        jsonResponse(
+          next ?? options.lookup ?? { status: 'unavailable', message: 'No stub was supplied.' },
+        ),
       );
     }
     if ((init?.method ?? 'GET') === 'PUT') {
@@ -1017,6 +1043,130 @@ describe('filling the profile from the FCC record', () => {
     expect(putBody(fetchMock).fieldSources).toMatchObject({
       callsign: { source: 'callook.info', fetchedAt: '2026-08-04T12:00:00.000Z', value: 'W5NEW' },
     });
+  });
+
+  /**
+   * A MARKER IS A FACT ABOUT ONE LICENSEE, AND THE CALLSIGN IS WHO THAT IS.
+   *
+   * `ProfileFieldSource` carries the source, the day and the value, and no way of saying who the
+   * value is about — so a marker written for W8UM went on reading as "read from callook.info" after
+   * the applicant typed K5UTD over the callsign. Every claim on the profile was then about a
+   * different licensee than the profile was: callook.info never said anything about K5UTD, and the
+   * matcher reads `state` and `licenseClass`.
+   *
+   * The VALUES stay. They are on screen, they are the applicant's to keep or clear, and a form that
+   * empties fields as somebody types in another one is its own defect. What comes off is the
+   * source's name on them.
+   */
+  it('takes the source’s name off every field when the callsign moves to another licensee', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(2);
+
+    await userEvent.clear(screen.getByLabelText(/^callsign$/i));
+    await userEvent.type(screen.getByLabelText(/^callsign$/i), 'K5UTD');
+
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('GENERAL');
+    expect(screen.queryAllByText(/not a value you stated/i)).toHaveLength(0);
+    expect(screen.queryByText(/marked fields below were read from/i)).not.toBeInTheDocument();
+
+    // And no attribution reaches storage either: `pruneFieldSources` keeps a marker whose VALUE
+    // still matches, which every one of these does — it is the subject that moved, not the value.
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const body = putBody(fetchMock);
+    expect(body).toMatchObject({ callsign: 'K5UTD', state: 'MI', licenseClass: 'GENERAL' });
+    expect(body).not.toHaveProperty('fieldSources');
+  });
+
+  /**
+   * The marks are compared against the callsign, not deleted by the keystroke that changed it —
+   * the same device as the marker's own stored value one level down. So a callsign typed back is
+   * the same licence again, and callook.info did state these values for it.
+   */
+  it('gives the marks back when the callsign comes back, because the record did state them', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    await userEvent.clear(screen.getByLabelText(/^callsign$/i));
+    await userEvent.type(screen.getByLabelText(/^callsign$/i), 'K5UTD');
+    expect(screen.queryAllByText(/not a value you stated/i)).toHaveLength(0);
+
+    await userEvent.clear(screen.getByLabelText(/^callsign$/i));
+    // Lower case on purpose: a callsign is one licence however it is capitalised, and dropping a
+    // tab's marks over the shift key would be a badge vanishing for no reason the user can see.
+    await userEvent.type(screen.getByLabelText(/^callsign$/i), 'w8um');
+    expect(screen.getAllByText(/not a value you stated/i)).toHaveLength(2);
+  });
+
+  /**
+   * ACCEPTING A RECORD MEANS THAT RECORD IS WHAT THIS PROFILE READ — INCLUDING WHERE IT SAYS
+   * NOTHING.
+   *
+   * Accepting used to merge the new record's markers into the ones already held, so a second
+   * record silent on a field left the first licensee's `MI` and `GENERAL` in the form, still
+   * marked as read from callook.info. Dropping the mark alone would fix the attribution and leave
+   * the worse half: the state the matcher reads would still be the other licensee's, now
+   * indistinguishable from something this applicant typed.
+   */
+  it('does not leave the first licensee’s answers behind when the next record is silent on them', async () => {
+    const fetchMock = stubFetch({
+      lookups: [
+        { status: 'found', record: PERSON_RECORD },
+        { status: 'found', record: SILENT_RECORD },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('GENERAL');
+
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('');
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('');
+    expect(screen.queryAllByText(/not a value you stated/i)).toHaveLength(0);
+    // ...and the applicant is told, in the live region this form already keeps mounted: a value
+    // vanishing from a field is a change they are owed a sentence about.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /does not state State and License class, so those fields are now empty/i,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const body = putBody(fetchMock);
+    expect(body).not.toHaveProperty('state');
+    expect(body).not.toHaveProperty('licenseClass');
+    expect(body).not.toHaveProperty('fieldSources');
+  });
+
+  /**
+   * The other half of that rule, and the reason it is scoped by the marker rather than by the
+   * field: what a lookup clears is the previous RECORD's answer. A value the applicant typed is
+   * their own assertion — the strongest thing this tool holds — and an unrelated lookup must not
+   * be able to delete one.
+   */
+  it('clears only what an earlier record put there, never what the applicant typed', async () => {
+    stubFetch({
+      lookups: [
+        { status: 'found', record: PERSON_RECORD },
+        { status: 'found', record: SILENT_RECORD },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    await userEvent.clear(screen.getByLabelText(/^state$/i));
+    await userEvent.type(screen.getByLabelText(/^state$/i), 'OH');
+
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('OH');
+    // The licence class was still the first record's, so it goes.
+    expect(screen.getByLabelText(/license class/i)).toHaveValue('');
   });
 
   it('has no accessibility violations with the record on screen', async () => {

@@ -8,9 +8,11 @@ import {
 } from '../api/callsign.js';
 import {
   callsignFromRecord,
+  fillFromLookup,
   fromSource,
   type AcceptedCallsign,
 } from '../lib/callsignFill.js';
+import { profileFieldLabelList } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
 import './callsign.css';
 
@@ -98,11 +100,22 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set([
   'unavailable',
 ]);
 
+/**
+ * What the values that just left this panel were attributed to — the two lists `fillFromLookup`
+ * splits them into, kept so the confirmation can be built from them.
+ */
+interface Attribution {
+  /** Profile fields carrying callook.info's name, because the record itself stated them. */
+  marked: string[];
+  /** Profile fields written with no mark at all: the applicant's own, however they got there. */
+  unmarked: string[];
+}
+
 type Phase =
   | { kind: 'idle' }
   | { kind: 'busy' }
   | { kind: 'answered'; result: CallsignLookupResult }
-  | { kind: 'accepted'; record: CallsignRecord }
+  | { kind: 'accepted'; record: CallsignRecord; attribution: Attribution }
   /** The request itself did not complete: no answer was received, so none is reported. */
   | { kind: 'failed'; message: string };
 
@@ -159,6 +172,55 @@ export function frameFor(status: CallsignLookupResult['status'], callsign: strin
           'yourself.',
       };
   }
+}
+
+/**
+ * WHAT THE CONFIRMATION SAYS, BUILT FROM WHAT WAS ACTUALLY ATTRIBUTED.
+ *
+ * This panel is an editor as much as a report, and `fillFromLookup` marks only the values the
+ * RECORD stated — so "Filled in from the FCC record" and "These are values GrantSpotter read, not
+ * values you stated" could be, and were, printed over a set of values GrantSpotter read none of: a
+ * legacy licence class the applicant picked because the panel asked them to, a state they
+ * corrected, a callsign they typed themselves. That sentence is the reassurance this screen exists
+ * to give; printed unconditionally it is worth nothing on the occasions when it is true, which is
+ * the same defect as a badge that never comes off.
+ *
+ * So the words are computed from the same function that builds the markers, over the same accepted
+ * value, rather than from the fact that a record was on screen. `fillFromLookup` is pure, which is
+ * what makes calling it twice — once here for the sentence, once in the host for the markers it
+ * stores — a guarantee that the two agree rather than a second opinion.
+ */
+export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): Frame {
+  const { marked, unmarked } = attribution;
+  const one = marked.length === 1;
+  const mine =
+    unmarked.length === 0
+      ? ''
+      : ` ${profileFieldLabelList(unmarked, kind)} ${unmarked.length === 1 ? 'carries' : 'carry'} no mark: ` +
+        `the record either did not state ${unmarked.length === 1 ? 'it' : 'them'}, or you changed ` +
+        `what it said, so ${unmarked.length === 1 ? 'it is yours' : 'they are yours'}.`;
+
+  if (marked.length > 0) {
+    return {
+      heading: 'Filled in from the FCC record',
+      body:
+        `${profileFieldLabelList(marked, kind)} came from the record rather than from you, and ` +
+        `${one ? 'the field stays' : 'those fields stay'} marked that way until you edit ` +
+        `${one ? 'it' : 'them'}.${mine} Nothing has been saved yet.`,
+    };
+  }
+
+  return {
+    heading: 'Filled in — none of it attributed to the FCC record',
+    body:
+      (unmarked.length === 0
+        ? ''
+        : `${profileFieldLabelList(unmarked, kind)} went onto the form as ` +
+          `${unmarked.length === 1 ? 'your own value' : 'your own values'}. `) +
+      'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
+      'is now in it, and that is true of none of these — either the record had nothing to state, ' +
+      'or you changed what it said. Nothing has been saved yet.',
+  };
 }
 
 /** The record's own words for its operator class, or the truth about a club licence. */
@@ -237,7 +299,9 @@ export function CallsignLookup({
       case 'busy':
         return `Looking up ${typed}…`;
       case 'accepted':
-        return 'Filled in from the FCC record. Nothing has been saved yet.';
+        // The same heading the panel below shows, so the one user who cannot see it is not told
+        // that a record filled in values the record stated none of.
+        return `${acceptedFrame(phase.attribution, target).heading}. Nothing has been saved yet.`;
       case 'failed':
         return `The lookup did not run. ${phase.message}`;
       case 'answered': {
@@ -322,28 +386,61 @@ export function CallsignLookup({
           clubNotice={clubNotice}
           onUse={(values) => {
             onAccept(values);
-            setPhase({ kind: 'accepted', record });
+            // Which of these the host will mark is `fillFromLookup`'s answer, not this panel's
+            // guess at it: the same pure function, over the same accepted value, so the sentence
+            // the user reads and the markers the profile stores cannot disagree.
+            const fill = fillFromLookup(values, target);
+            setPhase({
+              kind: 'accepted',
+              record,
+              attribution: { marked: Object.keys(fill.fieldSources), unmarked: fill.unmarked },
+            });
           }}
           onDiscard={() => setPhase({ kind: 'idle' })}
         />
       )}
 
       {phase.kind === 'accepted' && (
-        <section className="callsign-panel" aria-labelledby={`${baseId}-accepted`}>
-          <h2 id={`${baseId}-accepted`}>Filled in from the FCC record</h2>
-          <SourceLine record={phase.record} />
-          <p className="callsign-note">
-            These are values GrantSpotter read, not values you stated, and the fields are marked
-            that way until you edit them. Nothing has been saved yet.
-          </p>
-          <div className="callsign-actions">
-            <button type="button" className="btn" onClick={() => setPhase({ kind: 'idle' })}>
-              Close
-            </button>
-          </div>
-        </section>
+        <AcceptedPanel
+          id={`${baseId}-accepted`}
+          record={phase.record}
+          frame={acceptedFrame(phase.attribution, target)}
+          onClose={() => setPhase({ kind: 'idle' })}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * What was filled in, and whose values they are.
+ *
+ * The record is still named here — it was read, and the link to the FCC's own copy of it is worth
+ * having whether or not anything was attributed to it — but the two sentences around it come from
+ * {@link acceptedFrame}, which is computed from what the markers actually say.
+ */
+function AcceptedPanel({
+  id,
+  record,
+  frame,
+  onClose,
+}: {
+  id: string;
+  record: CallsignRecord;
+  frame: Frame;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <section className="callsign-panel" aria-labelledby={id}>
+      <h2 id={id}>{frame.heading}</h2>
+      <SourceLine record={record} />
+      <p className="callsign-note">{frame.body}</p>
+      <div className="callsign-actions">
+        <button type="button" className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </section>
   );
 }
 
