@@ -372,7 +372,19 @@ const EXEMPT: Record<string, string> = {};
  * stale entry — the token must still exist in every theme, and must still be unmeasurable, so an
  * entry cannot outlive its cause and be mistaken for documentation of a real constraint.
  */
-const UNMEASURABLE_BY_DESIGN: Record<string, string> = {};
+const UNMEASURABLE_BY_DESIGN: Record<string, string> = {
+  /*
+    Signed rather than made measurable, because making it measurable would mean making it opaque,
+    and an opaque scrim is a different thing: the point of the layer is that the screen you left
+    is still dimly on screen behind the navigation drawer.
+  */
+  '--scrim':
+    'A translucent overlay, not an ink and not a surface: nothing is ever set on it. The drawer ' +
+    'above it paints its own --surface and takes its text contrast from that pair, which IS ' +
+    'measured here. What --scrim owes is dimming, over a backdrop that is whatever route was on ' +
+    'screen — a compositing question this file’s opaque-hex model cannot answer, and would ' +
+    'answer wrongly if the alpha were dropped to force a number out of it.',
+};
 
 /** The two blocks the AA matrix is derived over. */
 const THEMES: ReadonlyArray<readonly [selector: string, label: string]> = [
