@@ -442,6 +442,88 @@ describe('selectTemplates — ordering and the empty-appliesTo rule', () => {
   });
 });
 
+/**
+ * ONE FUNDER, SEVERAL PROGRAMMES, AND THE SENTENCE THE SCREEN PUTS ON TOP OF THE RESULT.
+ *
+ * `Applications.tsx` reads `overlays[0]` and prints "This funder's overlay, <title>, is selected",
+ * so the FIRST element of this array is not a list position, it is an assertion made to an
+ * applicant about the programme they are writing for. Until 2026-08-10 the overlay filter read
+ * only `programIds` and `funderId` and dropped the `klass` it was handed, while the sort was
+ * `order` alone. The ARRL Foundation publishes three programmes and ships three overlays under one
+ * `funderId`, so all three matched every one of its 114 records, and `order: 20` put the Amateur
+ * Radio GRANTS overlay first on all 111 SCHOLARSHIPS — measured against a built server on the
+ * shipped seed: 113 of the 119 programmes that get an overlay had the wrong one named.
+ *
+ * Two rules, and they are ordered because they answer different questions. An overlay that names
+ * this programme in `programIds` was written for THIS record and outranks anything matched at
+ * funder level, whatever `order` says. An overlay matched only at funder level has nothing but
+ * `appliesTo` to say whether it is about this kind of award, so it is held to it — the same
+ * `appliesTo` rule components have always been held to, empty still meaning every class.
+ */
+describe('selectTemplates — which overlay a programme actually binds to', () => {
+  const ARRL = 'arrl-foundation';
+
+  it('does not offer a funder sibling whose appliesTo excludes this programme class', () => {
+    const sel = selectTemplates(loadTemplates(templatesRoot()), {
+      funderId: ARRL,
+      programId: 'arrl-cat-the-10-10-international-scholarships',
+      klass: 'ham_scholarship',
+    });
+    expect(sel.overlays.map((t) => t.id)).toEqual(['funder-arrl-foundation-scholarships']);
+  });
+
+  it('names the scholarship overlay first on a scholarship, not the grants overlay', () => {
+    // The exact sentence the applications screen prints is built from overlays[0].
+    const sel = selectTemplates(loadTemplates(templatesRoot()), {
+      funderId: ARRL,
+      programId: 'arrl-cat-the-mary-lou-brown-scholarship',
+      klass: 'ham_scholarship',
+    });
+    expect(sel.overlays[0]?.id).toBe('funder-arrl-foundation-scholarships');
+  });
+
+  it('prefers the overlay that names this programme over a lower-ordered funder sibling', () => {
+    // funder-arrl-amateur-radio-grants is order 20 and funder-arrl-club-grant is order 30; both
+    // apply to ham_grant, so `order` alone hands the Club Grant programme the wrong overlay.
+    const sel = selectTemplates(loadTemplates(templatesRoot()), {
+      funderId: ARRL,
+      programId: 'arrl-club-grant',
+      klass: 'ham_grant',
+    });
+    expect(sel.overlays[0]?.id).toBe('funder-arrl-club-grant');
+  });
+
+  it('still names its own overlay first on the grants programme', () => {
+    const sel = selectTemplates(loadTemplates(templatesRoot()), {
+      funderId: ARRL,
+      programId: 'arrl-amateur-radio-grants',
+      klass: 'ham_grant',
+    });
+    expect(sel.overlays[0]?.id).toBe('funder-arrl-amateur-radio-grants');
+  });
+
+  it('keeps a programme-specific overlay even when its appliesTo would exclude the class', () => {
+    // `programIds` naming a record is a stronger statement than `appliesTo` describing a kind, so
+    // the class filter is applied to funder-level matches only. Otherwise a corpus whose klass
+    // drifts from an overlay's frontmatter would silently hide the one overlay written for it.
+    const all = loadTemplates(root);
+    const sel = selectTemplates(all, {
+      funderId: 'ardc',
+      programId: 'ardc-grants',
+      klass: 'ham_scholarship',
+    });
+    expect(sel.overlays.map((t) => t.id)).toEqual(['funder-ardc']);
+  });
+
+  it('drops a funder-level match whose class is wrong rather than ranking it lower', () => {
+    // Not merely reordered: a wrong-programme overlay left in the list is one an applicant can
+    // still click, under a heading that says these are written against this funder's criteria.
+    const all = loadTemplates(root);
+    const sel = selectTemplates(all, { funderId: 'ardc', klass: 'ham_scholarship' });
+    expect(sel.overlays).toEqual([]);
+  });
+});
+
 describe('contentRoot', () => {
   it('finds the repository content/ directory by walking up from this module', () => {
     const found = contentRoot();

@@ -285,20 +285,47 @@ export function getTemplate(id: string, root?: string): TemplateDoc {
 export function selectTemplates(all: TemplateDoc[], q: TemplateQuery): TemplateSelection {
   const byOrder = (a: TemplateDoc, b: TemplateDoc) => a.order - b.order || a.id.localeCompare(b.id);
 
+  /** Empty `appliesTo` means every class, which is the rule components have always been held to. */
+  const fitsClass = (t: TemplateDoc): boolean =>
+    q.klass === undefined || t.appliesTo.length === 0 || t.appliesTo.includes(q.klass);
+
+  /**
+   * `overlays[0]` IS A CLAIM, NOT A LIST POSITION. The applications screen prints "This funder's
+   * overlay, <title>, is selected" from it and offers a one-click insert of that overlay's
+   * criteria into the draft, so whatever lands first is what an applicant is told their funder
+   * asks for.
+   *
+   * A funder is not a programme. The ARRL Foundation runs grants, club grants and scholarships,
+   * ships one overlay for each, and puts one `funderId` on all three — so a funder-level match
+   * returns all three for every one of its records, and `order` alone then handed the Amateur
+   * Radio Grants overlay to all 111 ARRL catalog SCHOLARSHIPS. Measured on a built server against
+   * the shipped seed on 2026-08-10: 113 of the 119 programmes that get an overlay named the wrong
+   * one. `klass` was passed in by both callers for exactly this and was read only by `components`.
+   *
+   * So the two matches are no longer one filter. Naming this programme in `programIds` is a
+   * statement about THIS record and wins outright, whatever its `order`. Matching only the funder
+   * is a statement about the organisation, and has nothing but `appliesTo` to say whether it is
+   * about this kind of award — so it is held to it, and a sibling that does not fit is dropped
+   * rather than ranked lower: it would otherwise stay clickable under a heading promising these
+   * are written against the criteria of the thing being applied for.
+   */
+  const isForThisProgram = (t: TemplateDoc): boolean =>
+    q.programId !== undefined && t.programIds.includes(q.programId);
+
   const overlays = all
     .filter((t) => t.layer === 'funder' && !t.alwaysAvailable)
     .filter(
       (t) =>
-        (q.programId !== undefined && t.programIds.includes(q.programId)) ||
-        (q.funderId !== undefined && t.funderId === q.funderId),
+        isForThisProgram(t) ||
+        (q.funderId !== undefined && t.funderId === q.funderId && fitsClass(t)),
     )
-    .sort(byOrder);
+    .sort((a, b) => Number(isForThisProgram(b)) - Number(isForThisProgram(a)) || byOrder(a, b));
 
   const playbooks = all.filter((t) => t.layer === 'funder' && t.alwaysAvailable).sort(byOrder);
 
   const components = all
     .filter((t) => t.layer === 'component')
-    .filter((t) => q.klass === undefined || t.appliesTo.length === 0 || t.appliesTo.includes(q.klass))
+    .filter(fitsClass)
     .sort(byOrder);
 
   return { overlays, components, playbooks };
