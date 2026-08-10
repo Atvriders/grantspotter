@@ -3,7 +3,8 @@ import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { SessionContext, makeSessionValue, type SessionValue } from '../store/session.js';
-import { Watchlist } from './Watchlist.js';
+import { Watchlist, WATCH_TABLE_MIN_PX } from './Watchlist.js';
+import { restoreViewport, setViewportWidth } from '../test/viewport.js';
 
 /**
  * THE WATCHLIST IS WHERE SILENCE GETS READ.
@@ -663,5 +664,96 @@ describe('Watchlist — delivery channels', () => {
     const settings = await screen.findByRole('region', { name: /delivery/i });
     expect(within(settings).getByText(/7 deliveries in a row/i)).toBeInTheDocument();
     expect(within(settings).getByText(/2026-07-25/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The watchlist on a phone at a club meeting — the reading the brief describes.
+ *
+ * A watched programme is a RECORD, not a row in a matrix: nobody scans the Closes column of
+ * their own watchlist for an outlier, they read the one programme they came for. Below
+ * `WATCH_TABLE_MIN_PX` it stacks, and every qualifier the table cell carried has to come with it.
+ */
+describe('Watchlist watched programmes on a phone', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  it('keeps the table at the width the table fits at', async () => {
+    setViewportWidth(WATCH_TABLE_MIN_PX);
+    stubApi();
+    renderWatchlist();
+    expect(await screen.findByRole('table', { name: /watched programs/i })).toBeInTheDocument();
+  });
+
+  it('stacks into records one pixel below it', async () => {
+    setViewportWidth(WATCH_TABLE_MIN_PX - 1);
+    stubApi();
+    renderWatchlist();
+    expect(await screen.findByRole('list', { name: /watched programs/i })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /watched programs/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the status pill on every card', async () => {
+    setViewportWidth(390);
+    stubApi();
+    renderWatchlist();
+    await screen.findByRole('list', { name: /watched programs/i });
+    expect(screen.getByLabelText('Status: open')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Status: discontinued')).toHaveLength(2);
+  });
+
+  it('keeps the lastVerifiedAt badge on every card', async () => {
+    setViewportWidth(390);
+    stubApi();
+    renderWatchlist();
+    await screen.findByRole('list', { name: /watched programs/i });
+    expect(screen.getAllByLabelText(/^Verified /)).toHaveLength(3);
+  });
+
+  /**
+   * The whole reason the product exists, on the layout with the least room to say it. "Projected"
+   * is the marker; the zone beside it is the second fact, and neither may be the thing that gets
+   * dropped to fit a 320px screen.
+   */
+  it('keeps the projected-versus-published marker and its zone on every card', async () => {
+    setViewportWidth(320);
+    stubApi();
+    renderWatchlist();
+    await screen.findByRole('list', { name: /watched programs/i });
+    expect(screen.getByText('Projected · America/New_York')).toBeInTheDocument();
+    expect(screen.getByText('Published by the funder · UTC (no zone recorded)')).toBeInTheDocument();
+    expect(screen.getByText('No close date recorded')).toBeInTheDocument();
+  });
+
+  it('keeps the compromised-domain warning attached to the programme it is about', async () => {
+    setViewportWidth(320);
+    stubApi();
+    renderWatchlist();
+    const list = await screen.findByRole('list', { name: /watched programs/i });
+    const card = within(list).getByRole('note', { name: /safety warning/i });
+    expect(card).toBeInTheDocument();
+    // Still nothing outbound, on either layout.
+    const hrefs = [...list.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? '');
+    expect(hrefs.every((href) => href.startsWith('/'))).toBe(true);
+  });
+
+  it('keeps the one action a card has', async () => {
+    setViewportWidth(390);
+    const fetchMock = stubApi();
+    renderWatchlist();
+    await screen.findByRole('list', { name: /watched programs/i });
+    const buttons = screen.getAllByRole('button', { name: 'Stop watching' });
+    expect(buttons).toHaveLength(3);
+    await userEvent.click(buttons[0] as HTMLElement);
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            String(call[0]).startsWith('/api/watches/') &&
+            (call[1] as RequestInit | undefined)?.method === 'DELETE',
+        ),
+      ).toBe(true);
+    });
   });
 });

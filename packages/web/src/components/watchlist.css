@@ -26,10 +26,86 @@
 
 .wl-head-spacer { flex: 1 1 auto; }
 
+/*
+ * `display: grid` with one `minmax(0, 1fr)` track, not `overflow-x: auto` alone. Overflow clips at
+ * PAINT time; a grid item's automatic minimum width is its min-content, and `.shell-main` is a
+ * grid item — so without the track the 726 px table would push the whole document sideways at
+ * every viewport, which is exactly what `/sources` and `/admin` were doing.
+ */
 .wl-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   overflow-x: auto;
   margin: 0 calc(-1 * var(--s-4));
   padding: 0 var(--s-4);
+}
+
+/* ---------- watches as records ----------
+ *
+ * Below `WATCH_TABLE_MIN_PX` (982 px — see `routes/Watchlist.tsx`). The order is the argument:
+ * name, then the status pill and the verified badge, then the close date with its provenance and
+ * its zone, then the one action. Nothing is dropped, because a stack has no column to run out of.
+ */
+
+.wl-record-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.wl-record {
+  display: grid;
+  gap: var(--s-3);
+  justify-items: start;
+  min-width: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface);
+}
+
+.wl-record .wl-name a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: var(--fs-400);
+  overflow-wrap: anywhere;
+}
+
+.wl-record-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.wl-record-field {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+}
+
+/*
+ * In the table the deadline sits in a right-aligned `.num` cell, so `.wl-deadline` justifies its
+ * two lines to the end. On a card there is no column to align to, and a right-ragged date under a
+ * left-ragged label reads as two unrelated things.
+ */
+.wl-record .wl-deadline {
+  justify-items: start;
+}
+
+.wl-record .wl-qualifier {
+  /* The provenance word is the honesty marker on this card. It wraps rather than being clipped:
+     "PROJECTED · AMERICA/NEW_YORK" is 30 characters of uppercase and does not fit 320 px. */
+  white-space: normal;
+}
+
+/* Touch. */
+.wl-record .btn {
+  min-height: 44px;
 }
 
 .wl-name {
@@ -200,6 +276,14 @@
   border-radius: var(--r-1);
   background: var(--surface);
   color: var(--text);
+  /* 44 px is the touch floor, and it applies at every width: a pointer target is a pointer
+     target. These were 38 px, and the buttons beside them 41 px. */
+  min-height: 44px;
+  min-width: 0;
+}
+
+.wl-panel .btn {
+  min-height: 44px;
 }
 
 .wl-field input[aria-invalid='true'] { border-color: var(--no); }

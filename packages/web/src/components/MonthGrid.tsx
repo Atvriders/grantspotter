@@ -286,125 +286,158 @@ export function MonthGrid({ year, month, entries, now }: MonthGridProps): JSX.El
     });
 
   return (
-    <div className="month-frame">
-      {/*
-        A TABLE, not a `role="grid"`.
+    /*
+     * THIS ONE STAYS A GRID, and scrolls sideways inside its own frame.
+     *
+     * A month is a spatial object: "the deadline is the Friday after the one I am already
+     * preparing for" is a fact about where two marks sit relative to each other, and there is no
+     * stack of cards that carries it. Shrinking the grid instead — which is what happened before
+     * this frame scrolled — put seven columns into a 320 px screen and produced 39 px cells whose
+     * marks were 22 px of ellipsis. That is not a denser month view; it is a month view with the
+     * marks removed.
+     *
+     * The frame therefore holds the grid at the width where its cells are still legible (see
+     * `.month-grid`'s `min-width` in `calendar.css`) and scrolls to it. `tabIndex` because a
+     * region that scrolls has to be reachable by a keyboard with no scroll wheel, and
+     * `role="region"` with a name so landing on it is announced as something.
+     *
+     * The Agenda tab beside this one is the surface where every mark is spelled out in full, and
+     * it is the default for exactly that reason.
+     */
+    <>
+      <div className="month-frame" role="region" aria-label={`${title}, scrollable`} tabIndex={0}>
+        {/*
+          A TABLE, not a `role="grid"`.
 
-        Task 20 put `role="grid"` here because its brief's queries asked for it, and flagged at
-        the time that `role="table"` was the honest answer. It is, and the reason is not
-        pedantry: `grid` is a COMPOSITE WIDGET role. It obliges the author to ship two-dimensional
-        arrow-key navigation over a roving tabindex, and it changes what assistive technology
-        tells the user — a thing to enter and drive, rather than a table to read. This month view
-        ships no such navigation and needs none: it is a static arrangement of dates whose only
-        interactive contents are ordinary links, which the browser already reaches with Tab.
-        `role="grid"` therefore advertised a keyboard contract that did not exist.
+          Task 20 put `role="grid"` here because its brief's queries asked for it, and flagged at
+          the time that `role="table"` was the honest answer. It is, and the reason is not
+          pedantry: `grid` is a COMPOSITE WIDGET role. It obliges the author to ship two-dimensional
+          arrow-key navigation over a roving tabindex, and it changes what assistive technology
+          tells the user — a thing to enter and drive, rather than a table to read. This month view
+          ships no such navigation and needs none: it is a static arrangement of dates whose only
+          interactive contents are ordinary links, which the browser already reaches with Tab.
+          `role="grid"` therefore advertised a keyboard contract that did not exist.
 
-        The `role` attributes are DELETED rather than replaced with `role="table"` / `"row"` /
-        `"columnheader"` / `"cell"`, because `<table>`, `<tr>`, `<th scope="col">` and `<td>`
-        already carry exactly those implicit roles. Restating them adds a second place for the
-        semantics to drift from the markup. `aria-label` stays: the month and year are the one
-        thing the element cannot name itself.
+          The `role` attributes are DELETED rather than replaced with `role="table"` / `"row"` /
+          `"columnheader"` / `"cell"`, because `<table>`, `<tr>`, `<th scope="col">` and `<td>`
+          already carry exactly those implicit roles. Restating them adds a second place for the
+          semantics to drift from the markup. `aria-label` stays: the month and year are the one
+          thing the element cannot name itself.
 
-        `test/a11y.test.tsx` fails any `role="grid"` with no focusable cell, so this cannot
-        quietly come back.
-      */}
-      <table className="month-grid" aria-label={title}>
-        <thead>
-          <tr>
-            {DOW.map(([short, long]) => (
-              <th key={short} className="dow" scope="col">
-                <abbr title={long}>{short}</abbr>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {weeks.map((week, weekIndex) => (
-            <tr key={`week-${String(weekIndex)}`}>
-              {week.map((day, dayIndex) => {
-                if (day === null) {
-                  return (
-                    <td key={`pad-${String(weekIndex)}-${String(dayIndex)}`} className="day pad" />
-                  );
-                }
-                const key = cellDay(day);
-                const label = `${day.getUTCDate()} ${monthName} ${year}`;
-                const closes = groupByDeadlineOwner(closesOn.get(key) ?? []);
-                const opens = groupByDeadlineOwner(opensOn.get(key) ?? []);
-                const preps = groupByDeadlineOwner(prepsOn.get(key) ?? []);
-                return (
-                  <td
-                    key={key}
-                    className={`day${key === todayKey ? ' today' : ''}`}
-                    aria-label={label}
-                  >
-                    <span className="num">{day.getUTCDate()}</span>
-
-                    {closes.solo.map((entry) => (
-                      <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
-                    ))}
-                    {closes.groups.map((group) => (
-                      <OwnerFold
-                        key={`close-group-${group.ownerId}`}
-                        group={group}
-                        note={`One date, ${String(group.entries.length)} applications. They are not ${String(
-                          group.entries.length,
-                        )} deadlines: ${group.ownerName} sets this date, so clearing that one is what clears all of them, and a change to it moves every one.`}
-                      >
-                        {group.entries.map((entry) => (
-                          <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
-                        ))}
-                      </OwnerFold>
-                    ))}
-
-                    {opens.solo.map((entry) => (
-                      <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
-                    ))}
-                    {opens.groups.map((group) => (
-                      <OwnerFold
-                        key={`open-group-${group.ownerId}`}
-                        group={group}
-                        note={`One window opening, ${String(
-                          group.entries.length,
-                        )} applications: ${group.ownerName} published this date and they all read it off that record.`}
-                      >
-                        {group.entries.map((entry) => (
-                          <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
-                        ))}
-                      </OwnerFold>
-                    ))}
-
-                    {preps.solo.map((entry) => (
-                      <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
-                    ))}
-                    {preps.groups.map((group) => (
-                      <OwnerFold
-                        key={`prep-group-${group.ownerId}`}
-                        group={group}
-                        note={`One runway, ${String(
-                          group.entries.length,
-                        )} applications. They start on the same day because they end on the same day — ${
-                          group.ownerName
-                        }'s.`}
-                      >
-                        {group.entries.map((entry) => (
-                          <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
-                        ))}
-                      </OwnerFold>
-                    ))}
-                  </td>
-                );
-              })}
+          `test/a11y.test.tsx` fails any `role="grid"` with no focusable cell, so this cannot
+          quietly come back.
+        */}
+        <table className="month-grid" aria-label={title}>
+          <thead>
+            <tr>
+              {DOW.map(([short, long]) => (
+                <th key={short} className="dow" scope="col">
+                  <abbr title={long}>{short}</abbr>
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {weeks.map((week, weekIndex) => (
+              <tr key={`week-${String(weekIndex)}`}>
+                {week.map((day, dayIndex) => {
+                  if (day === null) {
+                    return (
+                      <td key={`pad-${String(weekIndex)}-${String(dayIndex)}`} className="day pad" />
+                    );
+                  }
+                  const key = cellDay(day);
+                  const label = `${day.getUTCDate()} ${monthName} ${year}`;
+                  const closes = groupByDeadlineOwner(closesOn.get(key) ?? []);
+                  const opens = groupByDeadlineOwner(opensOn.get(key) ?? []);
+                  const preps = groupByDeadlineOwner(prepsOn.get(key) ?? []);
+                  return (
+                    <td
+                      key={key}
+                      className={`day${key === todayKey ? ' today' : ''}`}
+                      aria-label={label}
+                    >
+                      <span className="num">{day.getUTCDate()}</span>
+
+                      {closes.solo.map((entry) => (
+                        <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
+                      ))}
+                      {closes.groups.map((group) => (
+                        <OwnerFold
+                          key={`close-group-${group.ownerId}`}
+                          group={group}
+                          note={`One date, ${String(group.entries.length)} applications. They are not ${String(
+                            group.entries.length,
+                          )} deadlines: ${group.ownerName} sets this date, so clearing that one is what clears all of them, and a change to it moves every one.`}
+                        >
+                          {group.entries.map((entry) => (
+                            <CloseChip key={`close-${entry.cycle.id}`} entry={entry} />
+                          ))}
+                        </OwnerFold>
+                      ))}
+
+                      {opens.solo.map((entry) => (
+                        <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
+                      ))}
+                      {opens.groups.map((group) => (
+                        <OwnerFold
+                          key={`open-group-${group.ownerId}`}
+                          group={group}
+                          note={`One window opening, ${String(
+                            group.entries.length,
+                          )} applications: ${group.ownerName} published this date and they all read it off that record.`}
+                        >
+                          {group.entries.map((entry) => (
+                            <OpensMark key={`open-${entry.cycle.id}`} entry={entry} />
+                          ))}
+                        </OwnerFold>
+                      ))}
+
+                      {preps.solo.map((entry) => (
+                        <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
+                      ))}
+                      {preps.groups.map((group) => (
+                        <OwnerFold
+                          key={`prep-group-${group.ownerId}`}
+                          group={group}
+                          note={`One runway, ${String(
+                            group.entries.length,
+                          )} applications. They start on the same day because they end on the same day — ${
+                            group.ownerName
+                          }'s.`}
+                        >
+                          {group.entries.map((entry) => (
+                            <PrepMark key={`prep-${entry.cycle.id}`} entry={entry} />
+                          ))}
+                        </OwnerFold>
+                      ))}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/*
+        BOTH OF THESE SIT OUTSIDE THE FRAME, and that is not tidiness.
+
+        The frame is a horizontal scroller holding a grid that is at least 672 px wide, so anything
+        inside it is 672 px wide too — a sentence in there would be a sentence the reader has to
+        scroll sideways to finish. Neither of them is a cell of the month anyway: one is a
+        statement about how the grid is being shown, the other a statement about what the window
+        returned.
+      */}
+      <p className="month-scroll-note">
+        Seven day columns, and they do not shrink below the width their marks need. On a narrow
+        screen the grid scrolls sideways inside its frame — the rest of the week is to the right.
+      </p>
       {!marksInMonth && (
         <p className="month-empty">
           Nothing falls in {title} — no deadline, no window opening and no prep start. That is what
           this window returned, not a claim that no funder has a date here.
         </p>
       )}
-    </div>
+    </>
   );
 }

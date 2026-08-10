@@ -5,7 +5,23 @@ import { EnrollmentCodes } from '../components/EnrollmentCodes.js';
 import { useSession } from '../store/session.js';
 import { useApi } from '../store/useApi.js';
 import { formatDate } from '../lib/trust.js';
+import { useNarrowerThan } from '../lib/narrowLayout.js';
 import '../components/admin.css';
+
+/**
+ * The first viewport width at which the accounts table fits without scrolling sideways.
+ *
+ * MEASURED in Chromium against the running instance, `el.style.width = 'min-content'` on the
+ * table itself: 642 px. `AppShell` spends 208 px on the nav rail and 48 px on page padding, so
+ * 642 + 208 + 48 = 898.
+ *
+ * Below it, each account becomes a card — and unlike the source-health matrix next door, that is
+ * the RIGHT answer here rather than a concession. Nobody scans this table down a column. Every
+ * row is a thing you act ON: change this person's role, disable this person, reset this person's
+ * password, delete this person. The five cells are one decision's worth of context, and the
+ * controls that carry it out are 41 px buttons crammed into the last cell of a 642 px table.
+ */
+export const ACCOUNTS_TABLE_MIN_PX = 898;
 
 /**
  * Mirrors `AdminUserRow` in `packages/server/src/api/adminUsersRouter.ts`.
@@ -79,6 +95,7 @@ export interface AdminProps {
 export function Admin({ now }: AdminProps): JSX.Element {
   const { user } = useSession();
   const users = useApi<UsersResponse>('/api/admin/users');
+  const stacked = useNarrowerThan(ACCOUNTS_TABLE_MIN_PX);
 
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'member'>('member');
@@ -306,6 +323,129 @@ export function Admin({ now }: AdminProps): JSX.Element {
     }
   }
 
+  /*
+   * THE THREE PIECES OF AN ACCOUNT ROW, built once and placed twice.
+   *
+   * The table wraps each in a `<td>`; the card wraps them in a `<li>` with a `<dl>` around the
+   * dates. They are functions returning JSX rather than components so that switching layouts
+   * cannot remount a `<select>` mid-change, and — the reason that matters here — so that a later
+   * tidy-up cannot quietly drop the "last admin who can sign in" warning or the delete
+   * confirmation from one layout while leaving it in the other. There is one copy of each.
+   */
+  function identityOf(row: AdminUserRow): JSX.Element {
+    return (
+      <>
+        <span className="admin-row-email">{row.email}</span>
+        <span className="admin-row-meta">
+          {row.isSelf && <span className="admin-tag admin-tag-self">you</span>}
+          {row.disabled && <span className="admin-tag admin-tag-off">disabled</span>}
+          {row.displayName === '' ? 'No display name' : row.displayName}
+        </span>
+        {row.id === lastEnabledAdminId && (
+          <span className="admin-row-note">
+            Last admin who can sign in. GrantSpotter refuses to demote, disable or delete this
+            account, because an instance with no admin who can sign in cannot be recovered from
+            inside the app.
+          </span>
+        )}
+      </>
+    );
+  }
+
+  function roleSelectFor(row: AdminUserRow): JSX.Element {
+    return (
+      <select
+        aria-label={`Role for ${row.email}`}
+        value={row.role}
+        onChange={(e) => {
+          void setRole(row, e.target.value as 'admin' | 'member');
+        }}
+      >
+        <option value="member">member</option>
+        <option value="admin">admin</option>
+      </select>
+    );
+  }
+
+  function actionsFor(row: AdminUserRow): JSX.Element {
+    return (
+      <>
+        <div className="admin-row-actions">
+          <button
+            type="button"
+            className="btn"
+            aria-label={row.disabled ? `Enable ${row.email}` : `Disable ${row.email}`}
+            onClick={() => {
+              void setDisabled(row, !row.disabled);
+            }}
+          >
+            {row.disabled ? 'Enable' : 'Disable'}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            aria-label={`Reset password for ${row.email}`}
+            onClick={() => {
+              void resetPassword(row);
+            }}
+          >
+            Reset password
+          </button>
+          {/* Absent, not disabled: the server refuses self-deletion outright, so a
+              greyed-out control here would only look like a permissions bug. */}
+          {!row.isSelf && confirmingDeleteId !== row.id && (
+            <button
+              type="button"
+              className="btn"
+              aria-label={`Delete ${row.email}`}
+              onClick={() => {
+                begin();
+                setConfirmingDeleteId(row.id);
+              }}
+            >
+              Delete
+            </button>
+          )}
+          {!row.isSelf && confirmingDeleteId === row.id && (
+            <>
+              <button
+                type="button"
+                className="btn"
+                aria-label={`Permanently delete ${row.email}`}
+                onClick={() => {
+                  void deleteUser(row);
+                }}
+              >
+                Delete permanently
+              </button>
+              <button
+                type="button"
+                className="btn"
+                aria-label={`Keep ${row.email}`}
+                onClick={() => setConfirmingDeleteId(null)}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+        {row.isSelf && (
+          <span className="admin-row-note">
+            You cannot delete your own account — another admin can delete it, and disabling it is
+            the reversible path.
+          </span>
+        )}
+        {confirmingDeleteId === row.id && (
+          <span className="admin-row-confirm">
+            Deleting {row.email} also deletes their profiles, watchlist entries, sessions and
+            applications — the server counts them and says what went. The audit trail of what they
+            did is kept. This cannot be undone.
+          </span>
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <p className="eyebrow">Administration</p>
@@ -397,7 +537,34 @@ export function Admin({ now }: AdminProps): JSX.Element {
           </p>
         )}
 
-        {users.data !== null && (
+        {users.data !== null && stacked && (
+          <ul className="admin-record-list" aria-label="User accounts">
+            {rows.map((row) => (
+              <li key={row.id} className="admin-record">
+                {identityOf(row)}
+                <dl className="admin-record-fields">
+                  <div className="admin-record-field">
+                    <dt className="eyebrow">Role</dt>
+                    <dd>{roleSelectFor(row)}</dd>
+                  </div>
+                  <div className="admin-record-field">
+                    <dt className="eyebrow">Created (UTC)</dt>
+                    <dd className="data">{formatDate(row.createdAt)}</dd>
+                  </div>
+                  <div className="admin-record-field">
+                    <dt className="eyebrow">Last login (UTC)</dt>
+                    <dd className="data">
+                      {row.lastLoginAt === null ? 'Never signed in' : formatDate(row.lastLoginAt)}
+                    </dd>
+                  </div>
+                </dl>
+                {actionsFor(row)}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {users.data !== null && !stacked && (
           <div className="admin-table-wrap">
             <table className="grid-table" aria-label="User accounts">
               <thead>
@@ -416,114 +583,13 @@ export function Admin({ now }: AdminProps): JSX.Element {
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>
-                    <td>
-                      <span className="admin-row-email">{row.email}</span>
-                      <span className="admin-row-meta">
-                        {row.isSelf && <span className="admin-tag admin-tag-self">you</span>}
-                        {row.disabled && <span className="admin-tag admin-tag-off">disabled</span>}
-                        {row.displayName === '' ? 'No display name' : row.displayName}
-                      </span>
-                      {row.id === lastEnabledAdminId && (
-                        <span className="admin-row-note">
-                          Last admin who can sign in. GrantSpotter refuses to demote, disable or
-                          delete this account, because an instance with no admin who can sign in
-                          cannot be recovered from inside the app.
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`Role for ${row.email}`}
-                        value={row.role}
-                        onChange={(e) => {
-                          void setRole(row, e.target.value as 'admin' | 'member');
-                        }}
-                      >
-                        <option value="member">member</option>
-                        <option value="admin">admin</option>
-                      </select>
-                    </td>
+                    <td>{identityOf(row)}</td>
+                    <td>{roleSelectFor(row)}</td>
                     <td className="num">{formatDate(row.createdAt)}</td>
                     <td className="num">
                       {row.lastLoginAt === null ? 'Never signed in' : formatDate(row.lastLoginAt)}
                     </td>
-                    <td>
-                      <div className="admin-row-actions">
-                        <button
-                          type="button"
-                          className="btn"
-                          aria-label={
-                            row.disabled ? `Enable ${row.email}` : `Disable ${row.email}`
-                          }
-                          onClick={() => {
-                            void setDisabled(row, !row.disabled);
-                          }}
-                        >
-                          {row.disabled ? 'Enable' : 'Disable'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn"
-                          aria-label={`Reset password for ${row.email}`}
-                          onClick={() => {
-                            void resetPassword(row);
-                          }}
-                        >
-                          Reset password
-                        </button>
-                        {/* Absent, not disabled: the server refuses self-deletion
-                            outright, so a greyed-out control here would only look
-                            like a permissions bug. */}
-                        {!row.isSelf && confirmingDeleteId !== row.id && (
-                          <button
-                            type="button"
-                            className="btn"
-                            aria-label={`Delete ${row.email}`}
-                            onClick={() => {
-                              begin();
-                              setConfirmingDeleteId(row.id);
-                            }}
-                          >
-                            Delete
-                          </button>
-                        )}
-                        {!row.isSelf && confirmingDeleteId === row.id && (
-                          <>
-                            <button
-                              type="button"
-                              className="btn"
-                              aria-label={`Permanently delete ${row.email}`}
-                              onClick={() => {
-                                void deleteUser(row);
-                              }}
-                            >
-                              Delete permanently
-                            </button>
-                            <button
-                              type="button"
-                              className="btn"
-                              aria-label={`Keep ${row.email}`}
-                              onClick={() => setConfirmingDeleteId(null)}
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        )}
-                      </div>
-                      {row.isSelf && (
-                        <span className="admin-row-note">
-                          You cannot delete your own account — another admin can delete it, and
-                          disabling it is the reversible path.
-                        </span>
-                      )}
-                      {confirmingDeleteId === row.id && (
-                        <span className="admin-row-confirm">
-                          Deleting {row.email} also deletes their profiles, watchlist entries,
-                          sessions and applications — the server counts them and says what went.
-                          The audit trail of what they did is kept. This cannot be undone.
-                        </span>
-                      )}
-                    </td>
+                    <td>{actionsFor(row)}</td>
                   </tr>
                 ))}
               </tbody>

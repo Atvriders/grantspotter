@@ -306,7 +306,35 @@ export function Sources(): JSX.Element {
             </p>
           </section>
 
-          <div className="sources-table-wrap">
+          {/*
+            THIS ONE STAYS A TABLE, and it is the only dense screen in the product that does.
+
+            Every other list here is read one record at a time — a club officer looking at one
+            deadline, an admin acting on one account — and those stack into cards on a phone. This
+            is not that. An operator opens this page to find the ONE source out of twenty-five
+            whose State cell is red, or whose Failures column is not zero, and finding it is an act
+            of scanning a column: the alignment between row 3's Failures and row 19's Failures IS
+            the affordance. Stack it into twenty-five cards and the comparison the page exists for
+            has to be done from memory, one card at a time.
+
+            So the matrix keeps its shape and scrolls inside its own box. `tabIndex` because a
+            region that scrolls must be reachable by a keyboard that has no scroll wheel, and
+            `role="region"` with a name so that landing on it is announced as something rather
+            than as a mystery focus stop.
+          */}
+          {/* Not `.eyebrow`: this is a sentence, and that class sets `text-transform: uppercase`
+              at the same specificity, so the two would fight over stylesheet order. */}
+          <p className="sources-scroll-note">
+            This matrix scrolls sideways rather than reflowing. Its columns are what make one bad
+            source findable among twenty-five, and a stack of cards would take that away.
+          </p>
+
+          <div
+            className="sources-table-wrap"
+            role="region"
+            aria-label="Source health, scrollable"
+            tabIndex={0}
+          >
             <table className="grid-table" aria-label="Source health">
               <thead>
                 <tr>

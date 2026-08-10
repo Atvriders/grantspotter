@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Sources, crawlSeconds, crawlSentence, type SourceRow } from './Sources.js';
 import { BLOCKED_HOSTS } from '../lib/safety.js';
+import { restoreViewport, setViewportWidth } from '../test/viewport.js';
 
 /**
  * The three rows are the three readings this page exists to keep apart.
@@ -567,5 +568,89 @@ describe('Sources — the fetcher blocklist is not configurable', () => {
     stubFetch(true);
     renderSources();
     expect(await screen.findByText(/is not configurable/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE ONE DENSE SCREEN THAT STAYS A TABLE.
+ *
+ * Browse, the watchlist and the account console all stack into cards on a phone, because their
+ * rows are records read one at a time. This one is not: an operator opens it to find the ONE
+ * source out of twenty-five whose State is red or whose Failures is not zero, and finding it is
+ * an act of comparing a column down the page. Stacking would replace that with twenty-five
+ * separate readings held in the head.
+ *
+ * These assert the decision rather than describing it, so a later pass that "makes /sources
+ * responsive like the others" has to argue with a test first.
+ */
+describe('Sources health matrix at a phone width', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  it('is still a table at 320px', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    expect(await screen.findByRole('table', { name: /source health/i })).toBeInTheDocument();
+  });
+
+  it('keeps every column, so the comparison the page exists for still works', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    const table = await screen.findByRole('table', { name: /source health/i });
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((th) => (th.textContent ?? '').trim());
+    expect(headers).toEqual([
+      'Source',
+      'State',
+      'Records / minimum',
+      'Last poll',
+      'Last success',
+      'Failures',
+      'Detail',
+      'Configuration',
+    ]);
+  });
+
+  it('keeps the health word on every row — the cell the operator is scanning for', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    expect(screen.getByText('Failing')).toBeInTheDocument();
+    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Idle')).toBeInTheDocument();
+  });
+
+  it('keeps "no minimum set" as words rather than letting a narrow column reduce it to 0', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    expect(screen.getByText('/ no minimum set')).toBeInTheDocument();
+  });
+
+  /**
+   * A box that scrolls has to be reachable by a keyboard that has no scroll wheel, and a focus
+   * stop with no name is a mystery. Both, or the horizontal scroll is a mouse-only feature.
+   */
+  it('makes the scrolling region focusable and named', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    const region = screen.getByRole('region', { name: /source health, scrollable/i });
+    expect(region).toHaveAttribute('tabindex', '0');
+  });
+
+  it('says out loud that the matrix scrolls sideways instead of reflowing', async () => {
+    setViewportWidth(320);
+    stubFetch(true);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    expect(screen.getByText(/scrolls sideways rather than reflowing/i)).toBeInTheDocument();
   });
 });

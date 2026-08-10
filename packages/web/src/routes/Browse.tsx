@@ -3,8 +3,15 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../store/useApi.js';
 import { FilterPanel } from '../components/FilterPanel.js';
 import { ExportMenu } from '../components/ExportMenu.js';
-import { ProgramTable, type ProgramRow } from '../components/ProgramTable.js';
 import {
+  ProgramTable,
+  PROGRAMME_TABLE_MIN_PX,
+  type ProgramRow,
+} from '../components/ProgramTable.js';
+import { useNarrowerThan } from '../lib/narrowLayout.js';
+import {
+  EMPTY_FILTERS,
+  FACETS,
   filtersToSearchParams,
   hidesRollingPrograms,
   searchParamsToFilters,
@@ -115,12 +122,49 @@ function Pager({
   );
 }
 
+/**
+ * The first viewport width at which the filter rail can stand BESIDE the results.
+ *
+ * MEASURED. The rail is 264 px with a `--s-5` (24 px) gutter, and the results column still has to
+ * hold the programme table's 666 px min-content or the table starts scrolling sideways the moment
+ * the rail appears — which is the state it shipped in, from 900 px up: at 900 the results column
+ * was 644 px against a table that needs 666. That table plus `.table-wrap`'s two hairlines is
+ * 668 px; 668 + 264 + 24, plus `AppShell`'s 208 px nav rail and 48 px of page padding, is 1212.
+ * Below that the filters become a disclosure across the full width, which is also what hands the
+ * table back the room it needs.
+ */
+export const FILTER_RAIL_MIN_PX = 1212;
+
+/**
+ * How many filters are currently narrowing the corpus.
+ *
+ * Every individual checkbox counts, not "3 of 7 groups are touched": a reader who has ticked four
+ * applicant entities has made four decisions, and rolling them into one is how a filter set comes
+ * to look smaller than it is. It exists so that CLOSING the filter sheet never hides the fact that
+ * the list underneath is filtered — the summary states the count whether it is open or shut.
+ */
+export function activeFilterCount(f: UiFilters): number {
+  let count = FACETS.reduce((sum, facet) => sum + f[facet.key].length, 0);
+  if (f.deadlineFrom !== undefined) count += 1;
+  if (f.deadlineTo !== undefined) count += 1;
+  // "Keep rolling and undated programs" is on by default, so only turning it OFF is a filter.
+  if (!f.includeRolling) count += 1;
+  if (f.amountMin !== undefined) count += 1;
+  if (f.amountMax !== undefined) count += 1;
+  if (f.q !== undefined && f.q !== '') count += 1;
+  if (f.sort !== EMPTY_FILTERS.sort) count += 1;
+  return count;
+}
+
 export function Browse({ now }: { now?: string }): JSX.Element {
   const nowISO = now ?? new Date().toISOString();
   const [searchParams, setSearchParams] = useSearchParams();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const filtersInSheet = useNarrowerThan(FILTER_RAIL_MIN_PX);
+  const stackedRows = useNarrowerThan(PROGRAMME_TABLE_MIN_PX);
 
   const filters = useMemo(() => searchParamsToFilters(searchParams), [searchParams]);
+  const activeCount = useMemo(() => activeFilterCount(filters), [filters]);
   const query = useMemo(() => filtersToSearchParams(filters).toString(), [filters]);
   const { data, loading, error } = useApi<BrowseResponse>(
     `/api/programs${query === '' ? '' : `?${query}`}`,
@@ -152,10 +196,34 @@ export function Browse({ now }: { now?: string }): JSX.Element {
       <p className="eyebrow">Corpus</p>
       <h1 style={{ marginBottom: 'var(--s-5)' }}>Browse opportunities</h1>
 
-      <div className="browse">
-        <FilterPanel filters={filters} onChange={update} />
+      <div className={filtersInSheet ? 'browse browse-sheet' : 'browse'}>
+        {/*
+          A sidebar a phone cannot afford becomes a disclosure it can ignore.
 
-        <div>
+          `<details>` and not a modal: a modal has to trap focus, restore it, and answer Escape,
+          and every one of those is a thing to get wrong for an affordance whose entire job is
+          "open the filters when you want them". Closed is the default here because a reader who
+          arrived on a phone came to read the list, not to configure it — and the summary states
+          how many filters are already on, so a closed sheet can never hide the fact that what is
+          underneath has been narrowed.
+        */}
+        {filtersInSheet ? (
+          <details className="filter-sheet card">
+            <summary>
+              <span className="filter-sheet-title">Filters</span>
+              <span className="filter-sheet-count">
+                {activeCount === 0 ? 'none set' : `${activeCount} set`}
+                {/* The same sentence the pager uses, so the two can never disagree. */}
+                {data !== null && ` · ${data.total} programmes match`}
+              </span>
+            </summary>
+            <FilterPanel filters={filters} onChange={update} />
+          </details>
+        ) : (
+          <FilterPanel filters={filters} onChange={update} />
+        )}
+
+        <div className={stackedRows ? 'browse-results browse-results-stacked' : 'browse-results'}>
           {hidesRollingPrograms(filters) && (
             <p className="row-warning" style={{ maxWidth: 'none' }}>
               Rolling and undated programs are hidden while a deadline window is set. NCDXF and SARA

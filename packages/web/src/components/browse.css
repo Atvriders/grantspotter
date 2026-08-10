@@ -14,21 +14,21 @@
 
   The figure that used to be quoted here (~2280px) is no longer the table's: nearly all of it was
   one prose amount cell held open by `.grid-table td.num`'s `white-space: nowrap`. With that cell
-  allowed to wrap the table's min-content is 691px, which is what `PROGRAMME_TABLE_MIN_PX` is
-  derived from. Both rules stay: 691px still exceeds a phone, and the failure mode is the same.
+  allowed to wrap the table's min-content is 666px, which is what `PROGRAMME_TABLE_MIN_PX` is
+  derived from. Both rules stay: 666px still exceeds a phone, and the failure mode is the same.
 */
 .browse > * {
   min-width: 0;
 }
 
 /*
- * Below `FILTER_RAIL_MIN_PX` (1235 px — see `routes/Browse.tsx` for how it was measured) the rail
+ * Below `FILTER_RAIL_MIN_PX` (1212 px — see `routes/Browse.tsx` for how it was measured) the rail
  * has become a `<details>` and spans the full width, which is also what gives the table back the
  * room it needs.
  *
  * THE SWITCH IS A CLASS, NOT A MEDIA QUERY. `Browse` and `ProgramTable` choose their markup from
  * `lib/narrowLayout.ts`, so each width is written down once, in TypeScript, next to the
- * measurement that produced it. A `@media (max-width: 1234px)` here would be a second copy of
+ * measurement that produced it. A `@media (max-width: 1211px)` here would be a second copy of
  * that number, free to drift from the first.
  */
 .browse-sheet {
@@ -266,7 +266,23 @@
   max-width: 46ch;
 }
 
-.deadline-day { font-variant-numeric: tabular-nums; }
+/*
+ * The close cell may break BETWEEN the date and the mark that qualifies it, and nowhere else.
+ *
+ * `.grid-table td.num` sets `white-space: nowrap`, which welded "2026-08-31" and "published" onto
+ * one line and made this column's min-content 187 px against 97 px for the date alone. That 90 px
+ * was a quarter of what the whole table was short of at a laptop width. Nothing is dropped and
+ * nothing is clipped — the mark moves to the line below — and each mark keeps its own `nowrap`
+ * just below, so no marker can ever break mid-word.
+ */
+.grid-table td.num.deadline {
+  white-space: normal;
+}
+
+.deadline-day {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .estimated-mark,
 .published-mark,
@@ -277,6 +293,8 @@
   font-size: var(--fs-100);
   letter-spacing: 0;
   color: var(--text-muted);
+  /* A marker is never allowed to give ground. The amount beside it is. */
+  white-space: nowrap;
 }
 
 .zone-mark {
@@ -290,20 +308,57 @@
  * THE ONE CELL ALLOWED TO GIVE GROUND.
  *
  * `amount.amountRaw` is the funder's own wording, and funders write sentences: "The new program
- * price is either $1,450.00 or …". `.grid-table td.num` sets `white-space: nowrap`, which is
- * right for a date and a count and catastrophic for prose — measured in Chromium against the
- * shipped seed, that single cell was 1,905 px wide and held the whole table open at 2,563 px.
- * The selector is `td.num.amount` rather than `.amount` so it outranks `.grid-table td.num`
- * whichever order the bundler emits the two stylesheets in.
+ * price is either $1,450.00 or …". It therefore does NOT carry `.num`, which is the class for a
+ * date, a count or a figure and sets `white-space: nowrap` — right for those, catastrophic for
+ * prose. Measured in Chromium against the shipped seed, one such cell was 1,905 px wide under
+ * that rule and held the whole table open at 2,563 px.
+ *
+ * It keeps the data face, because most amounts ARE figures, and loses the right alignment,
+ * because a wrapped paragraph ragged down its left edge is not a column of numbers.
+ *
+ * `width` is a PREFERENCE, not a floor: in an auto-layout table it asks for a fair share of what
+ * is going without raising the table's min-content, which is what `PROGRAMME_TABLE_MIN_PX` is
+ * derived from. Measured with the rule defeated and restored, the table's min-content is 666 px
+ * either way, and at a 1100 px window the amount column goes from 148 px to 184 px.
  *
  * When space runs out THIS is what gets narrower. The status pill, the verified badge and the
  * est./published mark beside it keep their `nowrap`: a marker clipped mid-word is a marker the
  * reader stops trusting, and an amount that wraps onto three lines is still the whole amount.
  */
-.grid-table td.num.amount,
-.grid-table th.num.amount {
+.grid-table td.amount {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95em;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* The column head keeps the uppercase micro-label every other head has; only its alignment and
+   its share of the row change. */
+.grid-table th.amount {
+  text-align: left;
+  width: 28%;
+}
+
+/*
+ * Four lines, then an ellipsis — IN THE TABLE ONLY.
+ *
+ * Measured on the shipped corpus: the median `amountRaw` is 6 characters and 25 of 143 run past
+ * 60, to a maximum of 430. Left alone, those two dozen rows are several hundred pixels tall in a
+ * 110 px column, and the cost is paid by every other row's markers, which get pushed off the
+ * screen. This is the trade the product's own priority order asks for — the amount gives ground
+ * before a marker does — and it is the gentlest form of it: the clip is visual, the full sentence
+ * is still in the DOM for a screen reader, the ellipsis says out loud that there is more, and the
+ * record is one click away on the same row. The record-card layout below does not clip at all.
+ *
+ * `-webkit-line-clamp` needs `-webkit-box`, and a `<td>` cannot be one — hence the inner span.
+ */
+.amount-clip {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
 }
 
 /* Constraint drawer opened from the ineligible badge. */
@@ -329,7 +384,7 @@
 
 /* ---------- records ----------
  *
- * Below `PROGRAMME_TABLE_MIN_PX` (947 px — see `components/ProgramTable.tsx`) a row stops being a
+ * Below `PROGRAMME_TABLE_MIN_PX` (924 px — see `components/ProgramTable.tsx`) a row stops being a
  * row. This is NOT the table with columns hidden: nothing is dropped, because a stack has no
  * column to run out of. The order is the argument — name, then every honesty marker, then the
  * fields, then the warnings — so a card clipped by the bottom of a phone screen has already shown
@@ -447,8 +502,8 @@
 /*
  * The `@media (max-width: 900px)` block that used to close this file is gone, not moved.
  *
- * It dropped the rail at 900 px and left the table in a 644 px column — 47 px short of the
- * 691 px the table's own columns need — so the layout it produced was a page that fitted with a
+ * It dropped the rail at 900 px and left the table in a 644 px column — 22 px short of the
+ * 666 px the table's own columns need — so the layout it produced was a page that fitted with a
  * results table that did not. `.browse-sheet` replaces it at the width the content actually
  * asked for, and `.filter-sheet .filter-panel { position: static }` above carries the one
  * declaration that block still owed.

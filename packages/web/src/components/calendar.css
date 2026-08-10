@@ -164,11 +164,21 @@
   font-weight: 700;
 }
 
-.month-empty {
-  padding: var(--s-5) var(--s-4);
+/* Both notes stand under the frame rather than inside it — see `MonthGrid.tsx` for why. */
+.month-scroll-note {
+  margin: var(--s-2) 0 0;
+  max-width: 70ch;
   font-size: var(--fs-200);
   color: var(--text-muted);
-  border-top: 1px solid var(--border);
+}
+
+.month-empty {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-4);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
   background: var(--surface-2);
 }
 

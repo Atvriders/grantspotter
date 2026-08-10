@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { Browse } from './Browse.js';
+import { activeFilterCount, Browse, FILTER_RAIL_MIN_PX } from './Browse.js';
+import { EMPTY_FILTERS } from '../lib/filterState.js';
+import { restoreViewport, setViewportWidth } from '../test/viewport.js';
 import {
   ARRL_FOUNDATION_ROW,
   ARRL_GRANTS_ROW,
@@ -344,5 +346,131 @@ describe('Browse search', () => {
     await waitFor(() => {
       expect(screen.queryByText('ARRL Foundation')).not.toBeInTheDocument();
     });
+  });
+});
+
+/**
+ * The filter rail on a phone.
+ *
+ * The rail is 264px of permanently-visible chrome, and at 900px — where it used to appear — it
+ * left the results table a 644px column against a 691px min-content. Below `FILTER_RAIL_MIN_PX`
+ * it becomes a `<details>` the reader opens when they want it. The one thing it may never do is
+ * close over the fact that the list underneath has been narrowed, which is what these assert.
+ */
+describe('Browse filter sheet', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  function sheet(): HTMLDetailsElement {
+    const el = document.querySelector('details.filter-sheet');
+    if (el === null) throw new Error('no filter sheet rendered');
+    return el as HTMLDetailsElement;
+  }
+
+  it('keeps the rail beside the results at the width it fits at', async () => {
+    setViewportWidth(FILTER_RAIL_MIN_PX);
+    renderBrowse();
+    await screen.findByRole('table', { name: /opportunities/i });
+    expect(document.querySelector('details.filter-sheet')).toBeNull();
+    expect(document.querySelector('.filter-panel')).not.toBeNull();
+  });
+
+  it('folds the rail into a disclosure one pixel below it', async () => {
+    setViewportWidth(FILTER_RAIL_MIN_PX - 1);
+    renderBrowse();
+    await screen.findByRole('table', { name: /opportunities/i });
+    expect(sheet().open).toBe(false);
+    // Folded, not deleted: the panel is still the same panel.
+    expect(sheet().querySelector('.filter-panel')).not.toBeNull();
+  });
+
+  it('states how many programmes survive the filters while it is shut', async () => {
+    setViewportWidth(390);
+    renderBrowse();
+    await screen.findByRole('list', { name: /opportunities/i });
+    const summary = sheet().querySelector('summary');
+    expect(sheet().open).toBe(false);
+    expect(summary?.textContent).toMatch(/2 programmes match/);
+  });
+
+  it('counts the filters that are on, so a shut sheet cannot hide them', async () => {
+    setViewportWidth(390);
+    renderBrowse('/?status=open&klass=ham_grant&q=arrl');
+    await screen.findByRole('list', { name: /opportunities/i });
+    expect(sheet().querySelector('summary')?.textContent).toMatch(/3 set/);
+  });
+
+  it('says "none set" rather than a bare zero when nothing is filtered', async () => {
+    setViewportWidth(390);
+    renderBrowse();
+    await screen.findByRole('list', { name: /opportunities/i });
+    expect(sheet().querySelector('summary')?.textContent).toMatch(/none set/);
+  });
+
+  it('opens on the summary, putting the whole panel within reach', async () => {
+    setViewportWidth(390);
+    renderBrowse();
+    await screen.findByRole('list', { name: /opportunities/i });
+    const summary = sheet().querySelector('summary');
+    expect(summary).not.toBeNull();
+    await userEvent.click(summary as HTMLElement);
+    expect(sheet().open).toBe(true);
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1);
+  });
+});
+
+describe('Browse results on a phone', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  it('stacks the results into records rather than shrinking the table', async () => {
+    setViewportWidth(390);
+    renderBrowse();
+    expect(await screen.findByRole('list', { name: /opportunities/i })).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('still names every programme and its funder', async () => {
+    setViewportWidth(390);
+    renderBrowse();
+    await screen.findByRole('list', { name: /opportunities/i });
+    expect(screen.getByRole('link', { name: 'ARRL Foundation Scholarship Program' })).toBeInTheDocument();
+    expect(screen.getByText('Six Meter Club of Chicago')).toBeInTheDocument();
+  });
+
+  /** The census is the page's headline claim and is not a table thing. It stays. */
+  it('keeps the ineligible census above the stack', async () => {
+    setViewportWidth(320);
+    renderBrowse();
+    await screen.findByRole('list', { name: /opportunities/i });
+    expect(screen.getByText(/you are ineligible for 1 of these/i)).toBeInTheDocument();
+  });
+});
+
+describe('activeFilterCount', () => {
+  it('is zero for the defaults, so the sheet says "none set" honestly', () => {
+    expect(activeFilterCount(EMPTY_FILTERS)).toBe(0);
+  });
+
+  it('counts every ticked box rather than every touched group', () => {
+    expect(
+      activeFilterCount({ ...EMPTY_FILTERS, entity: ['individual', 'university', 'teacher'] }),
+    ).toBe(3);
+  });
+
+  it('counts turning rolling programmes OFF, because the default is on', () => {
+    expect(activeFilterCount({ ...EMPTY_FILTERS, includeRolling: false })).toBe(1);
+    expect(activeFilterCount({ ...EMPTY_FILTERS, includeRolling: true })).toBe(0);
+  });
+
+  it('does not count an empty search string as a filter', () => {
+    expect(activeFilterCount({ ...EMPTY_FILTERS, q: '' })).toBe(0);
+    expect(activeFilterCount({ ...EMPTY_FILTERS, q: 'arrl' })).toBe(1);
+  });
+
+  it('counts a non-default sort, which narrows nothing but does change what is on top', () => {
+    expect(activeFilterCount({ ...EMPTY_FILTERS, sort: 'amount_desc' })).toBe(1);
   });
 });

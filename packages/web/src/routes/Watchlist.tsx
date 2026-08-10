@@ -8,7 +8,22 @@ import { NotificationList, type NotificationRow } from '../components/Notificati
 import { TrustBadge } from '../components/TrustBadge.js';
 import { StatusPill } from '../components/StatusPill.js';
 import { formatDate, NO_DATE } from '../lib/trust.js';
+import { useNarrowerThan } from '../lib/narrowLayout.js';
 import '../components/watchlist.css';
+
+/**
+ * The first viewport width at which the watched-programmes table fits without scrolling sideways.
+ *
+ * MEASURED in Chromium against the running instance with six programmes starred,
+ * `el.style.width = 'min-content'` on the table: 726 px. Plus `AppShell`'s 208 px rail and 48 px
+ * of page padding, that is 982.
+ *
+ * Below it, each watch becomes a card. This is the screen the brief's club officer is holding at
+ * a meeting: one deadline, read once, decided on. Its rows are records, not a matrix — nobody
+ * scans the Closes column of their own watchlist looking for an outlier; they read the programme
+ * they came for and want to know whether the date under it was published or projected.
+ */
+export const WATCH_TABLE_MIN_PX = 982;
 
 /** `WatchRow` from `packages/server/src/api/watchRouter.ts`, restated (web never imports server). */
 interface WatchRow {
@@ -252,10 +267,44 @@ function refusedField(err: unknown): string | null {
   return typeof field === 'string' ? field : null;
 }
 
+/**
+ * The programme's identity, exactly as both layouts show it.
+ *
+ * The safety note travels WITH the name and not in a column of its own, because the instruction
+ * it carries ("do not apply at this funder's former domain") is meaningless detached from the
+ * funder it is about — and a card layout that put it anywhere else would be free to lose it.
+ */
+function WatchName({ row }: { row: WatchRow }): JSX.Element {
+  return (
+    <span className="wl-name">
+      {/* Every link on this page is an in-app path. The corpus deliberately holds a record about
+          a hijacked domain, and the one guarantee that survives every future edit is that this
+          page opens nothing outbound. */}
+      <Link to={`/o/${row.program.id}`}>{row.program.name}</Link>
+      <span className="wl-funder">{row.funderName}</span>
+      {/*
+        `role="note"` and a real sentence, matching the browse row.
+
+        This shipped as a bare `<span>` whose only explanation was a `title`. A `title` is not
+        reachable by touch or keyboard and is announced by screen readers inconsistently and only
+        as a description, so the one row on this page that carries an instruction not to visit a
+        domain was the row whose reason was least likely to be heard.
+      */}
+      {row.program.tags.includes(SAFETY_WARNING_TAG) && (
+        <span className="wl-safety" role="note" aria-label="Safety warning">
+          Safety warning — do not apply at this funder&rsquo;s former domain. It no longer belongs
+          to them. Open the record for where to apply instead.
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Watchlist({ now }: { now?: string }): JSX.Element {
   const nowISO = now ?? new Date().toISOString();
   const session = useSession();
   const isAdmin = session.user?.role === 'admin';
+  const stacked = useNarrowerThan(WATCH_TABLE_MIN_PX);
 
   const watches = useApi<{ rows: WatchRow[] }>('/api/watches');
   const notifications = useApi<{ rows: NotificationRow[]; unread: number }>('/api/notifications');
@@ -416,7 +465,36 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
           </p>
         )}
 
-        {watchRows.length > 0 && (
+        {watchRows.length > 0 && stacked && (
+          <ul className="wl-record-list" aria-label="Watched programs">
+            {watchRows.map((row) => (
+              <li key={row.program.id} className="wl-record">
+                <WatchName row={row} />
+                {/* Markers first, under the name. A card clipped by the bottom of a phone screen
+                    has already said what state this programme is in and how old the check is. */}
+                <div className="wl-record-marks">
+                  <StatusPill status={row.program.trust.status} />
+                  <TrustBadge lastVerifiedAt={row.program.trust.lastVerifiedAt} now={nowISO} />
+                </div>
+                <div className="wl-record-field">
+                  <span className="eyebrow">Closes</span>
+                  <DeadlineCell row={row} />
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    void unwatch(row.program.id);
+                  }}
+                >
+                  Stop watching
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {watchRows.length > 0 && !stacked && (
           <div className="wl-scroll">
             <table className="grid-table" aria-label="Watched programs">
               <thead>
@@ -436,28 +514,7 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
                 {watchRows.map((row) => (
                   <tr key={row.program.id}>
                     <td>
-                      <span className="wl-name">
-                        {/* Every link on this page is an in-app path. The corpus deliberately
-                            holds a record about a hijacked domain, and the one guarantee that
-                            survives every future edit is that this page opens nothing outbound. */}
-                        <Link to={`/o/${row.program.id}`}>{row.program.name}</Link>
-                        <span className="wl-funder">{row.funderName}</span>
-                        {/*
-                          `role="note"` and a real sentence, matching the browse row.
-
-                          This shipped as a bare `<span>` whose only explanation was a `title`.
-                          A `title` is not reachable by touch or keyboard and is announced by
-                          screen readers inconsistently and only as a description, so the one row
-                          on this page that carries an instruction not to visit a domain was the
-                          row whose reason was least likely to be heard.
-                        */}
-                        {row.program.tags.includes(SAFETY_WARNING_TAG) && (
-                          <span className="wl-safety" role="note" aria-label="Safety warning">
-                            Safety warning — do not apply at this funder&rsquo;s former domain. It
-                            no longer belongs to them. Open the record for where to apply instead.
-                          </span>
-                        )}
-                      </span>
+                      <WatchName row={row} />
                     </td>
                     <td>
                       <StatusPill status={row.program.trust.status} />

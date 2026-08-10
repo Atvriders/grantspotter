@@ -544,3 +544,36 @@ describe('MonthGrid — a prep mark never hides that its date is projected', () 
     }
   });
 });
+
+/**
+ * The grid keeps its shape on a phone and scrolls to it.
+ *
+ * A month is a spatial object — "the deadline is the Friday after the one I am already preparing
+ * for" is a fact about where two marks sit relative to each other — so this is the one dense
+ * surface with nothing to stack into. Before the frame scrolled, seven columns of a 320 px screen
+ * were 39 px each and their marks were 22 px of ellipsis, both measured in Chromium: not a denser
+ * month, a month with the marks taken out. `.month-grid`'s measured `min-width` is what stops
+ * that, and a box that scrolls has to be reachable by a keyboard with no scroll wheel.
+ */
+describe('MonthGrid scrolling frame', () => {
+  it('is a named region a keyboard can reach', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={12} entries={entries} now={NOW} />
+      </MemoryRouter>,
+    );
+    const region = screen.getByRole('region', { name: /December 2026, scrollable/i });
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(region).toHaveClass('month-frame');
+  });
+
+  it('still contains the month table rather than replacing it', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid year={2026} month={12} entries={entries} now={NOW} />
+      </MemoryRouter>,
+    );
+    const region = screen.getByRole('region', { name: /December 2026, scrollable/i });
+    expect(within(region).getByRole('table', { name: 'December 2026' })).toBeInTheDocument();
+  });
+});

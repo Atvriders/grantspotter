@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { Admin } from './Admin.js';
+import { ACCOUNTS_TABLE_MIN_PX, Admin } from './Admin.js';
+import { restoreViewport, setViewportWidth } from '../test/viewport.js';
 import { SessionContext, makeSessionValue } from '../store/session.js';
 
 interface AdminUserFixture {
@@ -570,5 +571,84 @@ describe('Admin console — enrollment codes', () => {
     const table = await screen.findByRole('table', { name: /enrollment codes/i });
     const row = within(table).getByText('W1MX autumn 2026 intake').closest('tr') as HTMLElement;
     expect(within(row).getByText('Expired')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Accounts on a phone.
+ *
+ * Unlike the source-health matrix, this table has nothing to scan down. Every row is a thing you
+ * act ON — change this person's role, disable them, reset their password, delete them — and the
+ * cells are one decision's worth of context around four controls. Below `ACCOUNTS_TABLE_MIN_PX`
+ * each account becomes a card, and both layouts are built from the same three functions so that
+ * a lock-out warning or a delete confirmation cannot be dropped from one of them.
+ */
+describe('Admin accounts on a phone', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  it('keeps the table at the width the table fits at', async () => {
+    setViewportWidth(ACCOUNTS_TABLE_MIN_PX);
+    renderAdmin();
+    expect(await screen.findByRole('table', { name: /user accounts/i })).toBeInTheDocument();
+  });
+
+  it('stacks into cards one pixel below it', async () => {
+    setViewportWidth(ACCOUNTS_TABLE_MIN_PX - 1);
+    renderAdmin();
+    expect(await screen.findByRole('list', { name: /user accounts/i })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /user accounts/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the lock-out warning on the account it is about', async () => {
+    setViewportWidth(390);
+    renderAdmin();
+    await screen.findByRole('list', { name: /user accounts/i });
+    expect(screen.getByText(/last admin who can sign in/i)).toBeInTheDocument();
+  });
+
+  it('keeps the "you" and "disabled" tags', async () => {
+    setViewportWidth(390);
+    stubFetch(() => undefined, {
+      rows: [ADMIN_ROW, { ...MEMBER_ROW, disabled: true }],
+    });
+    renderAdmin();
+    await screen.findByRole('list', { name: /user accounts/i });
+    expect(screen.getByText('you')).toBeInTheDocument();
+    expect(screen.getByText('disabled')).toBeInTheDocument();
+  });
+
+  it('keeps both dates, labelled, rather than dropping the columns that held them', async () => {
+    setViewportWidth(390);
+    renderAdmin();
+    await screen.findByRole('list', { name: /user accounts/i });
+    expect(screen.getAllByText('Created (UTC)')).toHaveLength(2);
+    expect(screen.getAllByText('Last login (UTC)')).toHaveLength(2);
+    expect(screen.getByText('Never signed in')).toBeInTheDocument();
+  });
+
+  it('keeps every control, and the delete confirmation behind the delete', async () => {
+    setViewportWidth(390);
+    renderAdmin();
+    await screen.findByRole('list', { name: /user accounts/i });
+    expect(screen.getByRole('combobox', { name: /role for member@example.com/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /disable member@example.com/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /reset password for member@example.com/i }),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^delete member@example.com/i }));
+    expect(screen.getByText(/this cannot be undone/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /permanently delete member@example.com/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('never offers to delete the signed-in account, on either layout', async () => {
+    setViewportWidth(390);
+    renderAdmin();
+    await screen.findByRole('list', { name: /user accounts/i });
+    expect(screen.queryByRole('button', { name: /^delete admin@example.com/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/you cannot delete your own account/i)).toBeInTheDocument();
   });
 });

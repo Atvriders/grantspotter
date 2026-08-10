@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { ProgramTable } from './ProgramTable.js';
+import { ProgramTable, PROGRAMME_TABLE_MIN_PX } from './ProgramTable.js';
 import type { ProgramRow } from './ProgramTable.js';
 import {
   ARRL_FOUNDATION_ROW,
@@ -11,7 +11,10 @@ import {
   CHICAGO_FM_ROW,
   FAR_SAFETY_ROW,
   NO_ZONE_ROW,
+  makeProgram,
+  makeRow,
 } from '../test/programRowFixtures.js';
+import { restoreViewport, setViewportWidth } from '../test/viewport.js';
 
 const NOW = '2026-08-02T12:00:00.000Z';
 
@@ -261,5 +264,169 @@ describe('ProgramTable amount', () => {
   it('renders the raw award range rather than a reformatted number', () => {
     renderTable([ARRL_FOUNDATION_ROW]);
     expect(screen.getByText('$500 - $25,000')).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE ROW THAT CARRIES EVERY HONESTY MARKER AT ONCE.
+ *
+ * No single row in the shipped corpus does, so the fixture assembles them: a projected close date
+ * (`est.`), a cycle whose zone was never recorded (`UTC`), a real status, a `lastVerifiedAt` old
+ * enough to be amber, a disputed block, a stale-mirror warning and the compromised-domain tag.
+ * The disputed wording is the ARRL Club Grant's own, from `data/seed/programs.negatives.json`.
+ *
+ * `amountRaw` is the Yaesu record's actual prose, because a sentence in the amount column is what
+ * blew this table to 2,563 px in the first place.
+ */
+const EVERY_MARKER_ROW: ProgramRow = makeRow({
+  program: makeProgram({
+    id: 'every-marker',
+    name: 'ARRL Club Grant Program',
+    amount: {
+      instrument: 'unknown',
+      amountRaw:
+        'The new program price is either $1,450.00 or $2,300.00 depending on configuration, ' +
+        'and the club pays shipping.',
+      awardCountRaw: 'Not published',
+    },
+    trust: {
+      status: 'dormant',
+      sourceUrl: 'https://www.arrl.org/club-grant-program',
+      lastVerifiedAt: '2026-01-05T00:00:00.000Z',
+      verificationMethod: 'manual_curation',
+      contentHash: 'every',
+      staleMirrorWarning:
+        'Still listed by 7 or more third-party aggregators, which mirror stale ARRL data.',
+      disputed: {
+        note: 'Three independent readings of the ARRL Club Grant cycle, and the page publishes no deadline field.',
+        claims: [
+          { claim: 'Dormant: the page shows only 2024 results.', sourceUrl: 'https://example.org/a' },
+          { claim: 'Autumn window: September 7 to November 4.', sourceUrl: 'https://example.org/b' },
+          { claim: 'February / June / October cycles.', sourceUrl: 'https://example.org/c' },
+        ],
+      },
+    },
+    tags: ['ham', 'grant', 'arrl', 'disputed', 'safety_warning'],
+  }),
+  funderName: 'ARRL Foundation',
+  verdict: { kind: 'unknown', missingProfileFields: ['is501c3'] },
+  nextClosesAt: '2027-03-01T04:59:00.000Z',
+  nextIsEstimated: true,
+  nextTimezone: null,
+});
+
+/**
+ * Every marker, as the query that finds it.
+ *
+ * The list is shared by the wide and the narrow assertion below, and that sharing IS the test:
+ * a marker dropped from one layout fails against the list the other layout still satisfies. It is
+ * written as queries rather than as class names because what has to survive is the marker a
+ * READER gets — the word, or the accessible name — not the element that happens to carry it.
+ */
+const HONESTY_MARKERS: Array<[string, () => HTMLElement]> = [
+  ['the "est." projected-date prefix', () => screen.getByText('est.')],
+  [
+    'the projected-date explanation, announced and not merely titled',
+    () => screen.getByLabelText(/projected from a recurrence rule.*not published by the funder/i),
+  ],
+  ['the UTC zone mark', () => screen.getByText('UTC')],
+  [
+    'the missing-zone explanation',
+    () => screen.getByLabelText(/time zone was not recorded.*shown in utc/i),
+  ],
+  ['the status pill', () => screen.getByLabelText('Status: dormant')],
+  [
+    'the lastVerifiedAt badge, amber and dated',
+    () => screen.getByLabelText(/unverified\. last checked 2026-01-05/i),
+  ],
+  ['the disputed marker', () => screen.getByRole('note', { name: /disputed/i })],
+  ['the safety warning', () => screen.getByRole('note', { name: /safety warning/i })],
+  ['the stale-mirror warning', () => screen.getByText(/mirror stale ARRL data/i)],
+  ['the verdict badge', () => screen.getByLabelText(/^Unknown, needs /)],
+];
+
+describe('ProgramTable honesty markers survive the narrow layout', () => {
+  afterEach(() => {
+    restoreViewport();
+  });
+
+  it('renders a table above the width the table fits at', () => {
+    setViewportWidth(PROGRAMME_TABLE_MIN_PX);
+    renderTable([EVERY_MARKER_ROW]);
+    expect(screen.getByRole('table', { name: /opportunities/i })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /opportunities/i })).not.toBeInTheDocument();
+  });
+
+  it('stacks into records below it', () => {
+    setViewportWidth(PROGRAMME_TABLE_MIN_PX - 1);
+    renderTable([EVERY_MARKER_ROW]);
+    expect(screen.getByRole('list', { name: /opportunities/i })).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  for (const [what, find] of HONESTY_MARKERS) {
+    it(`keeps ${what} at 320 px`, () => {
+      setViewportWidth(320);
+      renderTable([EVERY_MARKER_ROW]);
+      expect(find()).toBeInTheDocument();
+    });
+
+    it(`keeps ${what} in the table too`, () => {
+      setViewportWidth(1280);
+      renderTable([EVERY_MARKER_ROW]);
+      expect(find()).toBeInTheDocument();
+    });
+  }
+
+  /**
+   * The rule the brief states and this file has to hold to: when space runs out the AMOUNT is what
+   * gives ground, and the markers never do. On the narrowest layout nothing gives ground at all,
+   * because a stack has no column to lose — so the amount is here in full, prose and all, and
+   * carries none of the table's clipping.
+   */
+  it('keeps the funder’s full wording of the amount on the narrow card, unclipped', () => {
+    setViewportWidth(320);
+    const { container } = renderTable([EVERY_MARKER_ROW]);
+    expect(
+      screen.getByText(/The new program price is either \$1,450\.00 or \$2,300\.00/),
+    ).toBeInTheDocument();
+    expect(container.querySelector('.amount-clip')).toBeNull();
+  });
+
+  /**
+   * In the table it IS clipped, to four lines — and the clip is visual only. jsdom computes no
+   * layout, so what is asserted is the thing a clip could get wrong: that the sentence a screen
+   * reader reads, and the sentence a `Ctrl-F` finds, is still the whole one.
+   */
+  it('clips the amount in the table without removing a word of it from the document', () => {
+    setViewportWidth(1280);
+    const { container } = renderTable([EVERY_MARKER_ROW]);
+    const clip = container.querySelector('.amount-clip');
+    expect(clip).not.toBeNull();
+    expect(clip?.textContent).toBe(EVERY_MARKER_ROW.program.amount.amountRaw);
+  });
+
+  it('opens the constraint drawer on a record card, not only in a table row', async () => {
+    setViewportWidth(320);
+    function Expandable(): JSX.Element {
+      const [expandedId, setExpandedId] = useState<string | null>(null);
+      return (
+        <ProgramTable
+          rows={[CHICAGO_FM_ROW]}
+          now={NOW}
+          expandedId={expandedId}
+          onExplain={(id) => setExpandedId((current) => (current === id ? null : id))}
+        />
+      );
+    }
+    render(
+      <MemoryRouter>
+        <Expandable />
+      </MemoryRouter>,
+    );
+    const badge = screen.getByRole('button', { name: /ineligible/i });
+    expect(badge).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(badge);
+    expect(screen.getByText('This program is discontinued.')).toBeInTheDocument();
   });
 });

@@ -38,7 +38,33 @@
 
 .sources-lede { max-width: 76ch; }
 
-.sources-table-wrap { overflow-x: auto; }
+.sources-scroll-note {
+  margin: 0 0 var(--s-2);
+  max-width: 76ch;
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/*
+ * The health matrix keeps its columns and scrolls inside this box. See `routes/Sources.tsx` for
+ * why this is the one dense screen that stays a table.
+ *
+ * `display: grid` with one `minmax(0, 1fr)` track, not `overflow-x: auto` alone. Overflow clips at
+ * PAINT time; the damage here happens at LAYOUT time, because a grid item's automatic minimum
+ * width is its min-content and `.shell-main` is a grid item. With `overflow-x: auto` on its own,
+ * this page measured 858 px wide at a 320 px viewport — the whole document scrolled sideways, rail
+ * and topbar included, and the box that was supposed to be doing the scrolling never had to.
+ */
+.sources-table-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: auto;
+}
+
+.sources-table-wrap:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-1);
+}
 
 /* An unset minimum is rendered as words, never as the number 0 beside a yield: "0 / 0" reads as a
    threshold that has been met, and the one source that most needs an alarm is the one nobody has
@@ -58,11 +84,37 @@
 
 .source-config input[type="number"] {
   width: 6.5rem;
+  min-height: 44px;
   padding: var(--s-1) var(--s-2);
   font-family: var(--font-data);
 }
 
-.source-config label { font-size: var(--fs-200); }
+/* Touch floor. These controls sit inside a matrix an operator may well be driving from a phone
+   while standing at a rack; a 41 px button and a 13 px checkbox are not targets. */
+.source-config .btn,
+.fleet-summary .btn {
+  min-height: 44px;
+}
+
+.source-config label {
+  font-size: var(--fs-200);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.source-config label.eyebrow {
+  /* The number field's own legend, which is text and not a target. */
+  min-height: 0;
+  display: block;
+}
+
+.source-config input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
 
 .source-config-hint {
   font-size: var(--fs-200);
