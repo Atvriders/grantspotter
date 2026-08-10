@@ -37,8 +37,8 @@ export interface CreatedEnrollmentCode {
    */
   plaintext: string;
   /**
-   * What the server actually hashed — `plaintext` with capitals, dashes and spaces removed and the
-   * confusable letters folded onto digits.
+   * What the server actually hashed — `plaintext` with capitals, dashes, spaces and `U` removed
+   * and the confusable letters folded onto digits.
    *
    * IT IS THE SERVER'S ANSWER AND NOT THE BROWSER'S. The form previews the same value while the
    * admin types, by calling core's `normalizeEnrollmentCode`, but a preview is a promise and this

@@ -70,14 +70,37 @@ export const BACKUP_TABLES = [
   // Migration 091. AFTER `users`, because `created_by_user_id` references it and this list is
   // walked forwards to insert.
   //
-  // BACKED UP, and the decision is the same one `ics_tokens` above forced: the table holds a
-  // SHA-256 digest and no code, so a backup file is not a bundle of working credentials, and the
-  // alternative is worse in a way nobody would find out about until it had already happened. An
-  // operator who restores mid-intake would otherwise silently invalidate every code their club has
-  // handed out — thirty students, each answered "that enrollment code is not valid", with nothing
-  // on either side of the screen to explain why, and the officer unable to reproduce it because
-  // the code they are holding is the one that stopped existing. Revocation and expiry are what
-  // ends a code; a restore is not.
+  // BACKED UP, DIGEST AND ALL — RE-DECIDED ON 2026-08-10, BECAUSE THE REASON GIVEN HERE HAD STOPPED
+  // BEING TRUE. What this comment used to say was that "the table holds a SHA-256 digest and no
+  // code, so a backup file is not a bundle of working credentials". That was an argument about the
+  // INPUT: a digest of twenty random characters is not worth attacking. Migration 092 let an
+  // administrator type the input, and MEASURED on this host, `W1MX-AUTUMN-2026` came back out of
+  // its stored digest in 32.4 s and 11,334,277 dictionary candidates. For those months this file
+  // was writing a set of live credentials into a downloadable JSON, with `chosen` beside each one
+  // saying which were worth the 32 seconds.
+  //
+  // WHAT MAKES IT SAFE NOW IS NOT IN THE FILE, WHICH IS THE POINT. Migration 093 made `code_hash` an
+  // HMAC under a key derived from `SESSION_SECRET`, and `SESSION_SECRET` is an environment variable:
+  // it is not a column, not a table, and not in any backup this function can produce. A leaked
+  // backup is a list of MACs whose key the reader does not have. Two consequences worth an
+  // operator's attention rather than a discovery: keep the backup and the compose file that holds
+  // your secret apart, since together they are the pair — and any row still carrying
+  // `hash_scheme = 'sha256'` predates 093 and therefore, necessarily, is a generated 2^100 code, so
+  // it is the case the original argument really was true about.
+  //
+  // THE ALTERNATIVE — SHIPPING THE ROW WITHOUT ITS DIGEST — WAS WEIGHED AND REFUSED. `code_hash` is
+  // NOT NULL and UNIQUE, so a redacted export would have to invent one, and a restore would then
+  // silently invalidate every code a club has already handed out: thirty students each answered
+  // "that enrollment code is not valid", with nothing on either side of the screen to explain it,
+  // and the officer unable to reproduce it because the code they are holding is the one that
+  // stopped existing. Revocation and expiry are what end a code; a restore is not. Trading a
+  // certain harm for a hypothetical one is a bad trade even before the hypothetical was keyed.
+  //
+  // WHAT A RESTORE ONTO A DIFFERENT HOST DOES, said here because this is the only file that knows a
+  // restore is happening: the digests were keyed to the OLD deployment's `SESSION_SECRET`, so unless
+  // the operator carried that secret across with the data, the codes come back as records and not as
+  // codes — labels, uses, expiry, issuer and audit trail intact, and nothing redeemable.
+  // `json.test.ts` holds that as an executable fact rather than as a warning nobody reads.
   'enrollment_codes',
 ] as const;
 

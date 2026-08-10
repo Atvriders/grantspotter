@@ -4,7 +4,10 @@ import { exportBackup, restoreBackup } from '../../exports/json.js';
 import { openTestDb } from '../../test/testDb.js';
 import {
   createEnrollmentCodeRepo,
+  ENROLLMENT_HASH_SCHEME,
   hashEnrollmentCode,
+  legacyHashEnrollmentCode,
+  LEGACY_ENROLLMENT_HASH_SCHEME,
   newEnrollmentCode,
   normalizeEnrollmentCode,
   type EnrollmentCodeRepo,
@@ -341,6 +344,188 @@ describe('a code the caller supplied', () => {
     const { code } = issue();
     expect(() =>
       db.prepare('UPDATE enrollment_codes SET chosen = 2 WHERE id = ?').run(code.id),
+    ).toThrow(/CHECK constraint failed/);
+  });
+});
+
+/**
+ * WHAT A STOLEN DATABASE IS WORTH.
+ *
+ * Until migration 093 the answer was "every code an officer chose", and it was not a theory:
+ * `W1MX-AUTUMN-2026` was recovered from its stored digest on this host in 32.4 s and 11,334,277
+ * dictionary candidates, using the product's own hash function. These tests hold the property that
+ * replaced it — the digest is a MAC under a key that is not in the file — and the price that
+ * property has, which is that the key is `SESSION_SECRET` and the codes go with it.
+ */
+describe('the digest a stolen database hands over', () => {
+  const CHOSEN = 'W1MX-AUTUMN-2026';
+  const SECRET = 'a-test-session-secret-32-chars-min';
+  const OTHER_SECRET = 'a-different-test-session-secret-32';
+
+  let before: string | undefined;
+  beforeEach(() => {
+    before = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = SECRET;
+  });
+  afterEach(() => {
+    if (before === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = before;
+  });
+
+  /** The dictionary attack, refused. Everything an attacker holds is here except the key. */
+  it('is not the digest a dictionary can attack', () => {
+    const issued = repo.create({
+      label: 'autumn intake',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: LATER,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    if (!issued.ok) throw new Error('expected the chosen code to be issued');
+
+    const raw = JSON.stringify(db.prepare('SELECT * FROM enrollment_codes').all());
+    // The whole row as text: not the code, not its normalised form, and — the new part — not the
+    // unkeyed digest an attacker can compute from a guess.
+    expect(raw).not.toContain(CHOSEN);
+    expect(raw).not.toContain('W1MXATMN2026');
+    expect(raw).not.toContain(legacyHashEnrollmentCode(CHOSEN));
+    expect(raw).toContain(hashEnrollmentCode(CHOSEN));
+    expect(hashEnrollmentCode(CHOSEN)).not.toBe(legacyHashEnrollmentCode(CHOSEN));
+  });
+
+  it('records which function made it, so a legacy row can be told apart', () => {
+    const { code } = issue();
+    const stored = db
+      .prepare('SELECT hash_scheme FROM enrollment_codes WHERE id = ?')
+      .get(code.id) as { hash_scheme: string };
+    expect(stored.hash_scheme).toBe(ENROLLMENT_HASH_SCHEME);
+    expect(ENROLLMENT_HASH_SCHEME).not.toBe(LEGACY_ENROLLMENT_HASH_SCHEME);
+  });
+
+  it('depends on the secret, which is what makes the file alone useless', () => {
+    const underOne = hashEnrollmentCode(CHOSEN);
+    process.env.SESSION_SECRET = OTHER_SECRET;
+    expect(hashEnrollmentCode(CHOSEN)).not.toBe(underOne);
+    // …and the derivation is stable, so the same secret always reads the same code.
+    process.env.SESSION_SECRET = SECRET;
+    expect(hashEnrollmentCode(CHOSEN)).toBe(underOne);
+  });
+
+  /**
+   * THE PRICE, STATED AS A TEST RATHER THAN AS A WARNING. An operator who rotates `SESSION_SECRET`
+   * — or restores this data onto a host that generated its own — keeps every row and loses every
+   * code. That is the trade migration 093 makes, and it is worth having a test fail if somebody
+   * ever decides quietly that it should not be true.
+   */
+  it('stops redeeming when the secret changes, and loses nothing else', () => {
+    const { code, plaintext } = issue({ label: 'mid-intake', maxUses: 30 });
+    expect(repo.redeem({ plaintext, nowISO: NOW }, () => 'ok').ok).toBe(true);
+
+    process.env.SESSION_SECRET = OTHER_SECRET;
+    expect(repo.redeem({ plaintext, nowISO: NOW }, () => 'ok')).toEqual({
+      ok: false,
+      refusal: 'unknown',
+    });
+    // The record is all still there: the administrator can see it, revoke it and issue its
+    // replacement. What is gone is the credential, not the row.
+    expect(repo.findById(code.id)).toMatchObject({ label: 'mid-intake', uses: 1, maxUses: 30 });
+  });
+});
+
+/**
+ * THE UPGRADE, FROM THE ONLY POSITION THAT MATTERS: a club that is mid-intake when it happens.
+ *
+ * Nothing can re-hash an existing row — the plaintext went to the administrator once and is gone —
+ * so the rows already in the table keep their unkeyed digest and are read under both.
+ */
+describe('a code issued before the digest was keyed', () => {
+  const LEGACY_PLAINTEXT = 'K7QF2-9XMPT-3RJVH-8WCND';
+
+  /** A pre-093 row, written the way the old code wrote it: unkeyed digest, legacy scheme. */
+  function insertLegacyRow(id: string, label: string): void {
+    db.prepare(
+      `INSERT INTO enrollment_codes (id, code_hash, hash_scheme, label, chosen, max_uses, uses,
+         expires_at, revoked_at, created_at, created_by_user_id, last_used_at)
+       VALUES (?, ?, ?, ?, 0, NULL, 0, NULL, NULL, ?, ?, NULL)`,
+    ).run(
+      id,
+      legacyHashEnrollmentCode(LEGACY_PLAINTEXT),
+      LEGACY_ENROLLMENT_HASH_SCHEME,
+      label,
+      NOW,
+      adminId,
+    );
+  }
+
+  it('is still redeemed after the upgrade, however the holder typed it', () => {
+    insertLegacyRow('legacy-1', 'last term');
+    expect(repo.inspect(LEGACY_PLAINTEXT, NOW)).toEqual({ ok: true, id: 'legacy-1', label: 'last term' });
+    expect(repo.redeem({ plaintext: 'k7qf2 9xmpt 3rjvh 8wcnd', nowISO: NOW }, () => 'ok').ok).toBe(
+      true,
+    );
+    expect(repo.findById('legacy-1')?.uses).toBe(1);
+  });
+
+  it('is still revoked, expired and exhausted by the same rules', () => {
+    insertLegacyRow('legacy-2', 'withdrawn');
+    repo.revoke('legacy-2', NOW);
+    expect(repo.redeem({ plaintext: LEGACY_PLAINTEXT, nowISO: LATER }, () => 1)).toEqual({
+      ok: false,
+      refusal: 'revoked',
+    });
+  });
+
+  /**
+   * THE COLLISION THE SECOND DIGEST EXISTS TO CATCH. A chosen code hashes to the keyed digest and a
+   * pre-093 row holds the unkeyed one, so a create that checked only its own reading would insert a
+   * SECOND row for a plaintext this deployment has already issued — two rows, one code, and only
+   * one of them ever findable again.
+   */
+  it('cannot be shadowed by a new code that is the same code', () => {
+    insertLegacyRow('legacy-3', 'the one already out there');
+    const again = repo.create({
+      label: 'this term',
+      chosen: LEGACY_PLAINTEXT,
+      maxUses: null,
+      expiresAt: LATER,
+      createdByUserId: adminId,
+      nowISO: LATER,
+    });
+    expect(again).toEqual({
+      ok: false,
+      conflict: { id: 'legacy-3', label: 'the one already out there' },
+    });
+    expect(repo.list()).toHaveLength(1);
+  });
+
+  /** Nothing writes the old scheme any more: the two live side by side, they do not multiply. */
+  it('is the only kind of row that carries the unkeyed scheme', () => {
+    insertLegacyRow('legacy-4', 'last term');
+    issue({ label: 'this term', nowISO: LATER });
+    repo.create({
+      label: 'chosen this term',
+      chosen: 'W1MX-AUTUMN-2026',
+      maxUses: null,
+      expiresAt: LATER,
+      createdByUserId: adminId,
+      nowISO: LATER,
+    });
+
+    const rows = db
+      .prepare('SELECT label, hash_scheme FROM enrollment_codes ORDER BY created_at, label')
+      .all() as Array<{ label: string; hash_scheme: string }>;
+    expect(rows).toEqual([
+      { label: 'last term', hash_scheme: LEGACY_ENROLLMENT_HASH_SCHEME },
+      { label: 'chosen this term', hash_scheme: ENROLLMENT_HASH_SCHEME },
+      { label: 'this term', hash_scheme: ENROLLMENT_HASH_SCHEME },
+    ]);
+  });
+
+  it('refuses a scheme the schema has never heard of, at the database', () => {
+    insertLegacyRow('legacy-5', 'last term');
+    expect(() =>
+      db.prepare("UPDATE enrollment_codes SET hash_scheme = 'md5' WHERE id = 'legacy-5'").run(),
     ).toThrow(/CHECK constraint failed/);
   });
 });

@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
 import type { Funder, Program } from '@grantspotter/core';
 import { migrate } from '../db/migrate.js';
+import {
+  createEnrollmentCodeRepo,
+  hashEnrollmentCode,
+  legacyHashEnrollmentCode,
+} from '../db/repositories/enrollmentCodes.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { isDoNotPublish } from '../normalize/index.js';
@@ -415,5 +420,138 @@ describe('a full backup round trip through an empty migrated database, on the re
   it('produces a referentially sound database — foreign keys were never actually disabled', () => {
     const violations = target.pragma('foreign_key_check') as unknown[];
     expect(violations).toEqual([]);
+  });
+});
+
+/**
+ * WHAT A BACKUP FILE IS WORTH TO SOMEBODY WHO IS NOT THE OPERATOR.
+ *
+ * `GET /api/admin/backup.json` carries `enrollment_codes` — every row, including `code_hash`, and
+ * since migration 092 including `chosen`, which labels the ones a person could think of. While the
+ * digest was an unsalted SHA-256 that made the file a set of live credentials with the interesting
+ * ones marked: `W1MX-AUTUMN-2026` came back out of its digest on this host in 32.4 s and 11,334,277
+ * dictionary candidates.
+ *
+ * The table STAYS in the backup, because a restore that silently invalidates a club's open intake
+ * is a certain harm and the argument for redacting was a hypothetical one. What changed is the
+ * hypothetical: migration 093 keys the digest with something no backup contains. These tests hold
+ * both halves — the file gives nothing away, and the file still restores a working deployment —
+ * and the third fact, which is what the key costs when it does not travel with the data.
+ */
+describe('the enrollment codes a backup carries', () => {
+  const CHOSEN = 'W1MX-AUTUMN-2026';
+  const SECRET = 'a-test-session-secret-32-chars-min';
+  const OTHER_SECRET = 'a-different-test-session-secret-32';
+
+  let before: string | undefined;
+  let source: Db;
+
+  beforeEach(() => {
+    before = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = SECRET;
+
+    source = emptyMigratedDb();
+    source
+      .prepare(
+        `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+         VALUES ('u-admin', 'admin@example.com', 'admin@example.com', 'x', 'admin', 'ics-1', ?)`,
+      )
+      .run(NOW);
+    const issued = createEnrollmentCodeRepo(source).create({
+      label: 'W1MX autumn 2026 intake',
+      chosen: CHOSEN,
+      maxUses: 30,
+      expiresAt: '2027-08-02T12:00:00.000Z',
+      createdByUserId: 'u-admin',
+      nowISO: NOW,
+    });
+    if (!issued.ok) throw new Error('expected the chosen code to be issued');
+  });
+
+  afterEach(() => {
+    source.close();
+    if (before === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = before;
+  });
+
+  it('gives a reader the code back only if they also have SESSION_SECRET', () => {
+    const file = JSON.stringify(exportBackup(source, NOW));
+    expect(file).not.toContain(CHOSEN);
+    expect(file).not.toContain('W1MXATMN2026');
+    // The digest a guesser could compute for themselves is the one that is NOT in the file.
+    expect(file).not.toContain(legacyHashEnrollmentCode(CHOSEN));
+    expect(file).toContain(hashEnrollmentCode(CHOSEN));
+    // And the secret itself never gets into a backup by some other door.
+    expect(file).not.toContain(SECRET);
+  });
+
+  it('restores a club mid-intake back to a working code', () => {
+    const target = emptyMigratedDb();
+    restoreBackup(target, JSON.parse(JSON.stringify(exportBackup(source, NOW))), NOW);
+
+    const codes = createEnrollmentCodeRepo(target);
+    // Typed the way a student types it, on the restored deployment.
+    expect(codes.redeem({ plaintext: 'w1mx autumn 2026', nowISO: NOW }, () => 'ok').ok).toBe(true);
+    target.close();
+  });
+
+  /**
+   * THE COST OF THE KEY, AS AN EXECUTABLE FACT.
+   *
+   * Restoring onto a host that generated its own `SESSION_SECRET` brings the records back and not
+   * the codes. That is worth a failing test if anybody ever decides quietly that it is not true,
+   * and it is the sentence `json.ts` and migration 093 both put in front of an operator.
+   */
+  it('restores the records but not the codes when the secret did not travel with the data', () => {
+    const file = JSON.parse(JSON.stringify(exportBackup(source, NOW))) as unknown;
+    const target = emptyMigratedDb();
+    process.env.SESSION_SECRET = OTHER_SECRET;
+    restoreBackup(target, file, NOW);
+
+    const codes = createEnrollmentCodeRepo(target);
+    expect(codes.redeem({ plaintext: CHOSEN, nowISO: NOW }, () => 'ok')).toEqual({
+      ok: false,
+      refusal: 'unknown',
+    });
+    // Everything an administrator needs in order to see what happened and put it right.
+    expect(codes.list()).toEqual([
+      expect.objectContaining({
+        label: 'W1MX autumn 2026 intake',
+        chosen: true,
+        maxUses: 30,
+        uses: 0,
+      }),
+    ]);
+    target.close();
+  });
+
+  /**
+   * A backup written before migration 093 has no `hash_scheme` key. `restoreBackup` inserts only
+   * the columns a row carries, so the column default decides — and 'sha256' is the truth about
+   * those rows, not a convenience: every one of them is a generated 2^100 code.
+   */
+  it('reads a code restored from a backup that predates the column as unkeyed, and redeems it', () => {
+    const file = JSON.parse(JSON.stringify(exportBackup(source, NOW))) as {
+      tables: { enrollment_codes: Array<Record<string, unknown>> };
+    };
+    for (const row of file.tables.enrollment_codes) {
+      delete row.hash_scheme;
+      // A pre-093 file also carries the pre-093 digest.
+      row.code_hash = legacyHashEnrollmentCode(CHOSEN);
+    }
+
+    const target = emptyMigratedDb();
+    restoreBackup(target, file, NOW);
+    expect(
+      (
+        target.prepare('SELECT hash_scheme FROM enrollment_codes').get() as {
+          hash_scheme: string;
+        }
+      ).hash_scheme,
+    ).toBe('sha256');
+    expect(createEnrollmentCodeRepo(target).redeem({ plaintext: CHOSEN, nowISO: NOW }, () => 'ok').ok).toBe(
+      true,
+    );
+    target.close();
   });
 });

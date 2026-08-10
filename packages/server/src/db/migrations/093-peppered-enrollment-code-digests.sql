@@ -1,0 +1,72 @@
+-- WHICH FUNCTION PRODUCED THE DIGEST IN `code_hash`, BECAUSE FROM TODAY THERE ARE TWO.
+--
+-- Numbered 093 for the reason 090, 091 and 092 give: Plans 1-4 number their migrations from 001
+-- upward and stop at 037, so a 09x file always applies last regardless of what they add later. This
+-- is an ALTER and not a CREATE, so it adds no name to SQLite's schema namespace and cannot be the
+-- silent second declaration `db/schemaConformance.test.ts` exists to catch.
+--
+-- ------------------------------------------------------------------ what went wrong
+--
+-- `091-enrollment-codes.sql` argued, correctly, that "SHA-256 with no salt and no stretching is the
+-- right primitive here and the wrong one for a password … the input is 100 bits of uniform
+-- randomness this process generated, so there is no dictionary to attack and nothing to precompute".
+-- Migration 092 then let an administrator TYPE the input, and that paragraph — which is still
+-- sitting in 091 — became a description of a table this one no longer is.
+--
+-- MEASURED on this host, 2026-08-10, with the product's own hash function: a dictionary of
+-- {K,N,W,A} x digit x two letters x twenty club words x thirteen years x three separators recovered
+-- `W1MX-AUTUMN-2026` from its stored digest in 32.4 s after 11,334,277 candidates — 349,338 a second
+-- on one core, no GPU. A stolen copy of `grantspotter.sqlite`, or of the JSON backup this codebase
+-- writes, was a set of live credentials for every code an officer had chosen, and `chosen` labelled
+-- which rows were worth the 32 seconds.
+--
+-- ------------------------------------------------------------- what replaces it, and why here
+--
+-- `code_hash` now holds HMAC-SHA256 of the normalised code under a key derived by HKDF from
+-- `SESSION_SECRET`, which lives in the environment and not in this file. Redemption still finds a
+-- code by one indexed lookup on `code_hash`; what changes is that computing a candidate digest now
+-- requires something the database does not contain.
+--
+-- A PER-ROW SALT WAS THE OBVIOUS ANSWER AND IS THE WRONG ONE. A salt defeats precomputation shared
+-- across rows; the attack above is aimed at a single row and would not notice one. It would also
+-- force the redemption lookup to hash the guess once per row and scan, turning the only statement an
+-- anonymous caller can reach from an index seek into a table scan.
+--
+-- ------------------------------------------------- why a column, and what the old rows do now
+--
+-- Nothing can re-hash an existing row: the plaintext was handed to an administrator once and is
+-- gone. So the rows that already exist keep their unkeyed digest, and this column records that they
+-- have one. `db/repositories/enrollmentCodes.ts` looks a code up under BOTH readings in one
+-- statement (`WHERE code_hash IN (@keyed, @legacy)`), so an operator's live intake code goes on
+-- redeeming across the upgrade — which is the whole reason this is a new column and not a rewrite.
+--
+-- THE ROWS THIS DEFAULT DESCRIBES ARE EXACTLY THE ROWS 091'S ARGUMENT WAS TRUE OF, which is why
+-- leaving them alone is safe and not merely convenient: `chosen` did not exist before 092, and 092
+-- has never shipped, so every pre-093 row is a GENERATED code — twenty uniform characters from a
+-- 32-symbol alphabet, 2^100, no dictionary to aim at it. A backup written before this migration
+-- carries no `hash_scheme` key at all; `exports/json.ts` inserts only the columns a row actually
+-- carries, so those rows land on this default, which is the truth about them.
+--
+-- THE CHECK IS ON THE DOMAIN AND DELIBERATELY NOT ON THE PAIR. `CHECK (chosen = 0 OR hash_scheme <>
+-- 'sha256')` would state the real invariant — no unkeyed digest of a human-chosen code, ever — and
+-- was written, measured and removed. MEASURED with better-sqlite3 12.11.1 on this host: SQLite
+-- VALIDATES a CHECK added by ALTER TABLE against the rows already in the table, so on any database
+-- that had issued a chosen code under the unshipped 092 build this migration would refuse to apply
+-- and the server would not boot; and because SQLite re-evaluates CHECKs on every UPDATE of a row,
+-- such a row could afterwards never be revoked. An invariant that locks the past to protect the
+-- future is the wrong trade. What actually keeps it is that there is one hashing path in `create`
+-- and it is keyed, asserted in `db/repositories/enrollmentCodes.test.ts` and again over a real
+-- backup in `exports/json.test.ts`.
+--
+-- ---------------------------------------------------------------- what this costs an operator
+--
+-- THE CODES ARE NOW TIED TO `SESSION_SECRET`. Rotate it or lose it and every code issued under it
+-- stops redeeming — the rows survive with their labels, uses, expiry and issuer, and the remedy is
+-- to issue a new code for each open intake. Rotating that secret already signs every user out, so it
+-- is already a maintenance-window act. The same applies to restoring a backup onto a host with a
+-- different secret: the records come back and the codes do not. This is not detected, on purpose;
+-- see `enrollmentCodePepper` for why storing a fingerprint of the key beside the digests would be a
+-- worse trade than the sentence you are reading.
+ALTER TABLE enrollment_codes
+  ADD COLUMN hash_scheme TEXT NOT NULL DEFAULT 'sha256'
+    CHECK (hash_scheme IN ('sha256', 'hmac-sha256'));

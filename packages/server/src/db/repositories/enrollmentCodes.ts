@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import {
   ENROLLMENT_CODE_ALPHABET,
   normalizeEnrollmentCode,
@@ -19,19 +19,28 @@ import type { Db } from '../migrate.js';
  * This is Crockford's base32 alphabet: the ten digits and the twenty-two consonants and vowels left
  * after removing `I`, `L`, `O` and `U`. The first three are removed because they are the shapes
  * that get confused with `1` and `0`, and `U` because dropping it is what keeps a random 20
- * characters from spelling something an officer would not want to read out. `normalizeEnrollmentCode`
- * then FOLDS the removed letters back in rather than rejecting them, so a person who writes down
- * the `0` they saw as an `O` is not punished for it.
+ * characters from spelling something an officer would not want to read out.
+ * `normalizeEnrollmentCode` then FOLDS THREE OF THE FOUR back in rather than rejecting them, so a
+ * person who writes down the `0` they saw as an `O` is not punished for it. The fourth, `U`, has
+ * nothing to fold onto and is DELETED — which could not matter while this generator was the only
+ * source of codes, since it cannot emit one, and matters the moment an officer types
+ * `W1MX-AUTUMN-2026`. Core's `ENROLLMENT_CODE_DROPPED_LETTERS` derives that letter rather than
+ * listing it, and `describeEnrollmentCodeFold()` is what makes the browser and the refusals say so.
  *
  * 32^20 is 2^100. That is not a password — nothing about it is human-chosen — and it is far past
- * the point where guessing is the attack; the rate limiter on the redemption route is what makes
- * that entropy mean something operationally, because a code is guessable ONLY by trying.
+ * the point where guessing is the attack; a code of this kind is guessable ONLY by trying, and
+ * nobody can try 2^100 things.
  *
- * IT NO LONGER SAYS THAT OF EVERY CODE. Since an administrator may TYPE one (`create` below takes a
- * `chosen`), this module issues two kinds of credential with two different strengths, and the
- * paragraph above is true only of the generated kind. What bounds the other is
- * `CHOSEN_CODE_MIN_LENGTH` in core, which derives its floor from what the shipped limiter actually
- * lets an attacker try.
+ * IT NO LONGER SAYS THAT OF EVERY CODE, AND THAT IS WHY EVERYTHING AROUND IT CHANGED. Since an
+ * administrator may TYPE one (`create` below takes a `chosen`), this module issues two kinds of
+ * credential with two different strengths, and the paragraph above is true only of the generated
+ * kind. A generated code was strong enough that nothing else had to hold — the limiter on the
+ * redemption route was documented as a way of making casual guessing pointless rather than as a
+ * cap, and it was keyed on an address the caller could write. A chosen code cannot carry that
+ * weight, so three other things do, and `CHOSEN_CODE_MIN_LENGTH` is deliberately not one of them:
+ * the deployment-wide wrong-code ceiling in `api/auth.ts`, the audit rows written when guessing
+ * precedes an account, and `CHOSEN_CODE_MAX_USES` with `CHOSEN_CODE_MAX_DAYS`, which bound what a
+ * guessed code is worth. Each of those constants carries the measurement it came from.
  */
 const ALPHABET = ENROLLMENT_CODE_ALPHABET;
 const CODE_LENGTH = 20;
@@ -74,14 +83,155 @@ export function newEnrollmentCode(): string {
 export { normalizeEnrollmentCode };
 
 /**
- * Only this digest is persisted, so a copy of the database is not a pile of working credentials.
+ * THE COMMENT THAT WAS HERE WAS TRUE WHEN IT WAS WRITTEN AND FALSE BY THE TIME IT WAS READ, WHICH
+ * IS THIS CODEBASE'S MOST-REPEATED DEFECT.
  *
- * Unsalted SHA-256, exactly as `exports/token.ts` does for an ICS token and for the same reason:
- * the input is 100 bits of randomness this process generated, so there is no dictionary and nothing
- * to precompute, and a work factor would buy nothing while making every redemption attempt cost the
- * server real time — which is the wrong lever, since the rate limiter is the one that binds.
+ * It read: "Unsalted SHA-256 … the input is 100 bits of randomness this process generated, so there
+ * is no dictionary and nothing to precompute." Every word of that was right while the server was
+ * the only thing that made codes. `5d25533` let an administrator TYPE one, and what stopped being
+ * true was not the conclusion but the PREMISE. The sentence stayed, and a sentence that outlives its
+ * premise is worse than no sentence: the next reader takes it as a decision that was made.
+ *
+ * MEASURED ON THIS HOST, 2026-08-10, WITH THE PRODUCT'S OWN HASH FUNCTION. A dictionary of
+ * {K,N,W,A} x digit x two letters (the 1x2 callsign shape) x twenty club words x thirteen years x
+ * three separators recovered `W1MX-AUTUMN-2026` — sixteen characters, twelve after normalisation,
+ * comfortably over the floor — from its stored digest in 32.4 s after 11,334,277 candidates:
+ * 349,338 candidates a second on ONE core, single-threaded JavaScript, no GPU. There is no length
+ * a person would agree to read out at a meeting that survives that. So the answer is not a longer
+ * code; the answer is that the digest must stop being computable by whoever holds the file.
+ *
+ * A KEY. NOT A SALT, AND NOT A WORK FACTOR. All three were weighed and only one fits this table:
+ *
+ *   · A PER-ROW SALT DOES NOT ADDRESS THIS ATTACK AT ALL. A salt stops one precomputation being
+ *     amortised across many rows. The attack above is aimed at ONE row — the club's single chosen
+ *     code — and a salt the attacker can read costs it nothing. It would, meanwhile, cost the shape
+ *     this whole module is built on: redemption finds a code BY ITS DIGEST in one indexed
+ *     statement, so a per-row salt means hashing the guess once per row and scanning. The one
+ *     lookup an anonymous caller can reach would go from O(1) to O(rows).
+ *   · A WORK FACTOR (argon2id, scrypt) prices the attack instead of removing it, and bills everyone
+ *     else. This digest is computed on the request path, in a single-threaded process, in front of
+ *     a synchronous SQLite transaction. At 100 ms a hash a wrong code becomes a unit of denial of
+ *     service and the honest student pays it too. Passwords already pay argon2id here — off the
+ *     transaction, behind their own concurrency gate — and a code is not a password.
+ *   · A KEY costs one HMAC, the same order as the SHA-256 it replaces, keeps the single-statement
+ *     lookup exactly as it was, and removes the offline attack rather than pricing it. `createHmac`
+ *     and not `sha256(key + code)`: HMAC is the keyed construction whose security does not depend
+ *     on getting the concatenation right, and length extension cannot touch it.
+ *
+ * `exports/token.ts` KEEPS ITS UNSALTED SHA-256, and that is not an inconsistency. Its input is 256
+ * bits from `randomBytes` and there is no route by which a person can choose one. What died here is
+ * not the argument for a cheap digest; it is the claim that the input cannot be guessed, and over
+ * there that claim is still true.
+ */
+const PEPPER_SALT = 'grantspotter/enrollment-code-digest';
+const PEPPER_INFO = 'hmac-sha256/v1';
+const PEPPER_BYTES = 32;
+
+/** Memoised on the SECRET, not on the first answer — see `enrollmentCodePepper`. */
+let derivedPepper: { secret: string; key: Buffer } | undefined;
+let secretlessPepper: Buffer | undefined;
+
+/**
+ * WHERE THE KEY COMES FROM: `SESSION_SECRET`, THROUGH HKDF — AND WHAT THAT COSTS, SAID HERE RATHER
+ * THAN FOUND OUT LATER.
+ *
+ * THE DEPLOYMENT ALREADY HAS EXACTLY ONE LONG-LIVED SECRET. `config.ts` requires `SESSION_SECRET`,
+ * refuses to start without it, refuses the placeholder `docker-compose.yml` ships (and any fragment
+ * of it), and refuses anything under 32 characters. So by the time any route exists there is one
+ * high-entropy operator secret, it is in the environment, and it is NOT in the database file — which
+ * is the only property this needs. A second secret would be a second thing to generate, to document,
+ * to back up and to lose.
+ *
+ * HKDF RATHER THAN THE SECRET ITSELF. `auth/middleware.ts` uses `SESSION_SECRET` directly as the
+ * HMAC key over a session id. Reusing those same bytes as the key of a second MAC, this one over
+ * input an attacker chooses, is key reuse across purposes. `hkdfSync` gives this use its own 32
+ * bytes; the salt and info are fixed and non-secret because separation is the whole of their job.
+ *
+ * READ FROM THE ENVIRONMENT HERE RATHER THAN INJECTED, AND THAT IS THE SAFER OF THE TWO. A code is
+ * created through `api/enrollment.ts`, whose `RouterDeps` carries no config, and redeemed through
+ * `api/auth.ts`, whose deps carry the whole of it. Two injection points for one key is a way for a
+ * deployment to end up holding two, and that failure is silent and total: every code an
+ * administrator issues is unredeemable and the only symptom is thirty students being told their code
+ * is not valid. One resolution, in one place, cannot disagree with itself.
+ *
+ * RE-READ ON EVERY CALL, MEMOISED ON THE VALUE. A process that learns its secret after this module
+ * is first touched must not be pinned to a key derived before it did.
+ *
+ * WITH NO `SESSION_SECRET` THE KEY IS 32 RANDOM BYTES FOR THE LIFE OF THE PROCESS, and the direction
+ * of that fallback is deliberate. The server cannot reach it — `loadConfig` throws first, and
+ * `index.firstRun.test.ts` pins that — so it is where a test or a direct consumer of this module
+ * lands. A random key is a STRONGER pepper than a derived one, so what a missing secret can break is
+ * availability (codes stop redeeming across a restart), loudly, and never secrecy. Falling back to
+ * an unkeyed digest would be the same lie told in a new place.
+ *
+ * WHEN THE SECRET CHANGES OR IS LOST, EVERY CODE ISSUED UNDER IT STOPS REDEEMING. Nothing else about
+ * the rows goes: label, uses, expiry, issuer and the whole audit trail survive, and the remedy is one
+ * administrator action per open intake. Rotating `SESSION_SECRET` already signs every user out, so it
+ * is already a maintenance-window act; this adds a line to its cost rather than a new kind of
+ * surprise. `093-peppered-enrollment-code-digests.sql` tells whoever reads the schema, and
+ * `exports/json.ts` tells whoever restores a backup onto a new host.
+ *
+ * IT IS NOT DETECTED, AND THAT IS A CHOICE. Detecting a changed key means storing something derived
+ * from `SESSION_SECRET` beside the digests, and a key check value in the database turns a stolen
+ * database into an offline oracle for the SESSION key — one hash per guess, no known plaintext
+ * needed. Buying a better error message with the secrecy of the session key is the wrong way round.
+ */
+export function enrollmentCodePepper(): Buffer {
+  const secret = process.env.SESSION_SECRET;
+  if (secret === undefined || secret === '') {
+    secretlessPepper ??= randomBytes(PEPPER_BYTES);
+    return secretlessPepper;
+  }
+  if (derivedPepper === undefined || derivedPepper.secret !== secret) {
+    derivedPepper = {
+      secret,
+      key: Buffer.from(hkdfSync('sha256', secret, PEPPER_SALT, PEPPER_INFO, PEPPER_BYTES)),
+    };
+  }
+  return derivedPepper.key;
+}
+
+/** What `create` writes into `hash_scheme`, and one of the two values migration 093's CHECK allows. */
+export const ENROLLMENT_HASH_SCHEME = 'hmac-sha256';
+
+/** What every row written before migration 093 carries, and what nothing writes any more. */
+export const LEGACY_ENROLLMENT_HASH_SCHEME = 'sha256';
+
+/**
+ * Only this digest is persisted, so a copy of the database is not a pile of working credentials —
+ * which is now a claim about a KEY the copy does not contain, and no longer a claim about the input
+ * being unguessable.
  */
 export function hashEnrollmentCode(raw: string): string {
+  return createHmac('sha256', enrollmentCodePepper())
+    .update(normalizeEnrollmentCode(raw), 'utf8')
+    .digest('hex');
+}
+
+/**
+ * The digest a row written before migration 093 holds. LOOKED UP, NEVER WRITTEN.
+ *
+ * AN UPGRADE MUST NOT COST AN OPERATOR THEIR OPEN INTAKE. Nothing here can re-hash an existing row:
+ * the plaintext was returned once, to the administrator who issued it, and is gone. So the choice
+ * was between breaking every code a club is currently handing out and reading both digests on the
+ * way in. `create`, `inspect` and `redeem` each look for either, in one indexed statement, and the
+ * only thing that changes on upgrade day is that new codes are keyed.
+ *
+ * THE ROWS THIS FINDS ARE EXACTLY THE ROWS THE OLD COMMENT WAS RIGHT ABOUT, and that is why leaving
+ * them alone is safe rather than merely convenient. A pre-093 row can only be a GENERATED code:
+ * `chosen` did not exist before migration 092, and 092 shipped in the same unpushed change that
+ * introduced typed codes. Twenty uniform characters out of a 32-symbol alphabet is 2^100, so the
+ * unkeyed digest of one is not a dictionary target — the premise that failed for `W1MXATMN2026`
+ * holds for every row that can carry this scheme.
+ *
+ * THEY ARE NOT REWRITTEN ON REDEMPTION EITHER, though the plaintext is in hand at that moment.
+ * `code_hash` is UNIQUE and the rewrite would sit inside the transaction that creates a student's
+ * account, so the cost of being wrong about it is a 500 on a successful enrolment — paid to buy
+ * uniformity, not safety. Legacy rows age out on their own: a code is revoked, expires or is
+ * exhausted, and this branch can be deleted when `SELECT count(*) FROM enrollment_codes WHERE
+ * hash_scheme = 'sha256'` is zero.
+ */
+export function legacyHashEnrollmentCode(raw: string): string {
   return createHash('sha256').update(normalizeEnrollmentCode(raw), 'utf8').digest('hex');
 }
 
@@ -279,12 +429,34 @@ function refusalFor(row: CodeRow, nowISO: string): EnrollmentRefusal | undefined
 
 export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
   const insertStmt = db.prepare(
-    `INSERT INTO enrollment_codes (id, code_hash, label, chosen, max_uses, uses, expires_at,
-       revoked_at, created_at, created_by_user_id, last_used_at)
-     VALUES (@id, @code_hash, @label, @chosen, @max_uses, 0, @expires_at, NULL, @created_at,
-       @created_by_user_id, NULL)`,
+    `INSERT INTO enrollment_codes (id, code_hash, hash_scheme, label, chosen, max_uses, uses,
+       expires_at, revoked_at, created_at, created_by_user_id, last_used_at)
+     VALUES (@id, @code_hash, @hash_scheme, @label, @chosen, @max_uses, 0, @expires_at, NULL,
+       @created_at, @created_by_user_id, NULL)`,
   );
-  const byHashStmt = db.prepare(`SELECT ${COLUMNS} FROM enrollment_codes WHERE code_hash = ?`);
+
+  /**
+   * ONE STATEMENT, TWO CANDIDATE DIGESTS — the keyed one every new row carries and the unkeyed one
+   * every row older than migration 093 carries.
+   *
+   * `IN (@keyed, @legacy)` and not two `SELECT`s, because the single indexed lookup is the property
+   * the whole design of this table is built to keep. MEASURED with `EXPLAIN QUERY PLAN` on this host
+   * (node 20.11.0, better-sqlite3 12.11.1) against this DDL: `SEARCH enrollment_codes USING INDEX
+   * sqlite_autoindex_enrollment_codes_2 (code_hash=?)` — byte for byte the plan `code_hash = ?`
+   * produced before, and no scan.
+   *
+   * AT MOST ONE ROW CAN MATCH. `code_hash` is UNIQUE, so the two candidates can only both hit if two
+   * rows hold the same plaintext under different schemes — which `create` below refuses by checking
+   * with this same statement before it inserts, and which nothing else can produce.
+   */
+  const byHashStmt = db.prepare(
+    `SELECT ${COLUMNS} FROM enrollment_codes WHERE code_hash IN (@keyed, @legacy)`,
+  );
+
+  /** Both readings of one typed code: what this build stores, and what a pre-093 row stores. */
+  function digestsOf(plaintext: string): { keyed: string; legacy: string } {
+    return { keyed: hashEnrollmentCode(plaintext), legacy: legacyHashEnrollmentCode(plaintext) };
+  }
   const byIdStmt = db.prepare(`SELECT ${COLUMNS} FROM enrollment_codes WHERE id = ?`);
   const listStmt = db.prepare(`SELECT ${COLUMNS} FROM enrollment_codes ORDER BY created_at, id`);
   const revokeStmt = db.prepare(
@@ -342,9 +514,19 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
     create(input) {
       const plaintext = input.chosen ?? newEnrollmentCode();
       const normalized = normalizeEnrollmentCode(plaintext);
+      /**
+       * BOTH READINGS, THOUGH ONLY THE KEYED ONE IS STORED. A code that already exists as a pre-093
+       * row hashes to the unkeyed digest and to nothing else, so a collision check that asked only
+       * about the keyed one would let a second row be created for a plaintext this deployment has
+       * already issued — two rows, one code, and whichever the lookup found first would be the only
+       * one that could ever be redeemed or revoked. It takes one extra parameter to make that
+       * impossible.
+       */
+      const candidates = digestsOf(plaintext);
       const row = {
         id: randomUUID(),
-        code_hash: hashEnrollmentCode(plaintext),
+        code_hash: candidates.keyed,
+        hash_scheme: ENROLLMENT_HASH_SCHEME,
         label: input.label,
         chosen: input.chosen === null ? 0 : 1,
         max_uses: input.maxUses,
@@ -354,7 +536,7 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
       };
 
       const write = db.transaction((): CodeIssued => {
-        const taken = byHashStmt.get(row.code_hash) as CodeRow | undefined;
+        const taken = byHashStmt.get(candidates) as CodeRow | undefined;
         if (taken !== undefined) {
           return { ok: false, conflict: { id: taken.id, label: taken.label } };
         }
@@ -384,7 +566,7 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
         return write.immediate();
       } catch (err) {
         if (!isCodeHashCollision(err)) throw err;
-        const taken = byHashStmt.get(row.code_hash) as CodeRow | undefined;
+        const taken = byHashStmt.get(candidates) as CodeRow | undefined;
         return {
           ok: false,
           conflict: taken === undefined ? null : { id: taken.id, label: taken.label },
@@ -418,7 +600,7 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
       // A code that normalises to nothing is `unknown`, exactly as `redeem` treats it: an empty
       // body and a wrong guess have to be the same event or the difference is a free answer.
       if (normalizeEnrollmentCode(plaintext) === '') return { ok: false, refusal: 'unknown' };
-      const row = byHashStmt.get(hashEnrollmentCode(plaintext)) as CodeRow | undefined;
+      const row = byHashStmt.get(digestsOf(plaintext)) as CodeRow | undefined;
       if (row === undefined) return { ok: false, refusal: 'unknown' };
       // The same four conditions `redeem` reads, from the same function, so the two can never
       // disagree about what "could be redeemed" means.
@@ -457,10 +639,12 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
       // is refused as `unknown` like any other wrong guess rather than as a validation error, so it
       // cannot be told apart from a real miss.
       if (normalizeEnrollmentCode(input.plaintext) === '') return { ok: false, refusal: 'unknown' };
-      const codeHash = hashEnrollmentCode(input.plaintext);
+      // Both digests computed OUTSIDE the transaction, as the single one was: two HMAC-scale hashes
+      // are not work worth holding a write lock across.
+      const candidates = digestsOf(input.plaintext);
 
       const run = db.transaction((): Redemption<T> => {
-        const row = byHashStmt.get(codeHash) as CodeRow | undefined;
+        const row = byHashStmt.get(candidates) as CodeRow | undefined;
         if (row === undefined) return { ok: false, refusal: 'unknown' };
 
         // This read decides only the MESSAGE. Whether the use is actually available is decided by
