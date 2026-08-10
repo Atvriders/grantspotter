@@ -32,18 +32,34 @@ export const grantsGovExtract: SourceModule = {
     'scorer surface a programme nobody wrote a keyword for. Retention is a ~7-day rolling ' +
     'window with no index page, so the module requests today and walks back a week and treats ' +
     '404s as normal — a missing day is not a failure. ONE request per day of the window, never ' +
-    'one per keyword.',
+    'one per keyword. WHAT THAT COSTS, measured 2026-08-10: each day of the window is its own ' +
+    'copy of the whole corpus at 77,899,674 bytes, the runner fetches every request before it ' +
+    'parses any of them, and only the newest readable one is used — so a nightly run downloads ' +
+    'up to ~545 MB from this bucket and discards six sevenths of it. The archive is written by a ' +
+    'STREAMING writer (its local file headers state no sizes), which is why the reader takes its ' +
+    'lengths from the central directory; see fixtures/grants-gov-extract/README.md.',
 
   parse(payloads: FetchedPayload[]): RawOpportunity[] {
     // Newest successful payload wins; the rest of the retention window is redundant.
     const usable = payloads
       .filter((p) => p.url.startsWith(GRANTS_GOV_EXTRACT_BASE) && p.status === 200 && p.body !== '')
       .sort((a, b) => b.url.localeCompare(a.url));
+    // WHY THE FAILURES ARE REMEMBERED. Skipping a day we could not read is right — one truncated
+    // download out of seven is not an outage — but the `catch { continue }` this used to be turned
+    // "we could not read ANY of the seven" into an empty array, which is the same value a genuinely
+    // quiet day returns. That is the exact conflation this product exists to refuse, and it is what
+    // hid the local-header size bug (see `unzipFirstEntry`) behind a `Parsed 0 records` alarm for
+    // the whole life of the module. A reader that failed on every archive it was given is a broken
+    // reader, and the honest health state for it is `failing`, which is what throwing produces.
+    let lastUnreadable: unknown;
+    let readAny = false;
     for (const payload of usable) {
       let rows: ReturnType<typeof parseExtractXml>;
       try {
         rows = parseExtractXml(unzipFirstEntry(payload.body));
-      } catch {
+        readAny = true;
+      } catch (err) {
+        lastUnreadable = err;
         continue; // a truncated or non-ZIP body is just a day we skip
       }
       const out: RawOpportunity[] = [];
@@ -69,7 +85,12 @@ export const grantsGovExtract: SourceModule = {
         });
       }
       if (out.length > 0) return out;
+      // Read, and holding nothing we score as adjacent. A real answer about the corpus, so the loop
+      // keeps walking back — an older archive is a superset far more often than not.
     }
+    // One archive we could read is enough to know the reader is not the problem, whatever the other
+    // six days did. Zero of them, with days that answered 200, is not an empty corpus.
+    if (!readAny && lastUnreadable !== undefined) throw lastUnreadable;
     return [];
   },
 };
