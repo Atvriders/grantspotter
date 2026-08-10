@@ -4,6 +4,11 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { firstRunBanner } from '../auth/bootstrap.js';
+import {
+  ENV_CODE_DEFAULT_DAYS,
+  ENV_CODE_DEFAULT_MAX_USES,
+  ENV_CODE_LABEL,
+} from '../auth/chosenCode.js';
 import { PLACEHOLDER_MARKER } from '../config.js';
 
 /**
@@ -134,6 +139,9 @@ describe('README honesty surfaces', () => {
       'CRAWL_CRON',
       'ANTHROPIC_API_KEY',
       'SIMPLER_GRANTS_API_KEY',
+      'ENROLLMENT_CODE',
+      'ENROLLMENT_CODE_MAX_USES',
+      'ENROLLMENT_CODE_DAYS',
     ]) {
       expect(readme).toContain(key);
     }
@@ -924,6 +932,85 @@ describe('README: enrolment is a third door, not an open one', () => {
     expect(readme).toContain('`maxUses: null` means no limit');
     expect(readme).toContain('`expiresAt: null` means no expiry');
     expect(readme).toMatch(/unrevoked, unexpired and under its limit/i);
+  });
+
+  /**
+   * THE COMPOSE-FILE ROUTE IS A DOOR THIS SECTION HAS TO ACCOUNT FOR, AND THE FIRST THING IT HAS TO
+   * GET RIGHT IS THAT IT IS NOT A NEW ONE.
+   *
+   * The `## Accounts` table above says three things can bring an account into existence and that
+   * not one of them is open registration, and that claim is asserted verbatim elsewhere in this
+   * file. `ENROLLMENT_CODE` produces an ordinary code row redeemed through the ordinary route, so
+   * it is the THIRD path arriving by a second hand — and a README that let a reader count it as a
+   * fourth would be describing a product with a self-serve door nobody issued.
+   */
+  /**
+   * The README with its line wrapping, blockquote markers and emphasis removed.
+   *
+   * A doc gate should fail when a CLAIM goes, never when somebody re-wraps a paragraph or bolds a
+   * word inside a sentence it was matching. Three of the assertions below quote whole sentences
+   * that are longer than the file's 100-column wrap, so matching the raw text would make this
+   * block a tax on editing prose rather than a guard on its content. The table rows are still
+   * matched against the raw README, because there the backticks and pipes ARE the claim.
+   */
+  const flatten = (text: string): string =>
+    text
+      .replace(/^\s*>\s?/gm, ' ')
+      .replace(/[*`]/g, '')
+      .replace(/\s+/g, ' ');
+
+  it('describes the compose-file route as the same third door, with the same bounds', () => {
+    expect(readme).toContain('ENROLLMENT_CODE');
+    expect(flatten(readme)).toMatch(/same third path and not a fourth/i);
+    // The label is the row's identity AND the only thing that tells an administrator where a code
+    // they did not issue came from, so the README must name it as the screen actually shows it.
+    expect(readme).toContain(ENV_CODE_LABEL);
+    // Read out of the code, never transcribed: a README quoting 30 uses against a file shipping 50
+    // is precisely this suite's subject. Both the table row and the prose, because an operator
+    // skimming for the number reads the first and an operator deciding reads the second.
+    expect(readme).toMatch(
+      new RegExp(`\`ENROLLMENT_CODE_MAX_USES\` \\| no \\| \`${String(ENV_CODE_DEFAULT_MAX_USES)}\``),
+    );
+    expect(readme).toMatch(
+      new RegExp(`\`ENROLLMENT_CODE_DAYS\` \\| no \\| \`${String(ENV_CODE_DEFAULT_DAYS)}\``),
+    );
+    expect(flatten(readme)).toMatch(
+      new RegExp(`ENROLLMENT_CODE_MAX_USES\\s*defaults to\\s*${String(ENV_CODE_DEFAULT_MAX_USES)}`),
+    );
+    expect(flatten(readme)).toMatch(
+      new RegExp(`ENROLLMENT_CODE_DAYS\\s*to\\s*${String(ENV_CODE_DEFAULT_DAYS)}`),
+    );
+  });
+
+  it('says what a restart, an edit and a deletion each do to the row', () => {
+    // The four questions an operator asks in the order they ask them. Each is a real decision made
+    // in `auth/envEnrollmentCode.ts`, and a README that skipped any of them would leave the
+    // operator to find it out by watching a code stop working.
+    const flat = flatten(readme);
+    expect(flat).toMatch(/Restarting changes nothing/i);
+    expect(flat).toMatch(/Changing the value withdraws the old code/i);
+    expect(flat).toMatch(/deleting the value withdraws it/i);
+    expect(flat).toMatch(/A withdrawn code never comes back/i);
+    // And the one that is a security property rather than a convenience: nothing self-serve exists
+    // before an administrator does, so the compose value cannot bootstrap an instance either.
+    expect(flat).toMatch(/It cannot go first/i);
+  });
+
+  it('warns that the code sits in a tracked file, and why that one does not feel like a secret', () => {
+    // NOT the session-secret paragraph. This is a second warning about a second value, and the
+    // reason it needs its own is the asymmetry: an enrollment code is MEANT to be shared, so the
+    // instinct that protects a secret does not fire. Nothing else in this suite gated a
+    // tracked-file warning at all before this change.
+    const section = flatten(
+      readme.slice(readme.indexOf('### Enrollment codes'), readme.indexOf('## Deploying')),
+    );
+    expect(section.length, 'the enrolment section moved or went').toBeGreaterThan(2000);
+    expect(section).toMatch(/tracked by git/i);
+    expect(section).toMatch(/meant to be shared/i);
+    expect(section).toMatch(/\.env/);
+    expect(section).toMatch(/HOST_PORT/);
+    // A worked example is the same accident in a smaller font, and the README says why it has none.
+    expect(section).toMatch(/no example code/i);
   });
 });
 

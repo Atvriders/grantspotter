@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import type { BootstrapState } from '../auth/bootstrap.js';
+import { syncEnvEnrollmentCode } from '../auth/envEnrollmentCode.js';
 import { requireAuth } from '../auth/middleware.js';
 import {
   assertPasswordPolicy,
@@ -812,6 +813,30 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         role: 'admin',
         ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
       });
+
+      /**
+       * THE SECOND HALF OF `ENROLLMENT_CODE`, AND THE REASON IT IS HERE RATHER THAN ONLY AT BOOT.
+       *
+       * An enrollment code names the administrator who issued it (`created_by_user_id`, NOT NULL),
+       * so on a fresh database the boot call in `index.ts` can only DEFER: there is nobody to name.
+       * The account created two statements ago is that person. Without this line an operator who
+       * set the code in the compose file and deployed for the first time would have a code that
+       * does not work until they restarted the container, with no symptom to lead them there.
+       *
+       * AND THE DEFERRAL IS WORTH KEEPING RATHER THAN ENGINEERING AWAY. This is the moment the
+       * instance stops being unclaimed; before it, a live self-service credential would have let
+       * anybody who found the URL enrol while the operator was still reading the first-run token.
+       *
+       * AFTER `users.create` and BEFORE the session cookie, so that a failure here — there is none;
+       * the function does not throw — could never leave a signed-in operator wondering which half
+       * ran. It is synchronous, and better-sqlite3 is what makes that true rather than hopeful.
+       */
+      syncEnvEnrollmentCode({
+        db: deps.db,
+        spec: deps.config.enrollmentCode,
+        nowISO: new Date().toISOString(),
+      });
+
       startSession(req, res, user.id);
       res.status(201).json({ user: toPublicUser(user) });
     }),

@@ -94,9 +94,9 @@ export { normalizeEnrollmentCode };
  *
  * MEASURED ON THIS HOST, 2026-08-10, WITH THE PRODUCT'S OWN HASH FUNCTION. A dictionary of
  * {K,N,W,A} x digit x two letters (the 1x2 callsign shape) x twenty club words x thirteen years x
- * three separators recovered `W1MX-AUTUMN-2026` — sixteen characters, twelve after normalisation,
- * comfortably over the floor — from its stored digest in 32.4 s after 11,334,277 candidates:
- * 349,338 candidates a second on ONE core, single-threaded JavaScript, no GPU. There is no length
+ * three separators recovered `W1MX-AUTUMN-2026` — sixteen characters, and twelve after
+ * normalisation, which is exactly AT the floor — from its stored digest in 32.4 s after 11,334,277
+ * candidates: 349,338 a second on ONE core, single-threaded JavaScript, no GPU. There is no length
  * a person would agree to read out at a meeting that survives that. So the answer is not a longer
  * code; the answer is that the digest must stop being computable by whoever holds the file.
  *
@@ -324,6 +324,24 @@ export interface EnrollmentCodeRepo {
   create(input: CreateEnrollmentCodeInput): CodeIssued;
   list(): EnrollmentCode[];
   findById(id: string): EnrollmentCode | undefined;
+  /**
+   * THE ROW THAT HOLDS THIS CODE, WHATEVER STATE IT IS IN — revoked, expired, exhausted or live.
+   *
+   * `inspect` IS NOT THIS AND MUST NOT BECOME IT. It withholds the row's identity from every code
+   * it will not honour, and that is the whole of its disclosure policy: its caller is an anonymous
+   * HTTP route, and an answer that named a revoked code's row would turn a wrong guess into "yes,
+   * such a code exists here". This one names the row unconditionally and has exactly one caller —
+   * `auth/envEnrollmentCode.ts`, at boot, holding a value it read out of the operator's own file.
+   * Nothing reachable from a request may call it.
+   *
+   * WHY THE BOOT PATH NEEDS IT AND `inspect` CANNOT SERVE. Reconciling `ENROLLMENT_CODE` against
+   * the table turns on three questions that are all about rows a redemption would refuse: is this
+   * value the one already set from the file, has it been withdrawn, or does it belong to a code an
+   * administrator issued in the app? `inspect` answers "no" to all three with the same word.
+   *
+   * Undefined for a code that normalises to nothing, which is not a code.
+   */
+  findByCode(plaintext: string): EnrollmentCode | undefined;
   /** Idempotent: a second revoke returns the code with the FIRST revocation's timestamp. */
   revoke(id: string, nowISO: string): EnrollmentCode | undefined;
   /** Is there at least one code a person could redeem right now? Never says which, or how many. */
@@ -580,6 +598,15 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
 
     findById(id) {
       const row = byIdStmt.get(id) as CodeRow | undefined;
+      return row === undefined ? undefined : toCode(row);
+    },
+
+    findByCode(plaintext) {
+      if (normalizeEnrollmentCode(plaintext) === '') return undefined;
+      // The same one indexed statement `redeem` uses, and both digests for the same reason: a
+      // pre-093 row holds the unkeyed one, and a boot that could not see it would create a second
+      // row for a code this deployment has already issued.
+      const row = byHashStmt.get(digestsOf(plaintext)) as CodeRow | undefined;
       return row === undefined ? undefined : toCode(row);
     },
 

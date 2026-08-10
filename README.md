@@ -504,12 +504,16 @@ prints a one-time token to the container log, and sign-in is rate-limited.
 |---|---|---|
 | The first-run token, printed to the container log | the operator, once, against a database with no accounts | the first **administrator** |
 | **Admin → User accounts**, which generates a password shown once | an administrator | a member or an administrator, whichever is chosen |
-| An [enrollment code](#enrollment-codes), redeemed by whoever holds it | the person joining, using a code an administrator issued | a **member**, always |
+| An [enrollment code](#enrollment-codes), redeemed by whoever holds it | the person joining, using a code an administrator issued — from the admin screen, or from the `ENROLLMENT_CODE` line in `docker-compose.yml` | a **member**, always |
 
 Only the third lets a person create their own account, and the distinction it turns on is the
 entire design: **there is no open sign-up.** The form exists and it is inert without a code that an
 administrator issued, bounded with whatever limits they set, and revocable the moment they change
 their mind. Registration for whoever finds the URL was never available here and still is not.
+
+Setting the code in the compose file is the *same* third path and not a fourth: it produces the
+same row, with the same limits and the same revoke button, and it cannot produce one at all until
+an administrator exists — see [Enrollment codes](#enrollment-codes).
 
 | Capability | admin | member |
 |---|---|---|
@@ -578,6 +582,55 @@ says so at the moment you make it, not here:
   new one.
 - The list marks every code **Chosen** or **Generated**, because after the fact only a hash is
   stored and the two are not equally strong.
+
+**You can set one in `docker-compose.yml` instead, on the `ENROLLMENT_CODE` line**, if you would
+rather edit one file than sign in and fill in a form. It is not a different kind of credential and
+it gets no shortcuts: at boot it becomes an ordinary row in the same table, listed in
+**Admin → Enrollment codes** as `Set in docker-compose.yml (ENROLLMENT_CODE)`, marked **Chosen**,
+with the same use count, the same expiry, the same revoke button and the same audit trail. Every
+rule above applies to it, and the server refuses to start rather than issue a code that breaks one.
+
+- **It has to state its bounds, and the compose file states them for you.** `ENROLLMENT_CODE_MAX_USES`
+  defaults to **30** — a club intake, and what this product already calls the usual answer — and
+  `ENROLLMENT_CODE_DAYS` to **90**, one academic term rather than the 365 the ceiling allows,
+  because a default that takes the maximum is a default nobody chose. Both are written out in the
+  file next to the code, so you can see what you are handing out. Both are read *only when the code
+  is created*: changing one of them alone does nothing until you change the code itself, and the
+  container log prints the limits the row actually carries.
+- **Restarting changes nothing.** The row keeps the uses it has spent and the expiry it was created
+  with, because a container that restarts every week must not hold a code that never expires.
+- **Changing the value withdraws the old code** and issues the new one; **deleting the value
+  withdraws it** and issues nothing. In both cases the old row stays, with its label, its count and
+  its history, and anyone still holding that code is told it was withdrawn rather than that it is
+  not valid.
+- **A withdrawn code never comes back.** Revoke it in the app and a restart leaves it revoked — a
+  restart must not undo somebody's deliberate act. Putting an old code back on the line does not
+  reopen it either, and that one is doing real work rather than being consistent: everyone who was
+  read that code out while it was live still has it. To open a new door, use a code this instance
+  has not used before. The log says so on every boot that finds one.
+- **A code an administrator already issued is left alone.** If the value names a code that exists on
+  the instance, GrantSpotter does not take it over: its limits, its expiry and its issuer stay as
+  they were, and removing the line will not withdraw it. The log says all three, because the natural
+  assumption is the opposite.
+- **It cannot go first.** A code names the administrator who issued it, and nothing self-serve may
+  exist before an administrator does, so on a brand-new database the code is created the moment you
+  finish the first-run setup rather than at that first boot. No restart needed; the log says which
+  of the two happened.
+- **Rotating `SESSION_SECRET` fixes this one for you.** Every other outstanding code stops redeeming
+  when that secret changes (see below) and has to be reissued by hand. The compose-set code is
+  reissued on the next boot, because the file still says what it is.
+
+> **`docker-compose.yml` is tracked by git, and this is the value that will not feel like a secret.**
+> A session secret looks like one, so you think before you push. An enrollment code is *meant* to be
+> shared — read out at a meeting, chalked on a whiteboard, printed on a flyer — so it does not feel
+> like something to protect while you are typing it, and it still makes accounts. Push a fork with a
+> live code on that line and anybody reading your repository can create accounts on your instance
+> until you notice and revoke it. If you keep this repository under git, do not put the code on that
+> line: change it so the value is interpolated from the environment, written exactly the way the
+> `HOST_PORT` line is written, and keep the code in the `.env` beside the compose file, which
+> `.gitignore` already ignores. Deploying from a download, or from a clone you never push, and it
+> does not arise. For the same reason there is **no example code printed in the compose file or
+> here**: a code published in a public repository is a code every deployment that copied it shares.
 
 **The code is shown exactly once, on the screen that issues it.** After that only a hash of it is
 stored, so a copy of `grantspotter.sqlite`, a backup or the JSON export does not hand out working
@@ -751,6 +804,12 @@ interpolated from the environment — written exactly the way the `HOST_PORT` li
 written — and keep the secret in `.env` beside the compose file. That is the two-file arrangement
 this layout was meant to be rid of, so it is the answer for a tracked fork rather than the default.
 
+**The same applies to `ENROLLMENT_CODE`, and it is the line likelier to catch you out.** A session
+secret announces itself as a secret; an [enrollment code](#enrollment-codes) is *meant* to be shared,
+so it does not feel like one while you are typing it — and it still creates accounts. A fork pushed
+with a live code on that line lets strangers enrol on your instance until you revoke it. Same escape
+hatch, same `.env`, and it is empty as it ships so it costs you nothing to leave alone.
+
 **CI note:** a freshly created or forked repository sometimes will not run its first push-triggered
 workflow. The build workflow includes `workflow_dispatch` for exactly that case — trigger it once by
 hand from the Actions tab, and subsequent pushes behave normally.
@@ -767,10 +826,14 @@ hand from the Actions tab, and subsequent pushes behave normally.
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
 | `CALLSIGN_LOOKUP_ENABLED` | no | `true` | the one user-initiated request this product makes. `false` and the route is not registered, so this deployment never contacts `callook.info` — see [The callsign lookup](#the-callsign-lookup) |
+| `ENROLLMENT_CODE` | no | empty, and the feature is off | an [enrollment code](#enrollment-codes) you set in the file instead of in the app. At boot it becomes an ordinary code row with the same limits, revoke button and audit trail. Held to the same rules as one you type into the console, and the server refuses to start if it breaks one. **The value is a credential in a tracked file — read the warning below** |
+| `ENROLLMENT_CODE_MAX_USES` | no | `30` | how many accounts that code may create, up to the 200 any chosen code may have. Read only when the code is created |
+| `ENROLLMENT_CODE_DAYS` | no | `90` | how long it lives, up to the 365 any chosen code may have. Read only when the code is created, so a restart never extends it |
 | `ANTHROPIC_API_KEY` | no | none | optional parse assist only |
 | `SIMPLER_GRANTS_API_KEY` | no | none | optional federal ranking |
 
-Two variables fail loudly on startup, and neither of them can be given a default:
+Two variables fail loudly on startup for being absent or unedited, and neither of them can be given
+a default:
 
 - **`SESSION_SECRET` has no default because a shipped default session secret is a shared secret,
   which is not a secret.** Generate one with `openssl rand -hex 32`. The value in
@@ -859,6 +922,18 @@ Two variables fail loudly on startup, and neither of them can be given a default
   The shipped placeholder is refused twice over, and the two rules are independent on purpose:
   change `example.org` to your own host and `CHANGE_ME` still catches it; delete `CHANGE_ME` and
   `example.org` still does. Only replacing the whole value gets past both.
+
+**A third variable can stop the boot, and only if you asked it to.** `ENROLLMENT_CODE` is optional
+and empty as it ships, so this paragraph is about nobody until you type something between the
+quotes. Once you do, a value that breaks one of the rules for a code you choose — under 12
+characters folded, more than 200 uses, longer than 365 days — stops the server instead of starting
+one that quietly has no door behind the code you just read out at a meeting. Every one of those
+messages names the rule, says why the rule exists, and ends with the way out: **delete the
+`ENROLLMENT_CODE` line and the server starts again**, because the feature is optional and "off" is
+always one keystroke away. Nothing that depends on the *database* — a code that is already here, or
+one that has been withdrawn — ever stops a boot, because that can become true on a Sunday reboot
+nobody asked for; those are reported in the container log and the server starts. See
+[Enrollment codes](#enrollment-codes) for what a boot then does with the value.
 
 ---
 

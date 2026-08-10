@@ -1,19 +1,18 @@
 import {
-  CHOSEN_CODE_MAX_DAYS,
   CHOSEN_CODE_MAX_INPUT,
-  CHOSEN_CODE_MAX_USES,
-  CHOSEN_CODE_MIN_LENGTH,
   describeEnrollmentCodeFold,
-  describeEnrollmentCodeStripped,
-  exhaustionChance,
-  groupThousands,
-  labelRepeatsChosenCode,
-  MEASURED_GUESSES_PER_DAY,
   normalizeEnrollmentCode,
   type EnrollmentCode,
 } from '@grantspotter/core';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
+import {
+  isEnvCodeLabel,
+  MAX_EXPIRY_DAYS,
+  MAX_USES_CEILING,
+  refuseChosenCode,
+  RESERVED_LABEL_REFUSAL,
+} from '../auth/chosenCode.js';
 import { appendAuditLog } from '../db/repositories/ingestion.js';
 import { createEnrollmentCodeRepo } from '../db/repositories/enrollmentCodes.js';
 import type { RouterDeps } from './deps.js';
@@ -28,18 +27,16 @@ import { AppError } from './errors.js';
  */
 
 /**
- * The upper bounds on a code, and neither is arbitrary.
+ * THE RULES AND THE SENTENCES THAT REFUSE A CHOSEN CODE NOW LIVE IN `auth/chosenCode.ts`.
  *
- * `maxUses` at 10,000: a club intake is tens and a conference badge run is hundreds, so anything
- * past this is a typo (a missing decimal point, a pasted phone number) and a typo that mints a
- * practically unlimited credential should be refused rather than honoured. An admin who genuinely
- * wants no limit says so explicitly with `null`, which is a different and visible decision.
- *
- * `expiresInDays` at 3,650: ten years is longer than any intake and shorter than forever, and
- * `null` again says forever explicitly.
+ * They were written here, and they moved on 2026-08-10 for the reason that module opens with: an
+ * operator can set `ENROLLMENT_CODE` in `docker-compose.yml`, so this router is no longer the only
+ * thing that can be handed a code a person chose. A code from a file is a chosen code with a YAML
+ * file around it and is held to the same floor, the same ceilings and the same objection to a label
+ * that gives the code away. `MAX_USES_CEILING` and `MAX_EXPIRY_DAYS` — the GENERATED path's bounds,
+ * which the request schema below needs before it knows which kind of code it is being asked for —
+ * moved with them so that one file holds every number in this decision.
  */
-const MAX_USES_CEILING = 10_000;
-const MAX_EXPIRY_DAYS = 3650;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -77,82 +74,18 @@ const createBodySchema = z.object({
 const COLLISION_NOTICE_WINDOW_MS = 15 * 60 * 1000;
 
 /**
- * THE REFUSALS A CHOSEN CODE CAN MEET, WRITTEN OUT, because every one of them is the moment an
- * administrator is deciding something and the alternative is a paragraph in a document they will
- * not read.
+ * THE ONE REFUSAL A CHOSEN CODE CAN MEET THAT IS STILL WRITTEN HERE, because it is the only one
+ * that is not a rule about the code itself.
  *
- * They are functions rather than constants because each one has to say the administrator's own
- * number back to them. "Too short" without the two numbers is the kind of refusal that gets
- * retried with one more character.
+ * The other five moved to `auth/chosenCode.ts` when `ENROLLMENT_CODE` gave this product a second
+ * way to be handed a code somebody chose; `refuseChosenCode` is now the single answer to "may this
+ * be stored?". A COLLISION is not that question. It cannot be decided without asking the database,
+ * it is reported through a different status (`conflict`, not `validation_failed`), and the sentence
+ * names the OTHER code — which is a thing only an administrator, looking at a screen that already
+ * lists every code on the instance, is allowed to be told. `auth/envEnrollmentCode.ts` answers the
+ * same event from the boot path and says something different, to a different reader, for reasons
+ * set out there.
  */
-/**
- * THE FLOOR, EXPLAINED WITHOUT THE IMPLICATION THAT CLEARING IT IS AN ACHIEVEMENT.
- *
- * WHAT THIS SENTENCE USED TO SAY AND WHY IT WAS WITHDRAWN. It derived twelve from a measured
- * 1,862 wrong codes a second, which was true of the server as it then stood — the wrong-code budget
- * was keyed on an address the caller could write, so it was not in anybody's way. Two things about
- * that are now different. The rate is a ceiling instead of a throughput
- * (`MEASURED_GUESSES_PER_DAY`, and `api/auth.ts` for the three rungs that produce it), so the
- * arithmetic behind twelve no longer lands on twelve. And the sentence's own logic was the problem
- * rather than its number: it answered "why twelve?" so thoroughly that it read as "twelve is
- * enough". MEASURED on 2026-08-10, `W1MX-SPRING-2027` — fourteen characters after normalisation,
- * comfortably over the floor — was found on the seventh guess.
- *
- * SO THE REFUSAL LEADS WITH THE THING THAT IS TRUE AT EVERY LENGTH and gives the number second.
- * `exhaustionChance` still supplies the odds, because a refusal that asserts without arithmetic is
- * a refusal a reader is right to distrust, and it is labelled as what it is: the chance of somebody
- * working through every code, which is not how any of these are found.
- */
-function tooShortRefusal(normalized: string): string {
-  const length = String(normalized.length);
-  const floor = String(CHOSEN_CODE_MIN_LENGTH);
-  return (
-    // `describeEnrollmentCodeStripped()` and not a written-out list: `U` is deleted by the
-    // normaliser too, so a hand-written "capitals, dashes and spaces" quoted a length the reader
-    // could not arrive at — `W1MX-AUTUMN-2026` is fourteen of those characters and twelve of these.
-    `That code is ${length} characters once ${describeEnrollmentCodeStripped()} are taken out, and ` +
-    `a code ` +
-    `you choose has to be at least ${floor}. What the floor rules out is somebody working through ` +
-    'every possible code: GrantSpotter answers at most 240 wrong codes every fifteen minutes ' +
-    `across the whole server — ${groupThousands(MEASURED_GUESSES_PER_DAY)} a day, however many ` +
-    'addresses they use — and a year of that gets through a code of ' +
-    // "a code of N characters" rather than "a N-character code", so the sentence does not have to
-    // pick between "a" and "an" from a number whose spoken form it cannot see.
-    `${length} characters ${exhaustionChance(normalized.length)}, against a code of ${floor} ` +
-    `characters ${exhaustionChance(CHOSEN_CODE_MIN_LENGTH)}. That is the whole of what ${floor} ` +
-    'buys. It is not a measure of how hard your code is to GUESS, and no length is: in testing, ' +
-    'W1MX-SPRING-2027 was found on the seventh attempt by somebody trying a callsign with a ' +
-    'season and a year. Pick something a person outside your club would have no reason to try, ' +
-    'give it a short life and a number of uses, and treat it as a convenience rather than a secret.'
-  );
-}
-
-/**
- * WHY A CODE SOMEBODY TYPED HAS TO SAY HOW MANY PEOPLE IT IS FOR.
- *
- * The refusal names the thing it is bounding rather than the rule it is enforcing, because the
- * administrator reading it is about to choose the number and the only question that helps them is
- * "how many people am I giving this to?".
- */
-const NO_MAX_USES_REFUSAL =
-  'A code you choose has to say how many accounts it may create, and this one was given no limit. ' +
-  'A generated code is twenty random characters and nobody can arrive at it; one you can read out ' +
-  'is one somebody can guess, and the number of uses is what decides how much a lucky guess is ' +
-  'worth — in testing, a guessed code with no limit went on making member accounts until the test ' +
-  'stopped asking. Put the size of the intake here. Thirty is the usual answer, you can issue ' +
-  `another code in ten seconds if more people turn up, and the most a chosen code may have is ` +
-  `${String(CHOSEN_CODE_MAX_USES)}.`;
-
-function tooManyUsesRefusal(asked: number): string {
-  return (
-    `A code you choose may create at most ${String(CHOSEN_CODE_MAX_USES)} accounts and this one ` +
-    `asks for ${String(asked)}. That ceiling is about the day one of these is guessed rather than ` +
-    'about the day it is used: it is what an administrator can review by hand, and past a hall ' +
-    'full of people a code is not being read out any more, it is being published. A generated ' +
-    `code can still have ${String(MAX_USES_CEILING)}, or no limit at all.`
-  );
-}
-
 function collisionRefusal(label: string | null, normalized: string): string {
   const which =
     label === null
@@ -166,32 +99,6 @@ function collisionRefusal(label: string | null, normalized: string): string {
     'the new one.'
   );
 }
-
-const NO_EXPIRY_REFUSAL =
-  'A code you choose has to expire, and this one was given no expiry. A generated code is twenty ' +
-  'random characters and can safely live forever; a code an officer can read out at a meeting is ' +
-  'one that gets read out at a meeting — written on a whiteboard, photographed, forwarded, left ' +
-  'in a club chat that outlives the intake. An expiry is the only bound on that which does not ' +
-  `depend on somebody remembering to revoke it. Give it a number of days, up to ` +
-  `${String(CHOSEN_CODE_MAX_DAYS)}.`;
-
-function expiryTooLongRefusal(days: number): string {
-  return (
-    `A code you choose may live at most ${String(CHOSEN_CODE_MAX_DAYS)} days and this one asks ` +
-    `for ${String(days)}. A code that gets read out gets forwarded, photographed and left in a ` +
-    'club chat, and the chance of that only grows with time — an expiry is the one bound on it ' +
-    'that does not depend on somebody remembering. A generated code can still have ten years, ' +
-    'because nobody is passing one of those around by mouth. Issuing a new chosen code next year ' +
-    'takes ten seconds.'
-  );
-}
-
-const LABEL_REPEATS_CODE_REFUSAL =
-  'The label repeats the code. The label is stored exactly as you type it, shown in the table on ' +
-  'this screen, and written to the audit log — which is read by more people, and kept for longer, ' +
-  'than anything else here. A label containing the code would therefore store the code in the ' +
-  'clear in three places, which is the one thing this design exists to avoid: only a SHA-256 of a ' +
-  'code is ever kept. Name the intake, not the code.';
 
 /**
  * THE ADMIN HALF OF ENROLMENT. It is mounted by the composition root at
@@ -308,44 +215,47 @@ export function createEnrollmentRouter(deps: RouterDeps): Router {
       const days = expiresInDays ?? null;
 
       /**
-       * EVERY RULE THAT APPLIES ONLY TO A CODE SOMEBODY TYPED, IN ONE BLOCK, BEFORE ANYTHING IS
-       * WRITTEN.
+       * THE LABEL THE COMPOSE FILE'S OWN CODE ANSWERS TO IS NOT AVAILABLE HERE, AND THIS IS THE
+       * ONLY RULE IN THIS ROUTER THAT APPLIES TO BOTH KINDS OF CODE.
        *
-       * They are checked in the order an administrator would want to hear about them: what is
-       * wrong with the code itself first, then how far it reaches — how long it may live and how
-       * many accounts it may make — then the label. Nothing here touches the generated path
-       * (`chosen === null` skips all of it) and that is the honest shape, because none of these
-       * rules is about issuing a credential in general. Each is about the one property that
-       * differs: a chosen code can be guessed.
+       * `auth/envEnrollmentCode.ts` recognises the row set by `ENROLLMENT_CODE` by its label and by
+       * nothing else, because a digest is all the table holds and there is nothing else to
+       * recognise it by. So a code issued HERE under that label would be adopted by the next boot
+       * as the file's, and then withdrawn by it, because the file does not name that code. The
+       * administrator would watch a code they issued switch itself off after a restart with no
+       * trail but a revocation nobody performed.
        *
-       * THE TWO REACH RULES ARE THE SAME RULE ABOUT TWO AXES, and they are the part of this block
-       * that carries the weight now. A floor cannot stop a code being guessed; how long it lasts
-       * and how much it is worth when it is are the two things that CAN be bounded, so both are
-       * required and neither is silently defaulted.
+       * It is checked before the chosen-code rules and outside the `chosen !== null` block on
+       * purpose: the hazard is in the LABEL, so it is exactly as real for a generated code.
+       */
+      if (isEnvCodeLabel(label)) {
+        throw new AppError('validation_failed', RESERVED_LABEL_REFUSAL);
+      }
+
+      /**
+       * EVERY RULE THAT APPLIES ONLY TO A CODE SOMEBODY TYPED, IN ONE CALL, BEFORE ANYTHING IS
+       * WRITTEN — AND THE CALL IS THE POINT.
+       *
+       * This was a block of six `if`s written out here, which was right while this router was the
+       * only way to hand this product a code a person chose. It is not any more: `ENROLLMENT_CODE`
+       * in `docker-compose.yml` is the second, and the rules had to become a function two callers
+       * share rather than a block one of them owns. See `auth/chosenCode.ts` — the order they are
+       * asked in, and the reason each exists, moved with them.
+       *
+       * Nothing here touches the generated path (`chosen === null` skips all of it) and that is the
+       * honest shape, because none of these rules is about issuing a credential in general. Each is
+       * about the one property that differs: a chosen code can be guessed.
        */
       if (chosen !== null) {
-        const normalized = normalizeEnrollmentCode(chosen);
-        if (normalized.length < CHOSEN_CODE_MIN_LENGTH) {
-          throw new AppError('validation_failed', tooShortRefusal(normalized));
-        }
-        if (days === null) throw new AppError('validation_failed', NO_EXPIRY_REFUSAL);
-        if (days > CHOSEN_CODE_MAX_DAYS) {
-          throw new AppError('validation_failed', expiryTooLongRefusal(days));
-        }
-        // `maxUses ?? null` rather than the parsed value: the schema lets the field be omitted or
-        // explicitly null, and both of those mean "no limit", which is the thing being refused.
-        if ((maxUses ?? null) === null) {
-          throw new AppError('validation_failed', NO_MAX_USES_REFUSAL);
-        }
-        if (maxUses !== undefined && maxUses !== null && maxUses > CHOSEN_CODE_MAX_USES) {
-          throw new AppError('validation_failed', tooManyUsesRefusal(maxUses));
-        }
-        // Checked only for a chosen code because it cannot happen otherwise: on the generated path
-        // the label is written before the code exists, so an administrator could not repeat it if
-        // they tried.
-        if (labelRepeatsChosenCode(label, chosen)) {
-          throw new AppError('validation_failed', LABEL_REPEATS_CODE_REFUSAL);
-        }
+        const refusal = refuseChosenCode({
+          code: chosen,
+          label,
+          // `?? null` rather than the parsed value: the schema lets the field be omitted or
+          // explicitly null, and both of those mean "no limit", which is the thing being refused.
+          maxUses: maxUses ?? null,
+          expiresInDays: days,
+        });
+        if (refusal !== null) throw new AppError('validation_failed', refusal);
       }
 
       const expiresAt =
@@ -387,7 +297,7 @@ export function createEnrollmentRouter(deps: RouterDeps): Router {
       });
 
       // The one and only time this value leaves the process. There is no route that can show it
-      // again: only its SHA-256 is stored, so "show it to me once more" is not a feature that was
+      // again: only a keyed digest is stored, so "show it to me once more" is not a feature that was
       // left out, it is a thing this design has made impossible.
       //
       // `normalized` rides along because for a chosen code the string the administrator typed is

@@ -105,6 +105,72 @@ services:
       # already, because their licence is not in the FCC database at all.
       CALLSIGN_LOOKUP_ENABLED: "true"
 
+      # ---------------------------------------------------------------------------------------
+      # AN ENROLLMENT CODE YOU SET HERE INSTEAD OF IN THE APP. Optional. Leave it empty — as it
+      # ships — and nothing about this deployment changes.
+      #
+      # WHAT IT DOES. Type a code between the quotes and, from the next start, somebody who has
+      # that code can create their own member account without you signing in and issuing one. It
+      # is not a new kind of credential and gets no special treatment: at boot it becomes an
+      # ordinary row in the enrollment_codes table, listed in Admin → Enrollment codes as
+      # "Set in docker-compose.yml (ENROLLMENT_CODE)", with the same use count, the same expiry,
+      # the same revoke button and the same audit trail as one you type into that screen. It is
+      # held to the same rules, too, and the server will not start if it breaks one — a code you
+      # choose must be at least 12 characters after folding, may create at most 200 accounts and
+      # may live at most 365 days. If it refuses, the message says which rule and why.
+      #
+      # >>> THIS FILE IS TRACKED BY GIT, AND THIS VALUE IS THE ONE THAT WILL NOT FEEL LIKE A
+      # >>> SECRET. The warning at the top of this file about SESSION_SECRET applies here word for
+      # word, and this line is worse in an odd way: a session secret is obviously a secret, so you
+      # think about it before you push. An enrollment code is MEANT to be shared — read out at a
+      # meeting, written on a whiteboard, put at the bottom of a flyer — so it does not feel like
+      # something to protect while you are typing it. It is still a credential: it makes accounts.
+      # A fork you push with a live code in it lets anybody who reads your repository create
+      # accounts on your instance until you notice and revoke it, and search engines index forks.
+      # If you keep this repository under git, do NOT put the code on this line. Change the line
+      # so the value is interpolated from the environment, written exactly the way the HOST_PORT
+      # line further up is written, and keep the code in a `.env` beside this file: compose reads
+      # that file and `.gitignore` already ignores it. Deploy from a download, or from a clone you
+      # never push, and none of this arises.
+      #
+      # THERE IS DELIBERATELY NO EXAMPLE CODE PRINTED HERE. A code written into a public
+      # repository is a code every deployment that copied it shares, which is the same accident
+      # the session-secret placeholder exists to prevent. Use something a person outside your
+      # group would have no reason to try — not your callsign with a season and a year, which is
+      # the first thing anybody guesses, and which was found on the seventh attempt in testing.
+      #
+      # WHAT GETS FOLDED, BECAUSE NOTHING SHOWS YOU THE RESULT HERE. Capitals, dashes and spaces
+      # are ignored; O counts as 0; I and L count as 1; and U is DROPPED, so a code with three Us
+      # in it is three characters shorter than it looks. That only matters for the 12-character
+      # floor, and the refusal tells you the real length if you hit it. Anybody typing the code
+      # exactly as you gave it to them gets in either way.
+      #
+      # WHAT HAPPENS WHEN YOU EDIT THIS LINE. Restart with the same value and nothing at all
+      # happens — the code keeps the uses it has spent and the expiry it was created with, because
+      # a restart must not be able to extend a credential. CHANGE the value and the old code is
+      # withdrawn and the new one issued. DELETE the value and the old code is withdrawn: the
+      # people holding it are told it was withdrawn, and the row stays with its history. Revoking
+      # it in the app also sticks — a restart will not bring back a code somebody switched off,
+      # and neither will putting an old code back on this line, because everyone who was given it
+      # then would be let in again. To open a new door, use a code you have not used here before.
+      #
+      # AND IT CANNOT GO FIRST. On a brand-new database there is no administrator to attribute the
+      # code to, and nothing self-serve may exist before an administrator does, so the code is
+      # created the moment you finish the first-run setup rather than at that first boot. The
+      # container log says so. No restart needed.
+      ENROLLMENT_CODE: ""
+
+      # The two bounds the code above gets. They are written out rather than left to a default so
+      # you can see what you are handing out; both are read only when the code is CREATED, so
+      # changing one of these alone does nothing until you change the code itself.
+      #
+      # 30 accounts, because that is a club intake and the ceiling for any code you choose is 200.
+      # 90 days, one academic term — not the 365 the ceiling allows, because a default that takes
+      # the maximum is a default nobody chose, and a code left in a file somebody forgot about
+      # should stop working before the next intake arrives.
+      ENROLLMENT_CODE_MAX_USES: 30
+      ENROLLMENT_CODE_DAYS: 90
+
       # Optional. Everything works with these empty: the deterministic parsers, the rule-based
       # scoring and the copy-prompt flow need no key. Paste one in to use it.
       ANTHROPIC_API_KEY: ""

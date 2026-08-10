@@ -9,6 +9,7 @@ import {
   normalizeEnrollmentCode,
   type EnrollmentCodeRepo,
 } from '../db/repositories/enrollmentCodes.js';
+import { ENV_CODE_LABEL } from '../auth/chosenCode.js';
 import { openTestDb } from '../test/testDb.js';
 import type { RouterDeps, SessionUser } from './deps.js';
 import { createEnrollmentRouter } from './enrollment.js';
@@ -543,6 +544,36 @@ describe('a code the administrator chooses', () => {
     expect(stored).toContain(hashEnrollmentCode(CHOSEN));
   });
 
+  /**
+   * THE ONE LABEL AN ADMINISTRATOR MAY NOT USE, AND WHY IT IS A REFUSAL RATHER THAN A CONVENTION.
+   *
+   * `auth/envEnrollmentCode.ts` recognises the row set by `ENROLLMENT_CODE` in docker-compose.yml
+   * by its label and by nothing else — the table stores a digest, so there is nothing else to
+   * recognise it by. A code issued here under that label would be treated as the file's on the
+   * next boot and withdrawn, because the file does not name it: an administrator would watch a
+   * code they issued switch itself off after a restart, with no trail but a revocation nobody
+   * performed.
+   */
+  it('refuses the label that the compose file code answers to', async () => {
+    const res = await create({ label: ENV_CODE_LABEL, code: CHOSEN, maxUses: 30, expiresInDays: 90 });
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toMatch(/withdrawn the next time this server started/);
+    expect(createEnrollmentCodeRepo(db).list()).toEqual([]);
+  });
+
+  it('refuses it however it is cased or padded, since that is how the boot compares it', async () => {
+    for (const label of [ENV_CODE_LABEL.toUpperCase(), `  ${ENV_CODE_LABEL.toLowerCase()}  `]) {
+      const res = await create({ label, code: null, maxUses: null, expiresInDays: null });
+      expect(res.status, label).toBe(422);
+    }
+  });
+
+  it('does not stand in the way of a label that merely mentions the file', async () => {
+    // Containment would be the wrong rule: the identity is exact equality, so anything else is a
+    // label an officer is entitled to write.
+    const res = await create({ label: 'Codes we set in docker-compose.yml, autumn', code: null, maxUses: null, expiresInDays: null });
+    expect(res.status).toBe(201);
+  });
   it('refuses a code longer than the paste guard', async () => {
     const res = await create({ label: 'intake', code: 'W1MX'.repeat(40), maxUses: 30, expiresInDays: 90 });
     expect(res.status).toBe(422);
