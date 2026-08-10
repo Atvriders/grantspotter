@@ -764,15 +764,72 @@ describe('README: enrolment is a third door, not an open one', () => {
     expect(readme).toMatch(/same\s+12-character\s+floor/i);
   });
 
+  /**
+   * TWO ASSERTIONS IN THIS BLOCK CHANGED ON 2026-08-10 BECAUSE THE CLAIM THEY PINNED WAS FALSE,
+   * not because they were failing. They were green, and what they held green was a README sentence
+   * the product contradicts.
+   *
+   * They required the README to say that enrolment counts failures "against enrolment as a whole
+   * rather than against the caller", and that the price of that is "a burst of wrong guesses makes
+   * the next honest person wait". Neither is what `POST /api/auth/enroll` does:
+   *
+   *   · the budget is keyed on `reportedOrigin(req)` — the caller — in `api/auth.ts`, and has been
+   *     since 2026-08-05, when counting against enrolment as a whole was removed for closing every
+   *     club's intake on ten requests from one stranger who held no code at all;
+   *   · nothing but the "that code is not valid" branch consults it, so a holder of a code this
+   *     instance issued never reads it and cannot be made to wait by anybody. `enroll.test.ts`
+   *     pins both halves — `does not let a stranger's wrong codes close enrolment for somebody
+   *     with a real one`, and `spends one connection's guesses without spending another's`;
+   *   · and the refusal the product prints says so to the user's face: "Too many enrollment codes
+   *     have been tried from this connection recently."
+   *
+   * The accurate wording already existed one directory away, in the note over
+   * `ENROLLMENT_MAX_FAILURES`; only the README and this file had missed the change. So the README
+   * was rewritten to the measured behaviour, these assertions were re-pointed at it, and two of
+   * them now REFUSE the retired sentences by name — a claim that survived one green suite can
+   * survive another.
+   *
+   * THIS IS THE SECOND DOC GATE IN THIS FILE TO HAVE REQUIRED A FALSE STATEMENT. The first was the
+   * corpus statistic above (`marks the projected calendar dates as projected…`), which demanded
+   * "4 of the 243" and thereby kept a wrong figure on the project's front page with a green suite
+   * pointing at it. Same failure twice: an assertion written from the prose instead of from the
+   * thing the prose is about. A doc gate should pin the honesty, never the arithmetic — and where
+   * it must pin a number, it should read that number out of the source, as the budget does below.
+   */
   it('states the two properties that make a typed-in secret worth anything', () => {
     // A code is guessable only by trying, so the limiter is what gives its length meaning.
-    expect(readme).toMatch(/rate\s*\n?\s*limited by the same limiter that guards sign-in/i);
-    expect(readme).toMatch(/worth the\s*\n?\s*number of guesses allowed/i);
-    // The shape of the bucket, because it is visible to a user: enrolment is limited as a whole,
-    // so a burst of wrong guesses is felt by the next honest person. Documenting only the benefit
-    // and not that cost is the kind of half-sentence this file exists to stop.
-    expect(readme).toMatch(/against enrolment as a whole\s*\n?\s*rather than against the caller/i);
-    expect(readme).toMatch(/makes the next honest person wait/i);
+    expect(readme).toMatch(/counter of the same kind that guards sign-in/i);
+    expect(readme).toMatch(/worth the\s+number of guesses allowed/i);
+    // The budget itself, read out of the route rather than transcribed here. A README that quotes
+    // ten guesses against a route that allows thirty is precisely this file's subject.
+    const route = readFileSync(resolve(REPO_ROOT, 'packages/server/src/api/auth.ts'), 'utf8');
+    const maxFailures = /ENROLLMENT_MAX_FAILURES = (\d+)/.exec(route)?.[1];
+    const windowMin = /ENROLLMENT_WINDOW_MS = (\d+) \* 60 \* 1000/.exec(route)?.[1];
+    expect(maxFailures, 'ENROLLMENT_MAX_FAILURES is no longer a literal in auth.ts').toBeTruthy();
+    expect(windowMin, 'ENROLLMENT_WINDOW_MS is no longer `n * 60 * 1000` in auth.ts').toBeTruthy();
+    expect(readme).toMatch(new RegExp(`\\b${String(maxFailures)} wrong codes\\s+per connection\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(windowMin)} minutes\\b`));
+    // WHOSE budget it is, and who never touches it — the two sentences that were wrong.
+    expect(readme).toMatch(/counted against the caller and not against enrolment as a whole/i);
+    expect(readme).toMatch(
+      /nothing a stranger does with wrong\s+codes can stop your students enrolling/i,
+    );
+    // The cost that IS real, because a doc that states only the benefit is the half-sentence this
+    // file exists to stop: one campus NAT is one budget, and a mistype from it can be told to wait.
+    expect(readme).toMatch(/shares one budget/i);
+    // …and the retired claims, refused by name rather than merely unasserted.
+    expect(
+      /against enrolment as a whole\s+rather than against the caller/i.test(readme),
+      'The README is back to calling the enrolment budget deployment-wide. It is keyed on the ' +
+        'caller in api/auth.ts and has been since 2026-08-05, when the deployment-wide version ' +
+        'was measured closing every club on the instance for fifteen minutes.',
+    ).toBe(false);
+    expect(
+      /makes the next honest person wait/i.test(readme),
+      'The README is back to saying a burst of wrong guesses makes the next honest person wait. ' +
+        'A holder of a real code never reads that counter — see the two tests named in the note ' +
+        'above this one in enroll.test.ts.',
+    ).toBe(false);
     // Atomicity, as a claim a reader can check rather than a reassurance, and with the defect it
     // is guarding against named — this project shipped exactly this bug in the callsign lookup.
     expect(readme).toMatch(/at the same instant get one account, not two/i);

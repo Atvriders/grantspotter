@@ -268,7 +268,9 @@ describe('the breakpoints that were replaced', () => {
  * aside's 380px, fails here and makes somebody re-derive the number instead of leaving a stale
  * one behind. That is the failure this block exists for: the figure it replaced (1043) was
  * derived once, by hand, against `--fs-300`'s `ch` when `.profile-help` is `--fs-100`, and it
- * stacked a 1024 laptop for a legibility problem that does not begin until 996.
+ * stacked a 1024 laptop for a legibility problem that does not begin until 994. (996 until
+ * 2026-08-10, when the sweep in the note over the floor below put the 45-character measure at
+ * 45.10ch on a 995px window and 44.95ch on a 994px one.)
  */
 describe('the profile page stacks where the second column stops paying for itself', () => {
   const px = (source: string, pattern: RegExp): number => {
@@ -300,16 +302,41 @@ describe('the profile page stacks where the second column stops paying for itsel
     expect(formColumnAt(1440)).toBe(780);
   });
 
+  /**
+   * THE FLOOR MOVED FROM 340 TO 335 BECAUSE THE COMMENT UNDER IT MISSTATED ITS OWN MEASUREMENT.
+   *
+   * It read "340px is the narrowest form column swept with nothing truncated: below it the widest
+   * <option> ('Certificate, trade or professional school', 261px of text) stops fitting its
+   * control, and the 66ch help text drops under a 45-character measure at 336px." Two of those
+   * three numbers were wrong, and the assertion was a round number sitting above them rather than
+   * a measurement — so a reader taking the sentence at its word would have taken 261 and 336 with
+   * it. Re-swept in Chromium on 2026-08-10, second column held open below its breakpoint, 960 to
+   * 1060 at 1px (the same pass profile.css's note now records):
+   *
+   *   · 261px is the WIDTH OF THE STRING, not of the control. The control has to hold the string
+   *     plus 39px of padding, border and arrow: `max-content` on that `<select>` is 299px, and the
+   *     control is the form column less 34px, so the option is drawn whole at a 333px form column
+   *     and cut below it. At 340 it had 6px of slack, not 0.
+   *   · the help text is 45.10ch at a 335px form column and 44.95ch at 334, so the 45-character
+   *     measure gives out between those two — not at 336.
+   *
+   * 335 is the wider of the two floors and therefore the one that binds. It is a measured number
+   * again rather than a rounded-up one, which is the only reason the sentence above it can be
+   * trusted by whoever reads it next.
+   *
+   * BOTH FLOORS ARE FONT-DEPENDENT, and this file cannot re-measure them: it reads stylesheets, not
+   * a rendering. `--font-text` resolved to Liberation Sans on the machine that swept it. What the
+   * assertion is really holding is the ORDER of two numbers — the breakpoint must not leave a form
+   * column narrower than the narrowest one anybody has rendered and looked at — and 16px of margin
+   * at today's breakpoint is wide enough that another platform's advance widths cannot invert it.
+   */
   it('leaves the narrowest two-column form wider than anything measured to break in it', () => {
     const narrowest = formColumnAt(stacksAtOrBelow + 1);
-    // 340px is the narrowest form column swept with nothing truncated: below it the widest
-    // <option> ("Certificate, trade or professional school", 261px of text) stops fitting its
-    // control, and the 66ch help text drops under a 45-character measure at 336px.
     expect(
       narrowest,
       `stacking at ${String(stacksAtOrBelow)}px leaves a ${String(narrowest)}px form column at ` +
-        `${String(stacksAtOrBelow + 1)}px — narrower than the 340px floor the sweep measured`,
-    ).toBeGreaterThanOrEqual(340);
+        `${String(stacksAtOrBelow + 1)}px — narrower than the 335px floor the sweep measured`,
+    ).toBeGreaterThanOrEqual(335);
   });
 
   it('does not stack a 1024 laptop', () => {

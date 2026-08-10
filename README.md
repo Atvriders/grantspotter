@@ -555,20 +555,31 @@ held to the same 12-character floor as every other password here, checked by the
 **A wrong code and a code that was never issued get the same answer.** Enrolment tells you nothing
 about codes you do not hold: not whether one exists, not how many there are, not who has one.
 Expired, revoked and used-up codes *do* say which they are, because those are the three states a
-legitimate holder needs explained before they give up and email somebody. The endpoint is rate
-limited by the same limiter that guards sign-in, counting failures against enrolment as a whole
-rather than against the caller: an attacker who rotates their address or the email they are
-enrolling with does not get a fresh allowance for doing it, and the price of that is that a burst of
-wrong guesses makes the next honest person wait. Only a wrong code is charged to it: a code that
-really was issued here and has since expired, been revoked or run out is a holder failing, not an
-attacker probing, and locking them out for it teaches nobody anything. That limit is what makes a
-code's length mean anything — a secret you can only attack by guessing is worth the
-number of guesses allowed.
+legitimate holder needs explained before they give up and email somebody. Guessing is rationed by a
+failure counter of the same kind that guards sign-in, but with a budget of its own: 10 wrong codes
+per connection every 15 minutes, counted against the caller and not against enrolment as a whole.
+Only a wrong code is charged to it, and only a wrong code ever reads it: redeeming a code this
+instance really issued does not consult that counter at all, so nothing a stranger does with wrong
+codes can stop your students enrolling. A code that has expired, been revoked or run out is a
+holder failing, not an attacker probing, and locking them out for it teaches nobody anything. That
+limit is what makes a code's length mean anything — a secret you can only attack by guessing is
+worth the number of guesses allowed.
 
 **That promise is about codes, and not about email addresses.** Enrolling with an address that
 already has an account is told so, plainly, because the alternative is someone who signed up last
 term being unable to work out why the form will not take them. On an instance where every account
 needs a code you issued, that is a trade worth making and not a leak worth pretending about.
+
+**What that counter can and cannot tell apart.** It knows callers apart only by the address your
+proxy reports, so a club whose students all leave through one campus NAT shares one budget: after
+10 mistyped codes from that building the next mistype from it is answered "wait" rather than "that
+code is not valid", and typing the code correctly still enrols them. A caller who can reach the
+instance directly, with nothing in front of it, writes that address themselves and can start a
+fresh budget whenever they like — which buys more guesses at a code that is 100 bits out of the
+system CSPRNG, worth nothing at any rate, and costs them the ability to refuse anybody but
+themselves. Counting against enrolment as a whole instead would close that and open something
+worse, and it is what this instance did until 2026-08-05: ten wrong codes from one stranger refused
+every club on it for fifteen minutes.
 
 **Two people redeeming a single-use code at the same instant get one account, not two.** The use
 count and the new account are written in one transaction, so the limit holds under concurrency

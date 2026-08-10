@@ -193,28 +193,47 @@
   1440. (The model holds to 1488, where `--content-max: 1280px` starts capping the main region.)
 
   WHY 1010 AND NOT A LEGIBILITY FIGURE. Legibility is not what breaks first, and the criterion this
-  block used to state does not reproduce. Three things were swept between 940 and 1260, both ways:
+  block used to state does not reproduce. Three things were swept, and the first two were RE-SWEPT
+  on 2026-08-10 because the figures written here for them were wrong. The sweep is 960 to 1060 at
+  1px with the second column held open below its own breakpoint by an injected `!important` rule,
+  against `/profile` on the shipped-seed harness in headless Chromium, so the narrow half is
+  measured rather than extrapolated:
 
-    - the help text's measure. `.profile-help` is `--fs-100`, so its `ch` is 6.67px, not the 8.33px
-      of `--fs-300`: at a 364px form column the 66ch cap is not reached and the text renders at
-      330px = 49.4ch, which is inside the ordinary 45-75 character measure, not outside it. It
-      falls under 45ch at a 336px form column, i.e. below a 996px window.
-    - the widest `<option>` in the form ("Certificate, trade or professional school") needs 261px
-      of control. It first truncates when the form column reaches 324px, i.e. below a 992px window.
+    - the help text's measure. `.profile-help` is `--fs-100`, so its `ch` is 6.674px, not the
+      8.33px of `--fs-300`: at a 364px form column the 66ch cap is not reached and the text renders
+      at 330px = 49.45ch, which is inside the ordinary 45-75 character measure, not outside it. It
+      is 45.10ch at a 335px form column (a 995px window) and 44.95ch at 334 (994), so the
+      45-character floor falls between those two. This block said 336 and 996; both were two out.
+    - the widest `<option>` in the form ("Certificate, trade or professional school"). WHAT IT
+      NEEDS IS A CONTROL, NOT A STRING, and confusing the two is what made the old figure wrong:
+      `max-content` on that `<select>` measures 299px, of which 260px is the text and the other
+      39px is the padding, the border and the arrow. The control is the form column less 34px (the
+      card's padding either side and its border), so the option is drawn whole while the form
+      column is 333px or wider — a 993px window — and is cut below that. This block used to say
+      "needs 261px of control, first truncates at a 324px form column": 261 is the STRING, and at a
+      324px form column the option had already been losing letters for nine pixels.
     - the total height of the page, which is the thing the second column is actually FOR. A
       narrower form is a taller form; a second column is only worth its cramping if the page comes
       out shorter. Measured at a fixed 900px height, side by side against stacked: 3466 vs 3460 at
       1010 (the stack wins by 6px) and 3448 vs 3460 at 1011 (the column wins by 12px), widening to
-      3417 vs 3460 at 1024 and 3248 vs 3460 at 1200.
+      3417 vs 3460 at 1024 and 3248 vs 3460 at 1200. Re-measured on 2026-08-10: unchanged, all four.
+
+  THE PIXEL FIGURES IN THE FIRST TWO BULLETS ARE FONT-DEPENDENT and the window widths derived from
+  them are therefore not portable. `--font-text` is a system stack; on the machine this was measured
+  on it falls through to its `Arial` step and resolves to Liberation Sans, while a reader on macOS
+  gets `-apple-system` and one on Windows gets `Segoe UI`, each with its own advance widths. That is
+  why the conclusion below is stated as HEADROOM at the breakpoint — a comparison of two numbers
+  measured in the same font on the same machine — rather than as "the window where it would break".
 
   1011 is where the second column starts paying, and it is the most conservative of the three: at
-  1011 the help text is still 47.5ch and the widest option still has 281px of room against the
-  261px it needs. So the stack ends at 1010.
+  1011 the help text is still 47.50ch, and the widest option has a 317px control against the 299px
+  it needs. So the stack ends at 1010.
 
   THE OTHER HALF OF THE COST, which the height figures above already contain but which is worth
   naming: stacking does not move the completeness meter down a little, it moves it below the whole
   form. Measured at 1024, the meter's top is 307px from the top of the document side by side and
-  3,248px stacked — three and a half screens down, past a 2,918px form. The meter is the reason
+  3,248px stacked — three and a half screens down, past a 2,918px form (re-measured 2026-08-10 in
+  the same pass as the bullets above: 306.6px, 3,248.5px and 2,917.9px). The meter is the reason
   the form exists ("150 of 150 programs still return an unknown verdict"), and the lede at the top
   of this page calls it "the meter beside this form", which at 1024 it now again is.
 
