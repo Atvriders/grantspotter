@@ -124,7 +124,7 @@ export interface FetchOptions {
   userAgent: string;
   contactUrl: string;
   timeoutMs?: number;
-  /** When set, every payload is persisted under `${dataDir}/snapshots/`. */
+  /** When set, payloads are persisted under `${dataDir}/snapshots/` — see {@link SNAPSHOT_MAX_BYTES}. */
   dataDir?: string;
   transport?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => number;
@@ -232,6 +232,34 @@ const ACCEPT_HEADER: Record<FetchRequest['accept'], string> = {
   binary: '*/*',
 };
 
+/**
+ * The largest payload that is kept on disk under `${dataDir}/snapshots/`. 16 MiB.
+ *
+ * WHAT A SNAPSHOT IS FOR, which is what decides the number. It is forensics: when a parser starts
+ * finding nothing, an operator wants the bytes the site actually served that night. Nothing reads
+ * these files back — `insertSnapshot` records the URL, the status, the sha256 and the byte count in
+ * the `snapshots` table and the runner does not even pass it a path — so the DATABASE remains the
+ * record that a payload arrived and what it hashed to whether or not a file is written.
+ *
+ * WHAT IT WAS COSTING. `grants-gov-extract` fetches the Grants.gov daily archive, and every one of
+ * them landed here as a 103,866,232-byte base64 TEXT file. Seven days of retention window, once a
+ * night: 727,063,624 bytes per crawl, measured, on a self-hosted box whose entire database is one
+ * SQLite file. That is 265 GB a year of a file that is re-downloadable from a stable URL for a
+ * week, to serve a purpose (what did the site say?) it does not serve better than the sha256
+ * already in the row.
+ *
+ * 16 MiB because it must sit far above every payload this crawler exists to read and far below the
+ * one bulk archive it fetches: the largest capture in `fixtures/` is 306,359 bytes of NASA CSLI
+ * HTML, and the Grants.gov extract is 77,899,674. Two and a half orders of magnitude of daylight,
+ * and nothing this crawler polls lives in between.
+ *
+ * IT IS MEASURED ON THE BODY WE ARE HOLDING, not on the bytes that would land on disk, and for a
+ * `binary` payload those differ: the body is base64, which is 4/3 of the wire bytes. Deliberately
+ * the larger of the two — the ceiling exists to bound what one payload costs this machine, and the
+ * base64 is what the machine is holding.
+ */
+export const SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
+
 export function snapshotPathFor(
   dataDir: string,
   url: string,
@@ -242,6 +270,41 @@ export function snapshotPathFor(
   const bucket = createHash('sha256').update(url).digest('hex').slice(0, 16);
   const stamp = fetchedAt.replace(/[:.]/g, '-');
   return path.join(dataDir, 'snapshots', host, bucket, `${stamp}.${EXT[accept]}`);
+}
+
+/**
+ * Persist one payload under `${dataDir}/snapshots/`, unless it is too big to be worth keeping.
+ *
+ * BYTES, NOT BASE64 TEXT, for a binary payload. `FetchedPayload.body` is a string, so the fetcher
+ * base64s a binary response to carry it; writing that string out meant a file named `.bin` whose
+ * contents were ASCII, 4/3 the size of what the server sent, and not openable by anything that
+ * understands the format. The snapshot is supposed to be what the site served.
+ *
+ * A payload over {@link SNAPSHOT_MAX_BYTES} is not written and SAYS SO. Silently skipping would
+ * leave an operator looking for a file that was never going to exist; the row in `snapshots` still
+ * carries the URL, the status, the sha256 and the byte count, so nothing about "this payload
+ * arrived and here is what it hashed to" is lost with it.
+ */
+async function writeSnapshot(
+  dataDir: string,
+  url: string,
+  accept: FetchRequest['accept'],
+  fetchedAt: string,
+  body: string,
+): Promise<void> {
+  const held = Buffer.byteLength(body, 'utf8');
+  if (held > SNAPSHOT_MAX_BYTES) {
+    console.warn(
+      `[fetcher] not snapshotting ${url}: ${String(held)} bytes is over the ` +
+        `${String(SNAPSHOT_MAX_BYTES)}-byte SNAPSHOT_MAX_BYTES ceiling. The snapshots row still ` +
+        'records its status, size and sha256; only the copy on disk is skipped.',
+    );
+    return;
+  }
+  const file = snapshotPathFor(dataDir, url, accept, fetchedAt);
+  await mkdir(path.dirname(file), { recursive: true });
+  if (accept === 'binary') await writeFile(file, Buffer.from(body, 'base64'));
+  else await writeFile(file, body, 'utf8');
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -746,11 +809,7 @@ export function createFetcher(opts: FetchOptions): Fetcher {
       fetchedAt,
     };
 
-    if (opts.dataDir) {
-      const file = snapshotPathFor(opts.dataDir, url, req.accept, fetchedAt);
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, body, 'utf8');
-    }
+    if (opts.dataDir) await writeSnapshot(opts.dataDir, url, req.accept, fetchedAt, body);
     return payload;
   }
 

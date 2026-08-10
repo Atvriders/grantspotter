@@ -51,6 +51,43 @@ function signalEventId(sourceId: string, externalKey: string): string {
 }
 
 /**
+ * A source whose `requests` are ALTERNATIVES rather than a set: several addresses for the same
+ * answer, of which the crawl needs exactly one.
+ *
+ * WHY THIS EXISTS. `grants-gov-extract` offers the seven days of the Grants.gov rolling retention
+ * window. Every one of them is a FULL SNAPSHOT of the same federal corpus, and the window is there
+ * only so that a day which has not been published yet, or which 404s, does not cost us the feed.
+ * The loop below fetched all seven and held all seven, so a nightly run downloaded 545,297,718
+ * bytes, wrote the same corpus to disk seven times as base64, and held all seven bodies in memory
+ * to use one of them. Measured end-to-end on this host before the change, this one source:
+ * `parsedCount=89 snapshot bytes=727,063,624 wall=38.6s VmHWM=3547MB`. After: one request,
+ * `parsedCount=89 snapshot bytes=0 wall=28.4s VmHWM=877MB`.
+ *
+ * `answeredBy` is asked after each payload arrives, and a `true` ends the walk. It is a question
+ * about the PAYLOAD, not about the parse: for the extract it reads the ZIP frame and inflates
+ * nothing, so the cost of asking is a fraction of the cost of the request that would follow.
+ *
+ * IT MUST NOT BE ABLE TO HIDE A FAILURE. Stopping early only ever DROPS REQUESTS; it never turns
+ * an unreadable answer into a readable one, and the module's `parse` still throws when nothing it
+ * was given could be read. `answeredBy` returning `false` for every day leaves the loop exactly
+ * where it was — all seven fetched, and the parse deciding.
+ *
+ * Declared here, with the loop that honours it, rather than in `sources/types.ts` beside
+ * `FollowUpSource`: the modules that implement it must not import it, because
+ * `sources/registry.test.ts` walks every relative import out of `sources/` and fails when the walk
+ * reaches `db/` — which this file does on its second line. The structural match is what connects
+ * the two, and the test below `runSource` is what keeps them spelled the same.
+ */
+export interface AlternativeRequestsSource extends SourceModule {
+  /** True when this payload is the answer, so the remaining requests need not be made. */
+  answeredBy(payload: FetchedPayload): boolean;
+}
+
+export function hasAlternativeRequests(m: SourceModule): m is AlternativeRequestsSource {
+  return typeof (m as Partial<AlternativeRequestsSource>).answeredBy === 'function';
+}
+
+/**
  * Carry-forward #2 (RESOLUTIONS R9). `upsertProgram`'s `ON CONFLICT(id)` target means a stale or
  * missed `existingIdFor` surfaces as `ProgramUpsertConflictError` (Task 20) rather than a raw
  * SQLite message. This is the single place that turns any error caught inside `runSource` into
@@ -223,10 +260,14 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
     createFunderRepo(deps.db).upsert(funderFor(module.funderId));
 
     const payloads: FetchedPayload[] = [];
+    const alternatives = hasAlternativeRequests(module) ? module : undefined;
     for (const request of await resolveRequests(module)) {
       const payload = await deps.fetcher.fetch(request);
       payloads.push(payload);
       insertSnapshot(deps.db, sourceId, payload);
+      // One answer is enough. See `AlternativeRequestsSource` — for every other source in the
+      // registry `alternatives` is undefined and this loop is byte-identical to what it was.
+      if (alternatives?.answeredBy(payload) === true) break;
     }
 
     if (hasFollowUp(module)) {

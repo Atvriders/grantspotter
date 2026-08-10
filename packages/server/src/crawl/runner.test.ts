@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import type { FetchRequest, FetchedPayload, Program } from '@grantspotter/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixturePayload } from '../../test/fixtures.js';
+import { fixturePayload, loadFixture } from '../../test/fixtures.js';
 import { createCycleRepo } from '../db/repositories/cycles.js';
 import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
@@ -17,8 +17,9 @@ import { buildUserAgent } from '../config.js';
 import { NSF_FEED_URLS } from '../federal/nsf.js';
 import { createFetcher } from '../fetcher/index.js';
 import { approveReviewItem, confidenceFor } from '../review/index.js';
-import { funderFor, SOURCES } from '../sources/registry.js';
-import { healthMessageFor, runCrawl, runSource } from './runner.js';
+import { funderFor, getSource, SOURCES } from '../sources/registry.js';
+import { GRANTS_GOV_EXTRACT_RETENTION_DAYS } from '../federal/grantsGovExtract.js';
+import { hasAlternativeRequests, healthMessageFor, runCrawl, runSource } from './runner.js';
 
 /**
  * THE 5000 ms FLAKE, DIAGNOSED BEFORE IT WAS TIMED OUT.
@@ -1421,5 +1422,102 @@ describe('a robots.txt added between two crawl runs, in one process', () => {
     });
     await runCrawl({ db, fetcher, nowISO: () => NOW }, ['austin-arc', 'austin-arc']);
     expect(calls.filter((u) => u === AUSTIN_ROBOTS)).toHaveLength(1);
+  });
+});
+
+/**
+ * ALTERNATIVES, NOT A SET — the crawl loop's half of the Grants.gov extract memory fix.
+ *
+ * `grants-gov-extract` offers seven URLs because the Grants.gov bucket keeps a ~7-day rolling
+ * window and today's file may not be published yet. Every one of them is a FULL SNAPSHOT of the
+ * same corpus. The loop used to fetch and hold all seven: measured against the real archive on this
+ * host before the change, one nightly run of this ONE source downloaded 545,297,718 bytes, wrote
+ * 727,063,624 bytes of snapshots and peaked at 3,547 MB of RSS, to use one seventh of it.
+ *
+ * These four tests are the contract in both directions: the stop happens, it is keyed on something
+ * the runner and the module both still spell the same way, it does not fire for anybody else, and
+ * it CANNOT turn a failure into a quiet zero.
+ */
+describe('a source whose requests are alternatives stops at the first answer', () => {
+  const extractZip = () => loadFixture('grants-gov-extract', '00-extract.zip.b64');
+  const okPayload = (url: string): FetchedPayload => ({
+    url,
+    status: 200,
+    contentType: 'application/zip',
+    body: extractZip(),
+    fetchedAt: NOW,
+  });
+  const missing = (url: string): FetchedPayload => ({
+    url,
+    status: 404,
+    contentType: 'text/html',
+    body: '',
+    fetchedAt: NOW,
+  });
+
+  /** Answers the nth request of the run with `plan[n]`, falling back to the last entry. */
+  function scriptedFetcher(plan: Array<(url: string) => FetchedPayload>) {
+    const fetched: string[] = [];
+    return {
+      fetched,
+      fetcher: {
+        async fetch(req: FetchRequest): Promise<FetchedPayload> {
+          const answer = plan[fetched.length] ?? plan[plan.length - 1];
+          fetched.push(req.url);
+          return answer(req.url);
+        },
+      },
+    };
+  }
+
+  it('recognises the extract module, and nothing else in the registry', () => {
+    expect(hasAlternativeRequests(getSource('grants-gov-extract'))).toBe(true);
+    const others = SOURCES.filter((m) => m.id !== 'grants-gov-extract').filter((m) =>
+      hasAlternativeRequests(m),
+    );
+    expect(others.map((m) => m.id)).toEqual([]);
+  });
+
+  it('makes ONE request when the first day answers, and snapshots one payload', async () => {
+    const { fetched, fetcher } = scriptedFetcher([okPayload]);
+    const result = await runSource(deps(fetcher), 'grants-gov-extract');
+    expect(fetched).toHaveLength(1);
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBe(2); // the two adjacent records in the committed fixture
+    const snaps = db
+      .prepare('SELECT COUNT(*) AS n FROM snapshots WHERE source_id = ?')
+      .get('grants-gov-extract') as { n: number };
+    expect(snaps.n).toBe(1);
+  });
+
+  it('walks back a day when the first archive is a short download, and stops at the good one', async () => {
+    const truncated = (url: string): FetchedPayload => {
+      const zip = Buffer.from(extractZip(), 'base64');
+      const central = zip.readUInt32LE(zip.length - 22 + 16);
+      zip.writeUInt32LE(zip.readUInt32LE(central + 20) + 4096, central + 20);
+      return { ...okPayload(url), body: zip.toString('base64') };
+    };
+    const { fetched, fetcher } = scriptedFetcher([truncated, okPayload]);
+    const result = await runSource(deps(fetcher), 'grants-gov-extract');
+    expect(fetched).toHaveLength(2);
+    expect(result.parsedCount).toBe(2);
+    expect(result.error).toBeUndefined();
+  });
+
+  /**
+   * THE STOP CAN ONLY EVER DROP REQUESTS. Nothing answers, so the loop runs to the end of the
+   * window exactly as it did before — and the source is `failing` with a message that says the feed
+   * could not be READ, which is the distinction 651b9f3 exists to hold and which a memory guard
+   * must not be allowed to take back.
+   */
+  it('still fetches the whole window when nothing answers, and reports a read failure', async () => {
+    const { fetched, fetcher } = scriptedFetcher([missing]);
+    const result = await runSource(deps(fetcher), 'grants-gov-extract');
+    expect(fetched).toHaveLength(GRANTS_GOV_EXTRACT_RETENTION_DAYS);
+    expect(result.parsedCount).toBe(0);
+    expect(result.error).toMatch(/read failure, not an empty feed/);
+    const health = listSourceHealth(db).find((h) => h.sourceId === 'grants-gov-extract');
+    expect(health?.lastError).toMatch(/read failure, not an empty feed/);
+    expect(health?.lastSuccessAt).toBeUndefined();
   });
 });

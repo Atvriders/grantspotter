@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import {
   ROBOTS_CACHE_TTL_MS,
   ROBOTS_UNREAD_CACHE_TTL_MS,
   RequestBudgetExhaustedError,
+  SNAPSHOT_MAX_BYTES,
   backoffMs,
   createFetcher,
   maxRequestsPerFetch,
@@ -1340,5 +1341,86 @@ describe('createFetcher POST and snapshots', () => {
     expect(files[0]).toMatch(/\.html$/);
     const body = await readFile(path.join(hostDir, buckets[0], files[0]), 'utf8');
     expect(body).toContain('snap');
+  });
+
+  /**
+   * A `.bin` SNAPSHOT HOLDS BYTES. `FetchedPayload.body` is a string, so a binary response is
+   * carried as base64 — an encoding for the pipe, not for the archive. Writing that string out
+   * produced a file named `.bin` whose contents were ASCII, 4/3 the size of what the server sent,
+   * and openable by nothing that understands the format. The snapshot is supposed to be what the
+   * site served.
+   */
+  it('writes a binary snapshot as the bytes the server sent, not as base64 text', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'gs-snap-'));
+    const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x10, 0x80]);
+    const { transport } = router({
+      'https://example.test/robots.txt': () => res('', { status: 404 }),
+      'https://example.test/a.zip': () =>
+        new Response(new Uint8Array(bytes), {
+          status: 200,
+          headers: { 'content-type': 'application/zip' },
+        }),
+    });
+    const f = createFetcher({ ...baseOpts, transport, dataDir });
+    const payload = await f.fetch({
+      url: 'https://example.test/a.zip',
+      method: 'GET',
+      accept: 'binary',
+    });
+    expect(payload.body).toBe(bytes.toString('base64'));
+
+    const hostDir = path.join(dataDir, 'snapshots', 'example.test');
+    const [bucket] = await readdir(hostDir);
+    const [file] = await readdir(path.join(hostDir, bucket));
+    expect(file).toMatch(/\.bin$/);
+    const written = await readFile(path.join(hostDir, bucket, file));
+    expect(written.equals(bytes)).toBe(true);
+  });
+
+  /**
+   * THE CEILING, AND WHY IT IS NOT SILENT.
+   *
+   * `grants-gov-extract` fetches the Grants.gov daily archive: 77,899,674 bytes on the wire,
+   * 103,866,232 as the base64 body, and until the crawl learned to stop at the first readable day,
+   * seven of them a night — a measured 727,063,624 bytes of snapshot per crawl of that one source,
+   * on a self-hosted box whose whole database is one SQLite file. Nothing reads these files back;
+   * the `snapshots` row keeps the URL, the status, the sha256 and the byte count either way. So
+   * above SNAPSHOT_MAX_BYTES the copy on disk is skipped — and SAYS SO, because an operator hunting
+   * for the file needs to know it was declined rather than lost.
+   */
+  it('declines to snapshot a payload over the ceiling, and says so', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'gs-snap-'));
+    const huge = 'y'.repeat(SNAPSHOT_MAX_BYTES + 1);
+    const { transport } = router({
+      'https://example.test/robots.txt': () => res('', { status: 404 }),
+      'https://example.test/big': () => res(huge),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const f = createFetcher({ ...baseOpts, transport, dataDir });
+      const payload = await f.fetch({ url: 'https://example.test/big', method: 'GET', accept: 'html' });
+      // The payload itself is untouched: the parser and the snapshots row still get every byte.
+      expect(payload.body).toHaveLength(SNAPSHOT_MAX_BYTES + 1);
+      await expect(readdir(path.join(dataDir, 'snapshots'))).rejects.toThrow(/ENOENT/);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('SNAPSHOT_MAX_BYTES'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('https://example.test/big'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still writes a payload one byte under the ceiling', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'gs-snap-'));
+    const big = 'z'.repeat(SNAPSHOT_MAX_BYTES);
+    const { transport } = router({
+      'https://example.test/robots.txt': () => res('', { status: 404 }),
+      'https://example.test/edge': () => res(big),
+    });
+    const f = createFetcher({ ...baseOpts, transport, dataDir });
+    await f.fetch({ url: 'https://example.test/edge', method: 'GET', accept: 'html' });
+    const hostDir = path.join(dataDir, 'snapshots', 'example.test');
+    const [bucket] = await readdir(hostDir);
+    const [file] = await readdir(path.join(hostDir, bucket));
+    expect((await stat(path.join(hostDir, bucket, file))).size).toBe(SNAPSHOT_MAX_BYTES);
   });
 });
