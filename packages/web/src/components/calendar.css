@@ -26,6 +26,10 @@
   font: inherit;
   font-weight: 560;
   padding: var(--s-2) var(--s-4);
+  /* The touch floor, at every width. These were 41px, and a tab is the control that decides which
+     of the two calendar views a phone is looking at — there is nothing else to press first. */
+  min-height: 44px;
+  min-width: 44px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
@@ -59,11 +63,17 @@
   margin-bottom: var(--s-3);
 }
 
+/* Wraps: two buttons plus a month name is more than a 320px window affords in one line. */
 .cal-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-2);
   margin-bottom: var(--s-3);
+}
+
+.cal-nav .btn {
+  min-height: 44px;
 }
 
 .cal-nav .cal-month-name {
@@ -74,14 +84,33 @@
 /* ---------- month grid ---------- */
 
 .month-frame {
+  /* One `minmax(0, 1fr)` track so the frame's own intrinsic width is zero and the grid inside it
+     can be wider than the page without dragging the page along — the same rule the three table
+     wrappers needed, for the same layout-time reason. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--r-2);
-  overflow: hidden;
   background: var(--surface);
+}
+
+.month-frame:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-2);
 }
 
 .month-grid {
   width: 100%;
+  /*
+   * MEASURED. `table-layout: fixed` divides whatever width it is given by seven, so this grid has
+   * no intrinsic width of its own and will happily render 39 px cells at a 320 px viewport — with
+   * the marks inside them clipped to 22 px of ellipsis, which is a month view with the marks taken
+   * out. 672 px is the width the grid has at a 720 px viewport, the widest single-column layout
+   * `AppShell` produces, where each cell is 96 px. Below that the frame scrolls rather than the
+   * cells shrinking, so the narrowest phone gets the same cell the widest phone does.
+   */
+  min-width: 672px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -162,6 +191,27 @@
 .chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/*
+ * The 44px touch floor, inside the grid only — the legend's chips are `aria-hidden` swatches, not
+ * targets, and the rule must not inflate them.
+ *
+ * `min-height` with block display and symmetric padding, NOT `display: flex; align-items: center`:
+ * a flex container's text becomes an anonymous flex item, and `text-overflow: ellipsis` does not
+ * apply to one. The ellipsis is load-bearing here (a chip is a programme name in a 96px column),
+ * so the box grows around the text instead of the text being re-parented.
+ *
+ * Most cells do not move: `td.day` is already 108px tall and holds one or two marks. The days that
+ * grow are the ones carrying three or more, and on those the extra height is the honest picture of
+ * how much is due that day.
+ */
+.month-grid .chip,
+.month-grid .prep-mark,
+.month-grid .opens-mark,
+.month-grid .chip-group > summary {
+  min-height: 44px;
+  padding-block: var(--s-3);
 }
 
 /* Instrument drives the hue; applicant entity drives the dotted underline. */
@@ -302,9 +352,14 @@
 .agenda li {
   padding: var(--s-4);
   display: grid;
-  grid-template-columns: 160px 1fr;
+  grid-template-columns: 160px minmax(0, 1fr);
   gap: var(--s-4);
   align-items: start;
+}
+
+/* See `.browse > *` in browse.css: `minmax(0, …)` frees the track, this frees the item. */
+.agenda li > * {
+  min-width: 0;
 }
 
 .agenda li.estimated {
@@ -356,6 +411,13 @@
 .agenda .agenda-name {
   font-weight: 600;
   font-size: var(--fs-300);
+  /* The card's title link, and on a phone the first thing a thumb goes for: 17px tall was not a
+     target. `inline-flex` is safe here — unlike the grid's chips, this name wraps rather than
+     ellipsing, so there is no `text-overflow` for the anonymous flex item to break. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  overflow-wrap: anywhere;
 }
 
 .agenda .meta {
@@ -475,12 +537,32 @@
   font-size: var(--fs-200);
 }
 
-@media (max-width: 720px) {
+/*
+  849px, MEASURED, for the agenda row. The right-hand cell carries the programme name, the prep
+  sentence and the marks, so it is the one that decides: it stacks once it can no longer hold
+  384px, which is 46ch at --fs-300 and the narrowest measure this stylesheet's neighbours declare
+  anywhere. Swept with this query defeated, that cell is 494px at a 960px window and crosses 384px
+  at 850. The date column beside it is a flat 160px and never gives any of it back.
+*/
+@media (max-width: 849px) {
   .agenda li {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
   }
+}
 
+/*
+  The month grid keeps 720, and it is a density rule about the HEIGHT of a day cell — not a layout
+  one. Its width no longer depends on the viewport at all: `.month-grid` now carries a measured
+  `min-width: 672px` and `.month-frame` scrolls to it, so a day column is 96px wide at 320px just
+  as it is at 720px, and the marks inside it say the same thing at both.
+
+  (The claim this comment used to make — that the frame is `overflow: hidden` and so could never
+  push the page sideways — was true and was also the problem: the grid did not push the page
+  sideways because it shrank instead, to 39px cells holding 22px of ellipsis. Both measured in
+  Chromium at a 320px viewport.)
+*/
+@media (max-width: 720px) {
   .month-grid td.day {
     height: 76px;
   }

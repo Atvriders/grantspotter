@@ -84,8 +84,10 @@
   margin: 0 0 var(--s-4);
 }
 
+/* Wraps, like `.inbox-actions` below. A flex row of filter buttons had no reason not to. */
 .inbox-filter {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--s-2);
   margin-bottom: var(--s-4);
 }

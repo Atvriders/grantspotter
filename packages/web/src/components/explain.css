@@ -31,11 +31,17 @@
 
 .explain li {
   display: grid;
-  grid-template-columns: 150px 1fr;
+  grid-template-columns: 150px minmax(0, 1fr);
   gap: var(--s-3);
   align-items: start;
   padding-bottom: var(--s-3);
   border-bottom: 1px solid var(--border);
+}
+
+/* The second cell quotes the funder's own sentence verbatim, which can be one long unbroken
+   token. See `.browse > *`. */
+.explain li > * {
+  min-width: 0;
 }
 
 .explain li:last-child {
@@ -113,11 +119,16 @@
 
 .unknown-ladder li {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--s-3);
   align-items: baseline;
   padding: var(--s-2) 0;
   border-bottom: 1px solid var(--border);
+}
+
+/* The `auto` column holds `.waiting`, which is `white-space: nowrap`. See `.browse > *`. */
+.unknown-ladder li > * {
+  min-width: 0;
 }
 
 .unknown-ladder li:last-child {
@@ -139,10 +150,31 @@
   max-width: 68ch;
 }
 
-@media (max-width: 720px) {
-  .explain li,
+/*
+  These two shared one breakpoint at 720 and should never have: they are different shapes holding
+  different things, and measuring them says so.
+
+  `.explain li` is a label/value pair — an axis name beside the funder's own sentence — so the
+  test is the one `.panel dl` uses: the value must be at least as wide as the 150px label, giving
+  150 + --s-3 + 150 = 312px of row, 344px of `.explain`, and a 599px window once the shell's
+  padding is taken off. It also renders inside the results table, where the cell scrolls and the
+  window is not the constraint at all.
+*/
+@media (max-width: 599px) {
+  .explain li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+  `.unknown-ladder li` is prose — a field name and a `.help` sentence the rule above caps at 68ch
+  — so it takes the prose floor instead: 384px for the text column, plus the --s-3 gap and the
+  ~120px `.waiting` column, is 516px of row and 548px of card, which the main region only affords
+  from an 804px window up (548 + 208 rail + 2 x --s-5).
+*/
+@media (max-width: 803px) {
   .unknown-ladder li {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .unknown-ladder .waiting {

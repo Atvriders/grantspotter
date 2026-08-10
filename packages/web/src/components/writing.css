@@ -15,14 +15,29 @@
 
 .templates-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) 1fr;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   gap: var(--s-5);
   align-items: start;
 }
 
-@media (max-width: 900px) {
+/* The preview column holds a `<pre>` of template body text. Without this the `1fr` track was
+   floored at that block's min-content width. See `.browse > *`. */
+.templates-layout > * {
+  min-width: 0;
+}
+
+/*
+  983px, MEASURED. The preview column is the substance — it holds the template body in a `<pre>`
+  — and it stacks once it can no longer hold 384px, which is 46ch at --fs-300 and the narrowest
+  measure this stylesheet's neighbours declare anywhere.
+
+  Swept with this query defeated: the preview is 520px at a 1120px window and crosses 384px at
+  984. The picker column is `minmax(240px, 320px)` and sits at its 320px maximum until then, so
+  every pixel the window loses comes off the preview.
+*/
+@media (max-width: 983px) {
   .templates-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

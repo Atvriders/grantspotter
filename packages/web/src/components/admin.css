@@ -10,6 +10,13 @@
   margin-bottom: var(--s-3);
 }
 
+/* The touch floor across the console, at every width. `.btn` is 41px in base.css, which is a
+   stylesheet this pass does not own; the console's own buttons are raised here instead. */
+.admin-section .btn,
+.admin-section button {
+  min-height: 44px;
+}
+
 .admin-prose {
   max-width: 70ch;
   color: var(--text-muted);
@@ -28,6 +35,11 @@
   gap: var(--s-1);
   font-size: var(--fs-200);
   color: var(--text-muted);
+  /* Grow to fill the row, wrap to their own line under about 14rem, and — the part that matters
+     at 320 px — never insist on their content's width. `<input type="file">` has an intrinsic
+     width of ~264 px, which is most of a phone. */
+  flex: 1 1 14rem;
+  min-width: 0;
 }
 
 .admin-form input,
@@ -38,6 +50,11 @@
   border-radius: var(--r-1);
   background: var(--surface);
   color: var(--text);
+  /* The 44 px touch floor, applied at every width rather than only on a phone: a pointer target
+     is a pointer target, and these were 38 px. */
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* The generated password is shown once. It reads as data, not as prose. */
@@ -57,8 +74,10 @@
   word-break: break-all;
 }
 
+/* Wraps: the copy button and the sentence beside it must not push each other off the card. */
 .secret-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-3);
   margin-top: var(--s-2);
@@ -95,8 +114,72 @@
   color: var(--no);
 }
 
+/*
+ * `display: grid` with one `minmax(0, 1fr)` track, not `overflow-x: auto` alone.
+ *
+ * Overflow clips at PAINT time. The damage happens at LAYOUT time: a grid item's automatic
+ * minimum width is its min-content, `.shell-main` is a grid item, and the accounts table's
+ * 642 px min-content therefore propagated all the way up — this page measured 723 px wide at a
+ * 320 px viewport, rail and topbar and all, with `overflow-x: auto` already sitting right here.
+ */
 .admin-table-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   overflow-x: auto;
+}
+
+/* ---------- accounts as records ----------
+ *
+ * Below `ACCOUNTS_TABLE_MIN_PX` (898 px — see `routes/Admin.tsx`). Same three pieces the table
+ * cells hold, stacked, because every row here is a thing you act ON rather than a row you scan
+ * a column of. Nothing is dropped: the "last admin who can sign in" warning and the delete
+ * confirmation are rendered by the same function in both layouts.
+ */
+
+.admin-record-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.admin-record {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface);
+}
+
+.admin-record-fields {
+  margin: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.admin-record-field {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-record-field dd {
+  margin: 0;
+}
+
+/* Touch. Every control on a stacked account card is one somebody presses with a thumb. */
+.admin-record .btn,
+.admin-record select,
+.admin-record .admin-row-actions button {
+  min-height: 44px;
+}
+
+/* The account email is the one thing here with no natural break point. */
+.admin-record .admin-row-email {
+  overflow-wrap: anywhere;
 }
 
 .admin-row-actions {

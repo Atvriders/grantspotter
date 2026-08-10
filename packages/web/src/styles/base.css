@@ -150,6 +150,49 @@ a:hover { color: var(--accent-hover); }
 
 .skip-link:focus { top: var(--s-3); }
 
+/*
+  THE POINTER FLOOR.
+
+  Keyed on `pointer: coarse`, not on a viewport width. 44px is a statement about the size of a
+  fingertip, and a fingertip does not get smaller when the window does: a 360px window on a
+  desktop is still driven by a mouse, and a 1180px tablet still is not. Every width-keyed version
+  of this rule gets one of those two cases wrong.
+
+  Left as `min-height` rather than a fixed height so nothing already taller is shrunk, and so the
+  desktop rendering — where this product's identity was set — is untouched.
+*/
+@media (pointer: coarse) {
+  .btn,
+  button,
+  summary,
+  [role="tab"] {
+    min-height: var(--tap-min);
+  }
+
+  /* An icon-only control has no text to make it wide, so it needs the other axis stated. */
+  button:empty,
+  .btn:empty {
+    min-width: var(--tap-min);
+  }
+
+  /*
+    A tick box is drawn by the platform at about 13px. The box grows to 20 so it can be aimed at,
+    and the row that owns it gets the full floor, so the target is the whole line rather than the
+    glyph — which is what a reader is actually pressing at. `:has()` because the label is written
+    in a dozen component stylesheets and the relationship, not the class name, is what matters.
+  */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]) {
+    min-height: var(--tap-min);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -18,7 +18,19 @@
   margin-top: var(--s-4);
 }
 
-@media (max-width: 900px) {
+/* See `.browse > *`. `minmax(0, 1fr)` frees the track; the item in it still carries
+   `min-width: auto`, and the editor column holds the prose-check table. */
+.applications-layout > * {
+  min-width: 0;
+}
+
+/*
+  963px, MEASURED. The editor column is the substance of this screen, and it stacks once it can no
+  longer hold 384px — 46ch at --fs-300, the narrowest measure this stylesheet's neighbours declare
+  anywhere. Swept with this query defeated, it is 540px at a 1120px window and crosses 384px at
+  964.
+*/
+@media (max-width: 963px) {
   .applications-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -138,6 +150,18 @@
   border-radius: var(--r-2);
 }
 
+/*
+  `.prose-paragraphs` is the one `<table>` in this app with no wrapper element of its own, and its
+  six `white-space: nowrap` column heads ("Proper nouns + figures per 100 words") give it a
+  min-content width of about 900px — wider than the editor column at any viewport this product
+  supports. The scroll container therefore has to be the panel itself. It costs nothing when the
+  table fits, and when it does not the numbers scroll under the reader's thumb instead of the
+  whole page sliding sideways.
+*/
+.prose-check {
+  overflow-x: auto;
+}
+
 .prose-warning {
   background: var(--warn-soft);
   color: var(--warn);
@@ -179,7 +203,24 @@
   margin-top: var(--s-5);
 }
 
-@media (max-width: 900px) {
+/* The gap list quotes raw `[[slot]]` markers, which have no spaces to break at. See
+   `.browse > *`. */
+.before-export > * {
+  min-width: 0;
+}
+
+/*
+  1132px, MEASURED, and much higher than the 900 it replaces because these two panels sit INSIDE
+  the editor column, not beside it — they get what is left after the drafts rail and the shell
+  rail have taken theirs.
+
+  Neither panel is prose: one is a list of `[[slot]]` markers, the other a list of tick boxes, so
+  the 46ch floor is the wrong test. The floor used here is 220px, the narrowest column this
+  stylesheet declares for a list of controls (`.applications-layout`'s own `minmax(220px, 300px)`).
+  Swept against the shipped cascade — so the editor column changes width under it at 963 — the
+  narrower panel holds 220px down to a 1133px window and no further.
+*/
+@media (max-width: 1132px) {
   .before-export {
     grid-template-columns: minmax(0, 1fr);
   }

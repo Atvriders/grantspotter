@@ -68,6 +68,14 @@
   font-size: var(--fs-200);
 }
 
+/* The values are monospaced licence data — a grant date, an FRN, a licence class string — with
+   no spaces to break at, and the `dd` still carries `min-width: auto` however narrow the track
+   is allowed to get. See `.browse > *`. */
+.callsign-facts > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .callsign-facts dt {
   color: var(--text-muted);
 }

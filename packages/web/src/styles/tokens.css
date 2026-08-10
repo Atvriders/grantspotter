@@ -77,9 +77,19 @@
   --topbar-h: 56px;
   --content-max: 1280px;
 
+  /* The smallest a control may be where the pointer is a thumb. A new token rather than a number
+     typed into each stylesheet, because it is one decision — see the `pointer: coarse` block in
+     base.css — and because `--s-*` has no 44 in it and inventing `--s-4.5` would be worse. */
+  --tap-min: 44px;
+
   /* ---- elevation: hairlines, not drop shadows ---- */
   --shadow-1: 0 1px 2px rgb(20 24 31 / 0.06);
   --shadow-2: 0 8px 24px rgb(20 24 31 / 0.12);
+
+  /* The dimming layer behind the navigation drawer, and the only overlay in the app. Not a new
+     colour: it is the same ink the two elevation tokens above are cast in (--text, 20 24 31),
+     at the opacity that separates two surfaces without hiding which screen you left. */
+  --scrim: rgb(20 24 31 / 0.48);
 
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 }
@@ -115,6 +125,7 @@
 
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5);
   --shadow-2: 0 8px 24px rgb(0 0 0 / 0.6);
+  --scrim: rgb(0 0 0 / 0.62);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -149,5 +160,6 @@
 
     --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5);
     --shadow-2: 0 8px 24px rgb(0 0 0 / 0.6);
+    --scrim: rgb(0 0 0 / 0.62);
   }
 }

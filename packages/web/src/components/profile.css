@@ -12,6 +12,12 @@
   align-items: start;
 }
 
+/* See `.browse > *`: the track minimum and the item minimum are two different numbers, and
+   `minmax(0, …)` only sets the first of them. */
+.profile-grid > * {
+  min-width: 0;
+}
+
 .profile-lede {
   max-width: 72ch;
   color: var(--text-muted);
@@ -19,8 +25,11 @@
 
 /* ---- tabs ---- */
 
+/* Wraps rather than overflowing: the tab strip is 220px of min-content (measured) and the rule
+   below keeps the underline continuous when it takes a second line. */
 .profile-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--s-1);
   border-bottom: 1px solid var(--border);
   margin: var(--s-4) 0;
@@ -169,6 +178,17 @@
   margin: var(--s-3) 0 0;
 }
 
-@media (max-width: 900px) {
+/*
+  1043px, MEASURED. Same criterion as every other two-column block here: the substance column
+  stacks once it falls below 384px, which is 46ch at --fs-300 and the narrowest measure this
+  stylesheet declares anywhere.
+
+  The form is the substance of this page and the meter is a readout beside it, so the form is the
+  column that decides. Swept with this query defeated, the form column is 460px at a 1120px window
+  and crosses 384px at 1044 — the aside is `minmax(300px, 380px)`, which does not shrink, so
+  everything the window loses comes off the form. At the old 900 the form had 364px and its own
+  `.profile-help` text — capped at 66ch by the rule above — was being rendered at 43.
+*/
+@media (max-width: 1043px) {
   .profile-grid { grid-template-columns: minmax(0, 1fr); }
 }

@@ -1,9 +1,32 @@
 .shell {
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
-  grid-template-rows: var(--topbar-h) 1fr;
+  /*
+    `minmax(--topbar-h, auto)`, not a flat `--topbar-h`. The bar is a non-wrapping flex row whose
+    first item is the signed-in address; a long one has to be allowed to wrap somewhere, and a
+    fixed row would clip it against the page rather than growing the bar by one line.
+  */
+  grid-template-rows: minmax(var(--topbar-h), auto) 1fr;
   grid-template-areas: "rail topbar" "rail main";
   min-height: 100vh;
+}
+
+/*
+  THE RULE THIS WHOLE LAYOUT WAS MISSING.
+
+  A grid item's `min-width` defaults to `auto`, which resolves to its MIN-CONTENT width — so the
+  `1fr` main track could never be narrower than the widest thing on the route. `main` holds the
+  results table, whose min-content is ~2280px, so `.shell` measured 2565px wide AT EVERY VIEWPORT
+  and the page scrolled sideways on a 1440px desktop. The collapse-to-one-column rule at the foot
+  of this file had never worked for the same reason: one column of 2565px is still 2565px.
+
+  `min-width: 0` lets the track win, and the scroll containers inside `main` (`.table-wrap`,
+  `.sources-table-wrap`, `.admin-table-wrap`, `.wl-scroll`) then scroll their own contents instead
+  of moving the page. Every layout container in this app repeats this rule for the same reason;
+  `test/responsive.test.ts` fails the build if a new one forgets it.
+*/
+.shell > * {
+  min-width: 0;
 }
 
 .shell-rail {
@@ -64,9 +87,25 @@
   display: flex;
   align-items: center;
   gap: var(--s-4);
-  padding: 0 var(--s-5);
+  padding: var(--s-2) var(--s-5);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+
+/* Same min-content trap as `.shell > *`: a flex item's `min-width` is `auto` too, so an
+   address with no space in it would push the "Sign out" button off the right edge. */
+.shell-topbar > * {
+  min-width: 0;
+}
+
+.shell-topbar .eyebrow {
+  overflow-wrap: anywhere;
+}
+
+/* The address is what gives way, never the control: with `min-width: 0` above, an unchecked
+   flex-shrink would squeeze "Sign out" instead of wrapping the email beside it. */
+.shell-topbar .btn {
+  flex: none;
 }
 
 .shell-topbar-spacer {
@@ -95,9 +134,37 @@
   font-weight: 700;
 }
 
-@media (max-width: 720px) {
+/* ---------------------------------------------------------------------------
+   DRAWER MODE
+
+  639px, not 720px. MEASURED, not chosen from a device list.
+
+  The rail is 208px and `.shell-main` adds 2 x --s-5 of padding, so a viewport of W leaves the
+  content W - 256. The narrowest measure this stylesheet declares anywhere is 46ch — the ceiling
+  on `.row-warning` and `.row-danger`, the two honesty surfaces — which is 384px at --fs-300
+  (measured in Chromium against the shipped font stack). 384 + 256 = 640, so the rail can stay a
+  column down to a 640px window and has to go below it.
+
+  The old 720 was not wrong so much as untested: until `min-width: 0` landed above, this rule
+  could not change anything at any width, because one column of 2565px is still 2565px.
+
+  GO, not STACK. `AppShell.tsx` stops rendering the rail at this width and renders a drawer
+  instead, because a rail that is merely restyled is still eleven links in the tab order and still
+  a `navigation` landmark a screen reader offers, pointing at a column nobody can see. The rules
+  under `.shell-rail` below are therefore not the small-screen design — they are the fallback for
+  an environment with no `window.matchMedia`, where the component cannot know which mode it is in
+  and keeps the rail.
+
+  639.98, not 639, and the fraction is the whole point: `NavDrawer.tsx` exports
+  `SHELL_WIDE_MIN_PX = 640` and `lib/narrowLayout.ts` turns it into `(max-width: 639.98px)`. A
+  page zoomed to a fractional width — 639.5 on a 125% Windows scale — matches neither
+  `max-width: 639px` nor `min-width: 640px`, so with a plain 639 here the component would render
+  the drawer while this stylesheet still reserved the rail's 208px column beside it: an empty
+  gutter down the left of a phone. `NavDrawer.test.tsx` fails the build if the two stop agreeing.
+   --------------------------------------------------------------------------- */
+@media (max-width: 639.98px) {
   .shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "topbar" "rail" "main";
   }
 
@@ -106,8 +173,151 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .shell-nav {
+  .shell-rail .shell-nav {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+
+  /* 16px rather than 24px. The 16 reclaimed pixels go to the row text and the markers beside it,
+     which at 320px is the difference between a warning on one line and on two. */
+  .shell-main {
+    padding: var(--s-4);
+  }
+
+  .shell-topbar {
+    gap: var(--s-3);
+    padding: var(--s-2) var(--s-4);
+  }
+
+  /* Sign out is the other control in this bar, and it is 41px tall without this — measured in
+     Chromium at 390px, where the `pointer: coarse` floor in base.css does not apply because a
+     desktop browser at a phone width reports a fine pointer. That floor is right about fingertips
+     not shrinking with the window; it is not a reason for the two controls in the same bar to be
+     different heights, and a taller button costs a mouse user nothing. */
+  .shell-topbar .btn {
+    min-height: var(--tap-min);
+  }
+}
+
+/*
+  The three rules below are unconditional because the elements they style are: `AppShell.tsx`
+  renders the trigger and the drawer only below the breakpoint, so a width query around them would
+  restate what the component already decided.
+
+  They state `--tap-min` themselves rather than leaning on the `pointer: coarse` floor in base.css,
+  and the reason is not belt-and-braces. That floor covers `button` and `.btn`; these two controls
+  are the ONLY way to reach ten of the eleven destinations on a small screen, and a device that
+  misreports its pointer (a hybrid laptop in tablet posture answers `fine`) would leave the whole
+  navigation on a 37px target. The nav LINKS below are not covered by that rule at all — it names
+  no anchors — so their floor has to be stated somewhere, and this is the only stylesheet that
+  knows they are a list of eleven rows read with a thumb.
+*/
+.shell-menu-trigger {
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  flex: none;
+}
+
+/* The rail said which screen you were on by lighting a row up; with no rail, the bar says it in
+   words. Sized as a title rather than as one of the muted uppercase legends: it is the answer to
+   "where am I", not a label for something else. */
+.shell-screen-name {
+  font-size: var(--fs-400);
+  font-weight: 620;
+  letter-spacing: -0.011em;
+  line-height: var(--lh-tight);
+  /* Truncated, never hyphenated by force: `overflow-wrap: anywhere` rendered the longest of the
+     eleven as "Applicatio / ns" at 320px. An ellipsis says a word was cut; a word split mid-
+     syllable says the layout was. With the account controls in the drawer there is room for all
+     eleven names, so this is a guard rather than the usual case. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+  animation: shell-scrim-in 120ms ease-out;
+}
+
+.shell-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 61;
+  /* Never the whole width: the strip of scrim beside it is what says the page is still there, and
+     it is the target a thumb will reach for to dismiss this. */
+  width: min(320px, 86vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding: var(--s-4) var(--s-3);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  overflow-y: auto;
+  /* A flick that reaches the end of this list must not start scrolling the page underneath it. */
+  overscroll-behavior: contain;
+  animation: shell-drawer-in 160ms ease-out;
+}
+
+.shell-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.shell-drawer-close {
+  min-height: var(--tap-min);
+  flex: none;
+}
+
+/* Eleven destinations, each a thumb-sized target. The 3px keel and the accent-soft current row
+   are the rail's own rules, unchanged — this is the same navigation, not a second design. */
+.shell-drawer .shell-nav {
+  gap: var(--s-1);
+}
+
+.shell-drawer .shell-nav a {
+  min-height: var(--tap-min);
+  padding: var(--s-3);
+  font-size: var(--fs-400);
+}
+
+/* `margin-top: auto` pins the account to the foot of the panel however few destinations a member
+   sees, and the rule above it separates "where you can go" from "who you are". */
+.shell-drawer-foot {
+  margin-top: auto;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-3);
+}
+
+.shell-drawer-identity {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell-drawer-signout {
+  min-height: var(--tap-min);
+}
+
+/* Movement, so both are covered by the `prefers-reduced-motion` rule in base.css, which collapses
+   every animation in the app to 0.01ms rather than leaving each one to remember. */
+@keyframes shell-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes shell-scrim-in {
+  from {
+    opacity: 0;
   }
 }

@@ -29,20 +29,73 @@
   align-items: start;
 }
 
-@media (max-width: 900px) {
+/* `minmax(0, …)` frees the tracks; this frees the items in them. See `.browse > *`. */
+.detail-grid > * {
+  min-width: 0;
+}
+
+/*
+  943px, MEASURED, not 900px.
+
+  Criterion, used for every two-column block in this app: the column carrying the substance stacks
+  once it can no longer hold 46ch of body text — 384px at --fs-300 in Chromium — 46ch being the
+  narrowest measure this stylesheet declares anywhere (`.row-warning`, `.row-danger`).
+
+  Swept in the browser with this query defeated: the record column is 400px at a 960px window and
+  crosses 384px at 944. The old 900 left it at 341px — 41ch of quoted funder text — which is under
+  the product's own floor, so this breakpoint was not merely dead, it was in the wrong place.
+*/
+@media (max-width: 943px) {
   .detail-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-.panel { padding: var(--s-4); margin-bottom: var(--s-4); }
+/*
+  `container-type: inline-size` because a viewport breakpoint CANNOT be right for this panel.
+
+  The same `.panel` renders in two places at once on the record page: down the 2fr record column
+  and down the 1fr aside. At a 1024px window those are 464px and 280px wide simultaneously, so
+  any `@media` rule for the `dl` inside them is right for one and wrong for the other — and the
+  old `@media (max-width: 560px)` was wrong for the aside at EVERY width above it, which is why
+  the aside's values were reading one word per line on a full-size desktop.
+
+  Asking the panel how wide IT is answers both at once. This is the only container query in the
+  app; every other block sits in one context and a media query tells it the truth.
+*/
+.panel { padding: var(--s-4); margin-bottom: var(--s-4); container-type: inline-size; }
 .panel h2 { font-size: var(--fs-400); margin-bottom: var(--s-3); }
 
-.panel dl { display: grid; grid-template-columns: 180px 1fr; gap: var(--s-2) var(--s-4); margin: 0; }
-.panel dt { color: var(--text-muted); font-size: var(--fs-200); }
-.panel dd { margin: 0; }
+/* One column is the DEFAULT here, not the small-screen exception: a label above its value is
+   correct at any width, and it is what an environment with no container-query support gets. */
+.panel dl { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-1); margin: 0; }
 
-@media (max-width: 560px) {
-  .panel dl { grid-template-columns: minmax(0, 1fr); gap: var(--s-1); }
-  .panel dd { margin-bottom: var(--s-3); }
+/* Both cells, not just the value: `test/responsive.test.ts` asks every multi-track grid in the
+   app the same question, and a `dt` carrying an unbreakable label would floor the track too. */
+.panel dl > * { min-width: 0; }
+
+.panel dt { color: var(--text-muted); font-size: var(--fs-200); }
+
+/*
+  MEASURED: this `dl` was the last overflow left on the record page — 1456px of page inside a
+  1440px window. The value column held the funder's URL and a content hash, neither of which has a
+  space in it, so the `1fr` track was floored at the 213px that link needs and the sidebar panel
+  (248px of inner width at a 1024px window) burst its own card.
+
+  `overflow-wrap: anywhere` rather than `break-word` on purpose: only `anywhere` lowers the
+  min-content contribution, which is the number the grid algorithm actually reads. `break-word`
+  would wrap the rendered line and leave the track exactly as wide as before.
+*/
+.panel dd { margin: 0 0 var(--s-3); min-width: 0; overflow-wrap: anywhere; }
+
+/*
+  376px = the 180px label column + the --s-4 gap + 180px for the value.
+
+  A label/value pair is not prose, so the 46ch floor the page layouts use is the wrong test for
+  it; the right one is that the value must be at least as wide as the label it answers, or the
+  pair reads as a ragged ladder. Below that the two stay stacked, which is the default above.
+*/
+@container (min-width: 376px) {
+  .panel dl { grid-template-columns: 180px minmax(0, 1fr); gap: var(--s-2) var(--s-4); }
+  .panel dd { margin-bottom: 0; }
 }
 
 /* Anything the funder wrote is quoted, never paraphrased. */

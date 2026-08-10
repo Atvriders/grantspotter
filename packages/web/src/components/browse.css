@@ -1,8 +1,38 @@
 .browse {
   display: grid;
-  grid-template-columns: 264px 1fr;
+  grid-template-columns: 264px minmax(0, 1fr);
   gap: var(--s-5);
   align-items: start;
+}
+
+/*
+  The results column holds the opportunities table. Without this the `1fr` track was pinned to that
+  table's min-content width (a grid item's `min-width` is `auto` = its min-content width), so
+  `.browse` measured 2565px at every viewport and dragged the page with it. `minmax(0, 1fr)` above
+  frees the TRACK; this frees the ITEM inside it — both are needed, because an item whose used
+  min-width is its min-content simply overflows a track that shrank without it.
+
+  The figure that used to be quoted here (~2280px) is no longer the table's: nearly all of it was
+  one prose amount cell held open by `.grid-table td.num`'s `white-space: nowrap`. With that cell
+  allowed to wrap the table's min-content is 691px, which is what `PROGRAMME_TABLE_MIN_PX` is
+  derived from. Both rules stay: 691px still exceeds a phone, and the failure mode is the same.
+*/
+.browse > * {
+  min-width: 0;
+}
+
+/*
+ * Below `FILTER_RAIL_MIN_PX` (1235 px — see `routes/Browse.tsx` for how it was measured) the rail
+ * has become a `<details>` and spans the full width, which is also what gives the table back the
+ * room it needs.
+ *
+ * THE SWITCH IS A CLASS, NOT A MEDIA QUERY. `Browse` and `ProgramTable` choose their markup from
+ * `lib/narrowLayout.ts`, so each width is written down once, in TypeScript, next to the
+ * measurement that produced it. A `@media (max-width: 1234px)` here would be a second copy of
+ * that number, free to drift from the first.
+ */
+.browse-sheet {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .filter-panel {
@@ -60,6 +90,85 @@
   align-self: flex-start;
 }
 
+/* ---------- the filter sheet ----------
+ *
+ * The same panel, folded. It borrows the calendar's `<details>` language — a summary that states
+ * its own size, an open state marked by a rule under it — rather than inventing a drawer, because
+ * this product already has exactly one way of saying "there is more here than you can see".
+ */
+
+.filter-sheet {
+  padding: 0;
+}
+
+.filter-sheet > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  align-content: center;
+  gap: var(--s-2) var(--s-3);
+  /* 44 px is the floor for something a thumb presses, and this is the only control between the
+     reader and every filter on the screen. It is not the place to save six pixels. */
+  min-height: 44px;
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  font-weight: 560;
+}
+
+.filter-sheet > summary:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-2);
+}
+
+.filter-sheet[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-sheet-title {
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 600;
+}
+
+/* Never folded away: how many filters are on, and how many programmes survive them. */
+.filter-sheet-count {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
+/* The panel inside the sheet is not a second card, and it has nothing to stick to. */
+.filter-sheet .filter-panel {
+  position: static;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Touch. A 13x13 checkbox is not a target; the label around it is, once it is tall enough. */
+.filter-sheet .filter-panel label,
+.filter-sheet .filter-field,
+.filter-sheet .btn {
+  min-height: 44px;
+}
+
+.filter-sheet .filter-panel input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+}
+
+/*
+ * print.css hides `.filter-panel` outright — a filter control is not a fact about a programme.
+ * The sheet is that same control in a different wrapper, so it goes with it; left in, a printed
+ * page carries a "Filters — 3 set" heading over nothing.
+ */
+@media print {
+  .filter-sheet {
+    display: none !important;
+  }
+}
+
 /* The census: a single wide statement, the ineligible figure set in display size. */
 .census {
   display: flex;
@@ -87,7 +196,19 @@
   color: var(--text-muted);
 }
 
+.browse-results {
+  min-width: 0;
+}
+
 .table-wrap {
+  /*
+   * A grid with one `minmax(0, 1fr)` track, so this box's OWN intrinsic width is zero and a table
+   * inside it can be wider than the page without dragging the page along. `overflow-x: auto`
+   * alone never did that: it clips at paint time, and the damage happens at layout time — which
+   * is why the whole document measured 2,589 px at a 320 px viewport with this rule already here.
+   */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--r-2);
@@ -130,6 +251,21 @@
   max-width: 46ch;
 }
 
+/* "Sources do not agree" — the same amber the detail page's `.disputed` panel uses, because it is
+   the same fact seen from the list. Not `--no`: a disputed record is not a warning about danger,
+   it is a warning about certainty. */
+.row-disputed {
+  margin-top: var(--s-1);
+  margin-bottom: 0;
+  font-size: var(--fs-200);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-left: 3px solid var(--warn);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-1);
+  max-width: 46ch;
+}
+
 .deadline-day { font-variant-numeric: tabular-nums; }
 
 .estimated-mark,
@@ -148,6 +284,26 @@
   background: var(--warn-soft);
   padding: 0 var(--s-1);
   border-radius: var(--r-1);
+}
+
+/*
+ * THE ONE CELL ALLOWED TO GIVE GROUND.
+ *
+ * `amount.amountRaw` is the funder's own wording, and funders write sentences: "The new program
+ * price is either $1,450.00 or …". `.grid-table td.num` sets `white-space: nowrap`, which is
+ * right for a date and a count and catastrophic for prose — measured in Chromium against the
+ * shipped seed, that single cell was 1,905 px wide and held the whole table open at 2,563 px.
+ * The selector is `td.num.amount` rather than `.amount` so it outranks `.grid-table td.num`
+ * whichever order the bundler emits the two stylesheets in.
+ *
+ * When space runs out THIS is what gets narrower. The status pill, the verified badge and the
+ * est./published mark beside it keep their `nowrap`: a marker clipped mid-word is a marker the
+ * reader stops trusting, and an amount that wraps onto three lines is still the whole amount.
+ */
+.grid-table td.num.amount,
+.grid-table th.num.amount {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Constraint drawer opened from the ineligible badge. */
@@ -171,6 +327,97 @@
   margin-left: var(--s-2);
 }
 
+/* ---------- records ----------
+ *
+ * Below `PROGRAMME_TABLE_MIN_PX` (947 px — see `components/ProgramTable.tsx`) a row stops being a
+ * row. This is NOT the table with columns hidden: nothing is dropped, because a stack has no
+ * column to run out of. The order is the argument — name, then every honesty marker, then the
+ * fields, then the warnings — so a card clipped by the bottom of a phone screen has already shown
+ * the reader the status, the verdict and how old the verification is.
+ */
+
+.record-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.record {
+  padding: var(--s-4);
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.record .row-name {
+  gap: var(--s-1);
+}
+
+.record-name {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: var(--fs-400);
+  /* A 60-character ARRL scholarship name has nowhere to go on a 320 px screen but a second line. */
+  overflow-wrap: anywhere;
+}
+
+.record-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+/* The verdict badge is a real button whenever the constraint drawer exists behind it. */
+.record-marks button.badge {
+  min-height: 44px;
+}
+
+.record-reasons {
+  padding: var(--s-3);
+  background: var(--surface-2);
+  border-radius: var(--r-1);
+}
+
+.record-fields {
+  margin: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.record-field {
+  display: grid;
+  gap: 2px;
+}
+
+.record-field dd {
+  margin: 0;
+}
+
+.record-deadline {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.record-amount {
+  font-family: var(--font-data);
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+
+/* Touch, across the whole stacked results column — the pager and the export controls included. */
+.browse-results-stacked .btn,
+.browse-results-stacked button {
+  min-height: 44px;
+}
+
+.browse-results-stacked .pager {
+  flex-wrap: wrap;
+}
+
 .empty-state {
   padding: var(--s-7) var(--s-5);
   text-align: center;
@@ -182,8 +429,11 @@
   max-width: 52ch;
 }
 
+/* Wraps. A non-wrapping row of two buttons and a status line has a min-content width of 261px
+   (measured), which is more than a 320px window leaves once the page padding is taken off. */
 .pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-3);
   margin-top: var(--s-4);
@@ -194,7 +444,12 @@
   color: var(--text-muted);
 }
 
-@media (max-width: 900px) {
-  .browse { grid-template-columns: 1fr; }
-  .filter-panel { position: static; }
-}
+/*
+ * The `@media (max-width: 900px)` block that used to close this file is gone, not moved.
+ *
+ * It dropped the rail at 900 px and left the table in a 644 px column — 47 px short of the
+ * 691 px the table's own columns need — so the layout it produced was a page that fitted with a
+ * results table that did not. `.browse-sheet` replaces it at the width the content actually
+ * asked for, and `.filter-sheet .filter-panel { position: static }` above carries the one
+ * declaration that block still owed.
+ */
