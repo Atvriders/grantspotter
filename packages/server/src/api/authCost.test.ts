@@ -391,21 +391,53 @@ describe('what a valid code tells its holder about other people', () => {
         .send({ code: plaintext, email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD });
     }
 
-    async function timeOf(emailAt: (i: number) => string): Promise<number> {
-      const started = Date.now();
-      for (let i = 0; i < SAMPLE; i += 1) {
-        await request(app)
-          .post('/api/auth/enroll')
-          .send({ code: plaintext, email: emailAt(i), password: GOOD_PASSWORD });
-      }
-      return (Date.now() - started) / SAMPLE;
+    async function timeOne(email: string): Promise<number> {
+      const started = performance.now();
+      await request(app)
+        .post('/api/auth/enroll')
+        .send({ code: plaintext, email, password: GOOD_PASSWORD });
+      return performance.now() - started;
     }
 
-    const hit = await timeOf((i) => `known-${String(i + 20)}@example.org`);
-    const miss = await timeOf((i) => `stranger-${String(i)}@example.org`);
+    // INTERLEAVED, AND A MEDIAN, because the first version of this was measuring the machine as
+    // much as the route. It timed all twelve member requests and THEN all twelve stranger
+    // requests, so any slowdown arriving between the two batches — another job landing on a
+    // shared runner — was charged entirely to whichever side went second. It failed CI at
+    // ratio 0.408 while five consecutive local runs sat between 0.81 and 1.02, and a threshold
+    // widened to swallow that would have been the assertion giving up rather than the
+    // measurement improving.
+    //
+    // Alternating the two makes drift hit both sides equally, and alternating WHICH GOES FIRST
+    // within each pair cancels any residual advantage in being second (a warm connection, a
+    // settled thread pool). The median then stops one stalled request deciding the result, which
+    // a mean over twelve cannot.
+    //
+    // The threshold below is unchanged at 0.5. That is the point: the fix belongs in how the
+    // number is obtained, not in how much wrongness it is willing to accept.
+    const hits: number[] = [];
+    const misses: number[] = [];
+    for (let i = 0; i < SAMPLE; i += 1) {
+      const member = `known-${String(i + 20)}@example.org`;
+      const stranger = `stranger-${String(i)}@example.org`;
+      if (i % 2 === 0) {
+        hits.push(await timeOne(member));
+        misses.push(await timeOne(stranger));
+      } else {
+        misses.push(await timeOne(stranger));
+        hits.push(await timeOne(member));
+      }
+    }
+
+    const median = (xs: readonly number[]): number => {
+      const sorted = [...xs].sort((a, b) => a - b);
+      const mid = sorted.length >> 1;
+      return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+    };
+    const hit = median(hits);
+    const miss = median(misses);
     const ratio = hit / miss;
     console.log(
-      `[cost] member=${hit.toFixed(1)}ms stranger=${miss.toFixed(1)}ms ratio=${ratio.toFixed(2)}`,
+      `[cost] member=${hit.toFixed(1)}ms stranger=${miss.toFixed(1)}ms ratio=${ratio.toFixed(2)} (medians of ${String(SAMPLE)} interleaved pairs)`,
     );
 
     // Both paths are one argon2id plus a few indexed statements; a factor of two either way is
