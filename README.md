@@ -538,6 +538,35 @@ An administrator issues a code under **Admin → Enrollment codes** with a label
 - **An expiry**, given as a number of days. A code with no limit and no expiry is a permanent
   password to your instance held by everyone you ever gave it to, so set at least one of the two.
 
+Leave the code box empty and GrantSpotter generates one — twenty characters, 2^100, unguessable.
+
+**You can also type your own**, so that an officer can read `W1MX-FALL-2026` out at a meeting
+instead of spelling twenty random characters down a phone. That is a real trade and the console
+says so at the moment you make it, not here:
+
+- **A code you choose must be at least 12 characters** once capitals, dashes and spaces are taken
+  out. Twelve is not a house style. A wrong code is answered in about half a millisecond, and the
+  guess limit below is counted per address, so somebody with more than one address is not held to
+  it — measured on the shipped build, 1,862 wrong codes a second. Twelve characters is the shortest
+  length at which a year of that leaves worse than a one-in-a-million chance of working through
+  every possibility; eight characters is one in nineteen. It is a floor and not a promise: nothing
+  can stop `W1MX-FALL-2026` being guessed by somebody who has heard of your club, so treat a chosen
+  code as a convenience with a deadline rather than as a secret.
+- **A code you choose must expire, within 365 days.** Not because of guessing — twelve characters
+  outlasts brute force by twenty million years — but because a code worth reading out is a code
+  that gets read out, photographed and forwarded, and an expiry is the only bound on that which
+  does not depend on somebody remembering to revoke it. A generated code may still live for ten
+  years, or forever.
+- **Codes are compared after they are folded.** Capitals, dashes and spaces are ignored, `O` counts
+  as `0`, and `I` and `L` count as `1` — that is what lets a student type a code off a whiteboard
+  and still get in. It also means `W1MX-FALL-2026` and `WIMX-FA11-2O26` are *the same code*, so the
+  console shows you the folded form before you save, and a second code that folds onto an existing
+  one is refused and tells you which one it clashed with. Revoking the old one does not free the
+  text: the two would still be the same code, and anyone still holding the old one could use the
+  new one.
+- The list marks every code **Chosen** or **Generated**, because after the fact only a hash is
+  stored and the two are not equally strong.
+
 **The code is shown exactly once, on the screen that issues it.** After that only a hash of it is
 stored — the same arrangement as the [calendar feed token](#exports), for the same reason: a copy of
 `grantspotter.sqlite`, a backup or the JSON export must not hand out working credentials. The list
@@ -592,7 +621,7 @@ one of its own tests green. A limit checked before an `await` and written after 
 | Route | Who | What it does |
 |---|---|---|
 | `GET /api/admin/enrollment-codes` | admin | lists codes; carries no plaintext, ever |
-| `POST /api/admin/enrollment-codes` | admin | issues one from `{ label, maxUses, expiresInDays }`; the only response in the product that carries `plaintext` |
+| `POST /api/admin/enrollment-codes` | admin | issues one from `{ label, code, maxUses, expiresInDays }`; `code: null` generates one, a string is the code you chose; the only response in the product that carries `plaintext`, and it carries `normalized` beside it — what was actually hashed |
 | `POST /api/admin/enrollment-codes/:id/revoke` | admin | stamps `revokedAt`; the row stays |
 | `GET /api/auth/enrollment-open` | public | `{ open: boolean }` — whether *some* usable code exists, and nothing else |
 | `POST /api/auth/enroll` | public | redeems a code, creates the member, signs them in |

@@ -1,0 +1,26 @@
+-- A code an administrator TYPED, told apart from one the server generated.
+--
+-- Numbered 092 for the reason 090 and 091 give: Plans 1-4 number their migrations from 001 upward
+-- and stop at 037, so a 09x file always applies last regardless of what they add later. This is an
+-- ALTER and not a CREATE, so it adds no name to SQLite's schema namespace and cannot be the silent
+-- second declaration `db/schemaConformance.test.ts` exists to catch.
+--
+-- WHY THE FACT IS STORED AND NOT DERIVED. There is nothing to derive it from. The table holds a
+-- SHA-256 and no code, so after the fact a chosen code and a generated one are byte-indistinguishable
+-- — and they are not equivalent: a generated code is 20 uniform characters from a 32-symbol
+-- alphabet (2^100) and a chosen one clears a twelve-character floor that rules out exhaustive
+-- search and rules out nothing else. An officer auditing their instance needs to know which of
+-- their live codes are the ones somebody could think of, and `EnrollmentCode.chosen` is what lets
+-- the admin table say so.
+--
+-- DEFAULT 0, AND THAT IS THE CORRECT ANSWER FOR EVERY EXISTING ROW rather than a convenient one:
+-- until this migration there was no way to supply a code, so every code that already exists was
+-- generated. The default also covers a restore of a backup written by an older build — the file has
+-- no `chosen` key, `exports/json.ts` inserts only the columns a row actually carries, and those
+-- rows land as generated, which is what they are.
+--
+-- INTEGER with a CHECK rather than a bare INTEGER: SQLite has no boolean type and will store
+-- anything in a column that does not refuse it, and `toCode` reads this with `=== 1`. A row holding
+-- 2 would read as generated and would be a lie told quietly.
+ALTER TABLE enrollment_codes
+  ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0 CHECK (chosen IN (0, 1));

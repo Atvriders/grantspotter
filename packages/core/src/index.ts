@@ -51,3 +51,21 @@ export type { AxisResult, AxisStatus } from './matcher.js';
 
 // CONTRACT §4 — content hashing. sha256.ts stays internal on purpose.
 export { hashProgram } from './hash.js';
+
+// Enrolment codes: the normalisation and the policy on a code an administrator TYPES. Shared
+// because the admin console has to show what a chosen code will be stored as before it is saved,
+// and `web -> server` is not a direction this repository allows. The generator and the digest are
+// not here — they need node:crypto and stay in `server/db/repositories/enrollmentCodes.ts`.
+export {
+  CHOSEN_CODE_MAX_DAYS,
+  CHOSEN_CODE_MAX_INPUT,
+  CHOSEN_CODE_MIN_LENGTH,
+  describeEnrollmentCodeFold,
+  ENROLLMENT_CODE_ALPHABET,
+  ENROLLMENT_CODE_FOLD,
+  exhaustionChance,
+  groupThousands,
+  labelRepeatsChosenCode,
+  MEASURED_GUESSES_PER_SECOND,
+  normalizeEnrollmentCode,
+} from './enrollmentCode.js';

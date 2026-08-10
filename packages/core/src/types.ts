@@ -625,6 +625,20 @@ export interface EnrollmentCode {
   id: string;
   /** What it is for, e.g. "W1MX autumn 2026 intake". Written by the admin, shown only to admins. */
   label: string;
+  /**
+   * Did an administrator TYPE this code, rather than let the server generate one?
+   *
+   * IT IS ON THE RECORD RATHER THAN INFERRED because there is nothing to infer it from — only the
+   * digest is stored — and because the two kinds of code now have genuinely different security
+   * properties. A generated code is 20 uniform characters from `ENROLLMENT_CODE_ALPHABET` and
+   * cannot be guessed; a chosen one clears `CHOSEN_CODE_MIN_LENGTH` and can be. An officer looking
+   * at a table of eight codes six months later needs to know which three are the ones somebody
+   * could think of, and a control whose operation cannot be seen cannot be operated.
+   *
+   * It is not a secret and it is not a hint: knowing that SOME code on this instance was chosen is
+   * of no use to anybody who cannot already read this record, which is admins only.
+   */
+  chosen: boolean;
   /** null = no limit; expiry or revocation still bound it. */
   maxUses: number | null;
   uses: number;

@@ -1,5 +1,9 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import type { EnrollmentCode } from '@grantspotter/core';
+import {
+  ENROLLMENT_CODE_ALPHABET,
+  normalizeEnrollmentCode,
+  type EnrollmentCode,
+} from '@grantspotter/core';
 import type { Db } from '../migrate.js';
 
 /**
@@ -22,8 +26,14 @@ import type { Db } from '../migrate.js';
  * 32^20 is 2^100. That is not a password — nothing about it is human-chosen — and it is far past
  * the point where guessing is the attack; the rate limiter on the redemption route is what makes
  * that entropy mean something operationally, because a code is guessable ONLY by trying.
+ *
+ * IT NO LONGER SAYS THAT OF EVERY CODE. Since an administrator may TYPE one (`create` below takes a
+ * `chosen`), this module issues two kinds of credential with two different strengths, and the
+ * paragraph above is true only of the generated kind. What bounds the other is
+ * `CHOSEN_CODE_MIN_LENGTH` in core, which derives its floor from what the shipped limiter actually
+ * lets an attacker try.
  */
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const ALPHABET = ENROLLMENT_CODE_ALPHABET;
 const CODE_LENGTH = 20;
 const GROUP_SIZE = 5;
 
@@ -49,27 +59,19 @@ export function newEnrollmentCode(): string {
 }
 
 /**
- * The one form a code is ever hashed in.
+ * The one form a code is ever hashed in — NOW DEFINED IN CORE, and re-exported here.
  *
- * Case is folded, the transcription confusions are folded (`O`→`0`, `I`/`L`→`1`), and everything
- * that is not in the alphabet — the dashes this module writes, the spaces a person types, the
- * newline an email client wrapped in — is dropped. It runs on BOTH sides: the code is normalised
- * before its digest is stored and before a candidate's digest is compared, so the two can never
- * disagree about what the code was.
+ * It moved on 2026-08-10 and the move is the point rather than tidying: an administrator can now
+ * type a code, so the admin console has to show them what their code will actually be stored as
+ * BEFORE they save it, and `web -> server` is a direction this repository does not allow. Core is
+ * shared, so the fold has exactly one definition and the browser's preview cannot drift from what
+ * the server hashes.
  *
- * Dropping unknown characters rather than rejecting them is deliberate. The alternative is a
- * validation error that says "that is not a valid code" for a trailing space, which is both useless
- * to the person and a second answer an attacker could tell apart from "wrong code".
+ * Re-exported rather than re-imported by each caller because `api/auth.ts`, this module's tests and
+ * this module itself already say `from './enrollmentCodes.js'`, and a rename that touches five
+ * files to move a function is a rename that hides the reason it moved.
  */
-export function normalizeEnrollmentCode(raw: string): string {
-  const CONFUSABLE: Record<string, string> = { O: '0', I: '1', L: '1' };
-  let out = '';
-  for (const character of raw.toUpperCase()) {
-    const folded = CONFUSABLE[character] ?? character;
-    if (ALPHABET.includes(folded)) out += folded;
-  }
-  return out;
-}
+export { normalizeEnrollmentCode };
 
 /**
  * Only this digest is persisted, so a copy of the database is not a pile of working credentials.
@@ -117,6 +119,19 @@ export type CreateAccount<T> = (code: EnrollmentCode) => T;
 
 export interface CreateEnrollmentCodeInput {
   label: string;
+  /**
+   * The code an administrator typed, or null to have one generated.
+   *
+   * REQUIRED AND NULLABLE rather than optional, so that every call site states which kind of
+   * credential it is minting. The two are not interchangeable — one is 2^100 and one is a phrase
+   * somebody can say out loud — and a field that can be left off is a field that gets left off.
+   *
+   * NOTHING IS VALIDATED HERE. The floor, the expiry rule and the label check are policy and live
+   * in `api/enrollment.ts` beside the sentences that explain them to an administrator; this
+   * repository's job is to store a digest and to refuse a collision, and it will faithfully store
+   * the digest of `A` if something above it asks for that.
+   */
+  chosen: string | null;
   maxUses: number | null;
   /** ISO, or null for a code that never expires. */
   expiresAt: string | null;
@@ -124,9 +139,39 @@ export interface CreateEnrollmentCodeInput {
   nowISO: string;
 }
 
+/**
+ * WHAT ISSUING A CODE CAN NOW DO INSTEAD OF SUCCEEDING, AND WHY THE GENERATED PATH GREW A BRANCH IT
+ * CANNOT REACH.
+ *
+ * `code_hash` is UNIQUE, and two DIFFERENT-LOOKING chosen codes can land on one digest, because the
+ * fold is the whole point of the fold: `W1MX-FALL-2026` and `WIMX-FA11-2O26` both normalise to
+ * `W1MXFA112026`. That was impossible while the server was the only thing that made codes — the
+ * generator never emits `I`, `L`, `O` or `U` at all, so no two generated codes can fold onto each
+ * other, and two of them landing on the same 20 characters is 2^-100.
+ *
+ * So a collision is now an ORDINARY OUTCOME of an administrator typing something, not a fault, and
+ * it is returned rather than thrown. A thrown SQLite constraint error would reach the error handler
+ * as a 500, and a 500 is the product saying "something went wrong here" about a request where
+ * nothing went wrong at all: somebody typed a code that is already in use, and the honest answer
+ * says so and says which one.
+ *
+ * `conflict` is null only in a case that cannot arise through this API: the colliding row was read
+ * back and had gone. Kept because the alternative is a nullish access in the one branch nobody
+ * tests, and the router has a sentence for it.
+ */
+export type CodeIssued =
+  | { ok: true; code: EnrollmentCode; plaintext: string; normalized: string }
+  | { ok: false; conflict: { id: string; label: string } | null };
+
 export interface EnrollmentCodeRepo {
-  /** The plaintext is returned HERE AND NOWHERE ELSE — nothing can recover it afterwards. */
-  create(input: CreateEnrollmentCodeInput): { code: EnrollmentCode; plaintext: string };
+  /**
+   * The plaintext is returned HERE AND NOWHERE ELSE — nothing can recover it afterwards.
+   *
+   * For a chosen code the plaintext is the administrator's own string, returned verbatim so the
+   * console can show it back exactly as typed; `normalized` beside it is what was actually hashed,
+   * which is the value they are really committing to and the one the console must show them.
+   */
+  create(input: CreateEnrollmentCodeInput): CodeIssued;
   list(): EnrollmentCode[];
   findById(id: string): EnrollmentCode | undefined;
   /** Idempotent: a second revoke returns the code with the FIRST revocation's timestamp. */
@@ -164,6 +209,7 @@ export interface EnrollmentCodeRepo {
 interface CodeRow {
   id: string;
   label: string;
+  chosen: number;
   max_uses: number | null;
   uses: number;
   expires_at: string | null;
@@ -175,12 +221,16 @@ interface CodeRow {
 
 /** `code_hash` is deliberately absent: nothing outside this file has any use for the digest. */
 const COLUMNS =
-  'id, label, max_uses, uses, expires_at, revoked_at, created_at, created_by_user_id, last_used_at';
+  'id, label, chosen, max_uses, uses, expires_at, revoked_at, created_at, created_by_user_id, last_used_at';
 
 function toCode(row: CodeRow): EnrollmentCode {
   return {
     id: row.id,
     label: row.label,
+    // `=== 1`, not truthiness: SQLite has no boolean and migration 092's CHECK is what keeps the
+    // column to 0 or 1. Reading anything else as `false` is the safe direction to be wrong in — it
+    // understates a code's strength rather than overstating it.
+    chosen: row.chosen === 1,
     maxUses: row.max_uses,
     uses: row.uses,
     expiresAt: row.expires_at,
@@ -189,6 +239,22 @@ function toCode(row: CodeRow): EnrollmentCode {
     createdByUserId: row.created_by_user_id,
     lastUsedAt: row.last_used_at,
   };
+}
+
+/**
+ * Is this the UNIQUE constraint on `code_hash`, as opposed to any other way an insert can fail?
+ *
+ * NARROW ON PURPOSE. The table also carries `CHECK (max_uses IS NULL OR max_uses > 0)` and
+ * `CHECK (chosen IN (0, 1))`, and a foreign key to `users`. Catching "a constraint failed" would
+ * turn a zero-use code — which `enrollmentCodes.test.ts` asserts still throws — into a refusal that
+ * says a code collided, which is a wrong answer dressed as a helpful one. The column name is
+ * matched as well as the error code because `id` is also unique, and a UUID collision is a
+ * different accident that deserves to be seen.
+ */
+function isCodeHashCollision(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'SQLITE_CONSTRAINT_UNIQUE' && err.message.includes('enrollment_codes.code_hash');
 }
 
 /**
@@ -213,9 +279,9 @@ function refusalFor(row: CodeRow, nowISO: string): EnrollmentRefusal | undefined
 
 export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
   const insertStmt = db.prepare(
-    `INSERT INTO enrollment_codes (id, code_hash, label, max_uses, uses, expires_at, revoked_at,
-       created_at, created_by_user_id, last_used_at)
-     VALUES (@id, @code_hash, @label, @max_uses, 0, @expires_at, NULL, @created_at,
+    `INSERT INTO enrollment_codes (id, code_hash, label, chosen, max_uses, uses, expires_at,
+       revoked_at, created_at, created_by_user_id, last_used_at)
+     VALUES (@id, @code_hash, @label, @chosen, @max_uses, 0, @expires_at, NULL, @created_at,
        @created_by_user_id, NULL)`,
   );
   const byHashStmt = db.prepare(`SELECT ${COLUMNS} FROM enrollment_codes WHERE code_hash = ?`);
@@ -257,33 +323,73 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
   );
 
   return {
+    /**
+     * ONE TRANSACTION: look for the digest, then write it — or refuse and write nothing.
+     *
+     * `.immediate()` and a re-read inside it, for the same reason `redeem` below gives: a check
+     * followed by a write is only a check if nothing can run in between. Here the thing that could
+     * run in between is a second administrator issuing the same chosen code from another browser
+     * tab, and the write lock is what makes "is this code taken?" and "take it" one decision.
+     *
+     * THE `catch` AROUND IT SHOULD BE UNREACHABLE AND IS NOT DELETED. Holding the write lock means
+     * no other connection can insert between the SELECT and the INSERT, so the UNIQUE constraint on
+     * `code_hash` has nothing left to catch. It is kept because "should be unreachable" is a claim
+     * about today's schema and today's callers, and the failure mode if the claim is ever wrong is
+     * a 500 on a route where an administrator has done nothing wrong. The cost of keeping it is
+     * eight lines; the cost of being wrong about it is the product blaming the user for a
+     * constraint. `redeem`'s `changes !== 1` branch is the same bargain, one statement further on.
+     */
     create(input) {
-      const plaintext = newEnrollmentCode();
+      const plaintext = input.chosen ?? newEnrollmentCode();
+      const normalized = normalizeEnrollmentCode(plaintext);
       const row = {
         id: randomUUID(),
         code_hash: hashEnrollmentCode(plaintext),
         label: input.label,
+        chosen: input.chosen === null ? 0 : 1,
         max_uses: input.maxUses,
         expires_at: input.expiresAt,
         created_at: input.nowISO,
         created_by_user_id: input.createdByUserId,
       };
-      insertStmt.run(row);
-      return {
-        code: {
-          id: row.id,
-          label: row.label,
-          maxUses: row.max_uses,
-          uses: 0,
-          expiresAt: row.expires_at,
-          revokedAt: null,
-          createdAt: row.created_at,
-          createdByUserId: row.created_by_user_id,
-          lastUsedAt: null,
-        },
-        // The one and only time this value exists outside the caller's own memory.
-        plaintext,
-      };
+
+      const write = db.transaction((): CodeIssued => {
+        const taken = byHashStmt.get(row.code_hash) as CodeRow | undefined;
+        if (taken !== undefined) {
+          return { ok: false, conflict: { id: taken.id, label: taken.label } };
+        }
+        insertStmt.run(row);
+        return {
+          ok: true,
+          code: {
+            id: row.id,
+            label: row.label,
+            chosen: row.chosen === 1,
+            maxUses: row.max_uses,
+            uses: 0,
+            expiresAt: row.expires_at,
+            revokedAt: null,
+            createdAt: row.created_at,
+            createdByUserId: row.created_by_user_id,
+            lastUsedAt: null,
+          },
+          // The one and only time this value exists outside the caller's own memory — and for a
+          // chosen code, the caller already had it.
+          plaintext,
+          normalized,
+        };
+      });
+
+      try {
+        return write.immediate();
+      } catch (err) {
+        if (!isCodeHashCollision(err)) throw err;
+        const taken = byHashStmt.get(row.code_hash) as CodeRow | undefined;
+        return {
+          ok: false,
+          conflict: taken === undefined ? null : { id: taken.id, label: taken.label },
+        };
+      }
     },
 
     list() {

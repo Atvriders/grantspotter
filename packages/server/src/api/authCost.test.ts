@@ -101,15 +101,27 @@ function build() {
   });
 }
 
+/**
+ * A generated code, unwrapped.
+ *
+ * `create` returns a union since an administrator may now TYPE a code and collide with an existing
+ * one (`db/repositories/enrollmentCodes.ts`). Nothing in this file types one — every call here
+ * passes `chosen: null` — so the refusal branch is unreachable, and it is thrown on rather than
+ * asserted away so that a future edit which does collide fails HERE, naming itself, instead of
+ * surfacing as an undefined `plaintext` twenty lines further down.
+ */
 function issue(over: Partial<Parameters<EnrollmentCodeRepo['create']>[0]> = {}) {
-  return codes.create({
+  const issued = codes.create({
     label: 'W1MX autumn 2026 intake',
+    chosen: null,
     maxUses: null,
     expiresAt: null,
     createdByUserId: ADMIN_ID,
     nowISO: new Date().toISOString(),
     ...over,
   });
+  if (!issued.ok) throw new Error('issue(): the generated code collided with an existing one');
+  return issued;
 }
 
 /** Total CPU (user + system) burned by this process, in milliseconds. */

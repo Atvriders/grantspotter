@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { EnrollmentCode } from '@grantspotter/core';
-import { EnrollmentCodes, enrollmentCodeState } from './EnrollmentCodes.js';
+import { CHOSEN_CODE_MIN_LENGTH } from '@grantspotter/core';
+import { confusableTwin, EnrollmentCodes, enrollmentCodeState } from './EnrollmentCodes.js';
 
 const NOW = '2026-08-04T12:00:00.000Z';
 
@@ -10,6 +11,7 @@ function makeCode(overrides: Partial<EnrollmentCode> = {}): EnrollmentCode {
   return {
     id: 'code-1',
     label: 'W1MX autumn 2026 intake',
+    chosen: false,
     maxUses: 5,
     uses: 2,
     expiresAt: '2026-12-31T00:00:00.000Z',
@@ -47,6 +49,8 @@ function stubFetch(overrides: Override = () => undefined, codes: EnrollmentCode[
         json: async () => ({
           code: makeCode({ id: 'code-new', label: 'New intake', uses: 0, lastUsedAt: null }),
           plaintext: CREATED_PLAINTEXT,
+          // The server's reading of the plaintext. `ENR-7fq2-kv91-tt40` folds its `l` onto `1`.
+          normalized: 'ENR7FQ2KV91TT40',
         }),
       });
     }
@@ -186,6 +190,8 @@ describe('creating a code', () => {
       );
       expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
         label: 'Field Day visitors',
+        // An empty code box means "generate one", sent as an explicit null rather than left off.
+        code: null,
         maxUses: null,
         expiresInDays: null,
       });
@@ -206,6 +212,7 @@ describe('creating a code', () => {
       );
       expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
         label: 'One student',
+        code: null,
         maxUses: 1,
         expiresInDays: 30,
       });
@@ -348,6 +355,182 @@ describe('revoking a code', () => {
       await screen.findByRole('button', { name: /revoke w1mx autumn 2026 intake/i }),
     );
     expect(await screen.findByRole('alert')).toHaveTextContent(/another instance/i);
+  });
+});
+
+/**
+ * THE CODE AN ADMINISTRATOR TYPES, AND THE ONE THING THE CONSOLE MUST NOT LET THEM MISS.
+ *
+ * A chosen code is not the string they typed. `W1MX-FALL-2026` is stored as `W1MXFA112026`, and
+ * `WIMX-FA11-2O26` is the same code — which is what makes two different-looking chosen codes able
+ * to collide, and what makes "show them their own typing back" a lie. Everything below is about
+ * the console showing the stored form at the moment of the decision rather than afterwards.
+ */
+describe('choosing the code instead of generating one', () => {
+  async function typeCode(value: string): Promise<HTMLElement> {
+    await userEvent.type(await screen.findByLabelText(/^code \(blank to generate one\)/i), value);
+    return screen.getByLabelText(/^code \(blank to generate one\)/i);
+  }
+
+  it('offers to generate one, and says what typing your own costs, before anything is typed', async () => {
+    stubFetch();
+    renderSection();
+    const box = await screen.findByLabelText(/^code \(blank to generate one\)/i);
+    const note = document.getElementById(box.getAttribute('aria-describedby') ?? '');
+
+    expect(note).not.toBeNull();
+    expect(note).toHaveTextContent(/blank generates twenty random characters/i);
+    // The trade, in the sentence a person reads rather than in a document.
+    expect(note).toHaveTextContent(/a code somebody can remember is a code somebody can guess/i);
+    expect(note).toHaveTextContent(new RegExp(`at least ${String(CHOSEN_CODE_MIN_LENGTH)}`, 'i'));
+  });
+
+  it('shows the normalised form, not the typing, while the administrator types', async () => {
+    stubFetch();
+    renderSection();
+    const box = await typeCode('W1MX-FALL-2026');
+    const note = document.getElementById(box.getAttribute('aria-describedby') ?? '');
+
+    // What they typed has dashes and an L. What is stored has neither.
+    expect(note).toHaveTextContent('W1MXFA112026');
+    expect(note).toHaveTextContent(/12 characters/);
+    // And the fold is named, with a second spelling of THEIR code rather than an abstract example.
+    expect(note).toHaveTextContent(/O counts as 0/);
+    expect(note).toHaveTextContent(confusableTwin('W1MXFA112026'));
+  });
+
+  it('says the floor and the count when the code is too short, before the press', async () => {
+    stubFetch();
+    renderSection();
+    const box = await typeCode('W1MX2026');
+    const note = document.getElementById(box.getAttribute('aria-describedby') ?? '');
+
+    expect(note).toHaveTextContent('W1MX2026');
+    expect(note).toHaveTextContent(/8 characters/);
+    expect(note).toHaveTextContent(
+      new RegExp(`a code you choose needs at least ${String(CHOSEN_CODE_MIN_LENGTH)}`, 'i'),
+    );
+  });
+
+  it('stops calling the expiry optional once a code has been typed', async () => {
+    stubFetch();
+    renderSection();
+    expect(await screen.findByLabelText(/blank for no expiry/i)).toBeInTheDocument();
+
+    await typeCode('W1MX-FALL-2026');
+    expect(screen.queryByLabelText(/blank for no expiry/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/required for a code you choose/i)).toBeInTheDocument();
+  });
+
+  it('sends the code exactly as typed, so the fold happens once and on the server', async () => {
+    const fetchMock = stubFetch();
+    renderSection();
+    await userEvent.type(await screen.findByLabelText(/what this code is for/i), 'Autumn intake');
+    await typeCode('W1MX-FALL-2026');
+    await userEvent.type(screen.getByLabelText(/expires in days/i), '90');
+    await userEvent.click(screen.getByRole('button', { name: /create enrollment code/i }));
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === 'POST',
+      );
+      expect(JSON.parse((post?.[1] as RequestInit).body as string)).toEqual({
+        label: 'Autumn intake',
+        code: 'W1MX-FALL-2026',
+        maxUses: null,
+        expiresInDays: 90,
+      });
+    });
+  });
+
+  it('tells the administrator what a chosen code is worth, on the banner that shows it', async () => {
+    stubFetch(
+      (url, init) =>
+        init?.method === 'POST' && url === '/api/admin/enrollment-codes'
+          ? {
+              ok: true,
+              status: 201,
+              json: async () => ({
+                code: makeCode({ id: 'code-new', label: 'Autumn intake', chosen: true, uses: 0 }),
+                plaintext: 'W1MX-FALL-2026',
+                normalized: 'W1MXFA112026',
+              }),
+            }
+          : undefined,
+      [],
+    );
+    renderSection();
+    await createCode('Autumn intake');
+
+    const banner = await screen.findByRole('status');
+    // Their typing, and then the thing they actually committed to.
+    expect(banner).toHaveTextContent('W1MX-FALL-2026');
+    expect(banner).toHaveTextContent('W1MXFA112026');
+    expect(banner).toHaveTextContent(confusableTwin('W1MXFA112026'));
+    // The honest half, said where the decision has just been made rather than in a document.
+    expect(banner).toHaveTextContent(/short enough for somebody to think of/i);
+    expect(banner).toHaveTextContent(/not safe from being guessed/i);
+  });
+
+  it('says none of that about a generated code, because none of it is true of one', async () => {
+    stubFetch();
+    renderSection();
+    await createCode();
+
+    const banner = await screen.findByRole('status');
+    expect(banner).toHaveTextContent(CREATED_PLAINTEXT);
+    expect(banner).not.toHaveTextContent(/think of/i);
+    expect(banner).not.toHaveTextContent(/GrantSpotter stores that as/i);
+  });
+
+  it('surfaces the server’s refusal verbatim rather than inventing its own', async () => {
+    stubFetch((url, init) =>
+      init?.method === 'POST' && url === '/api/admin/enrollment-codes'
+        ? {
+            ok: false,
+            status: 422,
+            json: async () => ({
+              error: {
+                code: 'validation_failed',
+                message: 'That code is 8 characters once capitals, dashes and spaces are taken out',
+              },
+              requestId: 'req-test-2',
+            }),
+          }
+        : undefined,
+    );
+    renderSection();
+    await createCode('Autumn intake');
+    // The number is the server's, because the derivation is the server's. A second copy in the
+    // browser is a second copy to keep in step.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/8 characters once capitals/i);
+  });
+
+  it('marks which codes were chosen and which were generated, on every row', async () => {
+    stubFetch(() => undefined, [
+      makeCode({ id: 'g', label: 'Generated intake', chosen: false }),
+      makeCode({ id: 'c', label: 'Chosen intake', chosen: true }),
+    ]);
+    renderSection();
+    const table = await screen.findByRole('table', { name: /enrollment codes/i });
+
+    const generated = within(table).getByText('Generated intake').closest('tr') as HTMLElement;
+    const chosen = within(table).getByText('Chosen intake').closest('tr') as HTMLElement;
+    expect(within(generated).getByText('Generated')).toBeInTheDocument();
+    expect(within(chosen).getByText('Chosen')).toBeInTheDocument();
+    // Both words are printed. A reader cannot infer anything from a tag they do not know exists.
+    expect(within(generated).queryByText('Chosen')).not.toBeInTheDocument();
+  });
+});
+
+describe('the second spelling of a chosen code', () => {
+  it('writes every folded digit back as a letter that folds onto it', () => {
+    expect(confusableTwin('W1MXFA112026')).toBe('WIMXFAII2O26');
+  });
+
+  it('leaves a code alone when nothing in it can be spelled another way', () => {
+    // No 0 and no 1, so there is no second spelling to warn about.
+    expect(confusableTwin('K7QF29XMPT3RJVH8WCND')).toBe('K7QF29XMPT3RJVH8WCND');
   });
 });
 

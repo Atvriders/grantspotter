@@ -40,15 +40,23 @@ afterEach(() => {
   db.close();
 });
 
+/**
+ * A code that was issued, unwrapped. `create` returns a union because a code an administrator TYPES
+ * can collide with one that already exists; every caller of this helper expects to get a code, so
+ * the refusal branch throws here rather than being narrowed away at each call site.
+ */
 function issue(over: Partial<Parameters<EnrollmentCodeRepo['create']>[0]> = {}) {
-  return repo.create({
+  const issued = repo.create({
     label: 'W1MX autumn 2026 intake',
+    chosen: null,
     maxUses: null,
     expiresAt: null,
     createdByUserId: adminId,
     nowISO: NOW,
     ...over,
   });
+  if (!issued.ok) throw new Error('issue(): unexpected collision');
+  return issued;
 }
 
 describe('the code a person reads', () => {
@@ -101,6 +109,7 @@ describe('issuing a code', () => {
     expect(code).toEqual({
       id: expect.any(String),
       label: 'W1MX autumn 2026 intake',
+      chosen: false,
       maxUses: 30,
       uses: 0,
       expiresAt: LATER,
@@ -164,6 +173,175 @@ describe('issuing a code', () => {
     // `090-ics-tokens.sql` was corrected to follow, enforced here by the cascade.
     db.prepare('DELETE FROM users WHERE id = ?').run(adminId);
     expect(repo.list()).toEqual([]);
+  });
+});
+
+/**
+ * A CODE SOMEBODY TYPED. The repository stores a digest either way; what changes is that the input
+ * is now a string a person chose, which means it can already be taken.
+ *
+ * Nothing about the FLOOR or the EXPIRY is tested here, because none of it lives here: this module
+ * will faithfully store the digest of `A` if `api/enrollment.ts` asks it to, and the argument for
+ * why it must not be asked is in that file next to the sentence an administrator reads.
+ */
+describe('a code the caller supplied', () => {
+  const CHOSEN = 'W1MX-FALL-2026';
+
+  it('stores the chosen code and marks the row as chosen', () => {
+    const issued = repo.create({
+      label: 'W1MX autumn 2026 intake',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: LATER,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    if (!issued.ok) throw new Error('expected the first chosen code to be issued');
+
+    expect(issued.code.chosen).toBe(true);
+    expect(issued.plaintext).toBe(CHOSEN);
+    expect(issued.normalized).toBe('W1MXFA112026');
+    expect(repo.findById(issued.code.id)?.chosen).toBe(true);
+
+    // The same promise as the generated path: the digest is stored and the code is not.
+    const raw = JSON.stringify(db.prepare('SELECT * FROM enrollment_codes').all());
+    expect(raw).not.toContain(CHOSEN);
+    expect(raw).not.toContain('W1MXFA112026');
+    expect(raw).toContain(hashEnrollmentCode(CHOSEN));
+  });
+
+  it('is redeemed by any spelling that folds onto it', () => {
+    repo.create({
+      label: 'intake',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    expect(repo.redeem({ plaintext: 'wimx fa11 2o26', nowISO: NOW }, () => 'ok').ok).toBe(true);
+  });
+
+  /**
+   * THE COLLISION, AT THE LEVEL THAT HAS TO REFUSE IT. `code_hash` is UNIQUE, so the alternative to
+   * this branch is a thrown SQLite constraint error and a 500 on a request where the administrator
+   * did nothing wrong.
+   */
+  it('refuses a second code that folds onto the first, and names the one it clashes with', () => {
+    const first = repo.create({
+      label: 'W1MX autumn 2026 intake',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    if (!first.ok) throw new Error('expected the first chosen code to be issued');
+
+    const second = repo.create({
+      label: 'Field Day helpers',
+      // Not one character of this is the same as `CHOSEN`, and it is the same code.
+      chosen: 'wimx-fa11-2o26',
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: LATER,
+    });
+
+    expect(second).toEqual({
+      ok: false,
+      conflict: { id: first.code.id, label: 'W1MX autumn 2026 intake' },
+    });
+    // Refused means nothing was written: not a row, and not a use of the id it would have had.
+    expect(repo.list()).toHaveLength(1);
+  });
+
+  it('refuses a collision with a revoked code, because revoking does not free the text', () => {
+    const first = repo.create({
+      label: 'last term',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    if (!first.ok) throw new Error('expected the first chosen code to be issued');
+    repo.revoke(first.code.id, NOW);
+
+    const again = repo.create({
+      label: 'this term',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: LATER,
+    });
+    expect(again.ok).toBe(false);
+  });
+
+  it('does not confuse a chosen code with a generated one that happens to be issued beside it', () => {
+    repo.create({
+      label: 'chosen',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    // A later instant, not the same one: `list()` orders by `created_at` and breaks ties on a
+    // random UUID, so two codes issued at the identical timestamp come back in either order.
+    issue({ label: 'generated', nowISO: LATER });
+
+    expect(repo.list().map((c) => [c.label, c.chosen])).toEqual([
+      ['chosen', true],
+      ['generated', false],
+    ]);
+  });
+
+  it('carries `chosen` through a backup and a restore', () => {
+    repo.create({
+      label: 'chosen',
+      chosen: CHOSEN,
+      maxUses: null,
+      expiresAt: null,
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    const backup = exportBackup(db, NOW);
+    db.prepare('DELETE FROM enrollment_codes').run();
+    restoreBackup(db, JSON.parse(JSON.stringify(backup)) as typeof backup);
+
+    // An operator who restores must not be told every code on the instance was generated — that is
+    // the reassuring answer rather than the true one, and it is the one they would act on.
+    expect(repo.list().map((c) => c.chosen)).toEqual([true]);
+  });
+
+  /**
+   * A backup written before migration 092 has no `chosen` key at all. `exports/json.ts` inserts
+   * only the columns a row carries, so the column default decides — and every code that existed
+   * before this feature really was generated, because there was no way to supply one.
+   */
+  it('reads a code restored from a backup that predates the column as generated', () => {
+    const { code } = issue({ label: 'from an old backup' });
+    const backup = exportBackup(db, NOW);
+    for (const row of backup.tables.enrollment_codes ?? []) delete row.chosen;
+
+    db.prepare('DELETE FROM enrollment_codes').run();
+    restoreBackup(db, JSON.parse(JSON.stringify(backup)) as typeof backup);
+
+    expect(repo.findById(code.id)?.chosen).toBe(false);
+  });
+
+  /**
+   * The column is a boolean SQLite has no type for, so migration 092 spends a CHECK on it. Without
+   * one, a hand-edited or badly restored row holding 2 would read as `chosen: false` — a code the
+   * console would present as unguessable when it is not, which is the wrong direction to be wrong.
+   */
+  it('refuses a value that is neither chosen nor generated, at the database', () => {
+    const { code } = issue();
+    expect(() =>
+      db.prepare('UPDATE enrollment_codes SET chosen = 2 WHERE id = ?').run(code.id),
+    ).toThrow(/CHECK constraint failed/);
   });
 });
 

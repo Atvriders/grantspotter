@@ -62,17 +62,40 @@ describe('asking whether enrolment is open', () => {
 
 describe('the admin side of the codes', () => {
   it('creates a code with explicit nulls rather than omitted keys', async () => {
-    const fetchMock = stub({ code: {}, plaintext: 'ENR-1' });
-    await createEnrollmentCode({ label: 'Autumn intake', maxUses: null, expiresInDays: 30 });
+    const fetchMock = stub({ code: {}, plaintext: 'ENR-1', normalized: 'ENR1' });
+    await createEnrollmentCode({
+      label: 'Autumn intake',
+      code: null,
+      maxUses: null,
+      expiresInDays: 30,
+    });
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(ENROLLMENT_CODES_PATH);
     expect(init.method).toBe('POST');
+    // `code: null` travels rather than being dropped: "generate one for me" is a decision the
+    // console made, and a server reading an absent key has to guess which of the two it meant.
     expect(JSON.parse(init.body as string)).toEqual({
       label: 'Autumn intake',
+      code: null,
       maxUses: null,
       expiresInDays: 30,
     });
+  });
+
+  it('sends a chosen code through untouched, so the server folds it and the browser does not', async () => {
+    const fetchMock = stub({ code: {}, plaintext: 'W1MX-FALL-2026', normalized: 'W1MXFA112026' });
+    await createEnrollmentCode({
+      label: 'Autumn intake',
+      code: 'W1MX-FALL-2026',
+      maxUses: 30,
+      expiresInDays: 90,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // The dashes and the case survive the wire. Normalising here would mean two implementations of
+    // the fold, and the one that decides is the one that writes the digest.
+    expect(JSON.parse(init.body as string).code).toBe('W1MX-FALL-2026');
   });
 
   it('escapes the id it is given rather than pasting it into a path', async () => {

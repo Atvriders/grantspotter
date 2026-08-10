@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import type { EnrollmentCode } from '@grantspotter/core';
+import {
+  CHOSEN_CODE_MAX_DAYS,
+  CHOSEN_CODE_MAX_INPUT,
+  CHOSEN_CODE_MIN_LENGTH,
+  describeEnrollmentCodeFold,
+  ENROLLMENT_CODE_FOLD,
+  normalizeEnrollmentCode,
+  type EnrollmentCode,
+} from '@grantspotter/core';
 import { ApiError } from '../api/client.js';
 import {
   createEnrollmentCode,
@@ -79,6 +87,33 @@ function usesLabel(code: EnrollmentCode): string {
     : `${String(code.uses)} of ${String(code.maxUses)}`;
 }
 
+/**
+ * A SECOND SPELLING OF THE SAME CODE — the trap, shown to the administrator as their own string
+ * rather than described in the abstract.
+ *
+ * Every digit the fold can PRODUCE — only `0` and `1` — is written back as a letter that folds onto
+ * it, so `W1MXFA112026` comes back as `WIMXFAII2O26`. Other digits are left alone, because nothing
+ * folds onto them. The result is a genuinely different-looking string that opens the same door,
+ * which is the fact an administrator has to understand before a collision can surprise them.
+ *
+ * Built by INVERTING `ENROLLMENT_CODE_FOLD` rather than by writing `0 -> O` here, so a change to
+ * the fold cannot leave this example lying. Where two letters fold onto one digit (`I` and `L` both
+ * give `1`) the first wins, because the example only has to be A valid alternative spelling.
+ */
+export function confusableTwin(normalized: string): string {
+  const unfold = new Map<string, string>();
+  for (const [letter, digit] of Object.entries(ENROLLMENT_CODE_FOLD)) {
+    if (!unfold.has(digit)) unfold.set(digit, letter);
+  }
+  return [...normalized].map((c) => unfold.get(c) ?? c).join('');
+}
+
+/**
+ * The sentence that says the fold out loud, assembled from the map so it cannot drift from what the
+ * server hashes. `api/enrollment.ts` builds its refusals from the same function.
+ */
+const FOLD_SENTENCE = describeEnrollmentCodeFold();
+
 export interface EnrollmentCodesProps {
   /**
    * The instant expiry is judged against. Injected so a test can pin it, exactly as `Browse` and
@@ -93,6 +128,7 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
   const nowIso = now ?? new Date().toISOString();
 
   const [label, setLabel] = useState('');
+  const [chosen, setChosen] = useState('');
   const [maxUses, setMaxUses] = useState('');
   const [expiresInDays, setExpiresInDays] = useState('');
   const [created, setCreated] = useState<CreatedEnrollmentCode | null>(null);
@@ -104,6 +140,18 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
   // instance with no codes — but there is nothing useful to render either way, and `useApi`
   // already raises a body that failed to parse as an error.
   const rows = codes.data?.codes ?? [];
+
+  /**
+   * WHAT THE ADMINISTRATOR IS ACTUALLY COMMITTING TO, WORKED OUT AS THEY TYPE.
+   *
+   * `normalizeEnrollmentCode` is core's, which is the same function the server hashes with — that
+   * is why it lives in core rather than in the server package, and it is the only reason this
+   * preview can be trusted rather than approximated.
+   */
+  const chosenCode = chosen.trim();
+  const normalized = normalizeEnrollmentCode(chosenCode);
+  const twin = confusableTwin(normalized);
+  const belowFloor = chosenCode !== '' && normalized.length < CHOSEN_CODE_MIN_LENGTH;
 
   function begin(): void {
     setError(null);
@@ -158,11 +206,21 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
     try {
       const result = await createEnrollmentCode({
         label: trimmed,
+        // Blank means "generate one", which is the default this form opens on.
+        //
+        // NOTHING ABOUT THE FLOOR, THE EXPIRY OR THE LABEL IS CHECKED HERE, deliberately, and it is
+        // not an oversight: those three refusals each carry a paragraph explaining a number, and a
+        // second copy of a paragraph in the browser is a paragraph that will disagree with the
+        // server's one edit from now. The preview under the field warns before the press; the
+        // server's own sentence is what the administrator reads if they press anyway. The checks
+        // above stay because they are about the SHAPE of a field, which has no argument to drift.
+        code: chosenCode === '' ? null : chosenCode,
         maxUses: uses.value,
         expiresInDays: days.value,
       });
       setCreated(result);
       setLabel('');
+      setChosen('');
       setMaxUses('');
       setExpiresInDays('');
       codes.reload();
@@ -220,6 +278,30 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
             again. Anyone holding it can create a member account until it expires, is used up, or
             is revoked, so send it the way you would send a password.
           </p>
+          {/*
+            THE SECOND PARAGRAPH EXISTS ONLY FOR A CODE THE ADMINISTRATOR TYPED, and it is the last
+            moment anything can tell them what they have just made. The list below carries a
+            "Chosen" tag afterwards, but a tag is a reminder and this is the explanation.
+
+            It says the stored form because that, and not their typing, is the code; it names a
+            second spelling of it, because the collision that spelling can cause is the surprise
+            waiting for them next term; and it says plainly that this one can be guessed, because
+            the rest of this panel's prose was written when no code could be.
+          */}
+          {created.code.chosen && (
+            <p className="admin-prose" style={{ marginTop: 'var(--s-2)', marginBottom: 0 }}>
+              GrantSpotter stores that as{' '}
+              <span className="secret-value">{created.normalized}</span> — capitals, dashes and
+              spaces are ignored and {FOLD_SENTENCE}, so{' '}
+              <span className="secret-value">{confusableTwin(created.normalized)}</span> is the same
+              code and no other code on this instance can use those characters now. You chose this
+              one, so unlike a generated code it is short enough for somebody to think of: it is
+              safe from being worked through character by character and it is not safe from being
+              guessed by anyone who knows your club. Revoke it the day the intake closes rather than
+              leaving it to expire, and set a maximum number of uses if you know how many people are
+              coming.
+            </p>
+          )}
           <span className="secret-actions">
             <button
               type="button"
@@ -259,6 +341,63 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
             onChange={(e) => setLabel(e.target.value)}
           />
         </label>
+        <label htmlFor="new-code-value">
+          Code (blank to generate one)
+          <input
+            id="new-code-value"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={CHOSEN_CODE_MAX_INPUT}
+            placeholder="W1MX-FALL-2026"
+            aria-describedby="new-code-note"
+            value={chosen}
+            onChange={(e) => setChosen(e.target.value)}
+          />
+        </label>
+        {/*
+          THE TRADE, STATED WHERE IT IS BEING MADE.
+
+          It occupies a whole row of the form (`.admin-form-note`) rather than sitting under the
+          panel heading, because a paragraph at the top of a screen is read once by the person who
+          set the instance up and never again by the officer issuing next term's code. This is
+          under the cursor.
+
+          `aria-describedby` AND NOT A LIVE REGION, which is the second thing this was. `role=
+          "status"` announced the whole sentence on every keystroke — a half-typed code read out
+          twelve times — and, because this section already renders the one-time code inside a
+          `role="status"` banner, it made "the status region" ambiguous for anybody looking for the
+          code they had just been shown. A description belongs TO the field: it is read when the
+          field is reached, and it does not interrupt.
+
+          The inner span is not decoration: `.admin-form-note` is the full-width flex item and the
+          span is what carries the readable measure, because a `max-width` on the item itself is
+          what stopped it breaking the row. `admin.css` has the measurement.
+        */}
+        <p id="new-code-note" className="admin-form-note">
+          <span>
+            {chosenCode === '' ? (
+              <>
+                Blank generates twenty random characters that nobody can guess. Type your own to get
+                one an officer can read out at a meeting — that is a real trade, because a code
+                somebody can remember is a code somebody can guess. A code you choose needs at
+                least {CHOSEN_CODE_MIN_LENGTH} characters once capitals, dashes and spaces are taken
+                out, and has to expire within {CHOSEN_CODE_MAX_DAYS} days.
+              </>
+            ) : (
+              <>
+                GrantSpotter will store that as{' '}
+                <span className="secret-value">{normalized}</span> — {normalized.length}{' '}
+                {normalized.length === 1 ? 'character' : 'characters'}
+                {belowFloor
+                  ? `, and a code you choose needs at least ${CHOSEN_CODE_MIN_LENGTH}`
+                  : ''}
+                . Capitals, dashes and spaces are ignored and {FOLD_SENTENCE}
+                {twin === normalized ? '' : `, so ${twin} is the same code`}.
+              </>
+            )}
+          </span>
+        </p>
         <label htmlFor="new-code-max-uses">
           Maximum uses (blank for no limit)
           <input
@@ -272,12 +411,21 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
           />
         </label>
         <label htmlFor="new-code-expires">
-          Expires in days (blank for no expiry)
+          {/*
+            The label changes with the other field, because "blank for no expiry" stops being true
+            the moment a code is typed and an input that lies about being optional is a refusal
+            waiting to happen. The leading words are the same in both readings, so the control is
+            still findable by the name it has always had.
+          */}
+          {chosenCode === ''
+            ? 'Expires in days (blank for no expiry)'
+            : `Expires in days (required for a code you choose, up to ${String(CHOSEN_CODE_MAX_DAYS)})`}
           <input
             id="new-code-expires"
             type="number"
             min={1}
             step={1}
+            max={chosenCode === '' ? undefined : CHOSEN_CODE_MAX_DAYS}
             inputMode="numeric"
             value={expiresInDays}
             onChange={(e) => setExpiresInDays(e.target.value)}
@@ -325,6 +473,19 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
                   <tr key={code.id}>
                     <td>
                       <span className="admin-row-email">{code.label}</span>
+                      {/*
+                        WHICH KIND OF CODE THIS IS, ON EVERY ROW AND NOT ONLY ON THE ONE JUST MADE.
+                        The two are not equally strong and nothing else on this screen can tell them
+                        apart — only a digest is stored, so the row is the only place the fact can
+                        live. An officer deciding which of eight codes to revoke first needs it.
+
+                        Both words are printed rather than tagging only the chosen ones: absence is
+                        not a statement, and a reader who does not know a tag exists cannot read
+                        anything from its absence.
+                      */}
+                      <span className={code.chosen ? 'admin-tag admin-tag-off' : 'admin-tag'}>
+                        {code.chosen ? 'Chosen' : 'Generated'}
+                      </span>
                       <span className="admin-row-meta">
                         Created {formatDate(code.createdAt)} ·{' '}
                         {code.lastUsedAt === null

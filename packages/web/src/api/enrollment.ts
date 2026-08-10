@@ -31,12 +31,32 @@ export interface CreatedEnrollmentCode {
    * The code itself, in the clear, for the only moment it exists outside a hash — the same
    * contract `POST /api/admin/users` has for `generatedPassword`. Nothing may store it, log it,
    * or put it in a URL: the admin copies it out of the screen or it is gone.
+   *
+   * For a CHOSEN code this is the administrator's own string, echoed back exactly as they typed
+   * it, so the banner can show them what to read out.
    */
   plaintext: string;
+  /**
+   * What the server actually hashed — `plaintext` with capitals, dashes and spaces removed and the
+   * confusable letters folded onto digits.
+   *
+   * IT IS THE SERVER'S ANSWER AND NOT THE BROWSER'S. The form previews the same value while the
+   * admin types, by calling core's `normalizeEnrollmentCode`, but a preview is a promise and this
+   * is the record: the code that was committed to is whatever the process that wrote the digest
+   * says it is.
+   */
+  normalized: string;
 }
 
 export interface CreateEnrollmentCodeBody {
   label: string;
+  /**
+   * The code to use, or `null` to have the server generate one.
+   *
+   * `null` rather than an omitted key, for the reason the two below give: the console always knows
+   * which it means, and a field that can be left off is a field whose meaning drifts.
+   */
+  code: string | null;
   /** `null` is "no limit" — an explicit answer, not an omission the server has to guess at. */
   maxUses: number | null;
   expiresInDays: number | null;

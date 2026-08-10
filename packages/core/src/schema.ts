@@ -448,6 +448,9 @@ export const profileSchema = z.discriminatedUnion('kind', [
 export const enrollmentCodeSchema = z.object({
   id: z.string(),
   label: z.string(),
+  // Required, not `.optional()`: a build that omitted it would read every code as generated, which
+  // is the reassuring answer rather than the true one.
+  chosen: z.boolean(),
   maxUses: z.number().int().positive().nullable(),
   uses: z.number().int().nonnegative(),
   expiresAt: z.string().nullable(),
