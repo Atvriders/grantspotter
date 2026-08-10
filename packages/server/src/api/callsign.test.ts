@@ -553,6 +553,83 @@ describe('POST /api/callsign/lookup — failing soft', () => {
     expect(res.body.status).toBe('not_us');
     expect(transport).not.toHaveBeenCalled();
   });
+
+  /**
+   * WHAT THE LIVE DEPLOYMENT ANSWERED ON 2026-08-09, AND WHY IT WAS THE WRONG ANSWER.
+   *
+   * `POST /api/callsign/lookup` with `N0CALLXX` returned `status: "not_us"` and "GrantSpotter can
+   * only look up United States callsigns automatically… your licence is no less valid for being
+   * issued somewhere this lookup cannot reach". `N0` is a US prefix. The string is a typo — six
+   * suffix letters where the format allows four — and the person who made it was told their
+   * American callsign was foreign. The route did not decide that; it repeated an `undefined` that
+   * meant two things at once, which is why the fix is in `callsign/shape.ts` and this test is here
+   * to hold the answer the route actually gives.
+   */
+  it('answers a mistyped US callsign `malformed`, not `not_us`, and asks nobody', async () => {
+    const { app, transport } = buildApp({ user: MEMBER });
+    const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'N0CALLXX' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('malformed');
+    expect(res.body.message).toMatch(/check what you typed/i);
+    expect(res.body.message).not.toMatch(/United States/);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The carve-out that already exists for a press that cannot become a request has to cover this
+   * one too, and for a sharper reason than the foreign case: the person here has made a TYPO, and a
+   * typo is the thing somebody corrects several times in a row. Charging for it would ration the
+   * form against exactly the user who most needs another go at it.
+   */
+  it('spends no ration on presses that are not callsigns', async () => {
+    const { app, transport } = buildApp({ user: MEMBER });
+
+    for (let i = 0; i < LOOKUP_MAX_PER_WINDOW * 2; i += 1) {
+      const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'N0CALLXX' });
+      expect(res.status, `press ${String(i + 1)}`).toBe(200);
+      expect(res.body.status).toBe('malformed');
+    }
+    expect(transport).not.toHaveBeenCalled();
+
+    // The allowance is whole: the press that follows the typos is a real lookup and is answered.
+    const real = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
+    expect(real.status).toBe(200);
+    expect(real.body.status).toBe('found');
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The shapes, at the route rather than at the classifier, because this is the layer a person
+   * actually reaches. `''` is refused by the body schema before any of this — `callsign` is
+   * `min(1)` — so the empty case arrives as whitespace, which is what an accidental space bar in
+   * the field leaves behind.
+   */
+  it.each([
+    ['too long', 'N0CALLXX'],
+    ['too short', 'W1'],
+    ['no digit', 'KANSAS'],
+    ['two digits', 'W5X5'],
+    ['punctuation', '???'],
+    ['nothing but a space', ' '],
+    ['an operating suffix', 'W1AW/4'],
+  ])('answers `malformed` for %s (%s) without naming a country', async (_what, callsign) => {
+    const { app, transport } = buildApp({ user: MEMBER });
+    const res = await request(app).post('/api/callsign/lookup').send({ callsign });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('malformed');
+    expect(res.body.message).not.toMatch(/United States|not a US/i);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty callsign at the schema, before any of that', async () => {
+    const { app, transport } = buildApp({ user: MEMBER });
+    const res = await request(app).post('/api/callsign/lookup').send({ callsign: '' });
+
+    expect(res.status).toBe(422);
+    expect(transport).not.toHaveBeenCalled();
+  });
 });
 
 /**

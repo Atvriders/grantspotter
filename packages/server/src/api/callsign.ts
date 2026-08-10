@@ -112,8 +112,8 @@ export interface CallsignRouterDeps {
  * `verifyRouter`'s ledger insert, which also lands before the fetch and is not rolled back.
  *
  * WHICH MEANS A PRESS THAT MAKES NO REQUEST IS NOT RATIONED, and that is not a loophole, it is
- * the sentence above taken literally. `callsign/callook.ts` refuses a callsign that is not a US
- * prefix in this process, from a table core already holds, before any socket exists — callook
+ * the sentence above taken literally. `callsign/callook.ts` refuses a callsign the FCC did not
+ * issue in this process, from a table core already holds, before any socket exists — callook
  * publishes FCC records and nothing else, so there is nothing to ask. Until 2026-08-04 the route
  * charged for it anyway: nine `DL1ABC` presses from one member returned 200 eight times and then
  * 429, with zero requests made to anybody, and the next press — with a real US callsign — was
@@ -122,9 +122,12 @@ export interface CallsignRouterDeps {
  * nothing is wrong with their licence. Telling them that eight times and then locking the form is
  * the opposite of what it says.
  *
- * THERE ARE NOW FOUR WAYS A PRESS COSTS THE SOURCE NOTHING, and the last two arrived on
- * 2026-08-04: a callsign that is not a US prefix, a base URL on the hard blocklist, a host whose
- * `Retry-After` has not run out, and a host this process is already mid-question with. The third
+ * THERE ARE NOW FIVE WAYS A PRESS COSTS THE SOURCE NOTHING, three of which arrived on 2026-08-04
+ * and one on 2026-08-09: a callsign the FCC did not issue, a string that is not a callsign at all,
+ * a base URL on the hard blocklist, a host whose `Retry-After` has not run out, and a host this
+ * process is already mid-question with. The first two were one case until the typo that reads as a
+ * foreign licence was found (`callsign/shape.ts`), and splitting them changed nothing here: neither
+ * becomes a request, so neither is charged. The cooldown case is the one that
  * matters most to the person: being told "the source asked us to wait two minutes" and ALSO being
  * charged for hearing it would mean a member who pressed the button eight times during a cooldown
  * came out the other side of it with no allowance left and still nothing filled in. A source asking

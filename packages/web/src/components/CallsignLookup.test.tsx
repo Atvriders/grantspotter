@@ -107,7 +107,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('the five statuses, each answered in its own words', () => {
+describe('the six statuses, each answered in its own words', () => {
   it('shows the record when one is found, and fills nothing in by itself', async () => {
     stubResult({ status: 'found', record: PERSON });
     const { onAccept } = renderLookup();
@@ -152,6 +152,54 @@ describe('the five statuses, each answered in its own words', () => {
     expect(panel).toHaveTextContent(/nothing is wrong with your licence/i);
     expect(panel).toHaveTextContent(/works exactly the same way for you/i);
     expect(panel.textContent ?? '').not.toMatch(/invalid|failed|not found/i);
+  });
+
+  /**
+   * THE ONE THAT WAS BEING RENDERED AS THE ONE ABOVE.
+   *
+   * Every input the server could not read as a callsign arrived here as `not_us` until 2026-08-09,
+   * so this panel put "N0CALLXX is not a US callsign" in a heading over a mistyped American
+   * callsign — `N0` is a US prefix, and the string is simply two letters too long. The frame is
+   * where the false claim lived (the server's sentence sits beneath it), so the frame is what has
+   * to name no country at all.
+   */
+  it('tells somebody who mistyped that it is a typo, without deciding where they are licensed', async () => {
+    // The cast is the mirror lagging, not a shortcut: `api/callsign.ts` restates the server's union
+    // by hand and does not list `malformed` yet, while the wire and this component both do.
+    stubResult({
+      status: 'malformed',
+      message: 'GrantSpotter could not read "N0CALLXX" as a callsign, so it asked nobody.',
+    } as unknown as CallsignLookupResult);
+    const { container } = renderLookup({ callsign: 'N0CALLXX' });
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /does not look like a callsign/i });
+    expect(panel).toHaveTextContent(/saying nothing about where your licence is from/i);
+    expect(panel).toHaveTextContent(/check what you typed/i);
+    // The server's own sentence, beneath the framing rather than instead of it.
+    expect(panel).toHaveTextContent(/could not read "N0CALLXX" as a callsign/i);
+    // The claim that was being made about a typo, and must not be made about one again.
+    expect(panel.textContent ?? '').not.toMatch(/not a US callsign|United States|another administration is/i);
+    // Nor may a typo be dressed as a fault: this is the same quiet panel the other refusals use.
+    expect(panel.className).toContain('callsign-quiet');
+    expect(panel.textContent ?? '').not.toMatch(/invalid|error|failed/i);
+    // And the person who cannot see the panel is told the same thing it says.
+    expect(liveRegion(container)).toHaveTextContent(/N0CALLXX does not look like a callsign/i);
+  });
+
+  /**
+   * The guard that decides whether a new status renders at all. `malformed` is in `KNOWN_STATUSES`
+   * (the test above proves it), and anything genuinely unrecognised still lands in the "something
+   * other than GrantSpotter answered" panel rather than blanking the screen — which is what would
+   * have happened to `malformed` if the server had been extended and this file had not.
+   */
+  it('still refuses to render a status it does not know', async () => {
+    stubResult({ status: 'teapot' } as unknown as CallsignLookupResult);
+    renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not run/i });
+    expect(panel).toHaveTextContent(/not a lookup result/i);
   });
 
   it('says the source is mid-import rather than that the callsign is missing', async () => {

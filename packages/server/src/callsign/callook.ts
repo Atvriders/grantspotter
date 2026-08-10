@@ -1,4 +1,4 @@
-import { callDistrictFromCallsign, type LicenseClass } from '@grantspotter/core';
+import { type LicenseClass } from '@grantspotter/core';
 import { assertNotBlocked } from '../fetcher/blocklist.js';
 import { canonicalHostname } from '../net/hosts.js';
 import {
@@ -9,6 +9,7 @@ import {
   parseRetryAfterMs,
   type HostCooldown,
 } from './cooldown.js';
+import { classifyCallsign, normaliseCallsign } from './shape.js';
 import type { CallsignLookupResult, CallsignRecord } from './types.js';
 
 /**
@@ -219,18 +220,6 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-/**
- * Whitespace removed, upper-cased. A callsign contains neither, so a space in the input is
- * typing, not data — and `callDistrictFromCallsign` would read `W1 AW` as "not a US callsign",
- * which is the one message that must never be shown to somebody holding a US licence.
- *
- * Nothing else is stripped. A `/P` or `/4` suffix is a real thing people type and this does NOT
- * remove it, because the licence record it would then return is not the string they asked about.
- */
-function normalise(callsign: string): string {
-  return callsign.replace(/\s+/g, '').toUpperCase();
-}
-
 /** The pieces of {@link CallsignLookupDeps} that decide whether a press becomes a request. */
 export type ReachDeps = Pick<CallsignLookupDeps, 'cooldown' | 'baseUrl' | 'now'>;
 
@@ -249,17 +238,35 @@ function targetUrl(wanted: string, deps: ReachDeps): string {
  * what is spent cannot drift apart, which is the property `api/callsign.ts` claims in prose.
  */
 type Refusal =
+  /** A callsign, issued somewhere callook does not publish records from. */
   | { kind: 'not_us' }
+  /** Not a callsign at all — which is a DIFFERENT fact, and used to be reported as the one above. */
+  | { kind: 'malformed' }
   | { kind: 'blocked'; error: unknown }
   | { kind: 'cooling'; remainingMs: number }
   | { kind: 'busy' };
 
 function refuseBeforeRequest(callsign: string, deps: ReachDeps): Refusal | undefined {
-  const wanted = normalise(callsign);
-  // callook holds United States records only, so a non-US callsign has nothing to ask about.
-  // `callDistrictFromCallsign` decides; this file does not mint a second opinion about what a
-  // callsign looks like.
-  if (callDistrictFromCallsign(wanted) === undefined) return { kind: 'not_us' };
+  const wanted = normaliseCallsign(callsign);
+  /*
+   * TWO REASONS NOT TO ASK, AND THEY ARE NOT THE SAME REASON.
+   *
+   * callook holds United States records only, so a foreign callsign has nothing to ask about — and
+   * a string that is not a callsign has nothing to ask about either, for a reason that has nothing
+   * to do with which country anybody is licensed in. Until 2026-08-09 both came back from
+   * `callDistrictFromCallsign` as one `undefined` and were sent out as `not_us`, so `N0CALLXX` —
+   * one letter too long, US prefix and all — was answered "your licence is no less valid for being
+   * issued somewhere this lookup cannot reach". `shape.ts` splits them; this file does not mint a
+   * second opinion about what a callsign looks like, it asks.
+   */
+  switch (classifyCallsign(wanted)) {
+    case 'foreign':
+      return { kind: 'not_us' };
+    case 'malformed':
+      return { kind: 'malformed' };
+    case 'us':
+      break;
+  }
 
   const url = targetUrl(wanted, deps);
   try {
@@ -287,10 +294,13 @@ function refuseBeforeRequest(callsign: string, deps: ReachDeps): Refusal | undef
  * Does pressing the button, right now, cost callook.info a request?
  *
  * EXPORTED FOR THE THING THAT RATIONS REQUESTS. `api/callsign.ts` limits how often one person may
- * make this software ask somebody else's server a question, and the four ways a press can cost
- * that server nothing — a callsign that is not a US prefix, a base URL on the hard blocklist, a
- * host that has asked us to wait and whose wait has not run out, and a host we are already
- * mid-question with — are all decided here, in this process, before any socket exists.
+ * make this software ask somebody else's server a question, and the ways a press can cost that
+ * server nothing — a callsign the FCC did not issue, a string that is not a callsign at all, a base
+ * URL on the hard blocklist, a host that has asked us to wait and whose wait has not run out, and a
+ * host we are already mid-question with — are all decided here, in this process, before any socket
+ * exists. The first two were one reason until 2026-08-09, which is how a typo came to be answered
+ * with a sentence about international licensing; they are two now, and a press costs nothing under
+ * either of them.
  *
  * Until 2026-08-04 the route had no way to ask, so it charged every press. Nine `DL1ABC` presses
  * from one member spent the whole allowance without a single request leaving the process, and the
@@ -411,7 +421,7 @@ function toRecord(body: Record<string, unknown>, fetchedAt: string): CallsignLoo
     // What the licensee holds NOW, which is not always what was asked for: callook answers a
     // lookup of a superseded callsign with the current record for that licensee. The caller must
     // use THIS value, and may usefully say "we found you under WV0ZZZ" when it differs.
-    callsign: normalise(callsign),
+    callsign: normaliseCallsign(callsign),
     type,
     name,
     // False also means "we were given no address at all", which is normal — about 1.3% of records
@@ -564,8 +574,38 @@ export async function lookupCallsign(
   callsign: string,
   deps: CallsignLookupDeps,
 ): Promise<CallsignLookupResult> {
-  const wanted = normalise(callsign);
+  const wanted = normaliseCallsign(callsign);
   const refusal = refuseBeforeRequest(callsign, deps);
+  /*
+   * NOT A CALLSIGN IS NOT A COUNTRY, AND IT GETS ITS OWN STATUS SO THAT NOBODY HAS TO READ IT AS
+   * ONE.
+   *
+   * Its own status rather than its own sentence under `not_us`, because `not_us` is a CLAIM — the
+   * client renders a heading saying this callsign is not American — and the claim is what was
+   * false. A sixth status is the thing the cooldown case deliberately did not add (see the NOTES in
+   * this module's tests); the difference is that a hold and a network failure share a true frame,
+   * "nothing was filled in and nothing is claimed", while "not a US callsign" and "not a callsign"
+   * do not share one. `packages/web`'s `KNOWN_STATUSES` guard is extended in the same change, which
+   * is what keeps the politest outcome in the product from being rendered as the most alarming one.
+   */
+  if (refusal?.kind === 'malformed') {
+    return {
+      status: 'malformed',
+      /*
+       * SHORT, AND ABOUT WHAT THIS PROCESS DID. The advice — check for a stray character, mind the
+       * "/P" suffix — belongs to the client's frame, which renders directly above this sentence;
+       * saying it in both places makes a person read the same paragraph twice and is the division
+       * of labour this module keeps everywhere else ("this copy is what the SCREEN promises; that
+       * message is what the SERVER observed"). What only this side knows is the string it was
+       * handed, that it asked nobody, and that it is claiming nothing about a country.
+       */
+      message:
+        `GrantSpotter could not read "${clip(wanted, 16)}" as a callsign, so it asked callook.info ` +
+        `nothing and is saying nothing about which country issued your licence. Check what you ` +
+        `typed; if it is right exactly as it stands, type your licence details in and carry on, ` +
+        `because nothing here depends on this lookup.`,
+    };
+  }
   if (refusal?.kind === 'not_us') {
     // Quoted back so the reader can see what we read, but capped: this is the one message that can
     // be built from arbitrary input, and a pasted paragraph must not become a pasted paragraph
@@ -576,17 +616,19 @@ export async function lookupCallsign(
       message:
         `GrantSpotter can only look up United States callsigns automatically — the source it ` +
         `asks, callook.info, holds FCC records and nothing else — and "${quoted}" is not one it ` +
-        `can answer for. If that is a US callsign, check it for a typo and leave off any "/P" or ` +
-        `"/4" suffix. Otherwise just type your licence details in yourself: every part of ` +
+        `can answer for. It IS a callsign, which is why this says nothing worse than that: if you ` +
+        `meant a US one, check it for a typo. Otherwise just type your licence details in ` +
+        `yourself: every part of ` +
         `GrantSpotter works the same either way, and your licence is no less valid for being ` +
         `issued somewhere this lookup cannot reach.`,
     };
   }
   if (refusal?.kind === 'blocked') return unavailable(blockedMessage(refusal.error));
-  // THE HOLD, READ BEFORE ANY SOCKET EXISTS. `unavailable` and not a status of its own: the five
-  // statuses are what `packages/web` knows how to render, a sixth would fall through its
-  // unknown-status guard and be reported as "the API answered with something that is not a lookup
-  // result", and the sentence is what carries the difference. See NOTES in this module's tests.
+  // THE HOLD, READ BEFORE ANY SOCKET EXISTS. `unavailable` and not a status of its own, and that is
+  // still true now that `malformed` exists: every ending `unavailable` covers shares one true
+  // frame — no record, nothing filled in, nothing claimed about the callsign — and the sentence is
+  // what carries which ending it was. A status is worth adding only when the frame would otherwise
+  // say something false, which is what `malformed` was for. See NOTES in this module's tests.
   if (refusal?.kind === 'cooling') {
     return unavailable(askedToWaitMessage(refusal.remainingMs, false));
   }

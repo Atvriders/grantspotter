@@ -86,16 +86,28 @@ function isLicenseClass(value: string): value is LicenseClass {
 }
 
 /**
- * The five statuses, as a runtime set. The type says a response can only be one of these; the
+ * WHAT THIS PANEL CAN RENDER, which is what the server can answer with.
+ *
+ * `api/callsign.ts` mirrors `packages/server/src/callsign/types.ts` by hand — web may not import
+ * from server — and `malformed` is named here rather than there because a mirror that lags is a
+ * fact this component already has to survive: `KNOWN_STATUSES` below exists precisely because the
+ * wire is not the type. Rendering it is this file's job either way, and a status the panel can
+ * frame must not be reported as a proxy having answered instead of GrantSpotter.
+ */
+type LookupStatus = CallsignLookupResult['status'] | 'malformed';
+
+/**
+ * The six statuses, as a runtime set. The type says a response can only be one of these; the
  * wire does not, and this app is served behind a tunnel where a proxy or a captive portal can
  * answer 200 with something else entirely (see `apiFetch`'s non-JSON guard, which is the same
  * defence one layer down). An unrecognised status must not reach `frameFor`, whose exhaustive
  * switch would hand back `undefined` and blank the screen.
  */
-const KNOWN_STATUSES: ReadonlySet<string> = new Set([
+const KNOWN_STATUSES: ReadonlySet<string> = new Set<LookupStatus>([
   'found',
   'not_found',
   'not_us',
+  'malformed',
   'updating',
   'unavailable',
 ]);
@@ -132,7 +144,7 @@ interface Frame {
 }
 
 /**
- * The sentence for each status. FIVE STATUSES, FIVE ANSWERS — a shared "lookup failed" would
+ * The sentence for each status. SIX STATUSES, SIX ANSWERS — a shared "lookup failed" would
  * tell an international operator that something is wrong with their licence, and would tell
  * somebody whose source is mid-import that their callsign does not exist.
  *
@@ -140,7 +152,7 @@ interface Frame {
  * copy is what the SCREEN promises; that message is what the SERVER observed, and flattening
  * one into the other loses the half the user needs.
  */
-export function frameFor(status: CallsignLookupResult['status'], callsign: string): Frame {
+export function frameFor(status: LookupStatus, callsign: string): Frame {
   switch (status) {
     case 'found':
       return { heading: `FCC record for ${callsign}`, body: '' };
@@ -161,6 +173,28 @@ export function frameFor(status: CallsignLookupResult['status'], callsign: strin
           'FCC database, which covers US licences only, so it holds no record of any other ' +
           'administration to check against. Fill the form in yourself; every other part of ' +
           'GrantSpotter works exactly the same way for you.',
+      };
+    /*
+     * THE STATUS THAT MUST NOT NAME A COUNTRY, BECAUSE NOBODY HERE KNOWS ONE.
+     *
+     * Until 2026-08-09 this answer did not exist and its cases arrived as `not_us`, so the heading
+     * above — "X is not a US callsign" — was printed over `N0CALLXX`, over `W1AW/4`, and over
+     * anything else a person mistyped. `N0` is a US prefix; six suffix letters is not a US format;
+     * neither fact makes the string foreign, and one of them is a typo the reader can fix in a
+     * second if they are told what is actually wrong. So this frame says what the software knows —
+     * it could not read the string as a callsign — and says explicitly that it is not a claim about
+     * the licence's origin, which is the claim that was being made by accident.
+     */
+    case 'malformed':
+      return {
+        heading: `${callsign} does not look like a callsign, so nothing was looked up`,
+        body:
+          'GrantSpotter could not read this as a callsign of any administration, so it asked ' +
+          'nobody about it and is saying nothing about where your licence is from. The usual ' +
+          'cause is a typo — one character too many or too few — or a “/P” or “/4” suffix, which ' +
+          'says where somebody is operating and is not part of the callsign. Check what you ' +
+          'typed. If it is right exactly as it stands, nothing is wrong with your licence: fill ' +
+          'the form in yourself, because nothing here is required.',
       };
     case 'updating':
       return {
@@ -502,8 +536,9 @@ function NonFoundPanel({
   onClose: () => void;
 }): JSX.Element {
   return (
-    // `callsign-quiet` on every one of these: none of the four is a failure of the user's,
-    // and `not_us` in particular must not be dressed as an error.
+    // `callsign-quiet` on every one of these: not one of the five is a failure of the user's —
+    // `not_us` in particular must not be dressed as an error, and `malformed`, the only one that
+    // does point at what was typed, is a typo being pointed out and not a fault being reported.
     <section className="callsign-panel callsign-quiet" aria-labelledby={id}>
       <h2 id={id}>{frame.heading}</h2>
       <p className="callsign-note">{frame.body}</p>

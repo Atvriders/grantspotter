@@ -267,21 +267,77 @@ describe('lookupCallsign: the answers that are not a record', () => {
     const { deps, calls } = serveFixture('00-callook-info-w1aw-json.json');
     const result = await lookupCallsign('W1AW '.repeat(400), deps);
 
-    expect(result.status).toBe('not_us');
+    // `not_us` until 2026-08-09. Four hundred callsigns run together is not a foreign licence; the
+    // clipping is what this test is about and it is asserted on the message that is now correct.
+    expect(result.status).toBe('malformed');
     expect(calls).toHaveLength(0);
     expect(result.message?.length).toBeLessThan(600);
   });
 
-  it.each(['G0ABC', 'JA1XYZ', 'VE3ABC', '', '???', 'W1AW/4', '../../etc/passwd'])(
-    'makes no request at all for %s',
+  it.each(['G0ABC', 'JA1XYZ', 'VE3ABC'])('makes no request at all for %s', async (input) => {
+    const { deps, calls } = serveFixture('00-callook-info-w1aw-json.json');
+    const result = await lookupCallsign(input, deps);
+
+    expect(result.status).toBe('not_us');
+    expect(calls).toHaveLength(0);
+  });
+
+  /**
+   * THE FOUR INPUTS THIS TABLE USED TO ASSERT `not_us` FOR, WHICH WAS WRONG ABOUT ALL FOUR.
+   *
+   * `''`, `'???'`, `'W1AW/4'` and `'../../etc/passwd'` sat in the list above beside three genuine
+   * foreign callsigns, and the assertion said the product told all seven the same thing. It did:
+   * "GrantSpotter can only look up United States callsigns automatically… your licence is no less
+   * valid for being issued somewhere this lookup cannot reach", printed over an empty box, over
+   * punctuation, and over a US callsign with an operating suffix on it. The request count was the
+   * property worth pinning and it still is, so it is asserted here unchanged — what changes is the
+   * status, because the old one was the defect written down as an expectation.
+   */
+  it.each(['', '   ', '???', 'W1AW/4', '../../etc/passwd', 'N0CALLXX', 'W5X5', 'KANSAS'])(
+    'makes no request for %s either, and does not call it foreign',
     async (input) => {
       const { deps, calls } = serveFixture('00-callook-info-w1aw-json.json');
       const result = await lookupCallsign(input, deps);
 
-      expect(result.status).toBe('not_us');
+      expect(result.status).toBe('malformed');
       expect(calls).toHaveLength(0);
+      expect(wouldReachTheSource(input, deps)).toBe(false);
     },
   );
+
+  /**
+   * THE REPORT, IN ONE TEST. `N0` is a US prefix and `N0CALLXX` has six suffix letters where the
+   * format allows four, so it is a typo — and it was answered with the paragraph written to
+   * reassure international operators, which told an American their callsign was not American.
+   */
+  it('tells somebody who mistyped a US callsign that it is a typo, not a foreign licence', async () => {
+    const { deps, calls } = serveFixture('00-callook-info-w1aw-json.json');
+    const result = await lookupCallsign('N0CALLXX', deps);
+
+    expect(result.status).toBe('malformed');
+    expect(calls).toHaveLength(0);
+    expect(result.record).toBeUndefined();
+    // What it says: we could not read this, check it.
+    expect(result.message).toContain('N0CALLXX');
+    expect(result.message).toMatch(/could not read/i);
+    expect(result.message).toMatch(/check what you typed/i);
+    // What it must not say: anything at all about which country issued the licence…
+    expect(result.message).not.toMatch(/United States|not a US|foreign|issued somewhere/i);
+    // …and nothing that reads as a verdict on the licence itself.
+    expect(result.message).not.toMatch(/not found|invalid|unlicensed/i);
+  });
+
+  it('still says "not a US callsign" to a callsign that really is somebody else’s', async () => {
+    const { deps, calls } = serveFixture('00-callook-info-w1aw-json.json');
+    const result = await lookupCallsign('G0ABC', deps);
+
+    expect(result.status).toBe('not_us');
+    expect(calls).toHaveLength(0);
+    expect(result.message).toMatch(/United States/);
+    // The reassurance the split exists to keep pointed at the people it was written for.
+    expect(result.message).toMatch(/no less valid/i);
+    expect(result.message).not.toMatch(/not found|invalid/i);
+  });
 });
 
 describe('lookupCallsign: failures', () => {
@@ -492,12 +548,19 @@ describe('lookupCallsign: failures', () => {
  * The host being hammered was the one whose robots.txt says `Disallow: /`, which this product
  * queries anyway on an argument that rests entirely on this being one request a person asked for.
  *
- * WHY THE ANSWER IS `unavailable` AND NOT A SIXTH STATUS. `packages/web` holds its own copy of the
- * five-value union AND a runtime `KNOWN_STATUSES` guard; a status it does not know is reported to
- * the user as "the API answered with something that is not a lookup result… a proxy, tunnel, or
- * sign-in page may have answered instead". A sixth status would therefore have made the politest
- * outcome in the product look like the most alarming one. The sentence carries the difference, and
- * the sentence is what these tests pin.
+ * WHY THE ANSWER IS `unavailable` AND NOT A STATUS OF ITS OWN, WHICH IS STILL TRUE NOW THAT
+ * `malformed` EXISTS. Every ending `unavailable` covers shares one frame that is true of all of
+ * them — no record, nothing filled in, nothing claimed about the callsign — so the status costs the
+ * reader nothing and the server's sentence says which ending it was. `malformed` was added on
+ * 2026-08-09 because its cases had NO true frame to share: they were arriving as `not_us`, whose
+ * frame states in a heading that the callsign is not American, which is a claim and was false. A
+ * status earns its place when the frame would otherwise lie, not when the sentence differs.
+ *
+ * Adding one is not free either way: `packages/web` holds a runtime `KNOWN_STATUSES` guard, and a
+ * status it does not know is reported as "the API answered with something that is not a lookup
+ * result… a proxy, tunnel, or sign-in page may have answered instead". Anything added here has to
+ * be added there in the same change, or the politest outcome in the product renders as the most
+ * alarming one.
  */
 describe('lookupCallsign: when the source asks us to wait', () => {
   interface WaitHarness {
