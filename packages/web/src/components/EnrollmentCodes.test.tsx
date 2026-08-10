@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { EnrollmentCode } from '@grantspotter/core';
-import { CHOSEN_CODE_MIN_LENGTH } from '@grantspotter/core';
+import { CHOSEN_CODE_MAX_USES, CHOSEN_CODE_MIN_LENGTH } from '@grantspotter/core';
 import { confusableTwin, EnrollmentCodes, enrollmentCodeState } from './EnrollmentCodes.js';
 
 const NOW = '2026-08-04T12:00:00.000Z';
@@ -412,14 +412,35 @@ describe('choosing the code instead of generating one', () => {
     );
   });
 
-  it('stops calling the expiry optional once a code has been typed', async () => {
+  /**
+   * BOTH FIELDS, because both stopped being optional and for the same reason: they are the two
+   * bounds on what a chosen code is worth to somebody who guesses it, and a form that invites a
+   * blank the server refuses is a limit that turns away legitimate work.
+   *
+   * The queries name their own field. Until the uses field grew the same parenthetical, "required
+   * for a code you choose" matched exactly one label on this screen and the looser query passed by
+   * luck rather than by saying what it meant.
+   */
+  it('stops calling the expiry and the uses optional once a code has been typed', async () => {
     stubFetch();
     renderSection();
     expect(await screen.findByLabelText(/blank for no expiry/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/blank for no limit/i)).toBeInTheDocument();
 
     await typeCode('W1MX-FALL-2026');
     expect(screen.queryByLabelText(/blank for no expiry/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/required for a code you choose/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/blank for no limit/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/expires in days \(required for a code you choose/i),
+    ).toBeInTheDocument();
+    // …and the ceiling is on the label, so an officer meets it before a refusal does.
+    expect(
+      screen.getByLabelText(
+        new RegExp(`maximum uses \\(required for a code you choose, up to ${String(
+          CHOSEN_CODE_MAX_USES,
+        )}`, 'i'),
+      ),
+    ).toBeInTheDocument();
   });
 
   it('sends the code exactly as typed, so the fold happens once and on the server', async () => {
@@ -492,7 +513,8 @@ describe('choosing the code instead of generating one', () => {
             json: async () => ({
               error: {
                 code: 'validation_failed',
-                message: 'That code is 8 characters once capitals, dashes and spaces are taken out',
+                message:
+                  'That code is 8 characters once capitals, dashes, spaces and U are taken out',
               },
               requestId: 'req-test-2',
             }),

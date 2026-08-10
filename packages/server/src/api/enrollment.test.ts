@@ -284,7 +284,7 @@ describe('a code the administrator chooses', () => {
   });
 
   it('is redeemable by a holder who spells it any of the ways it can be spelled', async () => {
-    await create({ label: 'intake', code: CHOSEN, expiresInDays: 90 });
+    await create({ label: 'intake', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
     const repo = createEnrollmentCodeRepo(db);
 
     for (const typed of [CHOSEN, 'w1mx fall 2026', NORMALIZED, 'WIMX-FA11-2O26']) {
@@ -297,7 +297,7 @@ describe('a code the administrator chooses', () => {
   });
 
   it('refuses one that is too short, and says both numbers', async () => {
-    const res = await create({ label: 'intake', code: 'W1MX2026', expiresInDays: 90 });
+    const res = await create({ label: 'intake', code: 'W1MX2026', maxUses: 30, expiresInDays: 90 });
 
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('validation_failed');
@@ -305,21 +305,78 @@ describe('a code the administrator chooses', () => {
     // "too short" gets retried one character at a time.
     expect(res.body.error.message).toMatch(/\b8 characters\b/);
     expect(res.body.error.message).toMatch(/at least 12/);
-    // …and the reason, which is what an attacker can actually try rather than a policy citation.
-    expect(res.body.error.message).toMatch(/ten wrong codes every fifteen minutes/);
-    expect(res.body.error.message).toMatch(/1,862 wrong codes a second/);
+    /**
+     * THE REASON, AND IT IS NO LONGER THE ONE THIS TEST USED TO PIN. It required
+     * "ten wrong codes every fifteen minutes" and "1,862 wrong codes a second", which is the shape
+     * of the defect rather than a passing detail: the sentence explained the floor by quoting the
+     * throughput of a limiter keyed on a header the caller writes. Both are gone with the limiter
+     * they described. What is asserted now is the deployment-wide ceiling, which is the true bound
+     * on exhaustive search — and, deliberately, that the sentence quotes it "however many addresses
+     * they use", because that clause is the whole difference.
+     */
+    expect(res.body.error.message).toMatch(/240 wrong codes every fifteen minutes/);
+    expect(res.body.error.message).toMatch(/23,040 a day, however many addresses they use/);
     // The two odds, computed rather than asserted as prose: eight characters is not "found", it is
-    // one in nineteen, and a refusal that rounds a probability into a verdict invites disbelief.
+    // a probability, and a refusal that rounds one into a verdict invites disbelief.
     expect(res.body.error.message).toContain(exhaustionChance(8));
     expect(res.body.error.message).toContain(exhaustionChance(CHOSEN_CODE_MIN_LENGTH));
-    // …and the limit of the promise. Twelve is a floor, not a guarantee, and the refusal says so.
-    expect(res.body.error.message).toMatch(/floor\s+rather than a promise/);
+    /**
+     * AND THE LIMIT OF THE CLAIM, WHICH IS THE ASSERTION THIS ROUND EXISTS FOR. The old sentence
+     * ended "it is a floor rather than a promise", which is a hedge; a reader who clears the floor
+     * still comes away believing the number did something for them. `W1MX-SPRING-2027` clears it by
+     * two characters and was found on the seventh guess, so the refusal now says outright that no
+     * length measures guessability, and says it with the measurement.
+     */
+    expect(res.body.error.message).toMatch(/not a measure of how hard your code is to GUESS/);
+    expect(res.body.error.message).toMatch(/W1MX-SPRING-2027 was found on the seventh attempt/);
+    expect(res.body.error.message).not.toMatch(/1,862/);
     expect(createEnrollmentCodeRepo(db).list()).toEqual([]);
+  });
+
+  /**
+   * THE BOUND THAT IS LEFT WHEN THE FLOOR IS ADMITTED NOT TO BE ONE.
+   *
+   * MEASURED against the built server on 2026-08-10: a chosen code found on the seventh guess went
+   * on to mint 60 further member accounts, one per request, until the harness stopped asking. The
+   * argument recorded in core for NOT requiring `maxUses` — that it bounds the consequence and not
+   * the attack — is still true and is now the reason to require it rather than the reason not to.
+   */
+  it('refuses a chosen code that says nothing about how many accounts it may make', async () => {
+    const res = await create({ label: 'intake', code: CHOSEN, expiresInDays: 90 });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toMatch(/has to say how many accounts it may create/);
+    // The number an officer should type, so the refusal is a decision rather than a puzzle…
+    expect(res.body.error.message).toMatch(/Thirty is the usual answer/);
+    // …and the ceiling, so the next attempt is not refused a second time for a different reason.
+    expect(res.body.error.message).toMatch(/most a chosen code may have is 200/);
+    expect(createEnrollmentCodeRepo(db).list()).toEqual([]);
+  });
+
+  it('caps a chosen code at 200 accounts while leaving the generated ceiling alone', async () => {
+    const chosen = await create({
+      label: 'intake',
+      code: CHOSEN,
+      maxUses: 201,
+      expiresInDays: 90,
+    });
+    expect(chosen.status).toBe(422);
+    expect(chosen.body.error.message).toMatch(/at most 200 accounts and this one asks for 201/);
+    // 200 exactly is allowed: a ceiling that refuses its own stated value is a different rule.
+    expect(
+      (await create({ label: 'hamfest', code: CHOSEN, maxUses: 200, expiresInDays: 90 })).status,
+    ).toBe(201);
+
+    // Nothing about this feature makes a 2^100 code weaker: it keeps 10,000 and keeps `null`.
+    const generated = await create({ label: 'badges', maxUses: 10_000 });
+    expect(generated.status).toBe(201);
+    expect(generated.body.code.maxUses).toBe(10_000);
+    expect((await create({ label: 'open house', maxUses: null })).status).toBe(201);
   });
 
   it('counts the code AFTER the fold, so dashes do not buy length', async () => {
     // Eleven characters padded to seventeen with dashes. The dashes are not the code.
-    const res = await create({ label: 'intake', code: '1-2-3-4-5-6-7-8-9', expiresInDays: 90 });
+    const res = await create({ label: 'intake', code: '1-2-3-4-5-6-7-8-9', maxUses: 30, expiresInDays: 90 });
     expect(res.status).toBe(422);
     expect(res.body.error.message).toMatch(/\b9 characters\b/);
   });
@@ -337,7 +394,7 @@ describe('a code the administrator chooses', () => {
   });
 
   it('refuses an expiry past a year for a chosen code while allowing ten for a generated one', async () => {
-    const chosen = await create({ label: 'intake', code: CHOSEN, expiresInDays: 400 });
+    const chosen = await create({ label: 'intake', code: CHOSEN, maxUses: 30, expiresInDays: 400 });
     expect(chosen.status).toBe(422);
     expect(chosen.body.error.message).toMatch(/at most 365 days and this one asks for 400/);
 
@@ -351,6 +408,7 @@ describe('a code the administrator chooses', () => {
     const res = await create({
       label: `${CHOSEN} intake`,
       code: CHOSEN,
+      maxUses: 30,
       expiresInDays: 90,
     });
 
@@ -370,6 +428,7 @@ describe('a code the administrator chooses', () => {
     const first = await create({
       label: 'W1MX autumn 2026 intake',
       code: CHOSEN,
+      maxUses: 30,
       expiresInDays: 90,
     });
     expect(first.status).toBe(201);
@@ -377,6 +436,7 @@ describe('a code the administrator chooses', () => {
     const second = await create({
       label: 'Field Day helpers',
       code: 'WIMX-FA11-2O26',
+      maxUses: 30,
       expiresInDays: 90,
     });
 
@@ -394,12 +454,12 @@ describe('a code the administrator chooses', () => {
   });
 
   it('refuses a collision with a revoked code too, which is the point of saying so', async () => {
-    const first = await create({ label: 'last term', code: CHOSEN, expiresInDays: 90 });
+    const first = await create({ label: 'last term', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
     await request(buildApp(ADMIN)).post(
       `/api/admin/enrollment-codes/${String(first.body.code.id)}/revoke`,
     );
 
-    const again = await create({ label: 'this term', code: CHOSEN, expiresInDays: 90 });
+    const again = await create({ label: 'this term', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
     expect(again.status).toBe(409);
     // Anyone still holding the withdrawn code would be holding the new one, which is exactly what
     // revoking was for.
@@ -415,8 +475,8 @@ describe('a code the administrator chooses', () => {
    * property worth removing. A miss is already loud, because a miss creates a code.
    */
   it('writes the probe down when a chosen code hits an existing one', async () => {
-    const first = await create({ label: 'W1MX autumn 2026 intake', code: CHOSEN, expiresInDays: 90 });
-    await create({ label: 'guess', code: 'WIMX FA11 2O26', expiresInDays: 90 });
+    const first = await create({ label: 'W1MX autumn 2026 intake', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
+    await create({ label: 'guess', code: 'WIMX FA11 2O26', maxUses: 30, expiresInDays: 90 });
 
     const collisions = auditRows().filter((r) => r.action === 'enrollment_code.collision');
     expect(collisions).toEqual([
@@ -436,9 +496,9 @@ describe('a code the administrator chooses', () => {
   });
 
   it('records the probe once a window, so the trail cannot be flooded to bury itself', async () => {
-    await create({ label: 'W1MX autumn 2026 intake', code: CHOSEN, expiresInDays: 90 });
+    await create({ label: 'W1MX autumn 2026 intake', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
     for (let i = 0; i < 20; i += 1) {
-      await create({ label: `guess ${String(i)}`, code: CHOSEN, expiresInDays: 90 });
+      await create({ label: `guess ${String(i)}`, code: CHOSEN, maxUses: 30, expiresInDays: 90 });
     }
     // Twenty probes, one row. `deps.now` is pinned, so every one of them is inside one window.
     expect(auditRows().filter((r) => r.action === 'enrollment_code.collision')).toHaveLength(1);
@@ -456,7 +516,7 @@ describe('a code the administrator chooses', () => {
   });
 
   it('records that a code was chosen, and never the code', async () => {
-    const res = await create({ label: 'W1MX autumn intake', code: CHOSEN, expiresInDays: 90 });
+    const res = await create({ label: 'W1MX autumn intake', code: CHOSEN, maxUses: 30, expiresInDays: 90 });
 
     expect(auditRows()).toEqual([
       {
@@ -468,7 +528,7 @@ describe('a code the administrator chooses', () => {
         detail: JSON.stringify({
           label: 'W1MX autumn intake',
           chosen: true,
-          maxUses: null,
+          maxUses: 30,
           expiresAt: '2026-11-30T12:00:00.000Z',
         }),
       },
@@ -484,7 +544,7 @@ describe('a code the administrator chooses', () => {
   });
 
   it('refuses a code longer than the paste guard', async () => {
-    const res = await create({ label: 'intake', code: 'W1MX'.repeat(40), expiresInDays: 90 });
+    const res = await create({ label: 'intake', code: 'W1MX'.repeat(40), maxUses: 30, expiresInDays: 90 });
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('validation_failed');
   });
@@ -493,7 +553,7 @@ describe('a code the administrator chooses', () => {
     // It is a non-empty string, so it is a CHOSEN code — and it normalises to nothing, which is
     // zero characters. Falling through to "generate one" would silently give the administrator a
     // different credential from the one they asked for.
-    const res = await create({ label: 'intake', code: '-----', expiresInDays: 90 });
+    const res = await create({ label: 'intake', code: '-----', maxUses: 30, expiresInDays: 90 });
     expect(res.status).toBe(422);
     expect(res.body.error.message).toMatch(/\b0 characters\b/);
     expect(createEnrollmentCodeRepo(db).list()).toEqual([]);

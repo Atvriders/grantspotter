@@ -3,8 +3,10 @@ import type { FormEvent } from 'react';
 import {
   CHOSEN_CODE_MAX_DAYS,
   CHOSEN_CODE_MAX_INPUT,
+  CHOSEN_CODE_MAX_USES,
   CHOSEN_CODE_MIN_LENGTH,
   describeEnrollmentCodeFold,
+  describeEnrollmentCodeStripped,
   ENROLLMENT_CODE_FOLD,
   normalizeEnrollmentCode,
   type EnrollmentCode,
@@ -113,6 +115,14 @@ export function confusableTwin(normalized: string): string {
  * server hashes. `api/enrollment.ts` builds its refusals from the same function.
  */
 const FOLD_SENTENCE = describeEnrollmentCodeFold();
+
+/**
+ * "capitals, dashes, spaces and U" — what comes out of a code before it is measured, assembled in
+ * core so the hint under the field cannot go on quoting a length arrived at by a rule it does not
+ * state. `U` is deleted rather than folded, so `W1MX-AUTUMN-2026` is fourteen of the characters an
+ * officer typed and twelve of the ones this floor counts.
+ */
+const STRIPPED_SENTENCE = describeEnrollmentCodeStripped();
 
 export interface EnrollmentCodesProps {
   /**
@@ -297,9 +307,12 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
               code and no other code on this instance can use those characters now. You chose this
               one, so unlike a generated code it is short enough for somebody to think of: it is
               safe from being worked through character by character and it is not safe from being
-              guessed by anyone who knows your club. Revoke it the day the intake closes rather than
-              leaving it to expire, and set a maximum number of uses if you know how many people are
-              coming.
+              guessed by anyone who knows your club. What bounds that is its expiry and the{' '}
+              {created.code.maxUses === null
+                ? 'accounts'
+                : `${String(created.code.maxUses)} accounts`}{' '}
+              it may create — not its length — so revoke it the day the intake closes rather than
+              leaving it to run.
             </p>
           )}
           <span className="secret-actions">
@@ -381,8 +394,8 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
                 Blank generates twenty random characters that nobody can guess. Type your own to get
                 one an officer can read out at a meeting — that is a real trade, because a code
                 somebody can remember is a code somebody can guess. A code you choose needs at
-                least {CHOSEN_CODE_MIN_LENGTH} characters once capitals, dashes and spaces are taken
-                out, and has to expire within {CHOSEN_CODE_MAX_DAYS} days.
+                least {CHOSEN_CODE_MIN_LENGTH} characters once {STRIPPED_SENTENCE} are taken out,
+                and has to expire within {CHOSEN_CODE_MAX_DAYS} days.
               </>
             ) : (
               <>
@@ -399,12 +412,24 @@ export function EnrollmentCodes({ now }: EnrollmentCodesProps): JSX.Element {
           </span>
         </p>
         <label htmlFor="new-code-max-uses">
-          Maximum uses (blank for no limit)
+          {/*
+            The same conditional the expiry field carries, for the same reason and now for a second
+            one. "Blank for no limit" stops being true the moment a code is typed — a chosen code
+            has to say how many accounts it may create — and a form that invites a value the server
+            refuses is the defect this codebase keeps writing down: a limit that turns away
+            legitimate work. The number of uses is also the only bound on what a GUESSED chosen code
+            is worth, so the label says the ceiling rather than making the officer find it by being
+            refused.
+          */}
+          {chosenCode === ''
+            ? 'Maximum uses (blank for no limit)'
+            : `Maximum uses (required for a code you choose, up to ${String(CHOSEN_CODE_MAX_USES)})`}
           <input
             id="new-code-max-uses"
             type="number"
             min={1}
             step={1}
+            max={chosenCode === '' ? undefined : CHOSEN_CODE_MAX_USES}
             inputMode="numeric"
             value={maxUses}
             onChange={(e) => setMaxUses(e.target.value)}

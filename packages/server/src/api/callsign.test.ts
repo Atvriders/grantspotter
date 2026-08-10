@@ -385,8 +385,9 @@ describe('POST /api/callsign/lookup — rate limit', () => {
       check: (key, nowMs) => inner.check(key, nowMs),
       // Delegated and never used: this route counts every press that reaches the source, before the
       // request, so it has nothing whose outcome it must wait for. `begin` exists for the two auth
-      // routes, which do (auth/rateLimit.ts).
+      // routes, which do, and `count` for the enrolment route's audit row (auth/rateLimit.ts).
       begin: (key, nowMs) => inner.begin(key, nowMs),
+      count: (key, nowMs) => inner.count(key, nowMs),
       recordFailure: (key, nowMs) => {
         charged.push(key);
         inner.recordFailure(key, nowMs);

@@ -534,7 +534,8 @@ An administrator issues a code under **Admin → Enrollment codes** with a label
 "W1MX autumn 2026 intake" — and two bounds, both optional and both worth setting:
 
 - **A use limit.** How many accounts this code may create. Leave it empty for no limit; even then
-  the code is still bounded by its expiry and by your ability to revoke it.
+  the code is still bounded by its expiry and by your ability to revoke it. (For a code you *type*,
+  both bounds stop being optional — see below.)
 - **An expiry**, given as a number of days. A code with no limit and no expiry is a permanent
   password to your instance held by everyone you ever gave it to, so set at least one of the two.
 
@@ -544,22 +545,33 @@ Leave the code box empty and GrantSpotter generates one — twenty characters, 2
 instead of spelling twenty random characters down a phone. That is a real trade and the console
 says so at the moment you make it, not here:
 
-- **A code you choose must be at least 12 characters** once capitals, dashes and spaces are taken
-  out. Twelve is not a house style. A wrong code is answered in about half a millisecond, and the
-  guess limit below is counted per address, so somebody with more than one address is not held to
-  it — measured on the shipped build, 1,862 wrong codes a second. Twelve characters is the shortest
-  length at which a year of that leaves worse than a one-in-a-million chance of working through
-  every possibility; eight characters is one in nineteen. It is a floor and not a promise: nothing
-  can stop `W1MX-FALL-2026` being guessed by somebody who has heard of your club, so treat a chosen
-  code as a convenience with a deadline rather than as a secret.
-- **A code you choose must expire, within 365 days.** Not because of guessing — twelve characters
-  outlasts brute force by twenty million years — but because a code worth reading out is a code
-  that gets read out, photographed and forwarded, and an expiry is the only bound on that which
-  does not depend on somebody remembering to revoke it. A generated code may still live for ten
-  years, or forever.
+- **A code you choose can be guessed, and the product is built around that rather than around a
+  rule about length.** Nothing stops somebody who has heard of your club trying your callsign with
+  a season and a year: in testing, `W1MX-SPRING-2027` was found on the seventh attempt. So three
+  other things do the work. GrantSpotter answers **at most 240 wrong codes every fifteen minutes
+  across the whole server** — 23,040 a day, however many addresses a caller claims, and a code your
+  students really hold is never held up by it. It writes a line to the audit log when somebody is
+  working through codes, and another when an account is created from somewhere that has just been
+  getting them wrong. And the two bounds below cap what a guessed code is worth.
+- **A code you choose must be at least 12 characters** once capitals, dashes, spaces and `U` are
+  taken out. All that buys is ruling out somebody working through every possible code: at the
+  ceiling above, a year of guessing gets through eight characters with about one chance in 130,745
+  and twelve with about one in 137 billion. **Clearing the floor does not make a code hard to
+  guess** — `W1MX-SPRING-2027` clears it by two characters — so treat a chosen code as a
+  convenience with a deadline, not as a secret.
+- **A code you choose must say how many accounts it may create, up to 200.** This is the bound on
+  the day one of these is guessed: before it existed, a guessed code went on making member accounts
+  until somebody noticed. Thirty is the usual answer for a club intake, and issuing another code
+  takes ten seconds. A generated code keeps its 10,000, or no limit at all.
+- **A code you choose must expire, within 365 days.** Not because of guessing — no expiry short
+  enough to matter would help there — but because a code worth reading out is a code that gets read
+  out, photographed and forwarded, and an expiry is the only bound on that which does not depend on
+  somebody remembering to revoke it. A generated code may still live for ten years, or forever.
 - **Codes are compared after they are folded.** Capitals, dashes and spaces are ignored, `O` counts
-  as `0`, and `I` and `L` count as `1` — that is what lets a student type a code off a whiteboard
-  and still get in. It also means `W1MX-FALL-2026` and `WIMX-FA11-2O26` are *the same code*, so the
+  as `0`, `I` and `L` count as `1`, and **`U` is dropped entirely** — that is what lets a student
+  type a code off a whiteboard and still get in, and it is why `W1MX-AUTUMN-2026` is stored as
+  `W1MXATMN2026`, twelve characters rather than the fourteen you typed. The console shows you the
+  stored form before you save. It also means `W1MX-FALL-2026` and `WIMX-FA11-2O26` are *the same code*, so the
   console shows you the folded form before you save, and a second code that folds onto an existing
   one is refused and tells you which one it clashed with. Revoking the old one does not free the
   text: the two would still be the same code, and anyone still holding the old one could use the
@@ -568,8 +580,17 @@ says so at the moment you make it, not here:
   stored and the two are not equally strong.
 
 **The code is shown exactly once, on the screen that issues it.** After that only a hash of it is
-stored — the same arrangement as the [calendar feed token](#exports), for the same reason: a copy of
-`grantspotter.sqlite`, a backup or the JSON export must not hand out working credentials. The list
+stored, so a copy of `grantspotter.sqlite`, a backup or the JSON export does not hand out working
+credentials. For a code *you* typed, a plain hash would not have been enough — a dictionary of
+callsigns, seasons and years recovered `W1MX-AUTUMN-2026` from its stored digest in 32 seconds on
+one CPU core — so the stored value is an HMAC keyed with a secret derived from your
+`SESSION_SECRET`, which lives in your environment and is in no backup this software writes. **Two
+consequences worth knowing before they surprise you:** if you rotate or lose `SESSION_SECRET`, every
+outstanding enrolment code stops working (the rows stay, with their labels and counts — issue a new
+code for each open intake), and restoring a backup onto a host with a *different* `SESSION_SECRET`
+brings the records back but not the codes. Codes issued by a build older than migration 093 keep
+their original digest and go on working; they are all generated 20-character codes, which no
+dictionary reaches. The list
 of codes shows you the label, the use count, the expiry, who created it and when it was last
 redeemed, and it cannot show you the code itself, because the instance no longer has it. If you
 lose it, revoke it and issue another; that is cheaper than any recovery path and it is the one that
@@ -584,31 +605,40 @@ held to the same 12-character floor as every other password here, checked by the
 **A wrong code and a code that was never issued get the same answer.** Enrolment tells you nothing
 about codes you do not hold: not whether one exists, not how many there are, not who has one.
 Expired, revoked and used-up codes *do* say which they are, because those are the three states a
-legitimate holder needs explained before they give up and email somebody. Guessing is rationed by a
-failure counter of the same kind that guards sign-in, but with a budget of its own: 10 wrong codes
-per connection every 15 minutes, counted against the caller and not against enrolment as a whole.
-Only a wrong code is charged to it, and only a wrong code ever reads it: redeeming a code this
-instance really issued does not consult that counter at all, so nothing a stranger does with wrong
-codes can stop your students enrolling. A code that has expired, been revoked or run out is a
-holder failing, not an attacker probing, and locking them out for it teaches nobody anything. That
-limit is what makes a code's length mean anything — a secret you can only attack by guessing is
-worth the number of guesses allowed.
+legitimate holder needs explained before they give up and email somebody. Guessing is rationed by
+three counters rather than one: **10 wrong codes per address, 120 per source network, and 240
+across the whole server**, each per 15 minutes. Only a wrong code is charged to any of them, and
+only a wrong code ever reads one: redeeming a code this instance really issued does not consult
+them at all, so nothing a stranger does with wrong codes can stop your students enrolling. A code
+that has expired, been revoked or run out is a holder failing, not an attacker probing, and locking
+them out for it teaches nobody anything.
 
 **That promise is about codes, and not about email addresses.** Enrolling with an address that
 already has an account is told so, plainly, because the alternative is someone who signed up last
 term being unable to work out why the form will not take them. On an instance where every account
 needs a code you issued, that is a trade worth making and not a leak worth pretending about.
 
-**What that counter can and cannot tell apart.** It knows callers apart only by the address your
-proxy reports, so a club whose students all leave through one campus NAT shares one budget: after
-10 mistyped codes from that building the next mistype from it is answered "wait" rather than "that
-code is not valid", and typing the code correctly still enrols them. A caller who can reach the
-instance directly, with nothing in front of it, writes that address themselves and can start a
-fresh budget whenever they like — which buys more guesses at a code that is 100 bits out of the
-system CSPRNG, worth nothing at any rate, and costs them the ability to refuse anybody but
-themselves. Counting against enrolment as a whole instead would close that and open something
-worse, and it is what this instance did until 2026-08-05: ten wrong codes from one stranger refused
-every club on it for fifteen minutes.
+**Why three counters and not one.** The first knows callers apart only by the address your proxy
+reports, which behind a tunnel is the real client and is the precise signal — a club whose students
+all leave through one campus NAT shares one budget, so after 10 mistyped codes from that building
+the next mistype from it is answered "wait" rather than "that code is not valid", and typing the
+code correctly still enrols them. But a caller who can reach the instance directly writes that
+address themselves, and until 2026-08-10 that was the only counter: measured on the shipped build,
+one machine rotating the header was answered **20,008 wrong codes in 10.12 seconds** and left
+nothing in the audit log. That was an accepted trade while every code was 2^100 and it stopped
+being one the day an administrator could type `W1MX-FALL-2026`. The two counters underneath it are
+keyed on the TCP connection's own address, coarsened to a /24 or /48, and on nothing at all — there
+is no header that changes either. Behind your tunnel they are one value for the whole deployment,
+which is exactly the deployment-wide switch that ten wrong codes from a stranger used to flip on
+2026-08-05; it is affordable now only because a correct code never touches these counters. And a
+refused request charges nothing, so one source can only ever contribute its own 120 to the
+server-wide 240: **closing that one takes at least two networks acting together**, and the worst it
+does even then is answer a wrong code with "wait" instead of "not valid" for fifteen minutes.
+
+**What an attacker can still reach, stated rather than rounded off.** 240 wrong codes per fifteen
+minutes, deployment-wide, sustained: 23,040 a day. That is 1/8,000th of what was measured before,
+and it is still enormous next to a phrase somebody can think of, which is why the audit trail and
+the use limit above matter as much as the ceiling does.
 
 **Two people redeeming a single-use code at the same instant get one account, not two.** The use
 count and the new account are written in one transaction, so the limit holds under concurrency

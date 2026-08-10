@@ -796,39 +796,84 @@ describe('README: enrolment is a third door, not an open one', () => {
    * thing the prose is about. A doc gate should pin the honesty, never the arithmetic — and where
    * it must pin a number, it should read that number out of the source, as the budget does below.
    */
-  it('states the two properties that make a typed-in secret worth anything', () => {
-    // A code is guessable only by trying, so the limiter is what gives its length meaning.
-    expect(readme).toMatch(/counter of the same kind that guards sign-in/i);
-    expect(readme).toMatch(/worth the\s+number of guesses allowed/i);
-    // The budget itself, read out of the route rather than transcribed here. A README that quotes
+  /**
+   * A THIRD TIME, AND THIS ONE IS NOT THE README BEING BEHIND THE CODE — IT IS THE CLAIM ITSELF
+   * BEING WITHDRAWN.
+   *
+   * This test was named for "the two properties that make a typed-in secret worth anything" and
+   * demanded the sentence "a secret you can only attack by guessing is worth the number of guesses
+   * allowed". That is the reasoning the product has stopped making. It was sound while every code
+   * was 2^100 and it is not a defence of `W1MX-FALL-2026`: measured on 2026-08-10, one machine
+   * rotating `X-Forwarded-For` was answered 20,008 wrong codes in 10.12 s, because the budget the
+   * sentence was about was keyed on an address the caller writes.
+   *
+   * TWO ASSERTIONS ARE THEREFORE REPLACED RATHER THAN RELAXED, AND BOTH WERE TRUE WHEN WRITTEN.
+   * "Counted against the caller and not against enrolment as a whole" is now FALSE of the shipped
+   * server — there is a deployment-wide rung, deliberately, and a README that denied it would be
+   * this file's own subject. "Worth the number of guesses allowed" is withdrawn as an argument.
+   * What replaces them is stricter, not looser: all three ceilings are read out of `api/auth.ts`,
+   * the property that keeps the deployment-wide one out of one caller's reach is required in
+   * words, and the retired sentences are refused by name below.
+   */
+  it('states what actually bounds a code somebody typed, and what does not', () => {
+    // The three ceilings, read out of the route rather than transcribed here. A README that quotes
     // ten guesses against a route that allows thirty is precisely this file's subject.
     const route = readFileSync(resolve(REPO_ROOT, 'packages/server/src/api/auth.ts'), 'utf8');
-    const maxFailures = /ENROLLMENT_MAX_FAILURES = (\d+)/.exec(route)?.[1];
+    const perAddress = /ENROLLMENT_MAX_FAILURES = (\d+)/.exec(route)?.[1];
+    const perNetwork = /ENROLLMENT_MAX_FAILURES_PER_NETWORK = (\d+)/.exec(route)?.[1];
+    const perServer = /ENROLLMENT_MAX_FAILURES_DEPLOYMENT = (\d+)/.exec(route)?.[1];
     const windowMin = /ENROLLMENT_WINDOW_MS = (\d+) \* 60 \* 1000/.exec(route)?.[1];
-    expect(maxFailures, 'ENROLLMENT_MAX_FAILURES is no longer a literal in auth.ts').toBeTruthy();
-    expect(windowMin, 'ENROLLMENT_WINDOW_MS is no longer `n * 60 * 1000` in auth.ts').toBeTruthy();
-    expect(readme).toMatch(new RegExp(`\\b${String(maxFailures)} wrong codes\\s+per connection\\b`));
+    for (const [name, value] of Object.entries({
+      ENROLLMENT_MAX_FAILURES: perAddress,
+      ENROLLMENT_MAX_FAILURES_PER_NETWORK: perNetwork,
+      ENROLLMENT_MAX_FAILURES_DEPLOYMENT: perServer,
+      ENROLLMENT_WINDOW_MS: windowMin,
+    })) {
+      expect(value, `${name} is no longer a literal in the shape this test reads`).toBeTruthy();
+    }
+    expect(readme).toMatch(new RegExp(`\\b${String(perAddress)} wrong codes per address\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(perNetwork)} per source network\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(perServer)}\\s+across the whole server\\b`));
     expect(readme).toMatch(new RegExp(`\\b${String(windowMin)} minutes\\b`));
-    // WHOSE budget it is, and who never touches it — the two sentences that were wrong.
-    expect(readme).toMatch(/counted against the caller and not against enrolment as a whole/i);
+    // Who never touches any of them, which is the promise that makes a coarse ceiling affordable.
     expect(readme).toMatch(
       /nothing a stranger does with wrong\s+codes can stop your students enrolling/i,
     );
+    // The property that keeps the deployment-wide rung out of any single caller's reach. Without
+    // it, that rung is the 2026-08-05 off switch again and the README would be overselling it.
+    expect(readme).toMatch(/closing that one takes at least two networks acting together/i);
     // The cost that IS real, because a doc that states only the benefit is the half-sentence this
     // file exists to stop: one campus NAT is one budget, and a mistype from it can be told to wait.
     expect(readme).toMatch(/shares one budget/i);
+    // The honest ceiling an attacker still has, in a number rather than a reassurance.
+    expect(readme).toMatch(/23,040 a day/);
+    // And the sentence the whole change is for: the floor is not what makes a chosen code safe.
+    expect(readme).toMatch(/Clearing the floor does not make a code hard to\s+guess/i);
     // …and the retired claims, refused by name rather than merely unasserted.
     expect(
+      /worth the\s+number of guesses allowed/i.test(readme),
+      'The README is back to arguing that a chosen code is worth the number of guesses allowed. ' +
+        'That was the argument for a 2^100 code and it is not a defence of W1MX-FALL-2026, which ' +
+        'was found in seven guesses — see "the floor under a code an administrator chooses" in ' +
+        'core/test/enrollmentCode.test.ts.',
+    ).toBe(false);
+    expect(
+      /counted against the caller and not against enrolment as a whole/i.test(readme),
+      'The README says the enrolment budget is only ever per-caller. Since 2026-08-10 there is a ' +
+        'deployment-wide rung under it, because a caller who reaches the process directly picks ' +
+        'their own per-caller key — see ENROLLMENT_MAX_FAILURES_DEPLOYMENT in api/auth.ts.',
+    ).toBe(false);
+    expect(
       /against enrolment as a whole\s+rather than against the caller/i.test(readme),
-      'The README is back to calling the enrolment budget deployment-wide. It is keyed on the ' +
-        'caller in api/auth.ts and has been since 2026-08-05, when the deployment-wide version ' +
-        'was measured closing every club on the instance for fifteen minutes.',
+      'The README is back to calling the enrolment budget purely deployment-wide. The narrowest ' +
+        'rung is still keyed on the caller, and has been since 2026-08-05, when the ' +
+        'deployment-wide-only version was measured closing every club on the instance.',
     ).toBe(false);
     expect(
       /makes the next honest person wait/i.test(readme),
       'The README is back to saying a burst of wrong guesses makes the next honest person wait. ' +
-        'A holder of a real code never reads that counter — see the two tests named in the note ' +
-        'above this one in enroll.test.ts.',
+        'A holder of a real code never reads any of these counters — see the two tests named in ' +
+        'the note above this one in enroll.test.ts.',
     ).toBe(false);
     // Atomicity, as a claim a reader can check rather than a reassurance, and with the defect it
     // is guarding against named — this project shipped exactly this bug in the callsign lookup.
@@ -856,8 +901,10 @@ describe('README: enrolment is a third door, not an open one', () => {
     // account is told so, and a doc that implied otherwise would be overselling this.
     expect(readme).toMatch(/about codes, and not about email addresses/i);
     expect(readme).toMatch(/not a leak worth pretending about/i);
-    // The limiter's exemption, which is a promise to the honest holder of a dead code.
-    expect(readme).toMatch(/only a wrong code is charged to it/i);
+    // The limiter's exemption, which is a promise to the honest holder of a dead code. "Any of
+    // them" and not "it": there are three counters now and the exemption has to cover all three,
+    // or the promise is only true of the one a caller can rotate past anyway.
+    expect(readme).toMatch(/only a wrong code is charged to any of them/i);
   });
 
   it('documents every route in the contract, with the one that returns the plaintext marked', () => {

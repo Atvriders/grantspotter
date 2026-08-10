@@ -1,8 +1,15 @@
 import { Agent as httpAgent } from 'node:http';
 import type Database from 'better-sqlite3';
+import { MEASURED_GUESSES_PER_DAY } from '@grantspotter/core';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
+import {
+  ENROLLMENT_MAX_FAILURES,
+  ENROLLMENT_MAX_FAILURES_DEPLOYMENT,
+  ENROLLMENT_MAX_FAILURES_PER_NETWORK,
+  ENROLLMENT_WINDOW_MS,
+} from './auth.js';
 import { createBootstrapState } from '../auth/bootstrap.js';
 import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from '../auth/password.js';
 import { createRateLimiter } from '../auth/rateLimit.js';
@@ -1019,6 +1026,280 @@ describe('the rate limiter is what makes the entropy mean something', () => {
     expect(blocked.status).toBe(429);
     expect(blocked.body.error.code).toBe('rate_limited');
   }, 60_000);
+});
+
+/**
+ * THE RUNG BELOW THE ONE THE CALLER CHOOSES, AND WHAT IT IS FOR.
+ *
+ * WHAT WAS MEASURED, on this host on 2026-08-10 against the BUILT server in its own process, with
+ * `5d25533` in place and an administrator's chosen code live:
+ *
+ *   · 20,008 wrong codes at `POST /api/auth/enroll` in 10.12 s across 256 keep-alive connections,
+ *     every one answered 401, from ONE machine rotating `X-Forwarded-For` — 1,977 a second.
+ *   · Zero rows in `audit_log` afterwards.
+ *   · `W1MX-SPRING-2027` found on the seventh club-shaped guess from one address, and the account
+ *     it made followed by sixty more, until the harness stopped asking.
+ *
+ * The per-connection budget was not defeated by a trick; it was keyed on `req.ip`, which the caller
+ * writes when this process is reachable directly, so it was never in the way. It is kept — behind
+ * the documented tunnel it is the real client and it is the precise one — and two rungs that the
+ * caller has nothing to rotate now sit underneath it. See `ENROLLMENT_WINDOW_MS` in `api/auth.ts`
+ * for the derivation of each ceiling and for what an attacker can still reach.
+ */
+describe('a guesser who writes their own address', () => {
+  /** A fresh reported origin per request: the probe that made the old budget irrelevant. */
+  function forged(app: ReturnType<typeof build>, n: number, agent?: httpAgent) {
+    const req = request(app).post('/api/auth/enroll');
+    if (agent !== undefined) req.agent(agent);
+    return req
+      .set('x-forwarded-for', `203.0.${String((n >> 8) & 255)}.${String(n & 255)}`)
+      .send({
+        code: `ZZZZZ-ZZZZZ-ZZZZZ-Z${String(n).padStart(4, '0')}`,
+        email: `forged-${String(n)}@example.net`,
+        password: GOOD_PASSWORD,
+      });
+  }
+
+  async function flood(
+    app: ReturnType<typeof build>,
+    count: number,
+    agent?: httpAgent,
+    from = 0,
+  ): Promise<{ answered: number; refused: number; last: request.Response }> {
+    let answered = 0;
+    let refused = 0;
+    let last!: request.Response;
+    for (let i = 0; i < count; i += 1) {
+      last = await forged(app, from + i, agent);
+      if (last.status === 401) answered += 1;
+      else if (last.status === 429) refused += 1;
+    }
+    return { answered, refused, last };
+  }
+
+  function guessingRows(): Array<Record<string, string | null>> {
+    return db
+      .prepare(
+        `SELECT actor_user_id, entity_type, entity_id, detail FROM audit_log
+          WHERE action = 'enrollment.code_guessing' ORDER BY rowid`,
+      )
+      .all() as Array<Record<string, string | null>>;
+  }
+
+  it('gets a hundred and twenty answers however many addresses they claim', async () => {
+    issue();
+    const app = build();
+
+    const { answered, refused, last } = await flood(app, 130);
+
+    // The connection rung is bypassed exactly as it was — 120 is far past its ten — and the rung
+    // under it is the one that stops this.
+    expect(answered).toBe(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
+    expect(refused).toBe(130 - ENROLLMENT_MAX_FAILURES_PER_NETWORK);
+    expect(last.status).toBe(429);
+    expect(last.body.error.code).toBe('rate_limited');
+    // The sentence names the rung, and ends by telling the person most likely to be reading it —
+    // somebody who mistyped a real code while this was going on — that they are not shut out.
+    expect(last.body.error.message).toMatch(/from your network/);
+    expect(last.body.error.message).toMatch(/a code this server does recognise is not held up/);
+    expect(memberCount()).toBe(0);
+  }, 120_000);
+
+  /**
+   * THE 2026-08-05 LESSON AS ARITHMETIC RATHER THAN AS A HOPE. A single bucket for the whole
+   * deployment was a switch any stranger could flip with ten requests. The deployment-wide rung is
+   * twice the per-network one AND a refused request charges nothing, so one source can put at most
+   * its own 120 into it and closing it takes two.
+   */
+  it('cannot close the deployment-wide ceiling from one network however long they keep going', async () => {
+    issue();
+    const app = build();
+
+    const first = await flood(app, 200);
+    expect(first.answered).toBe(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
+    // ONE ROW, FROM THE NETWORK RUNG, AND THE ABSENCE OF THE OTHER TWO IS THE POINT. There is no
+    // `connection` row because a caller minting a fresh origin per request never fills a connection
+    // bucket — which is exactly why that rung could not be the only one — and no `server` row
+    // because one network cannot reach the deployment-wide ceiling.
+    expect(guessingRows().map((r) => JSON.parse(String(r.detail)).tier)).toEqual(['network']);
+
+    // Somebody in a different building, mistyping for the first time, is still answered about the
+    // code rather than about the flood.
+    const elsewhere = new httpAgent({ localAddress: '127.1.0.1' });
+    const other = await flood(app, 1, elsewhere, 9000);
+    expect(other.answered).toBe(1);
+  }, 120_000);
+
+  it('closes it once two networks have between them, and says so once', async () => {
+    issue();
+    const app = build();
+    const second = new httpAgent({ localAddress: '127.1.0.1' });
+
+    const a = await flood(app, 130);
+    const b = await flood(app, 130, second, 20_000);
+    expect(a.answered + b.answered).toBe(ENROLLMENT_MAX_FAILURES_DEPLOYMENT);
+
+    // A third network, which has done nothing at all, now meets the ceiling too — that is the cost
+    // of this rung, and it is only ever paid by a caller whose code was already wrong.
+    const third = new httpAgent({ localAddress: '127.2.0.1' });
+    const late = await flood(app, 1, third, 30_000);
+    expect(late.last.status).toBe(429);
+    expect(late.last.body.error.message).toMatch(/on this server/);
+
+    const tiers = guessingRows().map((r) => JSON.parse(String(r.detail)).tier);
+    // Two networks closed their own rung, one row each; the server rung closed once. Not 260 rows.
+    expect(tiers.filter((t) => t === 'network')).toHaveLength(2);
+    expect(tiers.filter((t) => t === 'server')).toHaveLength(1);
+  }, 240_000);
+
+  /**
+   * MEASURED before this change: 20,008 wrong codes, zero rows. The reason was not that nothing was
+   * written on principle — a closed budget already wrote one — it is that the row was bounded per
+   * KEY and the key was the header. Ten guesses an address bought one row an address, which is a
+   * trail an attacker fills at 197 rows a second to bury whatever else is in it.
+   */
+  it('leaves the operator a bounded trail with no address, no code and no digest in it', async () => {
+    issue();
+    const app = build();
+    await flood(app, 200);
+
+    const rows = guessingRows();
+    // ONE, for the one rung that closed, against two hundred requests and two hundred claimed
+    // addresses. Before this change the same two hundred requests wrote twenty rows — ten guesses
+    // an address bought a row an address — and at the measured 1,977 a second that is 197 rows a
+    // second, which is how an attacker buries the row an operator would have acted on.
+    expect(rows).toHaveLength(1);
+    for (const row of rows) {
+      expect(row.actor_user_id).toBeNull();
+      expect(row.entity_type).toBe('enrollment');
+      // A /24 or a /48, never a host: this row outlives the incident and is read by more people.
+      expect(row.entity_id).toMatch(/\/(24|48)$/);
+      expect(JSON.parse(String(row.detail)).reportedOrigin).toMatch(/\/(24|48)$/);
+    }
+    const trail = JSON.stringify(rows);
+    expect(trail).not.toContain('example.net');
+    expect(trail).not.toContain('ZZZZZ');
+    expect(trail).not.toContain('203.0.113.');
+  }, 120_000);
+});
+
+/**
+ * THE SECOND HALF OF "A CHOSEN CODE CAN BE GUESSED": SOMEBODY HAS TO BE ABLE TO NOTICE.
+ *
+ * MEASURED 2026-08-10 against the built server: seven wrong codes shaped like a club callsign, then
+ * the code, from one address, all eight inside the per-connection budget — one account and one
+ * ordinary `user.enroll` row, indistinguishable from a student who pasted their code correctly.
+ */
+describe('an account that came out of a run of wrong codes', () => {
+  async function wrongThenRight(app: ReturnType<typeof build>, wrong: number, plaintext: string) {
+    for (let i = 0; i < wrong; i += 1) {
+      const miss = await request(app)
+        .post('/api/auth/enroll')
+        .send({
+          code: `ZZZZZ-ZZZZZ-ZZZZZ-ZZZ${String(i).padStart(2, '0')}`,
+          email: `guess-${String(i)}@example.org`,
+          password: GOOD_PASSWORD,
+        });
+      expect(miss.status).toBe(401);
+    }
+    return request(app)
+      .post('/api/auth/enroll')
+      .send({ code: plaintext, email: 'found@example.org', password: GOOD_PASSWORD });
+  }
+
+  function noticedRows(): Array<Record<string, string | null>> {
+    return db
+      .prepare(
+        `SELECT actor_user_id, entity_type, entity_id, detail FROM audit_log
+          WHERE action = 'enrollment_code.redeemed_after_wrong_codes' ORDER BY rowid`,
+      )
+      .all() as Array<Record<string, string | null>>;
+  }
+
+  it('is written down, naming the code so it can be revoked and never the code itself', async () => {
+    const { code, plaintext } = issue({ maxUses: 30 });
+    const app = build();
+
+    const found = await wrongThenRight(app, 7, plaintext);
+    expect(found.status).toBe(201);
+
+    const rows = noticedRows();
+    expect(rows).toHaveLength(1);
+    // The credential an operator can act on, by its id — the row says somebody arrived at it, and
+    // is not a copy of it.
+    expect(rows[0].entity_id).toBe(code.id);
+    expect(rows[0].entity_type).toBe('enrollment_code');
+    expect(JSON.parse(String(rows[0].detail))).toMatchObject({
+      label: 'W1MX autumn 2026 intake',
+      fromConnection: 7,
+      threshold: 3,
+    });
+    const trail = JSON.stringify(rows);
+    expect(trail).not.toContain(plaintext);
+    expect(trail).not.toContain(hashEnrollmentCode(plaintext));
+  }, 120_000);
+
+  it('says nothing about an intake where nobody was guessing', async () => {
+    const { plaintext } = issue({ maxUses: 30 });
+    const app = build();
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/enroll')
+        .send({ code: plaintext, email: `student-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      expect(res.status).toBe(201);
+    }
+    expect(noticedRows()).toEqual([]);
+  }, 120_000);
+
+  /**
+   * A found code with uses left mints accounts as fast as they are asked for, so the row that says
+   * "this came out of guessing" must not be one per account — that is the trail-flooding shape
+   * again, aimed at the one row an operator would have acted on.
+   */
+  it('writes one row for the whole run, not one per account it goes on to make', async () => {
+    const { plaintext } = issue({ maxUses: 30 });
+    const app = build();
+
+    expect((await wrongThenRight(app, 7, plaintext)).status).toBe(201);
+    for (let i = 0; i < 10; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/enroll')
+        .send({ code: plaintext, email: `minted-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      expect(res.status).toBe(201);
+    }
+
+    expect(noticedRows()).toHaveLength(1);
+    // …and every account it made is still enumerable, from the rows that cannot be suppressed.
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'user.enroll'")
+        .get() as { n: number },
+    ).toEqual({ n: 11 });
+  }, 240_000);
+});
+
+/**
+ * THE FIGURE THE PRODUCT QUOTES AND THE CEILING THE SERVER ENFORCES ARE THE SAME FACT.
+ *
+ * `MEASURED_GUESSES_PER_DAY` lives in core because the admin console and the refusals both print
+ * sentences derived from it, and the ceiling lives in `api/auth.ts` because that is where it is
+ * enforced. Nothing in the type system ties them, and the last time a sentence about a limiter
+ * outlived the limiter it described, the product spent a release telling administrators that
+ * twelve characters were worth something because of a rate that no longer applied.
+ */
+describe('what the product says the ceiling is', () => {
+  it('is the ceiling the enrolment route actually enforces', () => {
+    const windowsPerDay = 86_400_000 / ENROLLMENT_WINDOW_MS;
+    expect(MEASURED_GUESSES_PER_DAY).toBe(ENROLLMENT_MAX_FAILURES_DEPLOYMENT * windowsPerDay);
+  });
+
+  it('keeps the deployment rung out of reach of any single network', () => {
+    // The property, not the numbers: a refused request charges nothing, so one source can only ever
+    // put its own per-network ceiling into the deployment-wide one.
+    expect(ENROLLMENT_MAX_FAILURES_DEPLOYMENT).toBeGreaterThan(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
+    expect(ENROLLMENT_MAX_FAILURES_PER_NETWORK).toBeGreaterThan(ENROLLMENT_MAX_FAILURES);
+  });
 });
 
 describe('whether the sign-in screen should offer to enrol at all', () => {

@@ -59,13 +59,16 @@ export { hashProgram } from './hash.js';
 export {
   CHOSEN_CODE_MAX_DAYS,
   CHOSEN_CODE_MAX_INPUT,
+  CHOSEN_CODE_MAX_USES,
   CHOSEN_CODE_MIN_LENGTH,
   describeEnrollmentCodeFold,
+  describeEnrollmentCodeStripped,
   ENROLLMENT_CODE_ALPHABET,
+  ENROLLMENT_CODE_DROPPED_LETTERS,
   ENROLLMENT_CODE_FOLD,
   exhaustionChance,
   groupThousands,
   labelRepeatsChosenCode,
-  MEASURED_GUESSES_PER_SECOND,
+  MEASURED_GUESSES_PER_DAY,
   normalizeEnrollmentCode,
 } from './enrollmentCode.js';

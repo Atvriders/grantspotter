@@ -79,6 +79,44 @@ describe('rate limiter', () => {
   });
 
   /**
+   * `count` EXISTS TO BE SAID, NOT TO REFUSE. The enrolment route writes an audit row when an
+   * account comes out of a place that has just been getting codes wrong, and "seven" and "one" are
+   * the same boolean to `check`. See `RateLimiter.count`.
+   */
+  describe('how many, rather than whether', () => {
+    it('reports the failures inside the window and forgets the ones outside it', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 100 });
+      expect(limiter.count('k', 0)).toBe(0);
+      for (const at of [0, 10, 20, 30, 40, 50, 60]) limiter.recordFailure('k', at);
+      expect(limiter.count('k', 60)).toBe(7);
+      // Past the window it is not a run of guesses any more, it is history.
+      expect(limiter.count('k', 1100)).toBe(0);
+    });
+
+    it('does not count an attempt whose outcome is still unknown', () => {
+      // `check` treats an in-flight attempt as spent, because it is deciding whether to allow more
+      // work. This is going into a sentence about what has already happened, and a request that
+      // may yet succeed is not a wrong code.
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 2 });
+      const attempt = limiter.begin('k', 0);
+      expect(limiter.check('k', 0).allowed).toBe(true);
+      expect(limiter.count('k', 0)).toBe(0);
+      if (attempt.started) attempt.charge(0);
+      expect(limiter.count('k', 0)).toBe(1);
+    });
+
+    it('counts each key on its own', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 100 });
+      limiter.recordFailure('a', 0);
+      limiter.recordFailure('a', 0);
+      limiter.recordFailure('b', 0);
+      expect([limiter.count('a', 0), limiter.count('b', 0), limiter.count('c', 0)]).toEqual([
+        2, 1, 0,
+      ]);
+    });
+  });
+
+  /**
    * THE HALF THAT `check` + `recordFailure` CANNOT EXPRESS.
    *
    * Both auth routes do tens of milliseconds of argon2id between deciding that an attempt is

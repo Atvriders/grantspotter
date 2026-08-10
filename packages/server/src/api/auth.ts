@@ -113,58 +113,129 @@ const enrollSchema = z.object({
 });
 
 /**
- * WHICH BUCKET A WRONG ENROLMENT CODE IS COUNTED IN, and why it is no longer a constant.
+ * HOW MANY WRONG ENROLMENT CODES THIS SERVER WILL ANSWER, AND THE THREE DIFFERENT SUBJECTS THE
+ * QUESTION HAS TO BE ASKED ABOUT.
  *
- * UNTIL 2026-08-05 IT WAS THE LITERAL STRING `'enrollment'` — one bucket for the whole deployment.
- * The reasoning written here was that the caller chooses every field of the request, so there is no
- * key they cannot mint a fresh bucket of, so the only key that caps anything is a fixed one. The
- * reasoning was sound and the conclusion was a deployment-wide off switch. MEASURED, 2026-08-05:
- * ten wrong codes from one stranger — no code, no account, no relationship to this deployment —
- * answered every subsequent enrolment with 429 for fifteen minutes, and 48 requests held it closed
- * for an hour. Every club on the instance, refused, by anybody.
+ * READ `ENROLLMENT_GUESS_LADDER` BELOW FOR THE SHAPE. This block is the argument.
  *
- * TWO THINGS CHANGED, and the key is only the second.
+ * UNTIL 2026-08-05 THE BUDGET WAS ONE BUCKET FOR THE WHOLE DEPLOYMENT, keyed on the literal string
+ * `'enrollment'`, and it was a deployment-wide off switch: ten wrong codes from one stranger
+ * answered every subsequent enrolment with 429 for fifteen minutes (measured). That was fixed by
+ * two changes, and the FIRST of them is the one everything below rests on and has not changed:
+ * THE BUDGET IS ONLY EVER CONSULTED BY A CALLER WHO IS GUESSING. It sits on the branch that answers
+ * "that code is not valid" and nowhere else, so somebody holding a code this deployment really
+ * issued never reads it, never charges it and cannot be refused by it however hard a stranger has
+ * been knocking. Every ceiling added here rations an ANSWER TO A WRONG CODE and can never refuse a
+ * redemption — which is what makes a coarse ceiling affordable at all.
  *
- * FIRST, THE BUDGET IS NOW ONLY CONSULTED BY A CALLER WHO IS GUESSING. It sits on the branch that
- * answers "that code is not valid" and nowhere else. Somebody holding a code this deployment really
- * issued never reads it, never charges it and can never be refused by it, whatever anybody else has
- * been doing. That alone is what stops a stranger closing an intake: a guess and a redemption no
- * longer pass through the same gate.
+ * THE SECOND CHANGE WAS TO KEY IT ON `req.ip`, AND THAT IS WHAT IS BEING REPLACED. The comment here
+ * used to state the trade plainly and correctly: a caller who reaches this process directly writes
+ * their own `X-Forwarded-For`, so they choose the key, so they can mint unlimited buckets — and
+ * what that buys them is unlimited guesses at 2^100, which is worth nothing at any rate. The
+ * reasoning was right and its premise is gone. Since 2026-08-10 an administrator can TYPE a code,
+ * so the thing being guessed can be `W1MX-SPRING-2027`, and a budget a caller can opt out of is
+ * not a budget.
  *
- * SECOND, IT IS KEYED ON THE CALLER'S ORIGIN as the deployment's own proxy reports it (`req.ip`;
- * `app.ts` sets `trust proxy` to 1, so that is the address the one hop in front of us wrote, not
- * one a client can put in a header when a proxy is really there). WHAT AN ATTACKER REACHES BY
- * CONTROLLING IT, said plainly because the last version of this comment guessed instead of saying:
- * a caller who can reach this process directly, with nothing in front of it, chooses `req.ip` and
- * can therefore mint an unlimited number of fresh buckets and make an unlimited number of guesses.
- * What that buys them is guesses at 2^100, which is worth nothing at any rate — a wrong code now
- * costs this process one SHA-256 and one indexed read, and no argon2id at all — and what it costs
- * them is the ability to refuse anybody but themselves. That is the right way round. A key nobody
- * can forge (the TCP peer) would be one value for every user behind the operator's tunnel, which is
- * the deployment-wide off switch again with extra steps.
+ * MEASURED ON THIS HOST, 2026-08-10, against the BUILT server in its own process, before this
+ * change:
  *
- * WHAT IT STILL COSTS, and it is not nothing: a club whose students all leave through one campus
- * NAT share one bucket, so ten MISTYPED codes from that building pause enrolment from that building
- * for the rest of the window. Only wrong codes are charged — an expired or exhausted one is a real
- * code and its holder is not guessing — so an intake in which people paste the code correctly never
- * touches it.
+ *   one address, X-Forwarded-For fixed      10 answered, the 11th 429      = 960 / day
+ *   one machine, X-Forwarded-For rotated    20,008 in 10.12 s / 256 conns  = 1,977 / second
+ *   seven club-shaped guesses then the code found on the eighth, from ONE address, inside the
+ *   budget, and ZERO rows in `audit_log` — for either probe.
  *
- * A SUCCESSFUL ENROLMENT DOES NOT RESET IT. That was a hole rather than a kindness: it made the
- * ceiling per-success instead of per-window. MEASURED, 2026-08-05: nine wrong codes, one real
- * redemption, five times over — 45 guesses inside one fifteen-minute window.
+ * AND AFTER IT, same host, same harness, same ten seconds:
  *
- * IT NO LONGER CLAIMS TO BOUND THE WORK, because it never did and something else does now. This
- * paragraph used to say that ten failures per window is the ceiling on argon2id hashes an anonymous
- * caller can start. It was false twice over: first because `check()` ran before the hash and
- * `recordFailure()` after it (240 concurrent wrong codes → 240 hashes, 10.2 s of CPU, measured),
- * and then because the fix for that charged legitimate enrolments to the same budget (30 students
- * with a valid code → 10 accounts, 20 refusals, measured). Both were the same mistake: a counter of
- * ANSWERS being asked to bound WORK. The work is bounded by `hashGate` below, which takes turns
- * between callers rather than refusing per caller, and by the ordering in the handler — a code this
- * deployment will not honour never reaches the hash at all.
+ *   one machine, X-Forwarded-For rotated    120 answered, 17,582 refused, ONE audit row
+ *   two source networks together            240 answered, 18,002 refused, THREE audit rows
+ *   the same seven guesses and the same code found on the eighth — still found, because no
+ *   ceiling can stop that — now followed by a row naming the code and saying it came out of
+ *   seven wrong ones, and by 29 further accounts rather than an unbounded number.
+ *
+ * THE THING THAT MAKES THIS HARD, said before the answer: behind the operator's Cloudflare Tunnel
+ * the TCP peer is ONE VALUE FOR EVERY USER, and `X-Forwarded-For` is the only per-client signal
+ * there is — and that header is written by the client when the process is reachable directly. One
+ * key cannot be both per-client and unforgeable. There is no arrangement of a single bucket that
+ * is not either evadable or a deployment-wide off switch, which is why the answer is not a key but
+ * a LADDER: a precise forgeable one, then two coarse unforgeable ones underneath it.
+ *
+ * WHAT EACH RUNG COSTS THE PEOPLE IT IS NOT AIMED AT — the question this codebase has got wrong
+ * three times, and the only one that decides a number:
+ *
+ *   CONNECTION (`req.ip`, ten). Unchanged. Behind the documented single hop this is the real
+ *   client. A campus NAT shares one bucket, so ten MISTYPED codes from that building answer the
+ *   eleventh mistype with "wait" instead of "not valid" — and a correctly typed code from that
+ *   building still enrols, because this branch is not on that path.
+ *
+ *   NETWORK (the coarsened TCP peer, a hundred and twenty). Unforgeable: no header changes
+ *   `req.socket.remoteAddress`, and `coarseOrigin` cuts it to a /24 or /48 so an attacker holding
+ *   an IPv6 allocation gets one bucket rather than 2^64 of them. Behind a tunnel this is the whole
+ *   deployment, which is exactly the coarseness that used to be fatal — and is affordable now only
+ *   because of the first paragraph. 120 is DERIVED FROM THE INTENDED USE: a club intake of thirty,
+ *   every one of them mistyping twice, is 60 wrong codes in a window, and this is double that.
+ *
+ *   SERVER (everything, two hundred and forty). Also unforgeable, since it has no key at all. It
+ *   exists for the caller the rung above cannot see: a hundred machines in a hundred networks, each
+ *   politely under 120. TWICE THE NETWORK RUNG ON PURPOSE, and that ratio is the property rather
+ *   than the number — a rung that refuses charges NOTHING, so a single network can never put more
+ *   than its own 120 into this counter, and closing it therefore takes at least two networks acting
+ *   together. One caller cannot reach the deployment-wide switch, which is the 2026-08-05 lesson
+ *   expressed as arithmetic instead of as a hope.
+ *
+ * WHAT AN ATTACKER CAN STILL REACH, stated rather than rounded off. 240 wrong codes per fifteen
+ * minutes, deployment-wide, sustained: 23,040 a day, 8.4 million a year. That is 1/8,000th of what
+ * was measured above and it is still enormous next to a phrase somebody can think of.
+ * `W1MX-SPRING-2027` was found in SEVEN. No setting of these numbers that does not refuse a real
+ * intake changes that, which is why this fix is three things and not one: the ceiling is the part
+ * that stops working through the whole space, `announceOnce` below is the part that makes the
+ * attempt visible, and `CHOSEN_CODE_MAX_USES` is the part that bounds what a found code is worth.
+ *
+ * TWO SMALLER PROPERTIES THAT FALL OUT OF THE LADDER AND ARE WORTH NAMING, because both were
+ * defects before it. A rung that refuses charges nothing, so the per-origin map can only ever gain
+ * a key on one of the ≤240 requests a window that get all the way through — a caller rotating
+ * `X-Forwarded-For` at 1,977/s used to add 1.7 million keys to it in a window. And the same bound
+ * applies to the announcement map, so the audit trail can no longer be flooded by a caller who
+ * mints fresh keys; see `announceOnce`.
+ *
+ * A SUCCESSFUL ENROLMENT DOES NOT RESET ANY OF THEM. That was a hole rather than a kindness: it
+ * made the ceiling per-success instead of per-window. MEASURED, 2026-08-05: nine wrong codes, one
+ * real redemption, five times over — 45 guesses inside one fifteen-minute window.
+ *
+ * NONE OF THEM CLAIMS TO BOUND THE WORK. That claim was false twice over (240 concurrent wrong
+ * codes → 240 hashes, 10.2 s of CPU; then the fix for it refused 20 of 30 legitimate students) and
+ * both times it was the same mistake: a counter of ANSWERS asked to bound WORK. The work is bounded
+ * by `hashGate`, which takes turns between callers, and by the ordering in the handler — a code
+ * this deployment will not honour never reaches the hash at all.
  */
-const ENROLLMENT_WINDOW_MS = 15 * 60 * 1000;
-const ENROLLMENT_MAX_FAILURES = 10;
+export const ENROLLMENT_WINDOW_MS = 15 * 60 * 1000;
+export const ENROLLMENT_MAX_FAILURES = 10;
+export const ENROLLMENT_MAX_FAILURES_PER_NETWORK = 120;
+export const ENROLLMENT_MAX_FAILURES_DEPLOYMENT = 240;
+
+/**
+ * THE ONE KEY THE DEPLOYMENT-WIDE RUNG USES. A constant, because the whole point of that rung is
+ * that there is nothing about the caller in it: a key is a thing an attacker can rotate, and this
+ * one deliberately offers them nothing to rotate.
+ */
+const DEPLOYMENT_KEY = 'deployment';
+
+/**
+ * HOW MANY WRONG CODES FROM THE SAME PLACE MAKE AN ACCOUNT WORTH WRITING DOWN, and the number
+ * refuses nothing whatsoever.
+ *
+ * THE SIGNATURE OF A GUESSED CODE IS "WRONG, WRONG, WRONG, RIGHT", and until now that produced the
+ * same single `user.enroll` row as any other enrolment. MEASURED 2026-08-10 against the built
+ * server: seven club-shaped guesses and then the code, from one address, all eight inside the
+ * per-connection budget, one account and nothing an operator could see.
+ *
+ * THREE, and it is set where an honest mistyper will sometimes trip it rather than where only an
+ * attacker will, for the reason `FAILED_SIGN_IN_NOTICE` gives: being wrong about it costs one audit
+ * row per source network per window and nothing else. Nobody is refused, delayed, or answered
+ * differently. A student who fat-fingers a code three times and then gets in writes one row that
+ * says so, with the counts in it, which is a row an operator can dismiss in a second — and the
+ * alternative is a threshold set so high that the attack this exists for slips under it.
+ */
+const ENROLLMENT_GUESSES_BEFORE_ACCOUNT = 3;
 
 /**
  * HOW MANY argon2id OPERATIONS THIS PROCESS WILL HAVE IN FLIGHT AT ONCE, across both
@@ -337,6 +408,58 @@ const REFUSAL: Record<EnrollmentRefusal, { code: ApiErrorCode; message: string }
 };
 
 /**
+ * WHAT A RUNG OF THE GUESS LADDER IS, AND THE ONE RULE ABOUT ITS `noticeKey`.
+ *
+ * `key` is what the budget counts against and may be a value the caller chose — the connection rung
+ * is `req.ip` and that is the point of it. `noticeKey` is what bounds the AUDIT ROW, and it may
+ * never be. Those are two different jobs and conflating them is how the old code left the trail
+ * floodable: one row per closed budget sounds bounded until the budget's key is a header, at which
+ * point 1,977 requests a second buy 197 rows a second and bury everything else in the log.
+ */
+type GuessTierName = 'connection' | 'network' | 'server';
+
+interface GuessTier {
+  readonly name: GuessTierName;
+  readonly limiter: RateLimiter;
+  readonly key: string;
+  /** Derived only from the TCP peer, or from nothing at all. Never from a header. */
+  readonly noticeKey: string;
+  readonly max: number;
+}
+
+/**
+ * WHO THE 429 SAYS HAS BEEN GUESSING, and it is three different sentences because they ask three
+ * different things of the reader.
+ *
+ * A person who is told "from this connection" can wait; a person told "on this server" needs to
+ * know that waiting is still the answer and that they have not been singled out. Naming the rung
+ * gives an attacker nothing they cannot already count for themselves.
+ */
+const GUESS_TIER_WHERE: Record<GuessTierName, string> = {
+  connection: 'from this connection',
+  network: 'from your network',
+  server: 'on this server',
+};
+
+/**
+ * WHY THIS SENTENCE ENDS THE WAY IT DOES. The person most likely to read it is not a guesser: it is
+ * somebody who mistyped a real code during an intake while somebody else was guessing. The old
+ * wording stopped at "wait and try it again", which reads as "enrolment is broken" and sends them
+ * to their club officer. Saying that a code this server knows is unaffected is both true — this
+ * branch is only reached by a code it does not know — and the difference between waiting and
+ * giving up. It tells an attacker nothing: the 401 they would otherwise have got says the same
+ * thing outright.
+ */
+function guessRefusal(tier: GuessTier): string {
+  return (
+    `That code was not accepted, and too many enrollment codes have been tried ` +
+    `${GUESS_TIER_WHERE[tier.name]} recently for GrantSpotter to say any more about it right now. ` +
+    'Check it with whoever gave it to you and try again in a few minutes. Nothing has been used ' +
+    'up, and a code this server does recognise is not held up by this.'
+  );
+}
+
+/**
  * THE TWO SENTENCES A CONFLICT GETS, and the only difference between them is how much they say.
  *
  * The specific one is for the person this answer was written for — somebody who enrolled last term
@@ -401,6 +524,12 @@ class DuplicateEmailError extends Error {
  * trustworthy exactly when the documented deployment shape holds (one reverse proxy or tunnel) and
  * is chosen by the client when it does not. Every use of this value carries a comment saying which
  * of those two it is relying on.
+ *
+ * IT IS NEVER THE ONLY THING BETWEEN A CALLER AND SOMETHING THEY WANT. That was true of the
+ * enrolment guess budget until 2026-08-10 and was the whole of the defect: a value the caller
+ * writes is a fine way to tell honest callers apart and is not a limit. Where it appears now it is
+ * the narrowest rung of a ladder whose lower rungs are the TCP peer and nothing at all, or it is a
+ * detail in a row bounded by one of those.
  */
 function reportedOrigin(req: Request): string {
   return req.ip === undefined || req.ip === '' ? 'unknown' : req.ip;
@@ -425,6 +554,61 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
   const guessLimiter =
     deps.enrollGuessLimiter ??
     createRateLimiter({ windowMs: ENROLLMENT_WINDOW_MS, maxFailures: ENROLLMENT_MAX_FAILURES });
+  /**
+   * THE TWO RUNGS BELOW THE CONNECTION, AND WHY NEITHER IS INJECTABLE.
+   *
+   * `enrollGuessLimiter` is a dependency because a test wanted a tiny window without editing
+   * `app.ts`; these are not, and the reason is the same one that keeps `disclosureLimiter` fixed.
+   * Their numbers are reachable in the tests that matter (120 and 240 requests), and a limiter a
+   * deployment can weaken from outside is a limiter whose comment stops being true of the thing
+   * that ships. See `ENROLLMENT_WINDOW_MS` above for what each rung costs and what it buys.
+   *
+   * Both hold at most their own ceiling in timestamps — a rung that refuses records nothing — so
+   * neither grows the way the `ThresholdNotice` comment warns an unbounded `createRateLimiter`
+   * does.
+   */
+  const networkGuessLimiter = createRateLimiter({
+    windowMs: ENROLLMENT_WINDOW_MS,
+    maxFailures: ENROLLMENT_MAX_FAILURES_PER_NETWORK,
+  });
+  const deploymentGuessLimiter = createRateLimiter({
+    windowMs: ENROLLMENT_WINDOW_MS,
+    maxFailures: ENROLLMENT_MAX_FAILURES_DEPLOYMENT,
+  });
+  /**
+   * THE RUNGS IN THE ORDER THEY ARE ASKED, NARROWEST FIRST, and the order is load-bearing twice
+   * over: the narrowest rung gives the most useful sentence when it is the one that fires, and —
+   * because a refusal charges nothing — being refused narrowly is what stops one caller spending
+   * the coarse budgets that everybody else shares.
+   */
+  function guessTiers(req: Request): GuessTier[] {
+    const network = coarseOrigin(peerAddress(req));
+    return [
+      {
+        name: 'connection',
+        limiter: guessLimiter,
+        key: reportedOrigin(req),
+        // NOT the origin, which is the key: the row has to be bounded by something the caller
+        // cannot mint, or the trail is the attacker's to fill.
+        noticeKey: `guess:connection:${network}`,
+        max: ENROLLMENT_MAX_FAILURES,
+      },
+      {
+        name: 'network',
+        limiter: networkGuessLimiter,
+        key: network,
+        noticeKey: `guess:network:${network}`,
+        max: ENROLLMENT_MAX_FAILURES_PER_NETWORK,
+      },
+      {
+        name: 'server',
+        limiter: deploymentGuessLimiter,
+        key: DEPLOYMENT_KEY,
+        noticeKey: 'guess:server',
+        max: ENROLLMENT_MAX_FAILURES_DEPLOYMENT,
+      },
+    ];
+  }
   /**
    * A SECOND COUNTER, not a second key on the first, because they ration different things and must
    * not be able to spend each other: the one above rations GUESSES AT A CODE and is per caller,
@@ -495,6 +679,13 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
    * refused afterwards, so a caller who keeps knocking writes one row per fifteen minutes rather
    * than one per request — an audit trail an attacker can fill at will is an audit trail that hides
    * everything else in it.
+   *
+   * AND THE KEY MUST BE ONE THE CALLER CANNOT MINT, which is a rule this function cannot enforce
+   * and every call site now keeps. "One row per key per window" is only a bound when the number of
+   * keys is; until 2026-08-10 two of the three keys here contained `req.ip`, so at the 1,977
+   * requests a second measured on the wrong-code path a caller could write a row every ten guesses
+   * — 197 rows a second, growing this map without limit and burying everything else in the log.
+   * Every key below is derived from the TCP peer, or from nothing at all.
    */
   const announced = new Map<string, number>();
   function announceOnce(key: string, row: Parameters<typeof appendAuditLog>[1]): void {
@@ -532,11 +723,15 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       return await hashGate.run({ peer, origin }, work);
     } catch (err) {
       if (!(err instanceof QueueFullError)) throw err;
-      // One row per source per window, by the same rule the other two announcements follow: the
-      // caller being shed is by definition the one sending the most, and a row per shed request
-      // would be an audit trail they could fill at will. Coarsened, because this row outlives the
-      // incident. The peer is first because it is the half nobody can forge.
-      announceOnce(`shed:${coarseOrigin(peer)}|${coarseOrigin(origin)}`, {
+      // One row per source per window, by the same rule the other announcements follow: the caller
+      // being shed is by definition the one sending the most, and a row per shed request would be
+      // an audit trail they could fill at will. Coarsened, because this row outlives the incident.
+      //
+      // THE KEY IS THE PEER ALONE. It used to be `peer|origin`, which meant a caller writing their
+      // own `X-Forwarded-For` had 2^24 keys to rotate through and so one row per shed request after
+      // all — the bound was written down and then handed to the attacker. The reported origin is
+      // still in the detail, where being caller-chosen costs nothing.
+      announceOnce(`shed:${coarseOrigin(peer)}`, {
         userId: null,
         action: 'auth.hash_queue_shed',
         entityType: 'auth',
@@ -695,38 +890,54 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       if (!seen.ok) {
         if (seen.refusal === 'unknown') {
           /**
-           * THE ONLY BUDGET A GUESS TOUCHES, and the only branch that touches it.
+           * THE ONLY BUDGETS A GUESS TOUCHES, and the only branch that touches them.
            *
-           * Check and charge with no `await` between them, so a burst is counted as a burst. And
-           * NOTHING ELSE ON THIS ROUTE READS THIS COUNTER: somebody holding a code this deployment
-           * really issued cannot be refused by it however hard a stranger has been knocking, which
-           * is what stops ten wrong codes from closing an intake. Being keyed per caller as well is
-           * belt to that brace; see `ENROLLMENT_MAX_FAILURES` for what a forged key does and does
-           * not buy.
+           * Every rung is read and charged in one synchronous stretch with no `await` anywhere in
+           * it, so a burst is counted as a burst. And NOTHING ELSE ON THIS ROUTE READS THEM:
+           * somebody holding a code this deployment really issued cannot be refused by any of these
+           * however hard a stranger has been knocking, which is what makes it safe for the lower
+           * two rungs to be as coarse as they are. See `ENROLLMENT_WINDOW_MS` for the derivation of
+           * each ceiling and for what an attacker can still reach.
            */
-          const origin = reportedOrigin(req);
-          const guesses = guessLimiter.check(origin);
-          if (!guesses.allowed) {
-            throw new AppError(
-              'rate_limited',
-              'Too many enrollment codes have been tried from this connection recently. Nothing ' +
-                'is wrong with a code you were given — wait and try it again.',
-              { retryAfterSec: guesses.retryAfterSec },
-            );
+          const tiers = guessTiers(req);
+          let stopped: { tier: GuessTier; retryAfterSec: number } | undefined;
+          for (const tier of tiers) {
+            const decision = tier.limiter.check(tier.key);
+            if (decision.allowed) continue;
+            stopped = { tier, retryAfterSec: decision.retryAfterSec };
+            break;
           }
-          guessLimiter.recordFailure(origin);
-          if (!guessLimiter.check(origin).allowed) {
-            // The request that CLOSED the budget writes the one row for this window. An operator
-            // who finds enrolment refusing somebody needs to be able to see that a limiter did it
-            // and roughly where from; `coarseOrigin` keeps that to a /24 or a /48, because an audit
-            // row outlives the incident. No address and no code: the caller had neither.
-            announceOnce(`guess:${origin}`, {
+
+          if (stopped !== undefined) {
+            // NOTHING IS CHARGED WHEN A RUNG REFUSES, and it is the property the ratio between the
+            // rungs depends on: a caller who has been cut off cannot go on spending the budgets
+            // shared with everybody else, cannot extend their own sliding window by knocking, and
+            // cannot add a key to any of these maps.
+            throw new AppError('rate_limited', guessRefusal(stopped.tier), {
+              retryAfterSec: stopped.retryAfterSec,
+            });
+          }
+
+          const reported = coarseOrigin(reportedOrigin(req));
+          for (const tier of tiers) tier.limiter.recordFailure(tier.key);
+          for (const tier of tiers) {
+            if (tier.limiter.check(tier.key).allowed) continue;
+            // The request that CLOSED a rung writes the one row for it this window. An operator who
+            // finds enrolment refusing somebody needs to see that a limiter did it, which one, and
+            // roughly where from; `coarseOrigin` keeps that to a /24 or a /48, because an audit row
+            // outlives the incident. Never an address in full, never a code: the caller had
+            // neither, and the reported origin is in the detail as a sample rather than as the
+            // subject, because on the rung it matters for it IS the subject and on the others it is
+            // whatever the last forger happened to write.
+            announceOnce(tier.noticeKey, {
               userId: null,
               action: 'enrollment.code_guessing',
               entityType: 'enrollment',
-              entityId: coarseOrigin(origin),
+              entityId: tier.name === 'server' ? DEPLOYMENT_KEY : coarseOrigin(peerAddress(req)),
               detail: JSON.stringify({
-                failures: ENROLLMENT_MAX_FAILURES,
+                tier: tier.name,
+                reportedOrigin: reported,
+                failures: tier.max,
                 windowSec: ENROLLMENT_WINDOW_MS / 1000,
               }),
               atISO: nowISO,
@@ -862,6 +1073,47 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         // person is holding a real credential and is not guessing at anything.
         const refusal = REFUSAL[outcome.refusal];
         throw new AppError(refusal.code, refusal.message);
+      }
+
+      /**
+       * AN ACCOUNT CAME OUT OF A PLACE THAT HAS JUST BEEN GETTING CODES WRONG, WHICH IS WHAT A
+       * GUESSED CODE LOOKS LIKE FROM HERE.
+       *
+       * A ceiling can make working through the whole space hopeless; nothing can make a phrase an
+       * officer can say out loud unguessable, so the operator's ability to NOTICE is part of the
+       * defence rather than a consolation for the absence of one. This is the row that would have
+       * been written on 2026-08-10 when seven club-shaped guesses found `W1MX-SPRING-2027` on the
+       * eighth attempt and left the trail empty.
+       *
+       * BOTH COUNTS, because the two are trustworthy in opposite deployments and neither alone
+       * catches both. Behind the documented tunnel the connection is the individual student and is
+       * the number worth reading; against a caller writing their own `X-Forwarded-For` it is always
+       * zero and the network's count is the one that is true. Either crossing the threshold is
+       * enough, and the row carries both so an operator can tell "one address tried seven" from
+       * "the building got four wrong between them all afternoon".
+       *
+       * BOUNDED BY THE COARSE PEER, like every other announcement on this route: a found code with
+       * two hundred uses left writes ONE of these, not two hundred. The `user.enroll` rows are
+       * where the rest of the damage is enumerated, and they cannot be suppressed.
+       */
+      const guessesHere = guessLimiter.count(reportedOrigin(req));
+      const guessesNear = networkGuessLimiter.count(coarseOrigin(peerAddress(req)));
+      if (Math.max(guessesHere, guessesNear) >= ENROLLMENT_GUESSES_BEFORE_ACCOUNT) {
+        announceOnce(`enrolled-after-guesses:${coarseOrigin(peerAddress(req))}`, {
+          userId: outcome.account.id,
+          action: 'enrollment_code.redeemed_after_wrong_codes',
+          entityType: 'enrollment_code',
+          // The code, so the operator can revoke the thing that was found. Its id, never it.
+          entityId: outcome.code.id,
+          detail: JSON.stringify({
+            label: outcome.code.label,
+            chosen: outcome.code.chosen,
+            fromConnection: guessesHere,
+            fromNetwork: guessesNear,
+            threshold: ENROLLMENT_GUESSES_BEFORE_ACCOUNT,
+          }),
+          atISO: nowISO,
+        });
       }
 
       // NO `reset()` HERE, AND THAT IS THE POINT OF THIS LINE'S ABSENCE.

@@ -1,12 +1,14 @@
 import {
   CHOSEN_CODE_MAX_DAYS,
   CHOSEN_CODE_MAX_INPUT,
+  CHOSEN_CODE_MAX_USES,
   CHOSEN_CODE_MIN_LENGTH,
   describeEnrollmentCodeFold,
+  describeEnrollmentCodeStripped,
   exhaustionChance,
   groupThousands,
   labelRepeatsChosenCode,
-  MEASURED_GUESSES_PER_SECOND,
+  MEASURED_GUESSES_PER_DAY,
   normalizeEnrollmentCode,
   type EnrollmentCode,
 } from '@grantspotter/core';
@@ -83,21 +85,71 @@ const COLLISION_NOTICE_WINDOW_MS = 15 * 60 * 1000;
  * number back to them. "Too short" without the two numbers is the kind of refusal that gets
  * retried with one more character.
  */
+/**
+ * THE FLOOR, EXPLAINED WITHOUT THE IMPLICATION THAT CLEARING IT IS AN ACHIEVEMENT.
+ *
+ * WHAT THIS SENTENCE USED TO SAY AND WHY IT WAS WITHDRAWN. It derived twelve from a measured
+ * 1,862 wrong codes a second, which was true of the server as it then stood — the wrong-code budget
+ * was keyed on an address the caller could write, so it was not in anybody's way. Two things about
+ * that are now different. The rate is a ceiling instead of a throughput
+ * (`MEASURED_GUESSES_PER_DAY`, and `api/auth.ts` for the three rungs that produce it), so the
+ * arithmetic behind twelve no longer lands on twelve. And the sentence's own logic was the problem
+ * rather than its number: it answered "why twelve?" so thoroughly that it read as "twelve is
+ * enough". MEASURED on 2026-08-10, `W1MX-SPRING-2027` — fourteen characters after normalisation,
+ * comfortably over the floor — was found on the seventh guess.
+ *
+ * SO THE REFUSAL LEADS WITH THE THING THAT IS TRUE AT EVERY LENGTH and gives the number second.
+ * `exhaustionChance` still supplies the odds, because a refusal that asserts without arithmetic is
+ * a refusal a reader is right to distrust, and it is labelled as what it is: the chance of somebody
+ * working through every code, which is not how any of these are found.
+ */
 function tooShortRefusal(normalized: string): string {
   const length = String(normalized.length);
   const floor = String(CHOSEN_CODE_MIN_LENGTH);
   return (
-    `That code is ${length} characters once capitals, dashes and spaces are taken out, and a code ` +
-    `you choose has to be at least ${floor}. The reason is what somebody guessing can actually ` +
-    'try: the limit of ten wrong codes every fifteen minutes is counted per address, so anybody ' +
-    'with more than one address is not held to it, and this server was measured answering ' +
-    `${groupThousands(MEASURED_GUESSES_PER_SECOND)} wrong codes a second. A year of that finds a ` +
+    // `describeEnrollmentCodeStripped()` and not a written-out list: `U` is deleted by the
+    // normaliser too, so a hand-written "capitals, dashes and spaces" quoted a length the reader
+    // could not arrive at — `W1MX-AUTUMN-2026` is fourteen of those characters and twelve of these.
+    `That code is ${length} characters once ${describeEnrollmentCodeStripped()} are taken out, and ` +
+    `a code ` +
+    `you choose has to be at least ${floor}. What the floor rules out is somebody working through ` +
+    'every possible code: GrantSpotter answers at most 240 wrong codes every fifteen minutes ' +
+    `across the whole server — ${groupThousands(MEASURED_GUESSES_PER_DAY)} a day, however many ` +
+    'addresses they use — and a year of that gets through a code of ' +
     // "a code of N characters" rather than "a N-character code", so the sentence does not have to
     // pick between "a" and "an" from a number whose spoken form it cannot see.
-    `code of ${length} characters ${exhaustionChance(normalized.length)}, and a code of ${floor} ` +
-    `characters ${exhaustionChance(CHOSEN_CODE_MIN_LENGTH)}. That is all ${floor} buys, and it is ` +
-    'a floor rather than a promise: add a word rather than a character, because W1MX-FALL-2026 ' +
-    'clears it and is still something a person could think of.'
+    `${length} characters ${exhaustionChance(normalized.length)}, against a code of ${floor} ` +
+    `characters ${exhaustionChance(CHOSEN_CODE_MIN_LENGTH)}. That is the whole of what ${floor} ` +
+    'buys. It is not a measure of how hard your code is to GUESS, and no length is: in testing, ' +
+    'W1MX-SPRING-2027 was found on the seventh attempt by somebody trying a callsign with a ' +
+    'season and a year. Pick something a person outside your club would have no reason to try, ' +
+    'give it a short life and a number of uses, and treat it as a convenience rather than a secret.'
+  );
+}
+
+/**
+ * WHY A CODE SOMEBODY TYPED HAS TO SAY HOW MANY PEOPLE IT IS FOR.
+ *
+ * The refusal names the thing it is bounding rather than the rule it is enforcing, because the
+ * administrator reading it is about to choose the number and the only question that helps them is
+ * "how many people am I giving this to?".
+ */
+const NO_MAX_USES_REFUSAL =
+  'A code you choose has to say how many accounts it may create, and this one was given no limit. ' +
+  'A generated code is twenty random characters and nobody can arrive at it; one you can read out ' +
+  'is one somebody can guess, and the number of uses is what decides how much a lucky guess is ' +
+  'worth — in testing, a guessed code with no limit went on making member accounts until the test ' +
+  'stopped asking. Put the size of the intake here. Thirty is the usual answer, you can issue ' +
+  `another code in ten seconds if more people turn up, and the most a chosen code may have is ` +
+  `${String(CHOSEN_CODE_MAX_USES)}.`;
+
+function tooManyUsesRefusal(asked: number): string {
+  return (
+    `A code you choose may create at most ${String(CHOSEN_CODE_MAX_USES)} accounts and this one ` +
+    `asks for ${String(asked)}. That ceiling is about the day one of these is guessed rather than ` +
+    'about the day it is used: it is what an administrator can review by hand, and past a hall ' +
+    'full of people a code is not being read out any more, it is being published. A generated ' +
+    `code can still have ${String(MAX_USES_CEILING)}, or no limit at all.`
   );
 }
 
@@ -126,10 +178,11 @@ const NO_EXPIRY_REFUSAL =
 function expiryTooLongRefusal(days: number): string {
   return (
     `A code you choose may live at most ${String(CHOSEN_CODE_MAX_DAYS)} days and this one asks ` +
-    `for ${String(days)}. The ${String(CHOSEN_CODE_MIN_LENGTH)}-character floor is worked out ` +
-    'against a year of guessing, so a longer life would need a longer code; rather than a sliding ' +
-    'scale GrantSpotter fixes the pair. A generated code can still have ten years. Issuing a new ' +
-    'chosen code next year takes ten seconds.'
+    `for ${String(days)}. A code that gets read out gets forwarded, photographed and left in a ` +
+    'club chat, and the chance of that only grows with time — an expiry is the one bound on it ' +
+    'that does not depend on somebody remembering. A generated code can still have ten years, ' +
+    'because nobody is passing one of those around by mouth. Issuing a new chosen code next year ' +
+    'takes ten seconds.'
   );
 }
 
@@ -259,10 +312,16 @@ export function createEnrollmentRouter(deps: RouterDeps): Router {
        * WRITTEN.
        *
        * They are checked in the order an administrator would want to hear about them: what is
-       * wrong with the code itself first, then how long it may live, then the label. Nothing here
-       * touches the generated path — `chosen === null` skips all of it — and that is the honest
-       * shape, because none of these rules is about issuing a credential in general. Each is about
-       * the one property that differs: a chosen code can be guessed.
+       * wrong with the code itself first, then how far it reaches — how long it may live and how
+       * many accounts it may make — then the label. Nothing here touches the generated path
+       * (`chosen === null` skips all of it) and that is the honest shape, because none of these
+       * rules is about issuing a credential in general. Each is about the one property that
+       * differs: a chosen code can be guessed.
+       *
+       * THE TWO REACH RULES ARE THE SAME RULE ABOUT TWO AXES, and they are the part of this block
+       * that carries the weight now. A floor cannot stop a code being guessed; how long it lasts
+       * and how much it is worth when it is are the two things that CAN be bounded, so both are
+       * required and neither is silently defaulted.
        */
       if (chosen !== null) {
         const normalized = normalizeEnrollmentCode(chosen);
@@ -272,6 +331,14 @@ export function createEnrollmentRouter(deps: RouterDeps): Router {
         if (days === null) throw new AppError('validation_failed', NO_EXPIRY_REFUSAL);
         if (days > CHOSEN_CODE_MAX_DAYS) {
           throw new AppError('validation_failed', expiryTooLongRefusal(days));
+        }
+        // `maxUses ?? null` rather than the parsed value: the schema lets the field be omitted or
+        // explicitly null, and both of those mean "no limit", which is the thing being refused.
+        if ((maxUses ?? null) === null) {
+          throw new AppError('validation_failed', NO_MAX_USES_REFUSAL);
+        }
+        if (maxUses !== undefined && maxUses !== null && maxUses > CHOSEN_CODE_MAX_USES) {
+          throw new AppError('validation_failed', tooManyUsesRefusal(maxUses));
         }
         // Checked only for a chosen code because it cannot happen otherwise: on the generated path
         // the label is written before the code exists, so an administrator could not repeat it if

@@ -416,6 +416,23 @@ export type RateLimitAttempt =
 export interface RateLimiter {
   check(key: string, nowMs?: number): RateLimitDecision;
   /**
+   * HOW MANY FAILURES ARE RECORDED AGAINST `key` RIGHT NOW, for a caller that wants to SAY
+   * something rather than refuse something.
+   *
+   * `check` answers "may this one proceed?", which is a boolean and is the wrong question for the
+   * one place this is used: `api/auth.ts` writes an audit row when an account is created from a
+   * source that has just been getting codes wrong, and "seven" and "one" are the same boolean.
+   * MEASURED on 2026-08-10 against the built server: seven wrong codes from one address, then a
+   * chosen code found on the eighth, produced an account and no row an operator could see, because
+   * every one of those seven was inside a budget that never closed.
+   *
+   * IN-FLIGHT ATTEMPTS ARE NOT COUNTED, unlike `check`'s reading of the same key. This number goes
+   * into a sentence about what has already happened; an attempt whose outcome is still unknown is
+   * not yet a wrong code, and counting it would let a burst of requests that all turn out to be
+   * correct inflate the figure in the row.
+   */
+  count(key: string, nowMs?: number): number;
+  /**
    * Take a slot BEFORE doing work that will decide whether this attempt is a failure.
    *
    * CHECK AND CLAIM IN ONE CALL, deliberately, for the reason `HostCooldown.beginAsking` gives one
@@ -477,6 +494,11 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   return {
     check(key, nowMs = Date.now()) {
       return decide(key, nowMs);
+    },
+
+    count(key, nowMs = Date.now()) {
+      // `recent` prunes as it reads, so asking is also what keeps a key from outliving its window.
+      return recent(key, nowMs).length;
     },
 
     begin(key, nowMs = Date.now()) {
