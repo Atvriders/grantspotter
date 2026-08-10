@@ -3,7 +3,13 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createBootstrapState } from '../src/auth/bootstrap.js';
-import { coarseOrigin, createConcurrencyGate, createRateLimiter } from '../src/auth/rateLimit.js';
+import {
+  coarseOrigin,
+  createConcurrencyGate,
+  createRateLimiter,
+  createThresholdNotice,
+  QueueFullError,
+} from '../src/auth/rateLimit.js';
 import { SESSION_COOKIE } from '../src/auth/session.js';
 import { loadConfig } from '../src/config.js';
 import { createSessionRepo } from '../src/db/repositories/sessions.js';
@@ -143,16 +149,18 @@ describe('rate limiter', () => {
  * the one above: a budget refuses, a gate waits. Confusing the two is what answered twenty of
  * thirty students with a valid enrollment code "Too many enrollment attempts. Try again later."
  */
+const ONE_LANE = { peer: '203.0.113.7', origin: '203.0.113.7' };
+
 describe('concurrency gate', () => {
   it('never runs more than the ceiling at once, and still runs everything', async () => {
-    const gate = createConcurrencyGate(3);
+    const gate = createConcurrencyGate({ maxConcurrent: 3, maxQueued: 100 });
     let live = 0;
     let peak = 0;
     const done: number[] = [];
 
     await Promise.all(
       Array.from({ length: 20 }, (_unused, i) =>
-        gate.run(async () => {
+        gate.run(ONE_LANE, async () => {
           live += 1;
           peak = Math.max(peak, live);
           await new Promise((resolve) => setTimeout(resolve, 5));
@@ -167,29 +175,238 @@ describe('concurrency gate', () => {
     // Drained: a slot leaked by a thrown body would show up here as a gate that never empties.
     expect(gate.inFlight).toBe(0);
     expect(gate.waiting).toBe(0);
+    expect(gate.shed).toBe(0);
   });
 
   it('gives the slot back when the work throws, so one failure is not a permanent hole', async () => {
-    const gate = createConcurrencyGate(1);
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10 });
     await expect(
-      gate.run(() => Promise.reject(new Error('argon2 fell over'))),
+      gate.run(ONE_LANE, () => Promise.reject(new Error('argon2 fell over'))),
     ).rejects.toThrow('argon2 fell over');
     expect(gate.inFlight).toBe(0);
-    await expect(gate.run(() => Promise.resolve('served'))).resolves.toBe('served');
+    await expect(gate.run(ONE_LANE, () => Promise.resolve('served'))).resolves.toBe('served');
   });
 
-  it('serves waiters in the order they arrived, so nobody starves', async () => {
-    const gate = createConcurrencyGate(1);
+  it('serves one lane in the order it arrived, so nobody starves', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10 });
     const order: number[] = [];
     await Promise.all(
       Array.from({ length: 5 }, (_unused, i) =>
-        gate.run(async () => {
+        gate.run(ONE_LANE, async () => {
           order.push(i);
           await new Promise((resolve) => setTimeout(resolve, 1));
         }),
       ),
     );
     expect(order).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  /**
+   * THE FINDING THIS PRIMITIVE WAS REWRITTEN FOR, at the level where it can be asserted exactly
+   * rather than in milliseconds.
+   *
+   * Strict FIFO put a caller with one request behind every request anybody else had already sent,
+   * so one caller sending N of them chose everybody's wait — measured end to end on 2026-08-09 as
+   * a student's enrolment going from 81 ms to 4,881 ms while a stranger held 512 connections open
+   * on the sign-in route. Round-robin makes a caller's share 1/n of the service however many
+   * requests they send, so the arithmetic below holds for any N.
+   */
+  it('gives a caller with one request the next turn, not the last one', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const served: string[] = [];
+    const work = (tag: string) => async () => {
+      served.push(tag);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
+    const student = { peer: '198.51.100.4', origin: '198.51.100.4' };
+
+    const all = [gate.run(flood, work('flood-0'))];
+    for (let i = 1; i < 20; i += 1) all.push(gate.run(flood, work(`flood-${String(i)}`)));
+    all.push(gate.run(student, work('student')));
+    await Promise.all(all);
+
+    // flood-0 took the free slot on arrival, so the round starts on the flood's lane and serves
+    // flood-1 before it comes round to the student: 21st through the door, THIRD served, and third
+    // for any size of flood at all. Under the FIFO this replaced the student was 21st out of 21.
+    expect(served.slice(0, 3)).toEqual(['flood-0', 'flood-1', 'student']);
+    expect(served).toHaveLength(21);
+  });
+
+  /**
+   * THE SECOND LEVEL OF THE ROUND, and the deployment shape it is for. Behind a reverse proxy every
+   * caller shares one TCP peer, so a round over peers alone would collapse to plain FIFO and the
+   * finding would be reproducible through the operator's own tunnel. Taking turns over the
+   * reported origin INSIDE each peer is what tells two users of one tunnel apart.
+   */
+  it('takes turns inside one peer, so a tunnel is not one lane', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const served: string[] = [];
+    const work = (tag: string) => async () => {
+      served.push(tag);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    const tunnel = '10.0.0.1';
+
+    const all = [gate.run({ peer: tunnel, origin: '203.0.113.7' }, work('flood-0'))];
+    for (let i = 1; i < 20; i += 1) {
+      all.push(gate.run({ peer: tunnel, origin: '203.0.113.7' }, work(`flood-${String(i)}`)));
+    }
+    all.push(gate.run({ peer: tunnel, origin: '198.51.100.4' }, work('student')));
+    await Promise.all(all);
+
+    expect(served[2]).toBe('student');
+  });
+
+  /**
+   * AND THE FIRST LEVEL IS WHAT STOPS THE SECOND BEING FORGED. With nothing in front of this
+   * process the reported origin is a header the caller writes, so a flood can mint a lane per
+   * request; the peer it arrives on is still one value, and one peer is still one share.
+   */
+  it('gives a caller minting a fresh reported origin per request no more than one peer share', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const served: string[] = [];
+    const work = (tag: string) => async () => {
+      served.push(tag);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+
+    const all = [gate.run({ peer: '203.0.113.7', origin: 'forged-0' }, work('flood-0'))];
+    for (let i = 1; i < 20; i += 1) {
+      all.push(
+        gate.run({ peer: '203.0.113.7', origin: `forged-${String(i)}` }, work(`flood-${String(i)}`)),
+      );
+    }
+    all.push(gate.run({ peer: '198.51.100.4', origin: '198.51.100.4' }, work('student')));
+    await Promise.all(all);
+
+    // Nineteen forged lanes bought one turn between them, because they are all one peer.
+    expect(served[2]).toBe('student');
+  });
+});
+
+/**
+ * WHAT HAPPENS AT THE CEILING, which is the half of the fix that bounds MEMORY and the wait rather
+ * than dividing them fairly. The rule is that the request dropped is the newest one belonging to
+ * whoever holds the largest share — so a flood can only ever displace itself, and the person with
+ * one request in a queue full of somebody else's is never the one turned away.
+ */
+describe('what the gate sheds when it is full', () => {
+  /** Hold every slot and every queue place, and hand back a lever to let them all finish. */
+  function saturate(gate: ReturnType<typeof createConcurrencyGate>, lane: { peer: string; origin: string }, n: number) {
+    let open = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const runs = Array.from({ length: n }, () => gate.run(lane, () => held).catch(() => 'shed'));
+    return { runs, open };
+  }
+
+  it('sheds the flood rather than the caller who arrived into it', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 4 });
+    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
+    const student = { peer: '198.51.100.4', origin: '198.51.100.4' };
+
+    // One running plus four queued is the whole gate.
+    const { runs, open } = saturate(gate, flood, 5);
+    await Promise.resolve();
+    expect(gate.waiting).toBe(4);
+
+    // The student walks into a full queue and is admitted; one of the flood's is shed for them.
+    let studentRan = false;
+    const studentRun = gate.run(student, async () => {
+      studentRan = true;
+    });
+    expect(gate.shed).toBe(1);
+    expect(gate.waiting).toBe(4);
+
+    open();
+    await Promise.all([...runs, studentRun]);
+    expect(studentRan).toBe(true);
+    expect((await Promise.all(runs)).filter((r) => r === 'shed')).toHaveLength(1);
+    expect(gate.inFlight).toBe(0);
+    expect(gate.waiting).toBe(0);
+  });
+
+  /**
+   * THE OTHER SIDE OF THE SAME RULE, and the reason it is a rule about SHARE rather than about
+   * arrival order: when every lane is the same size there is no flood to shed, only genuine load,
+   * and the honest answer is to turn away the newest rather than to drop somebody who has already
+   * been waiting. That case is the only one in which a caller with one request is refused.
+   */
+  it('turns away the arrival when no lane is larger than any other', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 2 });
+    let open = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const lane = (n: number) => ({ peer: `198.51.100.${String(n)}`, origin: `198.51.100.${String(n)}` });
+
+    const running = gate.run(lane(1), () => held);
+    const queued = [gate.run(lane(2), () => held), gate.run(lane(3), () => held)];
+    await Promise.resolve();
+    expect(gate.waiting).toBe(2);
+
+    await expect(gate.run(lane(4), () => held)).rejects.toThrow(QueueFullError);
+    // Nobody who was already waiting was disturbed to make room for somebody who was not.
+    expect(gate.waiting).toBe(2);
+
+    open();
+    await Promise.all([running, ...queued]);
+  });
+
+  it('runs nothing for a shed request, so being turned away costs the caller nothing', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 1 });
+    let started = 0;
+    let open = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
+    const count = async (): Promise<void> => {
+      started += 1;
+      await held;
+    };
+
+    const running = gate.run(flood, count);
+    const waiting = gate.run(flood, count).catch(() => 'shed');
+    await Promise.resolve();
+    await expect(gate.run(flood, count)).rejects.toThrow(QueueFullError);
+
+    open();
+    await Promise.all([running, waiting]);
+    // Two bodies ever started: the one that was running and the one that was queued. The third
+    // never entered `work`, which is what makes a shed cheap for this process as well as for them.
+    expect(started).toBe(2);
+    expect(gate.shed).toBe(1);
+  });
+});
+
+/**
+ * THE COUNTER THAT ONLY SPEAKS. Every other limiter in this file answers "may this proceed?"; this
+ * one answers "should somebody be told?", and it was added because 3,776 unauthenticated requests
+ * measured on 2026-08-09 produced zero rows in `audit_log`.
+ */
+describe('threshold notice', () => {
+  it('is true exactly once, on the event that reaches the threshold', () => {
+    const notice = createThresholdNotice({ windowMs: 1000, threshold: 3 });
+    expect(notice.crossed('k', 0)).toBe(false);
+    expect(notice.crossed('k', 10)).toBe(false);
+    expect(notice.crossed('k', 20)).toBe(true);
+    // A caller who keeps going writes no further rows, so the trail cannot be used to bury itself.
+    expect(notice.crossed('k', 30)).toBe(false);
+    expect(notice.crossed('k', 40)).toBe(false);
+  });
+
+  it('counts each key separately and starts again in the next window', () => {
+    const notice = createThresholdNotice({ windowMs: 1000, threshold: 2 });
+    expect(notice.crossed('a', 0)).toBe(false);
+    expect(notice.crossed('b', 0)).toBe(false);
+    expect(notice.crossed('a', 1)).toBe(true);
+    expect(notice.crossed('b', 1)).toBe(true);
+    // Same key, next window: the count restarts, so a sustained flood is reported once a window.
+    expect(notice.crossed('a', 1001)).toBe(false);
+    expect(notice.crossed('a', 1002)).toBe(true);
   });
 });
 

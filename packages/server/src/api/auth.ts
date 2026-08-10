@@ -12,6 +12,8 @@ import {
   coarseOrigin,
   createConcurrencyGate,
   createRateLimiter,
+  createThresholdNotice,
+  QueueFullError,
   type RateLimiter,
 } from '../auth/rateLimit.js';
 import {
@@ -157,9 +159,9 @@ const enrollSchema = z.object({
  * `recordFailure()` after it (240 concurrent wrong codes → 240 hashes, 10.2 s of CPU, measured),
  * and then because the fix for that charged legitimate enrolments to the same budget (30 students
  * with a valid code → 10 accounts, 20 refusals, measured). Both were the same mistake: a counter of
- * ANSWERS being asked to bound WORK. The work is bounded by `hashGate` below, which queues instead
- * of refusing, and by the ordering in the handler — a code this deployment will not honour never
- * reaches the hash at all.
+ * ANSWERS being asked to bound WORK. The work is bounded by `hashGate` below, which takes turns
+ * between callers rather than refusing per caller, and by the ordering in the handler — a code this
+ * deployment will not honour never reaches the hash at all.
  */
 const ENROLLMENT_WINDOW_MS = 15 * 60 * 1000;
 const ENROLLMENT_MAX_FAILURES = 10;
@@ -168,16 +170,71 @@ const ENROLLMENT_MAX_FAILURES = 10;
  * HOW MANY argon2id OPERATIONS THIS PROCESS WILL HAVE IN FLIGHT AT ONCE, across both
  * unauthenticated routes that perform one.
  *
- * A CEILING ON WORK, NEVER ON PEOPLE. Everything past it waits and is then served; nothing is
- * refused. Thirty students pressing submit together is the intended use of this feature, and the
- * only honest answer to thirty simultaneous hashes is that they will take a moment.
- *
  * FOUR, matching libuv's default thread-pool size, which is where `@node-rs/argon2` actually runs:
  * past that the operating system is queueing these anyway, and a queue we can see is worth more
- * than one we cannot — it bounds peak resident memory at four times argon2id's 19 MiB, it is FIFO
- * so nobody starves, and it gives `authCost.test.ts` a number to assert instead of a hope.
+ * than one we cannot — it bounds peak resident memory at four times argon2id's 19 MiB, and it
+ * gives `authCost.test.ts` a number to assert instead of a hope.
  */
 const MAX_CONCURRENT_HASHES = 4;
+
+/**
+ * HOW MANY MAY BE WAITING FOR ONE OF THOSE FOUR SLOTS, and why a ceiling had to exist at all.
+ *
+ * THIS PARAGRAPH USED TO SAY THERE WAS NO CEILING, and said it as a virtue: "everything past it
+ * waits and is then served; nothing is refused". MEASURED on this host, 2026-08-09: a stranger with
+ * no code and no account, opening 512 connections and POSTing `/api/auth/login` with a fresh email
+ * per request — which the `(peer, email)` sign-in counter can never fire on — took a student's
+ * enrolment from 81 ms to 4,881 ms, and the figure rose in step with their connection count
+ * (24 connections 243 ms, 96 → 967 ms, 256 → 2,507 ms) because the depth of the queue was theirs
+ * to choose.
+ * A caller who can choose everyone's wait can choose a wait longer than everyone's patience, at
+ * which point every one of those hashes is CPU spent on somebody who has already closed the tab.
+ * "Nothing is refused" was not generosity; it was the denial of service with the word removed.
+ *
+ * TWO HUNDRED AND FIFTY-SIX, derived rather than picked. Measured here, four-way concurrent
+ * argon2id costs 42 ms a hash (1,536 verifies drained in 16.1 s at four at a time), so a full
+ * queue drains in 256/4 x 42 ms = 2.7 s. That is the worst wait this gate will impose on anybody,
+ * and it is the number to change if a deployment's hardware is slower — not the concurrency,
+ * which is a property of the machine, but this, which is a promise about the wait.
+ *
+ * IT IS NOT A PER-CALLER BUDGET AND CANNOT BE SPENT ON ANYBODY ELSE'S BEHALF. The gate is
+ * round-robin between callers and sheds whoever holds the largest share, so a flood displaces only
+ * itself; 256 is reached by legitimate traffic only when 256 DIFFERENT people are waiting at once,
+ * which is an order of magnitude past a club intake and is real load rather than an attack.
+ */
+const MAX_QUEUED_HASHES = 256;
+
+/**
+ * What a shed request is told to wait, and it is the honest number rather than a punitive one: the
+ * queue in front of them drains in 2.7 s at worst, so the true answer is "about a second", and a
+ * limiter that says fifteen minutes when it means one second teaches people to ignore it.
+ */
+const SHED_RETRY_AFTER_SEC = 1;
+
+/**
+ * HOW MANY FAILED SIGN-INS FROM ONE SOURCE NETWORK BEFORE AN OPERATOR IS TOLD, and the number
+ * refuses nothing whatsoever.
+ *
+ * WHY IT EXISTS. MEASURED, 2026-08-09: 2,244 failed sign-ins arriving in twenty-one seconds
+ * produced ZERO rows in `audit_log`. The per-`(peer, email)` counter below is the right shape for stopping
+ * somebody guessing ONE person's password and is blind by construction to somebody who never
+ * guesses the same address twice — and that caller is the one an operator most needs to know
+ * about, because they are the one who was making everybody else wait. A control nobody can see
+ * operating cannot be operated, and the ones this server already has were all invisible to exactly
+ * the traffic that mattered.
+ *
+ * KEYED ON THE COARSENED TCP PEER, which no header can change. The reported origin would name the
+ * actual client network behind a tunnel and is the more useful fact — and is precisely why it is
+ * not used: a caller who can write it can hold every bucket below the threshold and be invisible
+ * again. An unforgeable key that is sometimes coarse beats a precise one that can be evaded.
+ *
+ * FIFTY IN FIFTEEN MINUTES. Being wrong about this number costs one audit row per source network
+ * per window and nothing else — nobody is refused, delayed, or told anything different — so it is
+ * set where a busy campus NAT on results day will occasionally trip it rather than where only an
+ * attack will.
+ */
+const FAILED_SIGN_IN_NOTICE = 50;
+const SIGN_IN_NOTICE_WINDOW_MS = 15 * 60 * 1000;
 
 /**
  * HOW MANY TIMES ONE CODE MAY BE TOLD, IN SO MANY WORDS, THAT AN ADDRESS ALREADY HAS AN ACCOUNT.
@@ -383,8 +440,47 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
    * ONE GATE FOR BOTH ROUTES, because there is one CPU. Sign-in and enrolment are the only two
    * unauthenticated paths in this server that run argon2id, and a ceiling that either of them could
    * exceed by borrowing the other's headroom would not be a ceiling.
+   *
+   * SPLITTING IT PER ROUTE WAS THE OBVIOUS FIX AND IS THE WRONG ONE. The measured failure was
+   * `/api/auth/login` starving `/api/auth/enroll`, so giving each its own gate makes that exact
+   * probe come out clean — and leaves the same stranger able to make every MEMBER of the
+   * deployment wait five seconds to sign in, which is the larger population and the more important
+   * route. The thing being starved was never the enrolment route; it was everybody who was not the
+   * attacker. So the round is between CALLERS and cuts across both routes: a student enrolling and
+   * a member signing in are two lanes, and the flood is a third whatever it is aimed at.
+   *
+   * MEASURED, 2026-08-09, 512 connections rotating the email on `/api/auth/login` against a server
+   * in its own process, with one student enrolling throughout. Three deployment shapes, because
+   * the two halves of a lane are trustworthy in different ones:
+   *
+   *   shape                                   student's enrolment      audit rows
+   *   one proxy in front (documented)         5,036 ms -> 330 ms       0 -> 2
+   *   no proxy, attacker forges the header    5,133 ms -> 302 ms       0 -> 2
+   *   one proxy AND a caller-chosen req.ip    5,070 ms -> 4,065 ms     0 -> 2
+   *
+   * Nothing legitimate was refused in any of the three, before or after: the enrolment was answered
+   * 201 every time, and what changed is how long it took.
+   *
+   * THE THIRD ROW IS THE RESIDUAL AND IT IS STATED RATHER THAN ROUNDED OFF. It is a deployment in
+   * which every caller shares one TCP peer AND `req.ip` is a value the caller writes — a proxy that
+   * does not append `X-Forwarded-For`, or `trust proxy` set to more hops than there really are. In
+   * that shape this process has no signal at all that distinguishes one caller from another, so no
+   * scheduler could divide anything fairly and this one does not pretend to. What it still does is
+   * bound the damage: the wait stops growing with the attacker's connection count and settles at
+   * the queue's own drain time. The fix for that row is configuration, not code.
    */
-  const hashGate = createConcurrencyGate(MAX_CONCURRENT_HASHES);
+  const hashGate = createConcurrencyGate({
+    maxConcurrent: MAX_CONCURRENT_HASHES,
+    maxQueued: MAX_QUEUED_HASHES,
+  });
+  /**
+   * Never consulted before answering anybody and never able to refuse: it exists so that the
+   * traffic the counters above are blind to leaves a mark. See `FAILED_SIGN_IN_NOTICE`.
+   */
+  const signInNotice = createThresholdNotice({
+    windowMs: SIGN_IN_NOTICE_WINDOW_MS,
+    threshold: FAILED_SIGN_IN_NOTICE,
+  });
 
   /**
    * ONE ROW PER KEY PER WINDOW, and no more, for a thing that is happening to the deployment rather
@@ -412,6 +508,54 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
     for (const [seen, at] of announced) if (nowMs - at >= ENROLLMENT_WINDOW_MS) announced.delete(seen);
     announced.set(key, nowMs);
     appendAuditLog(deps.db, row);
+  }
+
+  /**
+   * THE ONE PLACE EITHER UNAUTHENTICATED ROUTE RUNS argon2id, and the only place that knows what a
+   * shed looks like to a person.
+   *
+   * The lane is the pair the gate takes turns over: the TCP peer, which nobody can forge, and the
+   * address our own proxy reported, which tells two users of one tunnel apart. Neither is
+   * trustworthy alone and `QueueLane` says why the round is nested over both.
+   *
+   * A SHED IS A 429 AND NOT A 500, because it is a true statement about capacity rather than a
+   * fault, and it is deliberately the same 429 on both routes and for every caller: it depends on
+   * queue occupancy and on nothing about the address, the code or the password, so it cannot be
+   * used to tell any of those apart. Nothing has been spent when it is thrown — no argon2id, no
+   * enrolment use, no failure charged to any budget — so retrying really does cost the caller
+   * nothing but the wait.
+   */
+  async function hashUnderGate<T>(req: Request, work: () => Promise<T>): Promise<T> {
+    const peer = peerAddress(req);
+    const origin = reportedOrigin(req);
+    try {
+      return await hashGate.run({ peer, origin }, work);
+    } catch (err) {
+      if (!(err instanceof QueueFullError)) throw err;
+      // One row per source per window, by the same rule the other two announcements follow: the
+      // caller being shed is by definition the one sending the most, and a row per shed request
+      // would be an audit trail they could fill at will. Coarsened, because this row outlives the
+      // incident. The peer is first because it is the half nobody can forge.
+      announceOnce(`shed:${coarseOrigin(peer)}|${coarseOrigin(origin)}`, {
+        userId: null,
+        action: 'auth.hash_queue_shed',
+        entityType: 'auth',
+        entityId: coarseOrigin(peer),
+        detail: JSON.stringify({
+          reportedOrigin: coarseOrigin(origin),
+          maxQueued: MAX_QUEUED_HASHES,
+          maxConcurrent: MAX_CONCURRENT_HASHES,
+        }),
+        atISO: new Date().toISOString(),
+      });
+      throw new AppError(
+        'rate_limited',
+        'This server is already doing as much password checking as it can right now. Nothing is ' +
+          'wrong with your details, nothing has been used up, and nobody needs to do anything ' +
+          'about it — wait a moment and try again.',
+        { retryAfterSec: SHED_RETRY_AFTER_SEC },
+      );
+    }
   }
 
   const router = Router();
@@ -658,8 +802,14 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
        * hashes at a time. What used to stand here was a failure budget claiming a slot for every
        * attempt including the successful ones, and it answered twenty of those thirty students
        * "Too many enrollment attempts. Try again later."
+       *
+       * The queue is now bounded and takes turns between callers, which is what stopped somebody
+       * else's flood on the sign-in route deciding how long this student waits — see
+       * `MAX_QUEUED_HASHES`. A student can still be shed, but only by being the largest single
+       * contributor to the backlog themselves, and nothing of theirs is spent when they are: the
+       * code has not been redeemed and no budget has been charged at this point in the handler.
        */
-      const passwordHash = await hashGate.run(() => hashPassword(body.password));
+      const passwordHash = await hashUnderGate(req, () => hashPassword(body.password));
 
       let outcome: Redemption<UserRecord>;
       try {
@@ -773,13 +923,19 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
        * rotates the email address gets a fresh bucket each time and `verifyPasswordConstantTime`
        * runs a real argon2id verify against a dummy hash even when no such account exists — which
        * is deliberate, and is what stops the route leaking which addresses are accounts through
-       * response timing.
+       * response timing. IT IS THEREFORE BLIND, BY CONSTRUCTION, TO THE CHEAPEST FLOOD THERE IS,
+       * and that is not a defect in the key — a key that caught it would be a key an attacker
+       * could point at a named person. What that blindness cost was measured on 2026-08-09 and is
+       * answered in two other places rather than here: `MAX_QUEUED_HASHES`, so a caller sending a
+       * fresh address every time gets one caller's share of the CPU instead of all of it, and
+       * `FAILED_SIGN_IN_NOTICE`, so the operator finds out.
        *
-       * This paragraph used to end by declining to bound that, on the grounds that "a global gate
-       * on sign-in is a lockout for every user in the deployment at once". That is true of a gate
-       * that REFUSES and false of one that QUEUES, and the distinction is the whole lesson of this
-       * change. `hashGate` queues: every caller is served, four verifies at a time, and nobody is
-       * refused by it — see `MAX_CONCURRENT_HASHES`.
+       * This paragraph used to end by declining to bound the per-server work, on the grounds that
+       * "a global gate on sign-in is a lockout for every user in the deployment at once", and was
+       * then rewritten to say that a gate which QUEUES refuses nobody. Both were half right. A
+       * shared queue with no ceiling and no notion of whose turn it is refuses nobody and starves
+       * everybody: 512 connections here took a student's enrolment to 4,881 ms. What makes the
+       * shared gate safe is not that it queues, it is that it takes turns.
        */
       const attempt = deps.loginLimiter.begin(key);
       if (!attempt.started) {
@@ -796,13 +952,40 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         // typed the wrong password is decided only after the one argon2id
         // verify has already run.
         const user = users.findByEmail(body.email);
-        const passwordOk = await hashGate.run(() =>
+        const passwordOk = await hashUnderGate(req, () =>
           verifyPasswordConstantTime(user?.passwordHash, body.password),
         );
         const ok = passwordOk && user !== undefined && !user.disabled;
 
         if (!ok || user === undefined) {
           attempt.charge();
+          /**
+           * COUNTED HERE AND NOWHERE EARLIER, so the row means what it says. A request refused by
+           * the schema, by the bucket above or by the gate is not a failed sign-in — it is a
+           * request that never reached a password — and rolling those in would make the number an
+           * operator sees stop being "somebody is trying passwords".
+           *
+           * The count is per coarsened TCP PEER and not per account: the traffic that produced no
+           * audit rows at all was a caller who never used the same address twice, and the only
+           * thing every one of those requests had in common was where it came from.
+           */
+          const coarsePeer = coarseOrigin(peerAddress(req));
+          if (signInNotice.crossed(coarsePeer)) {
+            appendAuditLog(deps.db, {
+              userId: null,
+              action: 'auth.failed_sign_ins',
+              entityType: 'auth',
+              entityId: coarsePeer,
+              // Never an address, and never how many DISTINCT addresses were tried: the second
+              // would be the more useful signal and it is also a list of who was asked about,
+              // kept for longer and read by more people than the answers were.
+              detail: JSON.stringify({
+                failures: FAILED_SIGN_IN_NOTICE,
+                windowSec: SIGN_IN_NOTICE_WINDOW_MS / 1000,
+              }),
+              atISO: new Date().toISOString(),
+            });
+          }
           throw new AppError('unauthorized', 'Incorrect email or password.');
         }
 

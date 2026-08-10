@@ -504,6 +504,160 @@ describe('how much argon2id one burst can have running at once', () => {
   }, 180_000);
 });
 
+/**
+ * WHAT ONE STRANGER CAN DO TO EVERYBODY ELSE, which is a different question from what they can do
+ * to a route and is the one the tests above could not see.
+ *
+ * THE FINDING. `POST /api/auth/login` runs a real argon2id verify per request on purpose — against
+ * a dummy hash when no such account exists, so that response timing does not say which addresses
+ * are accounts — and its budget is keyed `(peer, email)`. A caller who never uses the same address
+ * twice therefore never meets it, and until 2026-08-09 every one of those requests took a place in
+ * a shared, unbounded, first-come-first-served queue that `POST /api/auth/enroll` waits in too.
+ *
+ * MEASURED against a real listening server in its own process, 512 connections, rotating email,
+ * no account and no code, one reverse proxy in front (the documented deployment, so every request
+ * shares a TCP peer and `req.ip` is what the proxy wrote):
+ *
+ *                        before (a4a863b)     after
+ *   student's enrolment  5,036 ms (91.6x)     330 ms (5.5x)
+ *   attacker's rate      6,462 req/min        67,710 req/min, 15,942 of them refused
+ *   audit rows about it  0                    2
+ *
+ * and before the fix the student's latency rose in step with the attacker's connection count —
+ * 24 connections 243 ms, 96 → 967 ms, 256 → 2,507 ms, 512 → 4,881 ms — which is the property that
+ * makes it a denial of service rather than a slow afternoon: the caller chooses everyone's wait.
+ *
+ * THESE TESTS COUNT PLACES IN THE QUEUE RATHER THAN MILLISECONDS. The wall-clock figures above
+ * belong to the machine that produced them; what belongs to the code is that the student is served
+ * after a couple of turns instead of after the whole flood, and that holds at any hash speed.
+ *
+ * The lanes are `X-Forwarded-For` because supertest is loopback and every request shares a TCP
+ * peer, which is exactly the documented deployment: one tunnel in front, `trust proxy` 1, so
+ * `req.ip` is the address the tunnel wrote and is what tells two of its users apart.
+ */
+describe('what a sign-in flood does to somebody who is not in it', () => {
+  const FLOOD = 300;
+  const ATTACKER = '203.0.113.9';
+  const STUDENT = '198.51.100.4';
+
+  it('serves the student in a couple of turns instead of behind three hundred strangers', async () => {
+    const { plaintext } = issue();
+    const app = build();
+
+    let settled = 0;
+    const flood = Array.from({ length: FLOOD }, (_unused, i) =>
+      request(app)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', ATTACKER)
+        // A FRESH ADDRESS EVERY TIME, which is what makes the `(peer, email)` budget blind to it.
+        .send({ email: `flood-${String(i)}@example.net`, password: 'not-the-password' })
+        .then((res) => {
+          settled += 1;
+          return res.status;
+        }),
+    );
+
+    // Let the flood reach the gate before the student presses submit.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const aheadAtStart = settled;
+    const student = await request(app)
+      .post('/api/auth/enroll')
+      .set('X-Forwarded-For', STUDENT)
+      .send({ code: plaintext, email: 'student@example.org', password: GOOD_PASSWORD });
+    const servedAhead = settled - aheadAtStart;
+
+    const statuses = await Promise.all(flood);
+    const shed = statuses.filter((s) => s === 429).length;
+    console.log(
+      `[starve] flood=${String(FLOOD)} floodShed=${String(shed)} ` +
+        `studentStatus=${String(student.status)} floodServedBeforeStudent=${String(servedAhead)}`,
+    );
+
+    // THE ASSERTION THE FINDING IS ABOUT. The student joined a queue of ~300 and was served after
+    // a handful of the flood's requests, because the round is between CALLERS: one caller's share
+    // is 1/n of the service however many requests they send. Under the FIFO this replaced the
+    // student was behind every single one of them.
+    expect(student.status).toBe(201);
+    expect(servedAhead).toBeLessThan(FLOOD / 4);
+    // Nobody legitimate was refused to achieve that, which is the other half of the claim.
+    expect(statuses.filter((s) => s === 401).length + shed).toBe(FLOOD);
+    // And the flood, not the student, is what the ceiling fell on.
+    expect(shed).toBeGreaterThan(0);
+  }, 180_000);
+
+  /**
+   * THE CONTROL THAT MAKES THE ONE ABOVE MEAN SOMETHING. If a student in the flood's own lane were
+   * also served early, the number above would be measuring luck rather than the round.
+   */
+  it('does not give the flood a shortcut by joining its own lane', async () => {
+    const { plaintext } = issue();
+    const app = build();
+
+    let settled = 0;
+    const flood = Array.from({ length: FLOOD }, (_unused, i) =>
+      request(app)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', ATTACKER)
+        .send({ email: `same-lane-${String(i)}@example.net`, password: 'not-the-password' })
+        .then((res) => {
+          settled += 1;
+          return res.status;
+        }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const aheadAtStart = settled;
+    // Same X-Forwarded-For as the flood: this caller IS the flood as far as the server can tell.
+    const inLane = await request(app)
+      .post('/api/auth/enroll')
+      .set('X-Forwarded-For', ATTACKER)
+      .send({ code: plaintext, email: 'in-lane@example.org', password: GOOD_PASSWORD });
+    const servedAhead = settled - aheadAtStart;
+    await Promise.all(flood);
+
+    console.log(
+      `[starve-control] sameLaneStatus=${String(inLane.status)} ` +
+        `floodServedBeforeIt=${String(servedAhead)}`,
+    );
+    // Either they queued behind their own lane's backlog, or the gate shed them for being the
+    // largest contributor to it. Both are the rule working; being served in two turns is not.
+    if (inLane.status === 201) expect(servedAhead).toBeGreaterThan(FLOOD / 4);
+    else expect(inLane.status).toBe(429);
+  }, 180_000);
+
+  /**
+   * THE SECOND HALF OF THE FINDING, and the one that had nothing to do with latency: it was
+   * INVISIBLE. MEASURED before the fix, `SHAPE=tunnel`: 2,244 failed sign-ins in twenty-one
+   * seconds, `audit_log` empty. The operator saw a slow deployment and had nothing to look at.
+   */
+  it('leaves the operator one row per window, not none and not one per request', async () => {
+    const app = build();
+    const bursts = 60;
+
+    await Promise.all(
+      Array.from({ length: bursts }, (_unused, i) =>
+        request(app)
+          .post('/api/auth/login')
+          .set('X-Forwarded-For', ATTACKER)
+          .send({ email: `noticed-${String(i)}@example.net`, password: 'not-the-password' }),
+      ),
+    );
+
+    const rows = db
+      .prepare("SELECT entity_id, detail FROM audit_log WHERE action = 'auth.failed_sign_ins'")
+      .all() as Array<{ entity_id: string; detail: string }>;
+    console.log(`[notice] failedSignIns=${String(bursts)} rows=${String(rows.length)}`);
+
+    // Exactly one: the fiftieth failure writes it and the ten after it write nothing, so a caller
+    // cannot bury the rest of the trail under their own noise.
+    expect(rows).toHaveLength(1);
+    // Coarsened to a network, never a host, and never an address that was tried.
+    expect(rows[0]?.entity_id).toContain('/');
+    expect(JSON.stringify(rows)).not.toContain('noticed-0@example.net');
+    expect(JSON.parse(rows[0]?.detail ?? '{}')).toMatchObject({ failures: 50 });
+  }, 180_000);
+});
+
 describe('whether a success refills the guess budget', () => {
   /**
    * MEASURED before the fix: `reset()` on a successful enrolment let the holder of a multi-use code
