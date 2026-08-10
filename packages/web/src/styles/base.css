@@ -114,10 +114,43 @@ a:hover { color: var(--accent-hover); }
   font-size: var(--fs-300);
 }
 
+/*
+  THE COLUMN HEADS DO NOT STICK, AND THE `position: sticky; top: 0` THAT USED TO SIT HERE IS GONE
+  RATHER THAN FIXED. It had never done anything, in any table, since the day it was written.
+
+  Why it was inert. Every table in this app sits in a wrapper carrying `overflow-x: auto` so a
+  wide table scrolls instead of the page. Per CSS Overflow 3, an `overflow-y` of `visible`
+  computes to `auto` when the other axis is not `visible`, so each of those wrappers is a
+  scrollport in BOTH axes — and `position: sticky` resolves against the nearest scrollport, not
+  against the window. None of the wrappers has a height, so its content is exactly as tall as it
+  is and it never scrolls vertically. The header was pinned to the top edge of a box that cannot
+  move. Measured in Chromium at 1024x768 and 1440x900: scrolling the page 400px moved the header
+  400px and the wrapper 400px — the same 400 — on /, /sources and /admin.
+
+  Why it is deleted rather than made to work. Making it work needs a `max-height` on the wrapper,
+  which turns the results into a nested scroll region, and the measurement of that is worse than
+  the thing it fixes. With `max-height: 70vh` injected and twelve wheel turns taken over the
+  table, at 1024x768 on /sources the reader ends up looking at a box scrolled 2,400px into its own
+  content whose visible portion is the 25px between the sticky header and the bottom of the
+  window: the box begins at y=727 in a 768px viewport, the wheel is captured by it, and the page
+  itself never scrolls at all (window.scrollY stayed 0). Browse at 1440x900 is milder and still a
+  loss — 4 rows of 50 visible in a 628px box whose last 136px are below the fold, reachable only
+  by moving the pointer off the table first. A page that scrolls as one page beats a header that
+  labels a column nobody can see.
+
+  What is lost, honestly. On / the cells say what they are without a heading — a status pill, a
+  "$1,000", a "2026-12-30 est.", a "Verified 2026-08-02". On /sources they do not: mid-table you
+  see two bare dates and a bare integer where LAST POLL, LAST SUCCESS and FAILURES used to be
+  named. That is a real cost and it wants a markup answer (a repeated header group, or the label
+  carried in the cell), not a scrollport. Print already has the markup answer and keeps it:
+  `styles/print.css` sets `thead { display: table-header-group }`, so a printed table repeats its
+  heads on every page.
+
+  Sticky itself is not the problem, and one rule in this app uses it correctly: `.filter-panel` in
+  `components/browse.css` is in ordinary page flow with no scrollport between it and the document,
+  and it works — measured, scrolling the page 600px moved it 153px and then pinned it at 16px.
+*/
 .grid-table th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   text-align: left;
   background: var(--surface-2);
   color: var(--text-muted);

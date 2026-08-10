@@ -179,16 +179,52 @@
 }
 
 /*
-  1043px, MEASURED. Same criterion as every other two-column block here: the substance column
-  stacks once it falls below 384px, which is 46ch at --fs-300 and the narrowest measure this
-  stylesheet declares anywhere.
+  1010px, MEASURED — moved down from 1043, which stacked a 1024 laptop and should not have.
 
-  The form is the substance of this page and the meter is a readout beside it, so the form is the
-  column that decides. Swept with this query defeated, the form column is 460px at a 1120px window
-  and crosses 384px at 1044 — the aside is `minmax(300px, 380px)`, which does not shrink, so
-  everything the window loses comes off the form. At the old 900 the form had 364px and its own
-  `.profile-help` text — capped at 66ch by the rule above — was being rendered at 43.
+  THE FORM COLUMN IS AN EXACT FUNCTION OF THE WINDOW, so the whole argument is arithmetic once one
+  number is chosen. `--rail-w` is 208, `.shell-main` pads by `--s-5` twice, the grid gap is another
+  `--s-5`, and the aside is `minmax(300px, 380px)` whose 1fr sibling has a min of 0 — so the aside
+  always takes its 380px maximum and never its 300px minimum, and everything the window loses comes
+  off the form:
+
+      form column = viewport - 208 - 48 - 24 - 380 = viewport - 660
+
+  Verified in Chromium against the real page: 240px at 900, 351px at 1011, 364px at 1024, 780px at
+  1440. (The model holds to 1488, where `--content-max: 1280px` starts capping the main region.)
+
+  WHY 1010 AND NOT A LEGIBILITY FIGURE. Legibility is not what breaks first, and the criterion this
+  block used to state does not reproduce. Three things were swept between 940 and 1260, both ways:
+
+    - the help text's measure. `.profile-help` is `--fs-100`, so its `ch` is 6.67px, not the 8.33px
+      of `--fs-300`: at a 364px form column the 66ch cap is not reached and the text renders at
+      330px = 49.4ch, which is inside the ordinary 45-75 character measure, not outside it. It
+      falls under 45ch at a 336px form column, i.e. below a 996px window.
+    - the widest `<option>` in the form ("Certificate, trade or professional school") needs 261px
+      of control. It first truncates when the form column reaches 324px, i.e. below a 992px window.
+    - the total height of the page, which is the thing the second column is actually FOR. A
+      narrower form is a taller form; a second column is only worth its cramping if the page comes
+      out shorter. Measured at a fixed 900px height, side by side against stacked: 3466 vs 3460 at
+      1010 (the stack wins by 6px) and 3448 vs 3460 at 1011 (the column wins by 12px), widening to
+      3417 vs 3460 at 1024 and 3248 vs 3460 at 1200.
+
+  1011 is where the second column starts paying, and it is the most conservative of the three: at
+  1011 the help text is still 47.5ch and the widest option still has 281px of room against the
+  261px it needs. So the stack ends at 1010.
+
+  THE OTHER HALF OF THE COST, which the height figures above already contain but which is worth
+  naming: stacking does not move the completeness meter down a little, it moves it below the whole
+  form. Measured at 1024, the meter's top is 307px from the top of the document side by side and
+  3,248px stacked — three and a half screens down, past a 2,918px form. The meter is the reason
+  the form exists ("150 of 150 programs still return an unknown verdict"), and the lede at the top
+  of this page calls it "the meter beside this form", which at 1024 it now again is.
+
+  WHAT THE PREVIOUS NUMBERS WERE. This block used to read "at the old 900 the form had 364px" and
+  "was being rendered at 43" ch. Neither reproduces: at 900 the form column is 240px and its help
+  text is 30.9ch; 364px is the form column at 1024, where the help text is 49.4ch. 43ch is the
+  measure at a 324px form column — a 984px window. The reading is kept here rather than deleted
+  because the conclusion drawn from it (stack at 1043) was the visible change in the responsive
+  commit, and a reader who remembers it deserves to know which figure moved.
 */
-@media (max-width: 1043px) {
+@media (max-width: 1010px) {
   .profile-grid { grid-template-columns: minmax(0, 1fr); }
 }

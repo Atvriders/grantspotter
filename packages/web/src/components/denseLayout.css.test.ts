@@ -69,6 +69,61 @@ describe('a dense table scrolls inside its own box, and the page does not', () =
   }
 });
 
+/**
+ * WHY THE COLUMN HEADS ARE NOT STICKY, held as a rule so the one-liner cannot come back.
+ *
+ * `.grid-table th { position: sticky; top: 0 }` shipped for the life of this app and never did
+ * anything. `position: sticky` resolves against the nearest scrollport, and every box above is
+ * one: `overflow-x: auto` makes `overflow-y: visible` compute to `auto` (CSS Overflow 3), so each
+ * wrapper is a scrollport in both axes. None of them has a height, so none of them ever scrolls
+ * vertically, so the header was pinned to an edge that cannot move. Measured in Chromium at
+ * 1024x768 and 1440x900 on /, /sources and /admin: a 400px page scroll moved the header 400px and
+ * moved the wrapper 400px.
+ *
+ * The two assertions below are one decision in two halves and have to move together. Giving a
+ * wrapper a `max-height` is the only way to make the header stick, and doing it turns the table
+ * into a nested scroll region: measured with `max-height: 70vh` injected, /sources at 1024x768
+ * ends up showing 25px of a table the wheel has scrolled 2,400px into, with the page itself never
+ * scrolling (window.scrollY 0). If some future table really does want a sticky head, it needs a
+ * height AND an answer to that measurement — so change both halves deliberately, with a browser
+ * open, rather than deleting whichever one is in the way.
+ */
+describe('a column head does not stick to a box that never scrolls', () => {
+  /** Every box a `.grid-table` sits in. `.prose-check` is the panel around the one bare table. */
+  const TABLE_BOXES: Array<[string, string]> = [
+    ...SCROLL_WRAPPERS,
+    ['detail.css', '.table-wrap'],
+    ['applications.css', '.prose-check'],
+  ];
+
+  for (const [file, selector] of TABLE_BOXES) {
+    it(`${file} ${selector} is not height-constrained, so nothing inside it can stick`, () => {
+      const block = blockFor(read(file), selector);
+      expect(block, `${selector} is missing from ${file}`).toBeDefined();
+      expect(block).not.toMatch(/(^|[\s;])(max-)?height:/);
+    });
+  }
+
+  it('base.css leaves the table head in normal flow', () => {
+    const block = blockFor(read('../styles/base.css'), '.grid-table th');
+    expect(block, '.grid-table th is missing from styles/base.css').toBeDefined();
+    expect(
+      block,
+      'A sticky table head inside an `overflow-x: auto` wrapper with no height is inert — it ' +
+        'pins to a box that cannot scroll. Read the note above this test before re-adding it.',
+    ).not.toMatch(/position:\s*sticky/);
+  });
+
+  it('the one sticky rule that does work is untouched', () => {
+    // `.filter-panel` sits in ordinary page flow with no scrollport between it and the document,
+    // so it pins to the window and always has: measured, a 600px page scroll moves it 153px and
+    // then holds it at `top: var(--s-4)`. Sticky is not the problem; sticking to a dead box was.
+    const block = blockFor(read('browse.css'), '.filter-panel');
+    expect(block).toMatch(/position:\s*sticky/);
+    expect(block).toMatch(/top:\s*var\(--s-4\)/);
+  });
+});
+
 describe('when the programme table runs out of room, the amount gives way and the markers do not', () => {
   const css = read('browse.css');
   const tsx = readFileSync(
@@ -200,5 +255,67 @@ describe('the breakpoints that were replaced', () => {
     // The only `@media` left in this file is the print rule.
     const queries = css.match(/@media[^{]*/g) ?? [];
     expect(queries.map((q) => q.trim())).toEqual(['@media print']);
+  });
+});
+
+/**
+ * WHERE THE PROFILE PAGE STACKS, derived rather than transcribed.
+ *
+ * The width in `profile.css` is not free: the form column is an exact function of the window,
+ * because the rail, the two page paddings, the grid gap and the aside are all fixed and the form
+ * is the only track that gives. This block recomputes that function FROM THE STYLESHEETS and
+ * checks the breakpoint against what was measured to break — so widening the rail, or raising the
+ * aside's 380px, fails here and makes somebody re-derive the number instead of leaving a stale
+ * one behind. That is the failure this block exists for: the figure it replaced (1043) was
+ * derived once, by hand, against `--fs-300`'s `ch` when `.profile-help` is `--fs-100`, and it
+ * stacked a 1024 laptop for a legibility problem that does not begin until 996.
+ */
+describe('the profile page stacks where the second column stops paying for itself', () => {
+  const px = (source: string, pattern: RegExp): number => {
+    const found = pattern.exec(source.replace(/\/\*[\s\S]*?\*\//g, ''));
+    expect(found, `nothing matched ${String(pattern)}`).not.toBeNull();
+    return Number(found?.[1]);
+  };
+
+  const tokens = read('../styles/tokens.css');
+  const railW = px(tokens, /--rail-w:\s*(\d+)px/);
+  const gap = px(tokens, /--s-5:\s*(\d+)px/);
+  const profile = read('profile.css');
+  const asideW = px(profile, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\([^,]+,\s*(\d+)px\)/);
+  const stacksAtOrBelow = px(profile, /@media\s*\(max-width:\s*(\d+)px\)/);
+
+  it('.shell-main still pays for its padding out of the same token as the gap', () => {
+    // The arithmetic below assumes one `--s-5` each side of `main`. If that changes, so does the
+    // form column, and every figure in profile.css's note goes with it.
+    expect(blockFor(read('AppShell.css'), '.shell-main')).toMatch(/padding:\s*var\(--s-5\)/);
+  });
+
+  /** The form column at a given window, side by side. Verified in Chromium: 364px at 1024. */
+  const formColumnAt = (viewport: number): number =>
+    viewport - railW - gap * 2 - gap - asideW;
+
+  it('reproduces the measured form column, so the model is the page', () => {
+    expect(formColumnAt(1024)).toBe(364);
+    expect(formColumnAt(900)).toBe(240);
+    expect(formColumnAt(1440)).toBe(780);
+  });
+
+  it('leaves the narrowest two-column form wider than anything measured to break in it', () => {
+    const narrowest = formColumnAt(stacksAtOrBelow + 1);
+    // 340px is the narrowest form column swept with nothing truncated: below it the widest
+    // <option> ("Certificate, trade or professional school", 261px of text) stops fitting its
+    // control, and the 66ch help text drops under a 45-character measure at 336px.
+    expect(
+      narrowest,
+      `stacking at ${String(stacksAtOrBelow)}px leaves a ${String(narrowest)}px form column at ` +
+        `${String(stacksAtOrBelow + 1)}px — narrower than the 340px floor the sweep measured`,
+    ).toBeGreaterThanOrEqual(340);
+  });
+
+  it('does not stack a 1024 laptop', () => {
+    // The measurement that prompted the review: at 1024 the two-column page is 3,417px tall and
+    // the stacked one 3,460px, so stacking there costs height AND puts the completeness meter
+    // 3,248px down the page instead of 307px.
+    expect(stacksAtOrBelow).toBeLessThan(1024);
   });
 });
