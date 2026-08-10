@@ -17,6 +17,15 @@
 -- exists once, in the response to the POST that made it, and is unrecoverable afterwards; the list
 -- route therefore cannot show it again, which is a property of this design and not an oversight.
 --
+-- SUPERSEDED BY `093-peppered-enrollment-code-digests.sql`, AND THE PARAGRAPH BELOW IS LEFT AS
+-- WRITTEN BECAUSE IT IS THE RECORD OF WHAT THIS TABLE WAS. Read it as history, not as a
+-- description: since migration 092 an administrator can TYPE a code, which destroyed the premise
+-- the argument rests on, and 093 replaced the digest with an HMAC keyed from `SESSION_SECRET`.
+-- `code_hash` is therefore the SHA-256 of the normalised code only for rows this migration's
+-- generation wrote; `hash_scheme` says which of the two any given row holds. The correction lives
+-- in 093 rather than in an edit here, but a reader who stops at this file must not be left holding
+-- a claim that stopped being true two migrations ago.
+--
 -- SHA-256 with no salt and no stretching is the right primitive here and the wrong one for a
 -- password, exactly as `exports/token.ts` argues: the input is 100 bits of uniform randomness this
 -- process generated, so there is no dictionary to attack and nothing to precompute, and a digest
