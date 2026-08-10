@@ -77,4 +77,27 @@ describe('SourceLink', () => {
     render(<SourceLink href="javascript:alert(1)" />);
     expect(screen.getByText('javascript:alert(1)', { exact: false })).toBeInTheDocument();
   });
+
+  /**
+   * The class is the whole fix, so the class is what is asserted here.
+   *
+   * `source-url` is `overflow-wrap: anywhere` in `styles/base.css`. Without it this component
+   * prints an address — one word, no spaces — as its own link text, and that word's rendered width
+   * becomes a floor under every box up to the document: 112 of the 143 shipped records scrolled
+   * the page sideways at 320, 360, 390, 414, 640, 700, 1024, 1280 and 1440, in both themes, until
+   * 2026-08-10. Whether it still works is a browser's question and `e2e/responsive.spec.ts` asks
+   * it; whether the class is still being applied is a question jsdom can answer in a millisecond,
+   * at the moment somebody edits this file.
+   */
+  it('gives the anchor the class that lets a spaceless address break', () => {
+    render(<SourceLink href="https://www.arrl.org/files/file/Foundation/Grant%20Application%20Form.pdf" />);
+    expect(screen.getByRole('link').className.split(/\s+/)).toContain('source-url');
+  });
+
+  it('keeps a caller’s own class beside it rather than instead of it', () => {
+    render(<SourceLink href="https://www.arrl.org/club-grant-program" className="wl-link" />);
+    const classes = screen.getByRole('link').className.split(/\s+/);
+    expect(classes).toContain('source-url');
+    expect(classes).toContain('wl-link');
+  });
 });

@@ -60,9 +60,11 @@ export function TemplatePicker({
                             {s.label}
                           </a>
                         ) : (
-                          // Shown, never linked. The address is still information.
+                          // Shown, never linked. The address is still information — and it is the
+                          // only part of this line with no space in it, so it carries
+                          // `source-url` and breaks rather than flooring the list's width.
                           <span className="muted">
-                            {s.label} — {s.url}
+                            {s.label} — <span className="source-url">{s.url}</span>
                           </span>
                         )}
                       </li>

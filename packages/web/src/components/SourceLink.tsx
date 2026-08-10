@@ -82,6 +82,13 @@ export interface SourceLinkProps {
  *         wrong kind of URL" are different findings even though neither becomes a link.
  *     In every case the URL is still shown, as plain unclickable text beside a sentence saying
  *     why — withholding the address as well would be its own kind of silence.
+ *  3. The address always ships with `source-url`, which is `overflow-wrap: anywhere` (see
+ *     `styles/base.css`). An address has no spaces in it, so it is one word, so its rendered
+ *     width is a floor under every box it sits in — and this component prints one as its own
+ *     link text by default. That is how 112 of the 143 shipped records came to scroll sideways at
+ *     every measured width from 320 to 1440 but one, in both themes (`styles/base.css` has the
+ *     figures). The class goes on here rather than on each of the five call sites for the same
+ *     reason rule 1 does: a caller cannot forget it.
  */
 export function SourceLink({ href, children, className }: SourceLinkProps): JSX.Element {
   const refusal = linkRefusal(href);
@@ -111,7 +118,12 @@ export function SourceLink({ href, children, className }: SourceLinkProps): JSX.
     }
   }
   return (
-    <a className={className} href={href} target="_blank" rel="noopener noreferrer">
+    <a
+      className={`source-url ${className ?? ''}`.trim()}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
       {children ?? href}
     </a>
   );

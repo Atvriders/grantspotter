@@ -462,7 +462,16 @@ export function Inbox(): JSX.Element {
                 <p className="inbox-outcome">
                   Apply at{' '}
                   {blockedHostFor(row.candidate.applyUrl) === null ? (
-                    <a href={row.candidate.applyUrl} rel="noreferrer noopener" target="_blank">
+                    // `source-url` for the same reason `SourceLink`'s anchor carries it: a
+                    // candidate's address is one unbreakable word, and a review queue is where the
+                    // longest untidiest URLs in the corpus arrive. The refused arm below is
+                    // covered by `.data`, which now breaks the same way.
+                    <a
+                      className="source-url"
+                      href={row.candidate.applyUrl}
+                      rel="noreferrer noopener"
+                      target="_blank"
+                    >
                       {row.candidate.applyUrl}
                     </a>
                   ) : (

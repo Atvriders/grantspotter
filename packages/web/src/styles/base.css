@@ -56,6 +56,41 @@ a:hover { color: var(--accent-hover); }
   letter-spacing: -0.01em;
 }
 
+/*
+  WHY EVERY TOKEN THIS PRODUCT PRINTS MAY BREAK MID-WORD.
+
+  A string with no spaces in it — a funder's address, a 64-character content hash, a source id, a
+  callsign — is ONE word to the line breaker, and that word's rendered width becomes the
+  min-content width of every box it sits in, all the way up to the document. No `min-width: 0`
+  above it can lower that floor, because the floor is the word: this is the 2565px grid blowout
+  again, arriving through text instead of through a track.
+
+  MEASURED, 2026-08-10, before this rule existed, driving Chromium over all 143 shipped records at
+  320, 360, 390, 414, 640, 700, 768, 1024, 1280 and 1440 in both themes: 112 of them scrolled the
+  page sideways at every one of those widths except 768 — where the record page is single-column
+  AND the rail has gone, so the one column is briefly wider than the longest address in the corpus
+  and the defect hides. That is the shape of this bug: it is not a small-screen bug, and a sweep
+  that only got narrower would have missed it at 1440 as thoroughly as the sweep that only varied
+  the width of a single record missed it everywhere. The worst record is
+  `/o/arrl-cat-irarc-memorial-joseph-p-rubino-wa4mmd-scholarship`, whose `aiPolicy.url` laid out
+  497px wide in the aside — the narrowest column on the page — and took the document to 1543px in
+  a 1440px window. After this rule: 0 of 143 at all ten widths in both themes.
+  `e2e/responsive.spec.ts` is where that measurement now lives.
+
+  `anywhere` and not `break-word`, for the reason `.panel dd` gives: only `anywhere` lowers the
+  min-content CONTRIBUTION, which is the number the grid and flex algorithms read. `break-word`
+  wraps the rendered line and leaves the floor exactly where it was. (`.blocked-host .host`
+  reaches the same end with `word-break: break-all` — which is why a REFUSED address never
+  overflowed a page and a linked one did, on 78% of the corpus, until this rule.)
+
+  `.source-url` is `SourceLink`'s anchor: the one component allowed to print an address, so the
+  one place the fix has to be applied for every call site to have it.
+*/
+.data,
+.source-url {
+  overflow-wrap: anywhere;
+}
+
 .eyebrow {
   font-size: var(--fs-100);
   text-transform: uppercase;

@@ -10,9 +10,22 @@ import path from 'node:path';
  *
  * It cannot prove the invariant. jsdom implements no layout — every `getBoundingClientRect()` in
  * it returns zeros — so nothing here measures a pixel, and a test that "checked overflow" under
- * jsdom would be a green light wired to nothing. The measurement is a browser's job and lives in
- * the e2e suite, which drives a real Chromium at 320, 360, 390, 768, 1024, 1280 and 1440 and
- * compares `document.documentElement.scrollWidth` against the viewport.
+ * jsdom would be a green light wired to nothing. The measurement is a browser's job, and it lives
+ * in `e2e/responsive.spec.ts`: a real Chromium, driven over the shipped corpus at 320, 360, 390,
+ * 768, 1024, 1280 and 1440 in BOTH themes, comparing `document.documentElement.scrollWidth`
+ * against the viewport for each of 15 records chosen for the properties that break a layout —
+ * the longest address the page can print, the longest name, the longest funder, the disputed
+ * record, the stale-mirror record, a club record, the blocked-host record and eight spread through
+ * the corpus by id. `RESPONSIVE_ALL=1` widens that to all 143. It does not visit any route but
+ * `/o/:id`, and that spec's own header says so at length.
+ *
+ * THAT SENTENCE WAS FALSE WHEN IT WAS FIRST WRITTEN. It described a browser test in the present
+ * tense; no file under `e2e/` mentioned `scrollWidth` until 2026-08-10. What actually existed was
+ * this file, honest that it cannot measure, pointing at a measurement nobody had written — which
+ * is worse than saying nothing, because a reader checking whether the invariant is held stops
+ * here. The pointer above is now a real file, and the wording is kept deliberately specific
+ * (widths, themes, sample, and the routes it skips) so that the next time it drifts from what the
+ * suite does, the drift is visible rather than plausible.
  *
  * What it CAN do is assert the CAUSES, because every one of them is written down in the CSS. The
  * blowout this file exists to prevent had exactly one root cause and it was structural: a grid
@@ -33,9 +46,14 @@ import path from 'node:path';
  *      mark to save room on a phone has inverted the product. Decoration goes first; these go
  *      never.
  *
- * A rule can pass all four and still overflow — a `<pre>` of unbreakable text, an SVG with a
- * hard-coded viewBox, an inline style in a `.tsx`. That is what the browser pass is for. These
- * assertions catch the class of defect that actually happened, at the moment it is typed.
+ * A rule can pass all four and still overflow, and one did: `SourceLink` printed the funder's
+ * address as its own link text, an address has no spaces in it, and one unbreakable word floors
+ * every box it sits in exactly as a min-content track does. All four rules above were green
+ * throughout, because none of them reads the markup — 112 of the 143 shipped records scrolled
+ * sideways at every width but 768, in both themes, until 2026-08-10. The remaining shapes of it
+ * are the same: a `<pre>` of unbreakable text, an SVG with a hard-coded viewBox, an inline style
+ * in a `.tsx`. That is what the browser pass is for. These assertions catch the class of defect
+ * that happened FIRST — a structural one, written in the CSS — at the moment it is typed.
  */
 
 const WEB_SRC = path.resolve(import.meta.dirname, '..');

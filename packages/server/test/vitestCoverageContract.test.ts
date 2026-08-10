@@ -136,6 +136,17 @@ const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
       'instead of inserting every programme again on each boot. That property cannot be tested ' +
       'against a hash-id fixture at all. `npm run test:e2e` runs it, never `npm test`.',
   ],
+  [
+    'e2e/responsive.spec.ts',
+    'Playwright, not vitest, and it is the one suite here that CANNOT be anything else: it measures ' +
+      '`document.documentElement.scrollWidth` against the viewport, and the only environment this ' +
+      'repo has that computes a layout is a real Chromium. jsdom returns zeros from every ' +
+      '`getBoundingClientRect`, which is why `packages/web/src/test/responsive.test.ts` asserts the ' +
+      'CAUSES in the CSS and delegates the pixels here. It boots the shipped seed corpus on its own ' +
+      'port, the way e2e/shippedSeed.spec.ts does, because the defect it guards against — 112 of ' +
+      '143 records scrolling sideways on an unbreakable URL — is a property of the corpus a real ' +
+      'install has. `npm run test:e2e` runs it, never `npm test`.',
+  ],
 ]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */

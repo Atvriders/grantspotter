@@ -75,10 +75,20 @@
 .panel dt { color: var(--text-muted); font-size: var(--fs-200); }
 
 /*
-  MEASURED: this `dl` was the last overflow left on the record page — 1456px of page inside a
-  1440px window. The value column held the funder's URL and a content hash, neither of which has a
-  space in it, so the `1fr` track was floored at the 213px that link needs and the sidebar panel
-  (248px of inner width at a 1024px window) burst its own card.
+  THIS `dl` WAS NOT THE LAST OVERFLOW ON THE RECORD PAGE. The claim that used to stand here —
+  "the last overflow left … 1456px of page inside a 1440px window" — was false in both halves, and
+  it was false the day it was written. Measured 2026-08-10 by driving Chromium over all 143 shipped
+  records at 320, 360, 390, 414, 640, 700, 768, 1024, 1280 and 1440 in both themes: 112 of them
+  scrolled sideways at every one of those widths but 768, and at 1440 the page measured 1543px, not
+  1456px. The overflow was the funder's address printed as `SourceLink`'s own link text, in the
+  aside — a `<p>`, not this `dl`. `styles/base.css` holds the fix and the numbers.
+
+  What this line does today, also measured: with `overflow-wrap` deleted from it and everything
+  else left in place, 0 of the 143 records overflow at 320, 1024 or 1440 — because every
+  space-free value a `dl` on this page currently carries is either `.data` (the content hash, the
+  verification method) or a `.source-url` (the page link), and both of those now break on their
+  own. It stays because that is a fact about today's corpus, not a property of the layout: a `dd`
+  is where an unbreakable value with neither class would land next.
 
   `overflow-wrap: anywhere` rather than `break-word` on purpose: only `anywhere` lowers the
   min-content contribution, which is the number the grid algorithm actually reads. `break-word`
