@@ -61,8 +61,9 @@ beforeEach(async () => {
   harness = createTestDb();
   db = harness.db;
   codes = createEnrollmentCodeRepo(db);
-  // A real administrator row: `enrollment_codes.created_by_user_id` references it, and its presence
-  // is also what makes first-run bootstrap closed, which is the state a live deployment is in.
+  // A real administrator row: `create` refuses to attribute a code to a user that does not exist
+  // (migration 094 dropped the foreign key that used to refuse it), and its presence is also what
+  // makes first-run bootstrap closed, which is the state a live deployment is in.
   db.prepare(
     `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
      VALUES (?, 'admin@example.org', 'admin@example.org', ?, 'admin', 'ics-admin', ?)`,

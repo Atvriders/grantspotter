@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { hashPassword } from '../auth/password.js';
+import { createEnrollmentCodeRepo } from '../db/repositories/enrollmentCodes.js';
 import { appendAuditLog } from '../db/repositories/ingestion.js';
 import { createSessionRepo } from '../db/repositories/sessions.js';
 import { createUserRepo, type Role, type UserRecord } from '../db/repositories/users.js';
@@ -22,7 +23,15 @@ export interface AdminUserRow {
   isSelf: boolean;
 }
 
-/** What a delete destroyed, so the admin is told rather than left to guess. */
+/**
+ * What a delete DESTROYED, so the admin is told rather than left to guess.
+ *
+ * Enrollment codes are deliberately not in here, and the omission is the distinction migration 094
+ * was written to draw: they are not destroyed. They are withdrawn, and they stay in Admin →
+ * Enrollment codes with their label, their use count and their history. `revokedEnrollmentCodes`
+ * below is a separate number because it is a separate fact, and rolling it into a list headed
+ * "removed with it" would tell an administrator their club's intake record had been deleted.
+ */
 export interface RemovedCounts {
   profiles: number;
   watches: number;
@@ -98,6 +107,7 @@ export function createAdminUsersRouter(deps: RouterDeps): Router {
   const router = Router();
   const users = createUserRepo(deps.db);
   const sessions = createSessionRepo(deps.db);
+  const codes = createEnrollmentCodeRepo(deps.db);
 
   /**
    * Lock-out guard. An instance with zero admins who can still sign in cannot
@@ -302,22 +312,64 @@ export function createAdminUsersRouter(deps: RouterDeps): Router {
       };
       const row = toRow(user, self.id);
 
-      // Every `REFERENCES users(id)` in the schema is ON DELETE CASCADE
-      // (sessions, profiles, watches, applications — 001-init.sql) and
-      // `openDatabase` sets `PRAGMA foreign_keys = ON`, so one DELETE takes the
-      // lot atomically instead of leaving orphans that surface later as a raw
-      // SQLite error. `audit_log.actor_user_id` has NO foreign key, so the
-      // record of what this account did — and of this deletion — outlives it.
+      /**
+       * ONE TRANSACTION, TWO DIFFERENT THINGS DONE TO THIS ACCOUNT'S ROWS, AND THE DIFFERENCE IS
+       * THE WHOLE OF MIGRATION 094.
+       *
+       * WHAT IS DESTROYED. Every `REFERENCES users(id)` left in the schema is ON DELETE CASCADE
+       * (sessions, profiles, watches, applications — 001-init.sql; ics_tokens, notifications and
+       * the channel tables since) and `openDatabase` sets `PRAGMA foreign_keys = ON`, so one DELETE
+       * takes the lot atomically instead of leaving orphans that surface later as a raw SQLite
+       * error. `audit_log.actor_user_id` has NO foreign key, so the record of what this account did
+       * — and of this deletion — outlives it.
+       *
+       * WHAT IS WITHDRAWN INSTEAD. `enrollment_codes.created_by_user_id` lost its key in 094: it
+       * records who ISSUED a code, and a record of a past act is not something an account deletion
+       * may rewrite. So the codes are revoked here rather than cascaded away — the credential stops
+       * working at this instant and cannot come back, and the row keeps its label, its uses, its
+       * expiry and the `user.enroll` trail that names it. This runs BEFORE the DELETE so it is the
+       * request's own clock that is written and so each withdrawal gets an audit row naming the
+       * administrator who caused it; 094's trigger is the schema-level backstop for any path that
+       * does not come through this route, and on this one it finds nothing left to do.
+       *
+       * THE FILE'S OWN CODE IS NOT TOUCHED BY EITHER, because it is attributed to nobody. Deleting
+       * the founding administrator used to delete it, whereupon the next boot recreated it with a
+       * fresh expiry and its uses back at zero — a removal that GRANTED access.
+       */
+      // One reading of the clock for the whole deletion, so the withdrawal, its audit row and the
+      // deletion's own row all carry the same instant rather than three consecutive milliseconds.
+      const at = deps.now();
+      let revokedEnrollmentCodes = 0;
       deps.db.transaction(() => {
+        const withdrawn = codes.revokeIssuedBy(user.id, at);
+        revokedEnrollmentCodes = withdrawn.length;
+        for (const code of withdrawn) {
+          appendAuditLog(deps.db, {
+            userId: self.id,
+            action: 'enrollment_code.revoke',
+            entityType: 'enrollment_code',
+            entityId: code.id,
+            // `via` is the first question anybody reading this row will have — nobody pressed the
+            // revoke button. Never the code and never its digest, exactly as every other writer of
+            // this action refuses them.
+            detail: JSON.stringify({
+              label: code.label,
+              uses: code.uses,
+              via: 'user.delete',
+              issuer: user.id,
+            }),
+            atISO: at,
+          });
+        }
         deps.db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
         audit(req, {
           action: 'user.delete',
           entityId: user.id,
-          detail: { email: user.email, role: user.role, removed },
+          detail: { email: user.email, role: user.role, removed, revokedEnrollmentCodes },
         });
       })();
 
-      res.json({ user: row, removed });
+      res.json({ user: row, removed, revokedEnrollmentCodes });
     } catch (err) {
       next(err);
     }

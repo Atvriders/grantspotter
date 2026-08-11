@@ -227,7 +227,7 @@ export function Admin({ now }: AdminProps): JSX.Element {
     begin();
     setConfirmingDeleteId(null);
     try {
-      const result = await apiSend<{ removed: RemovedCounts }>(
+      const result = await apiSend<{ removed: RemovedCounts; revokedEnrollmentCodes: number }>(
         'DELETE',
         `/api/admin/users/${row.id}`,
       );
@@ -239,6 +239,14 @@ export function Admin({ now }: AdminProps): JSX.Element {
           `${plural(removed.watches, 'watchlist entry', 'watchlist entries')}, ` +
           `${plural(removed.sessions, 'session', 'sessions')} and ` +
           `${plural(removed.applications, 'application', 'applications')}. ` +
+          // Said only when it happened, and said as a WITHDRAWAL rather than as a removal: the rows
+          // are still on the Enrollment codes screen with their use counts. An administrator who is
+          // not told this finds out from a student who cannot enrol.
+          (result.revokedEnrollmentCodes > 0
+            ? `${plural(result.revokedEnrollmentCodes, 'enrollment code', 'enrollment codes')} ` +
+              `they issued ${result.revokedEnrollmentCodes === 1 ? 'was' : 'were'} withdrawn and ` +
+              'can no longer create accounts; the rows stay on the Enrollment codes screen. '
+            : '') +
           'The audit trail of what this account did is kept.',
       });
       users.reload();

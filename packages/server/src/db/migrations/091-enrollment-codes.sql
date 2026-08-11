@@ -33,6 +33,18 @@
 --
 -- THE FOREIGN KEY, AND WHY IT CASCADES.
 --
+-- SUPERSEDED BY `094-enrollment-codes-outlive-their-issuer.sql`, AND THE PARAGRAPHS BELOW ARE LEFT
+-- AS WRITTEN BECAUSE THEY ARE THE RECORD OF WHAT THIS COLUMN WAS. Read them as history: since 094
+-- there is no foreign key on `created_by_user_id` at all and the column is nullable, so the shape
+-- declared at the bottom of this file is NOT the shape the database has. The conclusion below —
+-- that a live credential must not outlive its issuer's account — is unchanged and is now kept by a
+-- trigger that REVOKES those codes instead of deleting them; what was wrong was using one cascade
+-- to do that job and referential housekeeping at once, since the second one destroys the record the
+-- first one needs. The cost the last paragraph calls "real and stated rather than hidden" was
+-- larger than it says: it also fell on the code set in `docker-compose.yml`, which the schema
+-- forced to be attributed to a person who did not issue it, so deleting that account deleted the
+-- file's code and the next boot brought it back with a fresh expiry and its uses at zero.
+--
 -- `created_by_user_id` names the admin who issued the code, and deleting that admin deletes their
 -- outstanding codes. `test/userCascade.test.ts` draws the line this sits on: rows that are A RECORD
 -- OF SOMETHING THAT HAPPENED (audit_log, verify_attempts, review decisions) outlive the account,
@@ -65,6 +77,8 @@ CREATE TABLE IF NOT EXISTS enrollment_codes (
   expires_at         TEXT,
   revoked_at         TEXT,
   created_at         TEXT NOT NULL,
+  -- NEITHER `NOT NULL` NOR A FOREIGN KEY SINCE 094 — see the amendment in the header. This line is
+  -- what a database created before that migration held for as long as it took 094 to run.
   created_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   last_used_at       TEXT
 );

@@ -169,13 +169,113 @@ describe('issuing a code', () => {
     expect(repo.redeem({ plaintext, nowISO: LATER }, () => 'ok').ok).toBe(true);
   });
 
-  it('dies with the administrator who issued it', () => {
-    issue();
-    expect(repo.list()).toHaveLength(1);
-    // A live credential must not outlive the account that owns it — the same rule
-    // `090-ics-tokens.sql` was corrected to follow, enforced here by the cascade.
+  /**
+   * WHAT THIS TEST USED TO ASSERT, AND WHY THE ANSWER CHANGED RATHER THAN THE STANDARD.
+   *
+   * It read `expect(repo.list()).toEqual([])` after deleting the issuer, under the heading "dies
+   * with the administrator who issued it", and it was enforcing 091's `ON DELETE CASCADE`. The
+   * requirement it was written for — a live credential must not outlive the account that owns it,
+   * the rule `090-ics-tokens.sql` was corrected to follow — is unchanged and is still asserted
+   * here, in the first two expectations below. What changed is that migration 094 stopped meeting
+   * it by DESTROYING the row, because one cascade was doing two jobs: the policy above, and
+   * ordinary referential housekeeping. Erasure satisfies the first and, in doing so, deletes the
+   * club's record of an intake — the use count, the expiry, the label, and the subject of every
+   * `user.enroll` audit row that names the code an account came from.
+   */
+  it('stops working when the administrator who issued it is deleted, and stays on the record', () => {
+    const { code } = issue({ label: 'mid-intake', maxUses: 30, expiresAt: '2099-01-01T00:00:00.000Z' });
+    expect(repo.anyOpen(NOW)).toBe(true);
+
     db.prepare('DELETE FROM users WHERE id = ?').run(adminId);
+
+    // THE CREDENTIAL IS DEAD. Withdrawn, not merely unreachable: `revoke` is one-way, so nothing —
+    // not a restart, not `envEnrollmentCode`, not a second delete — brings it back.
+    const after = repo.findById(code.id);
+    expect(after?.revokedAt).not.toBeNull();
+    expect(repo.anyOpen(NOW)).toBe(false);
+
+    // THE RECORD IS NOT. Uses, expiry, label and the id every audit row points at all survive, and
+    // so does the name of the administrator who issued it — which is the fact the row exists to
+    // carry and the one an account deletion is not entitled to rewrite.
+    expect(after).toMatchObject({
+      id: code.id,
+      label: 'mid-intake',
+      maxUses: 30,
+      uses: 0,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      createdByUserId: adminId,
+    });
+  });
+
+  /**
+   * The half of 091's foreign key that WAS housekeeping, kept by hand now that the key is gone.
+   *
+   * Thrown rather than refused, for the reason `create` gives: there is no request an administrator
+   * can send that produces this, so there is no sentence that would help them. It is the same
+   * bargain as the zero-`max_uses` CHECK two tests up.
+   */
+  it('refuses to attribute a code to a user that does not exist', () => {
+    expect(() => issue({ createdByUserId: 'u-nobody' })).toThrow(/no such user/);
     expect(repo.list()).toEqual([]);
+  });
+});
+
+/**
+ * WITHDRAWING ONE ADMINISTRATOR'S CODES — the deliberate, clocked, audited half of what an account
+ * deletion does, which `api/adminUsersRouter.ts` runs inside the transaction that removes the row.
+ *
+ * The trigger migration 094 installs would reach every one of these too. What this method adds is
+ * the request's own clock, the list of what it withdrew so the caller can write the trail, and the
+ * guarantee that a code is withdrawn through the SAME statement the revoke button uses.
+ */
+describe('withdrawing the codes one administrator issued', () => {
+  const FAR = '2099-01-01T00:00:00.000Z';
+
+  it('withdraws only theirs, stamps the clock it was given, and reports what it did', () => {
+    const other = insertUser('admin-2');
+    const mine = issue({ label: 'mine', expiresAt: FAR });
+    const theirs = issue({ label: 'theirs', expiresAt: FAR, createdByUserId: other });
+    const fromTheFile = issue({ label: 'the file', expiresAt: FAR, createdByUserId: null });
+
+    const withdrawn = repo.revokeIssuedBy(adminId, LATER);
+
+    expect(withdrawn.map((c) => c.label)).toEqual(['mine']);
+    expect(withdrawn[0]?.revokedAt).toBe(LATER);
+    expect(repo.findById(mine.code.id)?.revokedAt).toBe(LATER);
+    // Somebody else's intake is not collateral…
+    expect(repo.findById(theirs.code.id)?.revokedAt).toBeNull();
+    // …and neither is the deployment's own code, which names nobody. `created_by_user_id = ?` is
+    // never true of NULL, which is the whole reason migration 094 made the column nullable.
+    expect(repo.findById(fromTheFile.code.id)?.revokedAt).toBeNull();
+  });
+
+  /**
+   * `anyOpen`'s predicate and not "everything not already revoked". A code that had expired or been
+   * used up is already dead in a way that cannot reverse, so withdrawing it would buy nothing and
+   * would replace the reason it really ended with a second, later one in the sentence
+   * `describeClosure` shows a person.
+   */
+  it('leaves alone the codes that were already closed, whichever way they closed', () => {
+    const revoked = issue({ label: 'already withdrawn', expiresAt: FAR });
+    repo.revoke(revoked.code.id, NOW);
+    const expired = issue({ label: 'ran out of time', expiresAt: LATER });
+    const spent = issue({ label: 'ran out of places', maxUses: 1, expiresAt: FAR });
+    expect(repo.redeem({ plaintext: spent.plaintext, nowISO: NOW }, () => 1).ok).toBe(true);
+
+    const after = '2026-10-01T00:00:00.000Z';
+    expect(repo.revokeIssuedBy(adminId, after)).toEqual([]);
+
+    // The first keeps the timestamp of the revocation that really happened…
+    expect(repo.findById(revoked.code.id)?.revokedAt).toBe(NOW);
+    // …and the other two are still describable as what they are, rather than as withdrawals.
+    expect(repo.findById(expired.code.id)?.revokedAt).toBeNull();
+    expect(repo.findById(spent.code.id)?.revokedAt).toBeNull();
+    // All three are shut either way, which is the only thing the security claim needs.
+    expect(repo.anyOpen(after)).toBe(false);
+  });
+
+  it('says nothing happened for an administrator who never issued one', () => {
+    expect(repo.revokeIssuedBy(insertUser('admin-3'), LATER)).toEqual([]);
   });
 });
 

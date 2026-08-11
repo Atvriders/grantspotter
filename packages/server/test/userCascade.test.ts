@@ -6,8 +6,11 @@ import { openTestDb } from '../src/test/testDb.js';
  *
  * `adminUsersRouter.ts` deletes an account with one statement and lets SQLite do the rest:
  *
- *   // Every `REFERENCES users(id)` in the schema is ON DELETE CASCADE
+ *   // Every `REFERENCES users(id)` LEFT in the schema is ON DELETE CASCADE
  *   // (sessions, profiles, watches, applications — 001-init.sql) …
+ *
+ * (The word "left" is migration 094's: `enrollment_codes` no longer declares one, and the last
+ * block in this file is what makes that safe rather than a hole. Everything below is unchanged.)
  *
  * That comment is TRUE TODAY. It is also a claim about every table this schema will ever grow,
  * written where nothing can check it — and this is the third time in this project a correct
@@ -69,10 +72,16 @@ afterAll(() => {
  * the intended behaviour; the guards at the bottom refuse an entry that names a column which does
  * not exist, or one that has since gained the cascade.
  *
- * All four are the same shape — a RECORD OF SOMETHING THAT HAPPENED, which an account deletion is
- * not entitled to rewrite. None of them is a credential, a subscription or a key: nothing here
- * keeps working on a deleted user's behalf, which is the distinction that matters and the one
- * `ics_tokens` would fall on the wrong side of.
+ * All five are the same shape — a RECORD OF SOMETHING THAT HAPPENED, which an account deletion is
+ * not entitled to rewrite — and nothing here keeps working on a deleted user's behalf, which is the
+ * distinction that matters and the one `ics_tokens` would fall on the wrong side of.
+ *
+ * THE FIFTH IS THE ONLY ONE WHOSE ROW COULD, and it is the reason to read the second half of each
+ * reason rather than the first. `enrollment_codes` holds a live account-minting credential; it
+ * qualifies for this list only because migration 094 made an account deletion WITHDRAW those codes
+ * instead of erasing them. An entry here has never been a way to opt out of the rule — it is a
+ * statement that the row is inert once its user is gone — and the last block in this file is what
+ * proves that of the one entry where inertness had to be built rather than observed.
  */
 const OUTLIVES_THE_USER: ReadonlyMap<string, string> = new Map([
   [
@@ -100,6 +109,20 @@ const OUTLIVES_THE_USER: ReadonlyMap<string, string> = new Map([
     'The reject memory that stops a rejected candidate coming back every crawl. It is keyed by ' +
       'the candidate, not the person; losing the decider would either resurrect the rejection or ' +
       'silently drop it, and the row does nothing on the departed reviewer\'s behalf.',
+  ],
+  [
+    'enrollment_codes.created_by_user_id',
+    'WHO ISSUED A CODE, which is a record of a past act and not a capability — the fifth entry ' +
+      'here and the only one that had to EARN its place, because an enrollment code is the one ' +
+      'thing on this list that could keep working on a deleted account\'s behalf. It does not, and ' +
+      'the reason is not this sentence: migration 094 replaced 091\'s cascade with a trigger that ' +
+      'REVOKES an issuer\'s open codes when the account is deleted, so the credential dies exactly ' +
+      'as before and the row — its label, its use count, its expiry, and the subject of every ' +
+      'user.enroll audit row that names it — is what survives. Cascading it back would erase a ' +
+      'club\'s intake record on a personnel change, and would take the code set in ' +
+      'docker-compose.yml with it (it is attributed to NULL now for that reason), whereupon the ' +
+      'next boot would recreate that one with a fresh expiry and its uses at zero. The probes in ' +
+      'the last block are what hold all of it; this reason may stand only while they pass.',
   ],
 ]);
 
@@ -375,5 +398,101 @@ describe('deleting a user — no exemption may be vacuous', () => {
     for (const [key, reason] of OUTLIVES_THE_USER) {
       expect(reason.trim().length, `${key} needs a reason, not a placeholder`).toBeGreaterThan(60);
     }
+  });
+});
+
+/**
+ * THE ONE EXEMPTION THAT HAD TO EARN ITS PLACE, PROVEN AT THE ROW.
+ *
+ * Every other entry in `OUTLIVES_THE_USER` is a record nothing acts on. An enrollment code is a
+ * live credential that mints accounts — it is the exact shape the second rule above calls "a key, a
+ * token, a subscription" and refuses to let anybody write a reason for. It is exempt anyway,
+ * because migration 094 separated the two jobs 091's single cascade was doing: the POLICY (an
+ * account's removal must leave no live credential behind) is kept by a trigger that REVOKES, and
+ * the HOUSEKEEPING (no row pointing at a missing parent) turned out to be the wrong thing to want
+ * from a column that records who did something.
+ *
+ * So the reason written up there is only allowed to stand while these three pass. The first says
+ * the schema really is what the exemption claims; the second says the credential really does stop
+ * working; the third says the compose file's own code — the row this whole change is about — really
+ * is out of reach of an account deletion, which is what stops a deletion from GRANTING access by
+ * having the next boot reissue it with a fresh expiry and its uses back at zero.
+ */
+describe('deleting a user withdraws the codes they issued rather than erasing them', () => {
+  const AT = '2026-08-11T00:00:00.000Z';
+  /** Far future, so the trigger's `expires_at > now` is answered by the calendar, not by luck. */
+  const FAR = '2099-01-01T00:00:00.000Z';
+
+  function insertCode(id: string, issuer: string | null, uses: number): void {
+    db.prepare(
+      `INSERT INTO enrollment_codes
+         (id, code_hash, label, max_uses, uses, expires_at, revoked_at, created_at,
+          created_by_user_id, last_used_at, chosen, hash_scheme)
+       VALUES (?, ?, ?, 30, ?, ?, NULL, ?, ?, NULL, 1, 'hmac-sha256')`,
+    ).run(id, `digest-${id}`, `label-${id}`, uses, FAR, AT, issuer);
+  }
+
+  function codeRow(id: string): { uses: number; expires_at: string; revoked_at: string | null } {
+    return db
+      .prepare('SELECT uses, expires_at, revoked_at FROM enrollment_codes WHERE id = ?')
+      .get(id) as { uses: number; expires_at: string; revoked_at: string | null };
+  }
+
+  it('really has lost the foreign key, and really does allow a code with no issuer', () => {
+    // Read from the live schema, because 091's DDL text still declares the key this asserts is
+    // gone — that file is the record of what the table WAS and says so in its own header.
+    expect(foreignKeysOf('enrollment_codes')).toEqual([]);
+    const column = (
+      db.pragma('table_info("enrollment_codes")') as Array<{ name: string; notnull: number }>
+    ).find((c) => c.name === 'created_by_user_id');
+    expect(column, 'the column the exemption is written about is gone').toBeDefined();
+    expect(column?.notnull, 'NOT NULL is back, so the compose code must name a person again').toBe(
+      0,
+    );
+  });
+
+  it('withdraws the credential and keeps the record, uses and expiry included', () => {
+    const id = 'u-code-issuer-probe';
+    db.prepare(
+      `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+       VALUES (?, ?, ?, 'x', 'admin', ?, ?)`,
+    ).run(id, 'issuer@example.test', 'issuer@example.test', 'ics-issuer-probe', AT);
+    insertCode('c-issued-by-probe', id, 29);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+
+    const after = codeRow('c-issued-by-probe');
+    expect(after, 'the code was cascaded away with its issuer').toBeDefined();
+    // The credential is dead…
+    expect(after.revoked_at).not.toBeNull();
+    // …and everything an officer would ask about the intake survived it.
+    expect(after.uses).toBe(29);
+    expect(after.expires_at).toBe(FAR);
+    // The issuer is still named, which is the whole point of dropping the key: `user.enroll` audit
+    // rows carry this code's id, and the trail needs its subject to still exist.
+    expect(
+      db.prepare('SELECT created_by_user_id AS u FROM enrollment_codes WHERE id = ?').get('c-issued-by-probe'),
+    ).toEqual({ u: id });
+
+    db.prepare('DELETE FROM enrollment_codes WHERE id = ?').run('c-issued-by-probe');
+  });
+
+  it('does not touch the code the compose file set, because it names nobody', () => {
+    const id = 'u-founder-probe';
+    db.prepare(
+      `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+       VALUES (?, ?, ?, 'x', 'admin', ?, ?)`,
+    ).run(id, 'founder@example.test', 'founder@example.test', 'ics-founder-probe', AT);
+    insertCode('c-from-the-file', null, 29);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+
+    // Unchanged in every field that decides what it can do. If this row were withdrawn — or, as it
+    // was before 094, deleted — the next boot would find the file naming a code this instance no
+    // longer has and issue it again: 90 fresh days and thirty fresh uses, handed out because
+    // somebody removed an account.
+    expect(codeRow('c-from-the-file')).toEqual({ uses: 29, expires_at: FAR, revoked_at: null });
+
+    db.prepare('DELETE FROM enrollment_codes WHERE id = ?').run('c-from-the-file');
   });
 });

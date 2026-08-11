@@ -100,7 +100,7 @@ export type EnvCodeOutcome =
   | { kind: 'closed'; code: EnrollmentCode; withdrew: number }
   /** The file names a code an administrator issued in the app. Left alone, not taken over. */
   | { kind: 'app-owned'; code: EnrollmentCode; withdrew: number }
-  /** Set, but there is no administrator yet to attribute it to. Created at bootstrap instead. */
+  /** Set, but no administrator has been created yet. Created at bootstrap instead. */
   | { kind: 'deferred'; withdrew: number }
   /** `create` refused after all the checks passed — a race, or a state this file did not foresee. */
   | { kind: 'refused'; withdrew: number };
@@ -116,35 +116,39 @@ export interface SyncEnvEnrollmentCodeInput {
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
- * WHO THE FILE'S CODE IS ATTRIBUTED TO: the oldest administrator, enabled ones first.
+ * WHO THE FILE'S CODE IS ATTRIBUTED TO: NOBODY, BECAUSE NOBODY IS THE TRUE ANSWER.
  *
- * `created_by_user_id` IS `NOT NULL REFERENCES users(id) ON DELETE CASCADE`, so this is not a
- * choice about tidiness — a code cannot exist without naming somebody. The honest answer is "the
- * operator, through a file", and there is no row for that. The oldest administrator is the closest
- * true statement available: on a self-hosted instance they are, with near certainty, the person who
- * wrote the compose file, and they are the one person guaranteed to be able to act on the row.
+ * WHAT THIS FUNCTION USED TO BE AND WHY IT IS NOT THAT ANY MORE. It was `foundingAdminId`, and it
+ * returned the oldest enabled administrator, because `created_by_user_id` was `NOT NULL REFERENCES
+ * users(id) ON DELETE CASCADE` and a code could not exist without naming somebody. Its own comment
+ * said what that cost: "delete that administrator and the file's code goes with them, and the next
+ * boot creates it again — with a fresh expiry and a use count back at zero", and called that "the
+ * direction to be wrong in". IT IS NOT. A code that was 89 days old with 29 of its 30 uses spent
+ * coming back new, because somebody removed an unrelated account, is a deletion GRANTING access —
+ * silently, on a restart nobody connected to the deletion, to everyone still holding a code that
+ * had been handed out three months earlier. Migration 094 made the column nullable so that the
+ * honest answer, "the operator, through a file", could actually be given.
  *
- * INVENTING A SYSTEM USER WAS THE OTHER OPTION AND IS WORSE. `users` rows carry a password hash, a
- * role and an ICS token; a synthetic one would appear in the admin user list, would be a row
- * somebody could enable or reset, and would be a permanent account created as a side effect of a
- * configuration value. A false row in the users table is a heavier lie than an imprecise
- * attribution in one column.
+ * INVENTING A SYSTEM USER IS STILL THE WRONG ANSWER, and for the reason it always was: `users` rows
+ * carry a password hash, a role and an ICS token, so a synthetic one would appear in the admin user
+ * list as a row somebody could enable, reset or sign in as. A false row in the users table is a
+ * heavier lie than an absent value in one column.
  *
- * WHAT THE CASCADE THEN MEANS, STATED RATHER THAN DISCOVERED: delete that administrator and the
- * file's code goes with them, and the next boot creates it again — with a fresh expiry and a use
- * count back at zero. That is the schema's rule for every code and this one is not exempted from
- * it; the only difference is that this one comes back, which is the direction to be wrong in.
+ * SO WHAT IS LEFT HERE IS NOT AN ATTRIBUTION BUT A GATE, AND IT IS A SECURITY PROPERTY THAT USED TO
+ * BE HELD BY ACCIDENT. The README's promise is that the first administrator comes out of the
+ * container log and that nothing self-serve exists until an administrator has acted. A compose file
+ * that minted a live account-creating credential against an empty database would break exactly
+ * that: anybody who reached the instance between `docker compose up` and the operator finishing the
+ * first-run screen could enrol. Until 094 the foreign key enforced it as a side effect, and the
+ * comment that stood here warned "a later change that relaxes the foreign key does not quietly take
+ * it away". This is that change, so the rule is now stated rather than inherited, and
+ * `envEnrollmentCode.test.ts` holds it directly instead of holding a proxy for it.
  *
- * `ORDER BY disabled` first: a disabled administrator can still own a row, but if there is an
- * enabled one they are the better answer, because they are the one who can revoke it.
+ * A MEMBER DOES NOT SATISFY IT. The promise is about an ADMINISTRATOR having acted; a deployment
+ * with members and no admin is not a deployment that has been set up.
  */
-function foundingAdminId(db: Db): string | undefined {
-  const row = db
-    .prepare(
-      `SELECT id FROM users WHERE role = 'admin' ORDER BY disabled, created_at, id LIMIT 1`,
-    )
-    .get() as { id: string } | undefined;
-  return row?.id;
+function anAdministratorExists(db: Db): boolean {
+  return db.prepare(`SELECT 1 AS ok FROM users WHERE role = 'admin' LIMIT 1`).get() !== undefined;
 }
 
 /**
@@ -157,13 +161,13 @@ function foundingAdminId(db: Db): string | undefined {
  * second call an operator who set the code and deployed for the first time would have to restart
  * the container after finishing setup, with no symptom but a code that does not work.
  *
- * THAT DEFERRAL IS A SECURITY PROPERTY AND NOT ONLY A FOREIGN KEY. The README's promise is that the
- * first administrator always comes out of the container log and that nothing self-serve exists
+ * THAT DEFERRAL IS A SECURITY PROPERTY AND IS NO LONGER A FOREIGN KEY. The README's promise is that
+ * the first administrator always comes out of the container log and that nothing self-serve exists
  * until an administrator has acted. A compose file that minted a live account-creating credential
  * against an empty database would break exactly that: anybody who reached the instance between
- * `docker compose up` and the operator finishing the first-run screen could enrol. The schema
- * happened to force the right answer, and this comment is here so a later change that relaxes the
- * foreign key does not quietly take it away.
+ * `docker compose up` and the operator finishing the first-run screen could enrol. The schema used
+ * to force the right answer and migration 094 took that away on purpose — see
+ * `anAdministratorExists`, which is now the rule itself rather than a consequence of one.
  */
 export function syncEnvEnrollmentCode(input: SyncEnvEnrollmentCodeInput): EnvCodeOutcome {
   const { db, spec, nowISO } = input;
@@ -272,12 +276,11 @@ export function syncEnvEnrollmentCode(input: SyncEnvEnrollmentCodeInput): EnvCod
     return { kind: 'closed', code: named, withdrew };
   }
 
-  const issuer = foundingAdminId(db);
-  if (issuer === undefined) {
+  if (!anAdministratorExists(db)) {
     log(
-      `[enrollment] ENROLLMENT_CODE is set, and no administrator account exists yet. A code has to ` +
-        `be attributed to somebody, and nothing self-serve may exist before an administrator does, ` +
-        `so it will be created the moment you finish the first-run setup above — no restart needed.`,
+      `[enrollment] ENROLLMENT_CODE is set, and no administrator account exists yet. Nothing ` +
+        `self-serve may exist before an administrator does, so it will be created the moment you ` +
+        `finish the first-run setup above — no restart needed.`,
     );
     return { kind: 'deferred', withdrew };
   }
@@ -290,7 +293,11 @@ export function syncEnvEnrollmentCode(input: SyncEnvEnrollmentCodeInput): EnvCod
     chosen: spec.code,
     maxUses: spec.maxUses,
     expiresAt,
-    createdByUserId: issuer,
+    // NOBODY, because the compose file is this code's author. No administrator typed it, none can
+    // reissue it, and it is the one row in this table that no account deletion may take away —
+    // which is the property that makes the uses it has spent and the expiry it was created with
+    // survive everything except an edit to the line that names it.
+    createdByUserId: null,
     nowISO,
   });
 
@@ -344,8 +351,11 @@ function describeClosure(code: EnrollmentCode, nowISO: string): string {
  * `appendAuditLog` made its actor nullable for the refused-enrolment row, on the ground that naming
  * any user in the one record that exists to be believed would be a false statement. This is the
  * same case one step further out: nobody was signed in, nobody pressed anything, and a boot read a
- * file. Attributing it to the administrator whose id is in `created_by_user_id` would put a
- * colleague's name against an act they did not perform.
+ * file. Naming any administrator here would put a colleague against an act they did not perform.
+ *
+ * `created_by_user_id` NOW AGREES WITH IT. It used to hold the oldest administrator on these rows,
+ * because the schema demanded a name, so the table said one thing about who issued the file's code
+ * and the trail said another. Since migration 094 both say the same thing, which is nothing.
  */
 function audit(
   db: Db,

@@ -154,10 +154,18 @@ services:
       # and neither will putting an old code back on this line, because everyone who was given it
       # then would be let in again. To open a new door, use a code you have not used here before.
       #
-      # AND IT CANNOT GO FIRST. On a brand-new database there is no administrator to attribute the
-      # code to, and nothing self-serve may exist before an administrator does, so the code is
-      # created the moment you finish the first-run setup rather than at that first boot. The
-      # container log says so. No restart needed.
+      # AND IT CANNOT GO FIRST. Nothing self-serve may exist before an administrator does — a code
+      # that worked on a brand-new database would let anybody who found the instance between
+      # `docker compose up` and your first-run screen create an account — so the code is created the
+      # moment you finish that setup rather than at the first boot. The container log says so. No
+      # restart needed.
+      #
+      # THE CODE ON THIS LINE BELONGS TO THIS FILE AND NOT TO ANY OF YOUR ADMINISTRATORS. It is
+      # listed with no issuer, and deleting an administrator account — including the first one you
+      # ever made — does not touch it: it keeps the uses it has spent and the expiry it was created
+      # with, because only an edit here can change either. Codes issued in the app are the other
+      # way round: deleting the administrator who issued one WITHDRAWS it, so the people holding it
+      # are told it was withdrawn, and the row stays in the table with its count and its history.
       ENROLLMENT_CODE: ""
 
       # The two bounds the code above gets. They are written out rather than left to a default so

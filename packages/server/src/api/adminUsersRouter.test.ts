@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { openTestDb } from '../test/testDb.js';
 import { starProgram } from '../test/fixtures/programs.js';
 import { createUserRepo } from '../db/repositories/users.js';
+import { createEnrollmentCodeRepo } from '../db/repositories/enrollmentCodes.js';
 import { createSessionRepo } from '../db/repositories/sessions.js';
 import { listAuditLog } from '../db/repositories/ingestion.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
@@ -326,6 +327,9 @@ describe('/api/admin/users', () => {
     expect(res.status).toBe(200);
     expect(res.body.user.email).toBe('departing@example.com');
     expect(res.body.removed).toEqual({ profiles: 1, watches: 1, sessions: 1, applications: 0 });
+    // Nothing to withdraw: this account never issued a code. The number is reported anyway rather
+    // than omitted, so the admin console never has to guess whether a missing key means zero.
+    expect(res.body.revokedEnrollmentCodes).toBe(0);
 
     expect(createUserRepo(db).findById(id)).toBeUndefined();
     expect(createUserRepo(db).findByIcsToken(icsToken)).toBeUndefined();
@@ -340,6 +344,89 @@ describe('/api/admin/users', () => {
     });
     // The program itself is untouched — only the star pointing at it went.
     expect(db.prepare('SELECT COUNT(*) AS n FROM programs').get()).toEqual({ n: 1 });
+  }, 20_000);
+
+  /**
+   * WHAT A DELETE DOES TO THE CODES THAT ACCOUNT ISSUED — the half of migration 094 that a person
+   * performs, as opposed to the trigger that catches the paths a person does not.
+   *
+   * 091 met this requirement with `ON DELETE CASCADE` and the rows were gone. That satisfied the
+   * one thing that matters — a removed account may not leave a live credential behind — and
+   * destroyed the club's record of an intake in the same statement: the use count somebody needs to
+   * answer "how many accounts did that make", the expiry, the label, and the id every `user.enroll`
+   * audit row names. This route now withdraws them instead, with the request's own clock and one
+   * audit row each, and the record stays legible.
+   */
+  it('withdraws the enrollment codes a deleted admin issued, and keeps the rows', async () => {
+    const app = buildApp(db, admin);
+    const created = await request(app)
+      .post('/api/admin/users')
+      .send({ email: 'officer@example.com', role: 'admin' });
+    const id = created.body.user.id as string;
+
+    const codes = createEnrollmentCodeRepo(db);
+    const issued = codes.create({
+      label: 'W1MX autumn 2026 intake',
+      chosen: null,
+      maxUses: 30,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      createdByUserId: id,
+      nowISO: NOW,
+    });
+    if (!issued.ok) throw new Error('the fixture code collided');
+    const plaintext = issued.plaintext;
+    expect(codes.redeem({ plaintext, nowISO: NOW }, () => 'account').ok).toBe(true);
+    // …and one this administrator did NOT issue, to prove the withdrawal is aimed and not a sweep.
+    const untouched = codes.create({
+      label: 'somebody else’s intake',
+      chosen: null,
+      maxUses: 30,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      createdByUserId: adminId,
+      nowISO: NOW,
+    });
+    if (!untouched.ok) throw new Error('the fixture code collided');
+
+    const res = await request(app).delete(`/api/admin/users/${id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.revokedEnrollmentCodes).toBe(1);
+
+    // The credential is dead — the holder is told it was withdrawn rather than told it never
+    // existed, which is the sentence that gets them to ask somebody.
+    expect(codes.redeem({ plaintext, nowISO: NOW }, () => 'account')).toEqual({
+      ok: false,
+      refusal: 'revoked',
+    });
+    // The record is not: the row, its label, the use it spent, and the issuer it names.
+    expect(codes.findById(issued.code.id)).toMatchObject({
+      label: 'W1MX autumn 2026 intake',
+      uses: 1,
+      maxUses: 30,
+      revokedAt: NOW,
+      createdByUserId: id,
+    });
+    expect(codes.findById(untouched.code.id)?.revokedAt).toBeNull();
+
+    // One audit row per withdrawal, naming the administrator who caused it — the delete route's
+    // actor, not the departed issuer, because the withdrawal is the deleter's act.
+    const revocations = allAuditRows(db).filter((r) => r.action === 'enrollment_code.revoke');
+    expect(revocations).toHaveLength(1);
+    expect(revocations[0]).toMatchObject({
+      actor_user_id: adminId,
+      entity_type: 'enrollment_code',
+      entity_id: issued.code.id,
+      at: NOW,
+    });
+    expect(JSON.parse(revocations[0].detail as string)).toEqual({
+      label: 'W1MX autumn 2026 intake',
+      uses: 1,
+      via: 'user.delete',
+      issuer: id,
+    });
+    // And the count is on the deletion row too, so one entry answers "what did removing this
+    // account actually do".
+    const deletion = allAuditRows(db).find((r) => r.action === 'user.delete');
+    expect(JSON.parse(deletion?.detail as string)).toMatchObject({ revokedEnrollmentCodes: 1 });
   }, 20_000);
 
   it('404s an unknown user id on every per-user route', async () => {

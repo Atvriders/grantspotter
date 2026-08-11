@@ -582,6 +582,12 @@ says so at the moment you make it, not here:
   new one.
 - The list marks every code **Chosen** or **Generated**, because after the fact only a hash is
   stored and the two are not equally strong.
+- **Deleting an administrator withdraws the codes they issued — it does not erase them.** The
+  credential stops working at that instant and cannot be brought back, so a departing officer's
+  intake code cannot go on making accounts; the rows stay on this screen with their labels, their
+  use counts and their expiry, and anybody still holding one is told it was withdrawn rather than
+  told it is not valid. The delete confirmation says how many were withdrawn, and each one gets its
+  own line in the audit log.
 
 **You can set one in `docker-compose.yml` instead, on the `ENROLLMENT_CODE` line**, if you would
 rather edit one file than sign in and fill in a form. It is not a different kind of credential and
@@ -612,10 +618,14 @@ rule above applies to it, and the server refuses to start rather than issue a co
   the instance, GrantSpotter does not take it over: its limits, its expiry and its issuer stay as
   they were, and removing the line will not withdraw it. The log says all three, because the natural
   assumption is the opposite.
-- **It cannot go first.** A code names the administrator who issued it, and nothing self-serve may
-  exist before an administrator does, so on a brand-new database the code is created the moment you
-  finish the first-run setup rather than at that first boot. No restart needed; the log says which
-  of the two happened.
+- **It cannot go first.** Nothing self-serve may exist before an administrator does — a code that
+  worked on a brand-new database would let anybody who found the instance between `docker compose
+  up` and your first-run screen make an account — so the code is created the moment you finish that
+  setup rather than at the first boot. No restart needed; the log says which of the two happened.
+- **It belongs to the file, not to any of your administrators.** It is listed with no issuer,
+  because none of them typed it and none of them can reissue it, and **deleting an administrator
+  account — including the first one you ever made — does not touch it.** It keeps the uses it has
+  spent and the expiry it was created with; only an edit to the line changes either.
 - **Rotating `SESSION_SECRET` fixes this one for you.** Every other outstanding code stops redeeming
   when that secret changes (see below) and has to be reissued by hand. The compose-set code is
   reissued on the next boot, because the file still says what it is.
@@ -644,7 +654,7 @@ code for each open intake), and restoring a backup onto a host with a *different
 brings the records back but not the codes. Codes issued by a build older than migration 093 keep
 their original digest and go on working; they are all generated 20-character codes, which no
 dictionary reaches. The list
-of codes shows you the label, the use count, the expiry, who created it and when it was last
+of codes shows you the label, the use count, the expiry, when it was created and when it was last
 redeemed, and it cannot show you the code itself, because the instance no longer has it. If you
 lose it, revoke it and issue another; that is cheaper than any recovery path and it is the one that
 leaves a record. Revocation stamps the row rather than deleting it, so what remains is the evidence

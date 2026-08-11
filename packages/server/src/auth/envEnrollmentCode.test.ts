@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig, resolveEnrollmentCode } from '../config.js';
+import { MIGRATIONS_DIR } from '../db/migrate.js';
 import { createEnrollmentCodeRepo } from '../db/repositories/enrollmentCodes.js';
 import { openTestDb } from '../test/testDb.js';
 import {
@@ -23,8 +26,8 @@ const logged: string[] = [];
 
 /**
  * Raw SQL rather than `createUserRepo`, for the reason `enrollmentCodes.test.ts` gives: the only
- * thing the foreign key needs is a real `users.id`, and `users.create` costs an argon2id hash this
- * file has no use for.
+ * thing `create` needs is a real `users.id` — it checks, now that migration 094 has taken away the
+ * foreign key that used to — and `users.create` costs an argon2id hash this file has no use for.
  */
 function insertUser(id: string, over: { role?: string; disabled?: 0 | 1; at?: string } = {}): string {
   db.prepare(
@@ -191,7 +194,10 @@ describe('what a boot does about the code in the compose file', () => {
     expect(row?.chosen).toBe(true);
     expect(row?.maxUses).toBe(ENV_CODE_DEFAULT_MAX_USES);
     expect(row?.uses).toBe(0);
-    expect(row?.createdByUserId).toBe('admin-1');
+    // Attributed to NOBODY: the compose file is this code's author, an administrator cannot
+    // reissue it, and no account deletion may take it away. See the block at the bottom of this
+    // file for what that buys and what the previous answer — the oldest admin — cost.
+    expect(row?.createdByUserId).toBeNull();
     expect(row?.expiresAt).toBe(
       new Date(Date.parse(NOW) + ENV_CODE_DEFAULT_DAYS * 86_400_000).toISOString(),
     );
@@ -343,8 +349,17 @@ describe('what a boot does about the code in the compose file', () => {
 });
 
 /**
- * THE FOREIGN KEY FORCED THE RIGHT ANSWER, and this block is what stops a later change from
- * relaxing it back out again.
+ * THE FOREIGN KEY FORCED THE RIGHT ANSWER UNTIL MIGRATION 094 REMOVED IT, and this block is now the
+ * only thing holding the rule.
+ *
+ * It used to be a guard on a side effect: `created_by_user_id` was `NOT NULL REFERENCES users(id)`,
+ * so a code literally could not be inserted before an administrator row existed, and these tests
+ * pinned the consequence. 094 made the column nullable — deliberately, so that the file's code
+ * could be attributed to the file rather than to a person who did not write it — which took the
+ * mechanism away and left the rule. `syncEnvEnrollmentCode` now asks `anAdministratorExists`
+ * outright, and what follows tests the rule itself: NOTHING SELF-SERVE MAY EXIST BEFORE AN
+ * ADMINISTRATOR DOES, because anybody who reached the instance between `docker compose up` and the
+ * first-run screen could otherwise enrol.
  */
 describe('a code from a file cannot exist before an administrator does', () => {
   it('defers on an empty database rather than inventing an issuer', () => {
@@ -365,19 +380,36 @@ describe('a code from a file cannot exist before an administrator does', () => {
     expect(sync(CODE).kind).toBe('deferred');
   });
 
-  it('creates it against the founding administrator once one exists', () => {
+  it('creates it the moment one exists, without a restart', () => {
     expect(sync(CODE).kind).toBe('deferred');
     insertUser('admin-1');
     expect(sync(CODE, A_DAY_LATER).kind).toBe('created');
-    expect(envRows()[0]?.createdByUserId).toBe('admin-1');
+    expect(envRows()).toHaveLength(1);
   });
 
-  it('attributes it to the oldest enabled administrator', () => {
+  /**
+   * WHAT THIS TEST USED TO SAY: "attributes it to the oldest enabled administrator", asserting
+   * `createdByUserId === 'admin-oldest'`. That was the closest true statement the schema allowed —
+   * `NOT NULL` meant a code could not exist without naming somebody — and it was still a false one:
+   * none of these three people issued this code, the file did, and none of them can reissue it.
+   *
+   * IT ALSO HAD A PRICE THAT WAS DOCUMENTED AND NOT FIXED. `created_by_user_id` cascaded, so
+   * deleting whichever administrator happened to be oldest deleted the compose file's code, and the
+   * next boot recreated it — with a fresh 90 days and its thirty uses back at zero. A code that was
+   * 89 days old with 29 of 30 spent came back new because an unrelated account was removed. The
+   * assertion below is that reversed: the attribution names nobody, and the deletion is a no-op.
+   */
+  it('is the deployment\'s code and not any administrator\'s, however many there are', () => {
     insertUser('admin-disabled', { disabled: 1, at: '2026-08-01T00:00:00.000Z' });
-    insertUser('admin-oldest', { at: '2026-08-02T00:00:00.000Z' });
+    const oldest = insertUser('admin-oldest', { at: '2026-08-02T00:00:00.000Z' });
     insertUser('admin-newest', { at: '2026-08-03T00:00:00.000Z' });
     sync(CODE);
-    expect(envRows()[0]?.createdByUserId).toBe('admin-oldest');
+    expect(envRows()[0]?.createdByUserId).toBeNull();
+
+    // …and it is out of reach of an account deletion, which is the reason that matters.
+    db.prepare('DELETE FROM users WHERE id = ?').run(oldest);
+    expect(envRows()[0]?.createdByUserId).toBeNull();
+    expect(envRows()[0]?.revokedAt).toBeNull();
   });
 });
 
@@ -412,5 +444,103 @@ describe('the trail a code from a file leaves', () => {
     sync(CODE, '2026-09-03T12:00:00.000Z');
     // An audit log that grows a row every restart is an audit log people stop reading.
     expect(auditRows()).toHaveLength(before);
+  });
+});
+
+/**
+ * THE SEQUENCE AN OPERATOR ACTUALLY RUNS, END TO END, BECAUSE THIS IS THE ONE THAT WAS WRONG.
+ *
+ * Set the code in `docker-compose.yml`; students spend some of it; the founding administrator
+ * leaves and their account is deleted; the container restarts. Before migration 094 the deletion
+ * cascaded the row away and this restart REISSUED the code — same string, new row, ninety fresh
+ * days, thirty fresh uses. Everybody who had ever been given that code could enrol again, and the
+ * only event that caused it was a personnel change nobody would connect to the intake.
+ *
+ * Two properties are asserted here and they pull in opposite directions, which is why both are:
+ * the code must NOT be reset (or the deletion granted access), and it must NOT be withdrawn either
+ * (or an unrelated deletion has shut an intake the file still names).
+ */
+describe('deleting the administrator who set the deployment up', () => {
+  function redeemOnce(nowISO: string): boolean {
+    return createEnrollmentCodeRepo(db).redeem({ plaintext: CODE, nowISO }, () => 'account').ok;
+  }
+
+  it('leaves the compose file\'s code exactly as it was, spent uses and original expiry included', () => {
+    const founder = insertUser('admin-founder', { at: '2026-08-01T00:00:00.000Z' });
+    insertUser('admin-successor', { at: '2026-08-02T00:00:00.000Z' });
+    expect(sync(CODE).kind).toBe('created');
+
+    // Two students enrol.
+    expect(redeemOnce(NOW)).toBe(true);
+    expect(redeemOnce(NOW)).toBe(true);
+    const before = envRows()[0];
+    expect(before?.uses).toBe(2);
+
+    // The founder leaves. `adminUsersRouter` refuses to remove the last enabled admin, so there is
+    // always somebody left — here, the successor.
+    db.prepare('DELETE FROM users WHERE id = ?').run(founder);
+
+    // The container restarts, days later, on the same unedited line.
+    const outcome = sync(CODE, A_DAY_LATER);
+    expect(outcome.kind).toBe('unchanged');
+
+    const after = envRows();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.id).toBe(before?.id);
+    expect(after[0]?.uses).toBe(2);
+    expect(after[0]?.expiresAt).toBe(before?.expiresAt);
+    expect(after[0]?.revokedAt).toBeNull();
+    // Still the code the club is handing out — 28 of its 30 places left, not 30.
+    expect(redeemOnce(A_DAY_LATER)).toBe(true);
+    expect(envRows()[0]?.uses).toBe(3);
+  });
+
+  it('withdraws a code that administrator issued IN THE APP, and keeps its record', () => {
+    const founder = insertUser('admin-founder', { at: '2026-08-01T00:00:00.000Z' });
+    insertUser('admin-successor', { at: '2026-08-02T00:00:00.000Z' });
+    const repo = createEnrollmentCodeRepo(db);
+    const issued = repo.create({
+      label: 'W9XYZ spring 2027 intake',
+      chosen: OTHER,
+      maxUses: 30,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      createdByUserId: founder,
+      nowISO: NOW,
+    });
+    expect(issued.ok).toBe(true);
+    expect(repo.redeem({ plaintext: OTHER, nowISO: NOW }, () => 'account').ok).toBe(true);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(founder);
+
+    // The credential is withdrawn — the opposite answer to the file's code, because this one really
+    // was that person's — and the holder is told so rather than told it never existed.
+    expect(repo.redeem({ plaintext: OTHER, nowISO: A_DAY_LATER }, () => 'account')).toEqual({
+      ok: false,
+      refusal: 'revoked',
+    });
+    // And the record survives, which is what a cascade could not do: the row, its label, the use it
+    // spent, and the id every `user.enroll` audit row points at.
+    const row = repo.findByCode(OTHER);
+    expect(row).toMatchObject({ label: 'W9XYZ spring 2027 intake', uses: 1, maxUses: 30 });
+    expect(row?.createdByUserId).toBe(founder);
+  });
+});
+
+/**
+ * THE STRING MIGRATION 094 CANNOT IMPORT.
+ *
+ * `ENV_CODE_LABEL` is the identity of the compose file's row — `syncEnvEnrollmentCode` finds it by
+ * matching this label and nothing else — and 094 has to name it in SQL in order to re-attribute the
+ * rows an older build wrote to the oldest administrator. A migration is a file SQLite runs, so it
+ * cannot import the constant, and a rename here would leave that migration silently re-attributing
+ * nothing on the next fresh deployment.
+ */
+describe('the label the migration and the constant have to agree on', () => {
+  it('appears in 094 exactly as chosenCode.ts declares it', () => {
+    const sql = readFileSync(
+      join(MIGRATIONS_DIR, '094-enrollment-codes-outlive-their-issuer.sql'),
+      'utf8',
+    );
+    expect(sql).toContain(`lower('${ENV_CODE_LABEL}')`);
   });
 });

@@ -648,7 +648,22 @@ export interface EnrollmentCode {
   revokedAt: string | null;
   /** ISO. */
   createdAt: string;
-  createdByUserId: string;
+  /**
+   * The administrator who issued this code, or `null` when the deployment did.
+   *
+   * A FACT ABOUT THE PAST AND NEVER A CAPABILITY. It is not a foreign key (migration 094): it may
+   * name an account that has since been deleted, which is the point — the record of who issued a
+   * credential is not something an account deletion is entitled to rewrite, and every other
+   * "who did this" column in this schema (`audit_log.actor_user_id`, `review_items.decided_by`) is
+   * exempted from the user cascade on the same ground. What a code can still DO is decided entirely
+   * by `revokedAt`, `expiresAt` and `uses`, so a departed issuer takes nothing with them except the
+   * revocation the delete route writes.
+   *
+   * `null` MEANS THE COMPOSE FILE, not "unknown". A code set in `ENROLLMENT_CODE` is authored by
+   * `docker-compose.yml` and no administrator can reissue it, so naming one would be a false
+   * statement — and it was one, until 094 made this column nullable.
+   */
+  createdByUserId: string | null;
   /** ISO. */
   lastUsedAt: string | null;
 }

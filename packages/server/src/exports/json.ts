@@ -67,8 +67,12 @@ export const BACKUP_TABLES = [
   'template_instances',
   'audit_log',
   'ics_tokens',
-  // Migration 091. AFTER `users`, because `created_by_user_id` references it and this list is
-  // walked forwards to insert.
+  // Migration 091. LAST, AND STILL AFTER `users` THOUGH IT NO LONGER HAS TO BE. It was placed here
+  // because `created_by_user_id` was a foreign key into `users`; migration 094 dropped that key, so
+  // the insert order no longer constrains this position. It is kept because the DELETE pass walks
+  // this list BACKWARDS, which empties `enrollment_codes` before `users` and is what stops 094's
+  // trigger — "revoke the codes of a deleted issuer" — from firing during a restore that is about
+  // to put both tables back exactly as they were.
   //
   // BACKED UP, DIGEST AND ALL — RE-DECIDED ON 2026-08-10, BECAUSE THE REASON GIVEN HERE HAD STOPPED
   // BEING TRUE. What this comment used to say was that "the table holds a SHA-256 digest and no

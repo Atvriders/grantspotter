@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { migrate, openDatabase } from '../src/db/migrate.js';
+import { migrate, MIGRATIONS_DIR, openDatabase } from '../src/db/migrate.js';
 import { createTestDb, type TestDb } from './helpers/tempDb.js';
 
 const EXPECTED_TABLES = [
@@ -337,5 +337,113 @@ describe('migrate', () => {
     db.prepare('DELETE FROM users WHERE id = ?').run('u1');
     expect(db.prepare('SELECT COUNT(*) AS n FROM applications').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT COUNT(*) AS n FROM template_instances').get()).toEqual({ n: 0 });
+  });
+});
+
+/**
+ * THE ONLY DATABASE MIGRATION 094 ACTUALLY CHANGES ANYTHING ON: one that already has codes in it.
+ *
+ * A fresh install runs 091, 092, 093 and 094 back to back against an empty table, so the rebuild
+ * copies nothing and the re-attribution matches nothing. Every claim 094 makes — that the digests
+ * travel, that the uses and the expiry survive, that the compose file's rows stop naming a person
+ * while an administrator's rows go on naming theirs — is a claim about an UPGRADE, and this is the
+ * only place it can be tested. It is built by migrating with 094 held back, writing the rows an
+ * older build would have written, and then letting it run.
+ */
+describe('094, on a database that already has enrollment codes', () => {
+  const AT = '2026-08-01T00:00:00.000Z';
+  const ENV_LABEL = 'Set in docker-compose.yml (ENROLLMENT_CODE)';
+  const FAR = '2099-01-01T00:00:00.000Z';
+
+  /** Every migration except the one under test, so `migrate()` can be asked to apply it alone. */
+  function dirWithout(exclude: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'grantspotter-pre094-'));
+    for (const file of readdirSync(MIGRATIONS_DIR)) {
+      if (file === exclude) continue;
+      copyFileSync(join(MIGRATIONS_DIR, file), join(dir, file));
+    }
+    return dir;
+  }
+
+  it('re-attributes the file’s code to nobody and leaves everything else exactly as it was', () => {
+    const migrations = dirWithout('094-enrollment-codes-outlive-their-issuer.sql');
+    // A raw database rather than `createTestDb`, which migrates all the way to HEAD in its
+    // constructor and would leave nothing for 094 to do.
+    const home = mkdtempSync(join(tmpdir(), 'grantspotter-mig094-'));
+    const db = openDatabase(join(home, 'db.sqlite'));
+    try {
+      // A database at 093: the table still has the cascade, so the code from the file has to name
+      // somebody, and the founding administrator is who it named.
+      expect(migrate(db, migrations).applied).toContain('093-peppered-enrollment-code-digests.sql');
+      expect(
+        (db.pragma('foreign_key_list(enrollment_codes)') as Array<{ table: string }>).map(
+          (fk) => fk.table,
+        ),
+      ).toEqual(['users']);
+
+      db.prepare(
+        `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+         VALUES (?, ?, ?, 'x', 'admin', ?, ?)`,
+      ).run('u-founder', 'f@example.test', 'f@example.test', 'ics-f', AT);
+      db.prepare(
+        `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+         VALUES (?, ?, ?, 'x', 'admin', ?, ?)`,
+      ).run('u-officer', 'o@example.test', 'o@example.test', 'ics-o', AT);
+      for (const [id, label, issuer] of [
+        ['c-env', ENV_LABEL, 'u-founder'],
+        // Same label, differently cased and padded — `isEnvCodeLabel` folds it and so must the
+        // migration, or a row the boot treats as the file's would keep naming a person.
+        ['c-env-folded', `  ${ENV_LABEL.toUpperCase()} `, 'u-founder'],
+        ['c-app', 'W1MX autumn 2026 intake', 'u-officer'],
+      ] as const) {
+        db.prepare(
+          `INSERT INTO enrollment_codes
+             (id, code_hash, hash_scheme, label, chosen, max_uses, uses, expires_at, revoked_at,
+              created_at, created_by_user_id, last_used_at)
+           VALUES (?, ?, 'hmac-sha256', ?, 1, 30, 29, ?, NULL, ?, ?, ?)`,
+        ).run(id, `digest-of-${id}`, label, FAR, AT, issuer, AT);
+      }
+
+      const applied = migrate(db).applied;
+      expect(applied).toEqual(['094-enrollment-codes-outlive-their-issuer.sql']);
+
+      const rows = db
+        .prepare(
+          `SELECT id, code_hash, hash_scheme, uses, max_uses, expires_at, revoked_at, chosen,
+                  created_by_user_id AS issuer
+             FROM enrollment_codes ORDER BY id`,
+        )
+        .all() as Array<Record<string, unknown>>;
+      // Nothing was lost in the rebuild — not a row, not a digest, not a use, not an expiry.
+      expect(rows).toEqual([
+        { id: 'c-app', code_hash: 'digest-of-c-app', hash_scheme: 'hmac-sha256', uses: 29,
+          max_uses: 30, expires_at: FAR, revoked_at: null, chosen: 1, issuer: 'u-officer' },
+        { id: 'c-env', code_hash: 'digest-of-c-env', hash_scheme: 'hmac-sha256', uses: 29,
+          max_uses: 30, expires_at: FAR, revoked_at: null, chosen: 1, issuer: null },
+        { id: 'c-env-folded', code_hash: 'digest-of-c-env-folded', hash_scheme: 'hmac-sha256',
+          uses: 29, max_uses: 30, expires_at: FAR, revoked_at: null, chosen: 1, issuer: null },
+      ]);
+
+      // The key is gone and the column takes NULL, which is what the two nulls above depend on.
+      expect(db.pragma('foreign_key_list(enrollment_codes)')).toEqual([]);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+
+      // Deleting the founding administrator is now a no-op for the file's rows — it used to delete
+      // them, whereupon the next boot reissued that code with a fresh expiry and its uses at zero —
+      // and withdraws the officer's, without touching the intake record it carries.
+      db.prepare('DELETE FROM users WHERE id = ?').run('u-founder');
+      db.prepare('DELETE FROM users WHERE id = ?').run('u-officer');
+      expect(
+        db.prepare('SELECT id, uses, revoked_at FROM enrollment_codes ORDER BY id').all(),
+      ).toEqual([
+        { id: 'c-app', uses: 29, revoked_at: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/) },
+        { id: 'c-env', uses: 29, revoked_at: null },
+        { id: 'c-env-folded', uses: 29, revoked_at: null },
+      ]);
+    } finally {
+      db.close();
+      rmSync(migrations, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

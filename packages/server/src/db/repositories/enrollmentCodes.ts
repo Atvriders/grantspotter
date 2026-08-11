@@ -285,7 +285,22 @@ export interface CreateEnrollmentCodeInput {
   maxUses: number | null;
   /** ISO, or null for a code that never expires. */
   expiresAt: string | null;
-  createdByUserId: string;
+  /**
+   * The administrator issuing this code, or null when the DEPLOYMENT is issuing it.
+   *
+   * REQUIRED AND NULLABLE rather than optional, for the same reason `chosen` is: the two are
+   * different kinds of credential — one an administrator can be asked about and one that belongs to
+   * a line in `docker-compose.yml` — and every call site has to say which it is minting. Only
+   * `auth/envEnrollmentCode.ts` passes null.
+   *
+   * A NON-NULL ID MUST NAME A USER THAT EXISTS, and `create` checks it rather than trusting the
+   * caller. Migration 094 dropped the foreign key that used to check it, because this column
+   * records who issued a code and a record of a past act cannot carry referential integrity against
+   * a table people are deleted from. What that key ALSO did was reject a caller that wrote an id
+   * belonging to nobody, and that half is worth keeping: it is the difference between a row that
+   * names a departed colleague and a row that names nothing anybody can look up.
+   */
+  createdByUserId: string | null;
   nowISO: string;
 }
 
@@ -344,6 +359,29 @@ export interface EnrollmentCodeRepo {
   findByCode(plaintext: string): EnrollmentCode | undefined;
   /** Idempotent: a second revoke returns the code with the FIRST revocation's timestamp. */
   revoke(id: string, nowISO: string): EnrollmentCode | undefined;
+  /**
+   * WITHDRAW EVERY CODE THIS ADMINISTRATOR ISSUED THAT COULD STILL CREATE AN ACCOUNT, and return
+   * them as they now stand so the caller can write the trail.
+   *
+   * THE ONE CALLER IS `api/adminUsersRouter.ts`, INSIDE THE TRANSACTION THAT DELETES THE ACCOUNT.
+   * Until migration 094 this happened by cascade and the rows were DELETED — which met the security
+   * requirement and destroyed the evidence: the use count an officer needs to answer "how many
+   * accounts did that intake make", the expiry, the label, and the subject of every `user.enroll`
+   * audit row that names the code an account came from. Revoking meets the same requirement and
+   * keeps all of it.
+   *
+   * ONLY THE OPEN ONES, which is `anyOpen`'s predicate rather than "everything not yet revoked". A
+   * code that had already expired or been used up cannot come back — expiry does not un-pass and
+   * `uses` never decreases — so withdrawing it would change nothing except the sentence
+   * `describeClosure` shows a person, replacing why it really ended with a second, later reason.
+   *
+   * IT IS NOT THE ONLY THING STANDING THERE. Migration 094's trigger performs the same withdrawal
+   * for any path that deletes a user without coming through here, on the ground that 091's cascade
+   * was a SCHEMA-level guarantee and replacing it with a line in one router would be the downgrade
+   * `test/userCascade.test.ts` exists to catch. This method is what makes the ordinary path use the
+   * request's own clock and leave an audit row per code; the trigger then finds nothing to do.
+   */
+  revokeIssuedBy(userId: string, nowISO: string): EnrollmentCode[];
   /** Is there at least one code a person could redeem right now? Never says which, or how many. */
   anyOpen(nowISO: string): boolean;
   /**
@@ -383,7 +421,7 @@ interface CodeRow {
   expires_at: string | null;
   revoked_at: string | null;
   created_at: string;
-  created_by_user_id: string;
+  created_by_user_id: string | null;
   last_used_at: string | null;
 }
 
@@ -489,6 +527,33 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
   );
 
   /**
+   * The codes one administrator issued that a person could still redeem — `anyOpen`'s three
+   * conditions with an issuer, so that what this finds and what that reports can never disagree
+   * about what "open" means.
+   *
+   * `SCAN enrollment_codes` + `USE TEMP B-TREE FOR ORDER BY`, and no index for it, measured with
+   * EXPLAIN QUERY PLAN on this host against migration 094's DDL. It runs once, when an account is
+   * deleted, over a table holding one row per intake an organisation has ever run; an index would
+   * be a third B-tree maintained on every redemption to save reading a single page on the rarest
+   * write this table has.
+   *
+   * `created_by_user_id = ?` never matches the compose file's row, because that row holds NULL and
+   * SQL equality against NULL is unknown. That is not a happy accident — it is the whole reason 094
+   * made the column nullable, and `envEnrollmentCode.test.ts` asserts it from the other side.
+   */
+  const openByIssuerStmt = db.prepare(
+    `SELECT ${COLUMNS} FROM enrollment_codes
+      WHERE created_by_user_id = @issuer
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > @now)
+        AND (max_uses IS NULL OR uses < max_uses)
+      ORDER BY created_at, id`,
+  );
+
+  /** Does this id name a user? Asked once per issued code, on the PRIMARY KEY. */
+  const userExistsStmt = db.prepare('SELECT 1 AS ok FROM users WHERE id = ?');
+
+  /**
    * THE STATEMENT THAT MAKES A SINGLE-USE CODE SINGLE-USE.
    *
    * Every condition that bounds a code is repeated HERE, in the WHERE clause of the write, and not
@@ -530,6 +595,25 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
      * constraint. `redeem`'s `changes !== 1` branch is the same bargain, one statement further on.
      */
     create(input) {
+      /**
+       * THE HALF OF 091'S FOREIGN KEY THAT WAS HOUSEKEEPING, KEPT AFTER 094 TOOK THE KEY AWAY.
+       *
+       * THROWN, NOT RETURNED AS A REFUSAL, and the distinction is the one `CodeIssued` already
+       * draws: a collision is an ordinary outcome of an administrator typing something and gets a
+       * sentence, whereas an issuer id that names nobody is a caller that is wrong — there is no
+       * request an administrator can send that produces it, and no sentence that would help them.
+       * It is the same bargain as the `max_uses > 0` CHECK, which `enrollmentCodes.test.ts` asserts
+       * still throws rather than being softened into a refusal.
+       *
+       * NULL IS NOT AN UNKNOWN ISSUER AND IS NOT CHECKED. It is the deployment, and there is no row
+       * to look for.
+       */
+      if (input.createdByUserId !== null && userExistsStmt.get(input.createdByUserId) === undefined) {
+        throw new Error(
+          `Cannot attribute an enrollment code to "${input.createdByUserId}": no such user. Pass ` +
+            'null only for a code the deployment itself is issuing (ENROLLMENT_CODE).',
+        );
+      }
       const plaintext = input.chosen ?? newEnrollmentCode();
       const normalized = normalizeEnrollmentCode(plaintext);
       /**
@@ -617,6 +701,18 @@ export function createEnrollmentCodeRepo(db: Db): EnrollmentCodeRepo {
       revokeStmt.run(nowISO, id);
       const row = byIdStmt.get(id) as CodeRow | undefined;
       return row === undefined ? undefined : toCode(row);
+    },
+
+    revokeIssuedBy(userId, nowISO) {
+      // Read the open ones first, then revoke each by id through the SAME statement the button
+      // uses, so an administrator leaving and an administrator pressing revoke write identical
+      // rows. Doing it as one bulk UPDATE would have been a second way to revoke a code, and a
+      // second way to revoke a code is a second place for `AND revoked_at IS NULL` to be forgotten.
+      const open = openByIssuerStmt.all({ issuer: userId, now: nowISO }) as CodeRow[];
+      return open.map((row) => {
+        revokeStmt.run(nowISO, row.id);
+        return toCode(byIdStmt.get(row.id) as CodeRow);
+      });
     },
 
     anyOpen(nowISO) {
