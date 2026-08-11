@@ -294,12 +294,17 @@ export function Enroll({ onAuthenticated, onCancel }: EnrollProps): JSX.Element 
           <label htmlFor="enrol-password" className="eyebrow">
             Password
           </label>
+          {/*
+            No `minLength`, for the reason `FirstRun.tsx` sets out at the same field: the attribute
+            counts characters and this product counts trimmed ones, so it refused — in the browser's
+            words, not ours — every password the two rules agree about and passed the one they do
+            not. Here it also hid the sentence that says a forgotten password needs an administrator.
+          */}
           <input
             id="enrol-password"
             type="password"
             autoComplete="new-password"
             required
-            minLength={MIN_PASSWORD_LENGTH}
             aria-describedby="enrol-password-hint"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

@@ -237,6 +237,38 @@ a:hover { color: var(--accent-hover); }
     min-height: var(--tap-min);
   }
 
+  /*
+    A FIELD IS A TOUCH TARGET TOO, and it is the one class of control this block never named.
+
+    MEASURED before this rule, Chromium at 320/360/390 with `hasTouch`, over every route that
+    carries a form: 47 text inputs on /applications at 35px, 11 on /profile at 40.5px, /profile's
+    eight `<select>`s at 37px and its three date fields at 42.5px — 207 controls short of the floor
+    across the sweep, and 0 after it. (Tick boxes are excluded from both counts: they are 20px on
+    purpose, by the rule below.)
+
+    The forms that DID clear it cleared it because four component stylesheets had each written the
+    number out again: `admin.css`, `browse.css`, `sources.css` and `watchlist.css` all carry a hard
+    `min-height: 44px`, and `signedOut.css` briefly carried this same query for its own three
+    fields. `profile.css` and `applications.css` never got round to it, which is what a floor
+    remembered per stylesheet eventually looks like — so it is stated once, here, where a form
+    written next year inherits it without anybody remembering anything.
+
+    Those four component rules are deliberately LEFT WHERE THEY ARE. They are unconditional, so
+    they also hold under a mouse, which this block by design does not; deleting them would shrink
+    admin, browse, sources and watchlist controls on a desktop, and that is a different decision
+    from the one being made here.
+
+    CHECKBOXES AND RADIOS ARE EXCLUDED, because they are already handled below and handled
+    differently: the box grows to 20px and the LABEL takes the 44, so the target is the whole line
+    rather than a 44px-tall tick. Giving them this floor would stretch the box itself, which is
+    what the rule below deliberately does not do.
+  */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    min-height: var(--tap-min);
+  }
+
   /* An icon-only control has no text to make it wide, so it needs the other axis stated. */
   button:empty,
   .btn:empty {

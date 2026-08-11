@@ -234,6 +234,12 @@ describe('every way enrolment fails has its own words', () => {
     expect(alert).toHaveTextContent(/at least 12 characters/i);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onAuthenticated).not.toHaveBeenCalled();
+
+    // The same claim `FirstRun.test.tsx` makes at its own password field, and for the same reason:
+    // jsdom runs no interactive validation, so this test could not tell a sentence that renders
+    // from one a `minLength` attribute keeps the browser from ever reaching. Chromium's bubble was
+    // what a person saw here; nothing in this environment could say so.
+    expect(screen.getByLabelText(/^password$/i)).not.toHaveAttribute('minlength');
   });
 
   it('quotes the server when it refuses the password, rather than inventing a second rule', async () => {

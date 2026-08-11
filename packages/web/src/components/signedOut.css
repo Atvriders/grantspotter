@@ -269,19 +269,17 @@
   }
 }
 
-/* base.css's `pointer: coarse` block gives the floor to `.btn`, `button`, `summary` and
-   `[role="tab"]`, and to the box of a checkbox — but not to a text input, which is as much a touch
-   target as any of them. Fixed here, for the fields this stylesheet owns, rather than in base.css:
-   these three screens are the ones being measured, and a floor applied app-wide is a change to
-   every form in the product — every other form in it still has 35px inputs under a thumb.
+/* THE 44px TOUCH FLOOR FOR THESE FIELDS IS NOT WRITTEN HERE. It was, for one commit: a
+   `@media (pointer: coarse)` block naming `.signed-out-field input`, because base.css's own coarse
+   block covered `.btn`, `button`, `summary` and `[role="tab"]` and no field of any kind. Scoping it
+   to this sheet was the wrong half of the fix — the owner asked whether mobile worked, and it was
+   only these three screens that were made to. Measured at 320/360/390 with a coarse pointer while
+   that scoped rule was live: /applications still had 47 text inputs at 35px and /profile had 11 at
+   40.5px, eight `<select>`s at 37px and three date fields at 42.5px.
 
-   MEASURED, first-run at 320 and 390. Under a mouse: every input was 35px before this change; after
-   it a body-size field is 40.5px (it grew when `font: inherit` gave it the body's 15px) and the two
-   `--fs-200` code fields are 37.5px. Under an emulated coarse pointer, all of them are 44px.
-   `e2e/signedOut.spec.ts` asserts both renderings, and asserts that they DIFFER — a touch pass that
-   silently ran as a desktop one would pass the floor for the wrong reason. */
-@media (pointer: coarse) {
-  .signed-out-field input {
-    min-height: var(--tap-min);
-  }
-}
+   So the floor now sits in base.css's coarse block, over every input, select and textarea in the
+   product, and these fields inherit it like every other form's. What is left here is the rendering
+   under a MOUSE, which that block deliberately does not touch: a body-size field is 40.5px (it grew
+   when `font: inherit` gave it the body's 15px against the UA's 13.33px) and the two `--fs-200` code
+   fields are 37.5px. `e2e/signedOut.spec.ts` asserts both renderings and asserts that they DIFFER —
+   a touch pass that silently ran as a desktop one would pass the floor for the wrong reason. */

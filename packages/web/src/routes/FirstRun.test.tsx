@@ -227,6 +227,21 @@ describe('FirstRun form', () => {
     expect(alert).toHaveTextContent(/at least 12 characters/i);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onAuthenticated).not.toHaveBeenCalled();
+
+    /*
+      AND NOTHING UPSTREAM OF THAT CHECK REFUSES THE PRESS IN A REAL BROWSER, which is a separate
+      claim and one jsdom cannot make: it performs no interactive validation, so every assertion
+      above passed unchanged for as long as `minLength={12}` sat on this field and Chromium was
+      answering the same press with a bubble of its own. Measured at 390px with the attribute in
+      place: five characters produced no request, no `role="alert"` anywhere in the document, and
+      `validationMessage` = "Please lengthen this text to 12 characters or more (you are currently
+      using 5 characters)". The sentence this test asserts was unreachable by typing.
+
+      Its absence is asserted rather than its effect, because the effect is exactly the thing this
+      environment renders invisible. See the note at the field in `FirstRun.tsx` for why the
+      product's rule and `minlength`'s rule are not the same rule.
+    */
+    expect(screen.getByLabelText(/^password$/i)).not.toHaveAttribute('minlength');
   });
 
   it('catches a mistyped confirmation, because this account has no reset path', async () => {

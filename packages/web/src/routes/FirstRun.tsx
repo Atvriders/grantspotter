@@ -319,12 +319,29 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
           <label htmlFor="first-run-password" className="eyebrow">
             Password
           </label>
+          {/*
+            NO `minLength` ATTRIBUTE, AND THAT IS THE DECISION RATHER THAN AN OMISSION.
+
+            It stated a DIFFERENT RULE from the one this product enforces. `minlength` counts
+            characters; `meetsPasswordFloor` and the server's `assertPasswordPolicy` both count
+            TRIMMED characters. Measured in Chromium at 390px with the attribute in place: a
+            five-character password never reached `submit` at all — no request, no `role="alert"`,
+            just the UA's own "Please lengthen this text to 12 characters or more (you are
+            currently using 5 characters)" — while twelve spaces satisfied the attribute and was
+            refused by the sentence below. The only input the browser let through was the one the
+            two rules disagree about, so the product's own message rendered in exactly the case it
+            was not written for and never in the case it was.
+
+            One rule, then, stated once in the hint and enforced by one predicate in the browser
+            and the same one on the server. `required` stays: a field left blank is a different
+            failure, it is how every other field on this form already behaves, and this screen has
+            no sentence of its own for it to displace.
+          */}
           <input
             id="first-run-password"
             type="password"
             autoComplete="new-password"
             required
-            minLength={MIN_PASSWORD_LENGTH}
             aria-describedby="first-run-password-hint"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
