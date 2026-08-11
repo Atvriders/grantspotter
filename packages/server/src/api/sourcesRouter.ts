@@ -32,6 +32,19 @@ export interface SourceHealthInput {
    */
   baselineRecordCount: number | null;
   expectedMinRecords: number;
+  /**
+   * `sources.last_error` — the sentence the crawl recorded for the failure that is still
+   * outstanding, or null when the last poll succeeded (`recordPollSuccess` clears the column).
+   *
+   * IT IS AN INPUT BECAUSE "FAILING" IS NOT A DIAGNOSIS. This state used to say only how many
+   * times in a row something had gone wrong, which is the one fact an operator can already see in
+   * the Failures column, and none of the fact they came to the page for. Since the crawl learned
+   * to record a refusal as a refusal (`PageNotReadError`, crawl/runner.ts), the stored sentence
+   * names the status and the address — "HTTP 403 for https://students.ieee.org/… — the site
+   * refused us" — and that is what has to reach the screen, or the page still reads as "we found
+   * nothing" for a site that said no.
+   */
+  lastError: string | null;
 }
 
 const STALE_AFTER_MS = 7 * 86_400_000;
@@ -63,10 +76,13 @@ export function sourceHealth(input: SourceHealthInput, nowISO: string): SourceHe
     return { state: 'never_polled', detail: 'This source has not been polled yet.' };
   }
   if (input.consecutiveFailures > 0) {
-    return {
-      state: 'failing',
-      detail: `${input.consecutiveFailures} consecutive failures since the last success.`,
-    };
+    const n = input.consecutiveFailures;
+    const tally = `${n} consecutive ${n === 1 ? 'failure' : 'failures'} since the last success.`;
+    // The REASON first and the tally second, because the reason is what the operator acts on and
+    // the tally is what they use to judge how urgent it is. Absent for a failure recorded before
+    // this column was read (or by a writer that left it null), in which case the tally is still
+    // true on its own — it is never replaced by silence.
+    return { state: 'failing', detail: input.lastError === null ? tally : `${input.lastError} ${tally}` };
   }
   // A source that has been polled but has never once succeeded is stale, not
   // healthy. Falling through to the yield check would read its NULL record
@@ -111,7 +127,8 @@ const RANK: Record<SourceHealthState, number> = {
 };
 
 const SELECT_COLUMNS = `id, label, tier, funder_id, enabled, last_polled_at, last_success_at,
-        consecutive_failures, last_record_count, baseline_record_count, expected_min_records`;
+        consecutive_failures, last_record_count, baseline_record_count, expected_min_records,
+        last_error`;
 
 interface SourceRow {
   id: string;
@@ -125,9 +142,18 @@ interface SourceRow {
   last_record_count: number | null;
   baseline_record_count: number | null;
   expected_min_records: number;
+  last_error: string | null;
 }
 
-/** PLAN-LOCAL to Plan 3. One source as the Sources page renders it. */
+/**
+ * PLAN-LOCAL to Plan 3. One source as the Sources page renders it.
+ *
+ * `lastError` is deliberately NOT a field here even though the column is now read. It reaches the
+ * page inside `health.detail`, which is the sentence the screen prints; carrying it twice would
+ * put the same text in two places for the client to choose between, and this repository has a
+ * standing complaint about fields that ride an interface without being rendered
+ * (`baselineRecordCount`, which no writer fills). One fact, one path.
+ */
 export interface SourceView {
   id: string;
   label: string;
@@ -164,6 +190,7 @@ function toView(r: SourceRow, nowISO: string): SourceView {
         lastRecordCount: r.last_record_count,
         baselineRecordCount: r.baseline_record_count,
         expectedMinRecords: r.expected_min_records,
+        lastError: r.last_error,
       },
       nowISO,
     ),

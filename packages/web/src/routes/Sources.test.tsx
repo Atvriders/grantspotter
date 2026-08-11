@@ -654,3 +654,117 @@ describe('Sources health matrix at a phone width', () => {
     expect(screen.getByText(/scrolls sideways rather than reflowing/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * "THEY REFUSED US", NOT "WE FOUND NOTHING" (2026-08-11).
+ *
+ * A 403 or a 404 on a page came back from the fetcher as an ordinary payload, was recorded as a
+ * SUCCESSFUL poll of zero records, and landed on this screen as `Yield dropped` — this page
+ * telling an operator their parser had stopped working, about a site that had simply said no.
+ * `students.ieee.org` sits behind Cloudflare, which is the ordinary way a datacentre IP gets a 403
+ * that the same operator's laptop does not, so the page they were told to go and check looked
+ * perfect.
+ *
+ * The server now fails that poll and puts the status and the address in `health.detail`. These
+ * tests pin what a reader actually sees, because the whole defect was legible copy stating a
+ * confident falsehood.
+ */
+describe('Sources — a refused source reads as refused', () => {
+  const REFUSED: SourceRow = {
+    id: 'ieee-student-branch-rebate',
+    label: 'IEEE Student Branch Rebate',
+    tier: 'C',
+    funderId: 'ieee',
+    enabled: true,
+    lastPolledAt: '2026-08-02T03:17:00.000Z',
+    lastSuccessAt: '2026-07-20T03:17:00.000Z',
+    consecutiveFailures: 1,
+    baselineRecordCount: null,
+    lastRecordCount: 1,
+    expectedMinRecords: 1,
+    health: {
+      state: 'failing',
+      detail:
+        'HTTP 403 for https://students.ieee.org/topics/submit-your-student-branch-annual-plan/ ' +
+        '— the site refused us, so no page was read. This is a refusal, not an empty page. ' +
+        '1 consecutive failure since the last success.',
+    },
+  };
+
+  /** A source whose every address answers 410: failed, and paused so we stop asking. */
+  const GONE: SourceRow = {
+    ...REFUSED,
+    id: 'k9ona-scholarship',
+    label: 'K9ONA scholarship page',
+    funderId: 'k9ona',
+    enabled: false,
+    health: {
+      state: 'failing',
+      detail:
+        'HTTP 410 for https://www.k9ona.com/scholarship/ — the site states this address is ' +
+        'permanently gone, so no page was read. This source has been paused so that we stop ' +
+        'asking nightly; re-enable it here once someone has found where the page went. ' +
+        '1 consecutive failure since the last success.',
+    },
+  };
+
+  function stubRows(rows: SourceRow[]): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          rows,
+          summary: { total: rows.length, healthy: 0, unhealthy: rows.length },
+          canConfigure: true,
+        }),
+      }),
+    );
+  }
+
+  it('names the status and the exact address that refused, in the row', async () => {
+    stubRows([REFUSED]);
+    renderSources();
+    const table = await screen.findByRole('table', { name: /source health/i });
+    expect(within(table).getByText(/HTTP 403/)).toBeInTheDocument();
+    expect(
+      within(table).getByText(/students\.ieee\.org\/topics\/submit-your-student-branch-annual-plan/),
+    ).toBeInTheDocument();
+    expect(within(table).getByText(/the site refused us/i)).toBeInTheDocument();
+  });
+
+  it('does not say the parser stopped working — that was the sentence, and it was false', async () => {
+    stubRows([REFUSED]);
+    renderSources();
+    const table = await screen.findByRole('table', { name: /source health/i });
+    expect(within(table).getByText('Failing')).toBeInTheDocument();
+    expect(within(table).queryByText('Yield dropped')).not.toBeInTheDocument();
+    // The yield alarm's own words. Neither may appear against a page nobody read.
+    expect(within(table).queryByText(/this source normally yields at least/i)).not.toBeInTheDocument();
+    expect(within(table).getByText(/not an empty page/i)).toBeInTheDocument();
+  });
+
+  it('greys out a source paused by a 410 and keeps the reason on the same line', async () => {
+    stubRows([GONE]);
+    renderSources();
+    const table = await screen.findByRole('table', { name: /source health/i });
+    expect(within(table).getByText(/HTTP 410/)).toBeInTheDocument();
+    expect(within(table).getByText(/permanently gone/i)).toBeInTheDocument();
+    // Paused, by the same flag an administrator sets, and drawn the same way.
+    const row = within(table).getByText('K9ONA scholarship page').closest('tr');
+    expect(row).toHaveClass('source-paused');
+    // The way back is on this row: the enable checkbox an admin ticks once they know the address.
+    expect(
+      within(table).getByRole('checkbox', { name: /poll K9ONA scholarship page nightly/i }),
+    ).not.toBeChecked();
+  });
+
+  it('states the third reading in prose, beside the two the page was built around', async () => {
+    stubRows([REFUSED]);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    expect(screen.getByText(/A source that refused us is not a quiet night/i)).toBeInTheDocument();
+    expect(screen.getByText(/permanently gone \(410\) also pauses the source/i)).toBeInTheDocument();
+  });
+});

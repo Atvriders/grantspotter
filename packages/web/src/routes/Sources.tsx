@@ -133,6 +133,13 @@ export function crawlSentence(result: CrawlResponse): string {
  * returned nothing" and "this source has nothing right now" are the same row in the database and
  * were the same sentence on screen. The six health states, the yield column and the two notes
  * below exist to keep those two readings apart in front of a human.
+ *
+ * A THIRD READING JOINED THEM ON 2026-08-11 and it had been wearing the first one's clothes: "the
+ * site refused us". A 403 or a 404 came back from the fetcher as an ordinary payload, was recorded
+ * as a SUCCESSFUL poll of zero records, and was drawn here as `Yield dropped` — this page telling
+ * an operator their parser had broken, about a site that had said no. The crawl now fails that
+ * poll and records the status and the address, which is what the Detail column prints; there is no
+ * seventh state, because "Failing" was already the right word and only the sentence was missing.
  */
 export function Sources(): JSX.Element {
   const { data, loading, error, reload } = useApi<SourcesResponse>('/api/sources/health');
@@ -303,6 +310,23 @@ export function Sources(): JSX.Element {
               against the minimum configured here and never against the source&rsquo;s own history.
               Six parsers once returned zero records from their own live pages while every test
               stayed green, and one of them owned the close date that most of this corpus inherits.
+            </p>
+            {/*
+              THE THIRD READING, added 2026-08-11. The two the page was built around were "the
+              parser returned nothing" and "the source has nothing right now". A site that answers
+              401, 403, 404 or 410 is neither: nothing was read, so there is nothing to have
+              yielded. It used to be recorded as a successful poll of zero records and drawn as a
+              yield alarm — the crawler blaming its own parser for a page that had refused it.
+            */}
+            <p>
+              A source that refused us is not a quiet night and is no longer counted as one. When a
+              site answers 401, 403, 404 or 410 and serves nothing we could read, the poll fails
+              rather than reporting a yield of zero, and the Detail column names the status and the
+              exact address that produced it &mdash; so &ldquo;they refused us&rdquo; never has to
+              be guessed at from a zero. A page the site states is permanently gone (410) also
+              pauses the source, because asking nightly for something its owner has told us they
+              deleted is not politeness. The reason stays on the row, and the checkbox beside it
+              turns polling back on the moment someone finds where the page went.
             </p>
           </section>
 

@@ -56,6 +56,7 @@ function insertSource(
     last_record_count: number | null;
     baseline_record_count: number | null;
     expected_min_records: number;
+    last_error: string | null;
   }> = {},
 ) {
   const row = {
@@ -71,15 +72,17 @@ function insertSource(
     last_record_count: 111,
     baseline_record_count: null as number | null,
     expected_min_records: 100,
+    last_error: null as string | null,
     ...patch,
   };
   db.prepare(
     `INSERT INTO sources
        (id, label, tier, klass, funder_id, enabled, last_polled_at, last_success_at,
-        consecutive_failures, last_record_count, baseline_record_count, expected_min_records)
+        consecutive_failures, last_record_count, baseline_record_count, expected_min_records,
+        last_error)
      VALUES (@id, @label, @tier, @klass, @funder_id, @enabled, @last_polled_at, @last_success_at,
              @consecutive_failures, @last_record_count, @baseline_record_count,
-             @expected_min_records)`,
+             @expected_min_records, @last_error)`,
   ).run(row);
   return row;
 }
@@ -93,6 +96,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 111,
         baselineRecordCount: 111,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
@@ -113,6 +117,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 0,
         baselineRecordCount: 111,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
@@ -132,6 +137,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 0,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
@@ -151,6 +157,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 0,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 0,
       },
       NOW,
@@ -166,6 +173,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 0,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 0,
       },
       NOW,
@@ -177,6 +185,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: null,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 0,
       },
       NOW,
@@ -193,12 +202,41 @@ describe('sourceHealth', () => {
         consecutiveFailures: 3,
         lastRecordCount: 111,
         baselineRecordCount: 111,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
     );
     expect(health.state).toBe('failing');
     expect(health.detail).toContain('3');
+  });
+
+  it('says WHY it is failing, not only how often — the operator acts on the reason', () => {
+    // `sources.last_error` after `crawl/runner.ts` recorded a refusal. Without this, the page
+    // showed a count of failures and nothing else, which is the one fact the Failures column
+    // already carries and none of the fact somebody opened this page for.
+    const refused =
+      'HTTP 403 for https://students.ieee.org/topics/submit-your-student-branch-annual-plan/ ' +
+      '— the site refused us, so no page was read. This is a refusal, not an empty page.';
+    const health = sourceHealth(
+      {
+        lastPolledAt: '2026-08-02T03:17:00.000Z',
+        lastSuccessAt: '2026-07-20T03:17:00.000Z',
+        consecutiveFailures: 1,
+        lastRecordCount: 1,
+        baselineRecordCount: 1,
+        lastError: refused,
+        expectedMinRecords: 1,
+      },
+      NOW,
+    );
+    expect(health.state).toBe('failing');
+    expect(health.detail).toContain('HTTP 403');
+    expect(health.detail).toContain('students.ieee.org');
+    expect(health.detail).toContain('refusal, not an empty page');
+    // Singular, because this is the first night. "1 consecutive failures" is the kind of sentence
+    // that tells a reader nobody looked at this screen.
+    expect(health.detail).toContain('1 consecutive failure since');
   });
 
   it('is stale when nothing has succeeded in more than seven days', () => {
@@ -209,6 +247,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: 111,
         baselineRecordCount: 111,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
@@ -224,6 +263,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: null,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 100,
       },
       NOW,
@@ -242,6 +282,7 @@ describe('sourceHealth', () => {
         consecutiveFailures: 0,
         lastRecordCount: null,
         baselineRecordCount: null,
+        lastError: null,
         expectedMinRecords: 0,
       },
       NOW,
@@ -324,6 +365,31 @@ describe('GET /api/sources/health', () => {
     expect(res.body.rows[0].health.state).toBe('yield_dropped');
     expect(res.body.rows[0].health.detail).toContain('111');
     expect(res.body.summary).toEqual({ total: 1, healthy: 0, unhealthy: 1 });
+  });
+
+  it('reads sources.last_error out of the database, so a refused source says it was refused', async () => {
+    // The row `crawl/runner.ts` writes when a site refuses the page. The column was not in
+    // SELECT_COLUMNS at all until 2026-08-11, so this sentence existed in the database and could
+    // not reach the screen — and the screen said "4 consecutive failures" instead.
+    insertSource(db, {
+      id: 'ieee-student-branch-rebate',
+      label: 'IEEE Student Branch Rebate',
+      funder_id: 'ieee',
+      last_success_at: null,
+      consecutive_failures: 4,
+      last_record_count: null,
+      expected_min_records: 1,
+      last_error:
+        'HTTP 403 for https://students.ieee.org/topics/submit-your-student-branch-annual-plan/ ' +
+        '— the site refused us, so no page was read. This is a refusal, not an empty page.',
+    });
+    const res = await request(buildApp(db, MEMBER)).get('/api/sources/health');
+    const row = res.body.rows.find((r: { id: string }) => r.id === 'ieee-student-branch-rebate');
+    expect(row.health.state).toBe('failing');
+    expect(row.health.detail).toContain('HTTP 403');
+    expect(row.health.detail).toContain('students.ieee.org');
+    // The count is still there — the reason is added to it, never in place of it.
+    expect(row.health.detail).toContain('4 consecutive failures');
   });
 });
 

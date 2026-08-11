@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isReadablePayload, pickPayload } from './payload.js';
 import { makeSinglePageSource } from './singlePage.js';
 
 const cfg = {
@@ -80,5 +81,49 @@ describe('makeSinglePageSource', () => {
     const raws = m.parse([page('<p>February 1 - 28 ... October 31.</p><h2>Recipients</h2>')]);
     expect(raws).toHaveLength(2);
     expect(raws[1].rawFields.recordType).toBe('past_award');
+  });
+});
+
+/**
+ * WHAT A PARSER MAY AND MAY NOT CONCLUDE FROM A REFUSAL.
+ *
+ * `pickPayload` has always skipped anything outside 200-299, so a 403 reaches a parser as "no
+ * payload for this address" and the parser correctly produces nothing. That was never the defect.
+ * The defect was that `crawl/runner.ts` then called `recordPollSuccess` because a `FetchedPayload`
+ * had come back at all, so a refusal was stored as a successful poll of zero records — and drawn
+ * on the Sources screen as a yield alarm, blaming a parser that had behaved exactly as designed.
+ *
+ * These tests pin BOTH sides of that seam: this layer's answer is still `[]` (it has no business
+ * knowing why the page is absent), and the predicate that decides it is the exported one the
+ * runner imports, so the two can no longer drift into disagreeing about what "we got the page"
+ * means.
+ */
+describe('a payload outside 200-299 is not a page', () => {
+  const answered = (status: number) => ({ ...page(''), status });
+
+  it('is what isReadablePayload says, for every class of status', () => {
+    expect(isReadablePayload(answered(200))).toBe(true);
+    expect(isReadablePayload(answered(204))).toBe(true);
+    expect(isReadablePayload(answered(299))).toBe(true);
+    // A redirect we never followed to the end is not the page either: `Location` is an address,
+    // not content, and the fetcher hands the 3xx back when a chain runs out of hops or of purse.
+    expect(isReadablePayload(answered(301))).toBe(false);
+    for (const status of [400, 401, 403, 404, 410, 418, 451]) {
+      expect(isReadablePayload(answered(status))).toBe(false);
+    }
+  });
+
+  it('makes pickPayload skip it, whatever the address matched', () => {
+    expect(pickPayload([answered(403)], '/demo')).toBeUndefined();
+    expect(pickPayload([answered(200)], '/demo')).toBeDefined();
+  });
+
+  it('still leaves the parser saying nothing more than "no page" — the runner decides why', () => {
+    const m = makeSinglePageSource(cfg);
+    const body = '<p>February 1 - 28, June 1 - 30, and October 31.</p><p>$3,000</p>';
+    // The SAME body the parser reads happily at 200 yields nothing at 403, because the parse is
+    // never offered a payload the site refused to serve.
+    expect(m.parse([{ ...page(body), status: 200 }])).toHaveLength(1);
+    expect(m.parse([{ ...page(body), status: 403 }])).toEqual([]);
   });
 });

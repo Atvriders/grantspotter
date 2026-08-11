@@ -5,6 +5,7 @@ import type { AiAssist } from '../ai/assist.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
 import {
   ProgramUpsertConflictError,
+  appendAuditLog,
   insertChangeEvents,
   insertSnapshot,
   listProgramsBySource,
@@ -22,6 +23,7 @@ import { normalizeRaw } from '../normalize/index.js';
 import { buildReviewItems, reprojectAllCycles } from '../review/index.js';
 import { SOURCES, funderFor, getSource } from '../sources/registry.js';
 import { hasFollowUp, isSignalSource, resolveRequests } from '../sources/types.js';
+import { isReadablePayload } from '../sources/util/payload.js';
 import { contextForSource } from './context.js';
 
 export interface CrawlDeps {
@@ -102,6 +104,169 @@ export function hasAlternativeRequests(m: SourceModule): m is AlternativeRequest
 export function healthMessageFor(err: unknown): string {
   if (err instanceof ProgramUpsertConflictError) return `source-key conflict: ${err.message}`;
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The status a server can give that means "stop asking", rather than "not today".
+ *
+ * RFC 9110 §15.5.11: a 410 states that access "is no longer available and this condition is likely
+ * to be permanent", that the condition is intentional, and that a client with link-editing
+ * capability SHOULD delete the reference. There is exactly one other status in this file's
+ * vocabulary that a site owner uses to speak to a crawler — a `Disallow` in robots.txt — and this
+ * software already treats that as binding the same night it appears. Re-requesting nightly,
+ * forever, a page whose owner has gone to the trouble of publishing 410 for it is the same
+ * impoliteness in a different spelling.
+ */
+const GONE = 410;
+
+/**
+ * Nothing this source asked for was served, so there is no page to have parsed.
+ *
+ * THE DEFECT THIS CLOSES, and it is the seventh instance in this codebase of one thing being
+ * reported as another. `fetcher/index.ts` throws only for 429 and 5xx; a 403 or a 404 comes back
+ * as an ordinary `FetchedPayload`. `runSource` then called `recordPollSuccess` no matter what the
+ * status was, while every parser skipped the payload (`isReadablePayload`) and returned `[]`. So
+ * "students.ieee.org refused us" — the ordinary way a datacentre IP meets Cloudflare, where a home
+ * VM does not — was stored as a SUCCESSFUL poll with zero records, and the Sources screen drew it
+ * as `yield_dropped`: "your parser stopped working", about a parser, a fixture and a live page
+ * that were all fine.
+ *
+ * That is the exact conflation the README's founding argument names: "this source returned
+ * nothing" and "this source has nothing right now" are different facts that look identical in a
+ * database row. A refusal is neither of them, and it must not be able to wear the second one's
+ * clothes.
+ *
+ * IT IS A THROW, not a bespoke code path, because `runSource`'s existing `catch` already does
+ * every single thing that has to happen: `recordPollFailure` writes `sources.last_error` and
+ * increments `consecutive_failures`, `SourceRunResult.error` carries the sentence into the crawl
+ * summary the Sources screen prints, and the run continues to the next source. Thrown BEFORE the
+ * diff, which matters for a reason beyond tidiness: `diffPrograms` against an empty `next` emits a
+ * `vanished` event per published record, so a single 403 used to tell an operator that every
+ * programme this funder had ever published was gone. It also skips `detectYieldDrop`, whose alarm
+ * would have said the parser failed.
+ */
+export class PageNotReadError extends Error {
+  /** The status of the first unread payload, or 0 when the fetch produced no status at all. */
+  readonly status: number;
+  readonly url: string;
+  /** True only for {@link GONE}: this source is to stop being polled, not retried tonight. */
+  readonly permanent: boolean;
+  constructor(url: string, status: number, requestCount: number) {
+    super(pageNotReadMessage(url, status, requestCount));
+    this.name = 'PageNotReadError';
+    this.status = status;
+    this.url = url;
+    this.permanent = status === GONE;
+  }
+}
+
+/**
+ * WHY EACH STATUS GETS ITS OWN SENTENCE. They are all failures and they are not the same event, and
+ * the operator reading `sources.last_error` is deciding what to DO. A 403 is somebody's WAF and the
+ * answer is usually to ask them; a 404 on a page polled for months is a move and the answer is to
+ * find the new address; a 401 on a source that never needed credentials is a change at their end
+ * and nothing we can fix by trying harder; a 410 is a decision, and the answer is to stop.
+ *
+ * 429 and 5xx are deliberately absent: `fetcher/index.ts` throws `HttpStatusError` for those after
+ * every retry, so they never become a payload and never reach this function. A server in distress
+ * is already a failure by a different road, and it is not a refusal — which is why the enumeration
+ * below does not pretend to cover it.
+ */
+export function pageNotReadMessage(url: string, status: number, requestCount: number): string {
+  const head = `HTTP ${String(status)} for ${url}`;
+  const rest =
+    status === 401
+      ? '— the site now asks for credentials this source has never had, so no page was read. ' +
+        'That is a change at their end, not an empty page.'
+      : status === 403
+        ? '— the site refused us, so no page was read. This is a refusal, not an empty page.'
+        : status === 404
+          ? '— nothing is at that address, so no page was read. The page has moved or been ' +
+            'withdrawn; it has not gone empty.'
+          : status === GONE
+            ? '— the site states this address is permanently gone, so no page was read. This ' +
+              'source has been paused so that we stop asking nightly; re-enable it here once ' +
+              'someone has found where the page went.'
+            : status >= 300 && status < 400
+              ? '— the redirects never resolved to a page within the hops allowed, so no page ' +
+                'was read. We never arrived, which is not the same as arriving at something empty.'
+              : `— the site declined this request, so no page was read. This is a refusal, not ` +
+                'an empty page.';
+  const others =
+    requestCount > 1
+      ? ` All ${String(requestCount)} of this source's requests came back unread.`
+      : '';
+  return `${head} ${rest}${others}`;
+}
+
+/**
+ * The refusal to report, or undefined when tonight's empty hands are honestly empty.
+ *
+ * THE RULE, AND THE TWO CASES IT DELIBERATELY LEAVES ALONE.
+ *
+ * It fires only when NOTHING WAS PARSED AND NOTHING WAS READ. Both halves are load-bearing:
+ *
+ *   "Nothing was read" and not "something was refused", because a refusal among payloads is
+ *   NORMAL for a source whose requests are alternatives. `grants-gov-extract` offers the seven days
+ *   of the Grants.gov retention window precisely so that a day which 404s does not cost us the
+ *   feed (see {@link AlternativeRequestsSource}); one readable archive is a complete answer about
+ *   the federal corpus, and a night on which that corpus happens to hold nothing we score as
+ *   adjacent is a real zero, not a refusal. Reading "any 4xx" as a failed poll would have marked
+ *   that source `failing` on an ordinary night, forever.
+ *
+ *   "Nothing was parsed", because records in hand are proof the source answered. A multi-request
+ *   source that yields records while one supplementary request 403s is still reported as a
+ *   success, and that is a residual this rule accepts rather than hides: the mechanism for "we got
+ *   less than we should have" already exists and is `detectYieldDrop`. Buying that case would cost
+ *   a per-source declaration of which requests are load-bearing, which is a thing every source
+ *   would then have to keep true.
+ *
+ * A source with no requests at all (`manual-tier-d`, whose records are hand-curated) has no
+ * payloads, so it can never land here — an empty list is not a refusal.
+ */
+export function refusalFor(payloads: FetchedPayload[], parsedCount: number): PageNotReadError | undefined {
+  if (parsedCount > 0 || payloads.length === 0) return undefined;
+  if (payloads.some(isReadablePayload)) return undefined;
+  const first = payloads[0];
+  if (first === undefined) return undefined;
+  // Permanence has to be unanimous. "Every address this source has is gone" is a decision worth
+  // acting on; one 410 beside a 403 is a site in some other kind of trouble, and pausing on it
+  // would silence a source over a state nobody stated.
+  const status = payloads.every((p) => p.status === GONE) ? GONE : first.status;
+  return new PageNotReadError(first.url, status, payloads.length);
+}
+
+/**
+ * Stop polling a source whose every address answers 410, and SAY WHO DECIDED.
+ *
+ * `sources.enabled = 0` is the same pause an administrator applies from the Sources screen, and
+ * `runCrawl` honours it on the nightly path and on the manual "run just this one" trigger alike.
+ * This is the only place in the product where that flag is written by something other than a
+ * person, so it writes an audit row exactly as `PATCH /api/sources/:id` does — a paused source is
+ * an invisible decision until somebody asks why a funder stopped updating, and an automatic one is
+ * worse. `actor_user_id` is null: the actor was the crawl, and naming any account there would be a
+ * false statement in the one record that exists to be believed.
+ *
+ * REVERSIBLE, ON THE SCREEN THAT SAYS WHY. The row keeps its `last_error`, which names the status
+ * and the address, and the enable checkbox is on the same line. That is the whole reason this can
+ * be automatic at all: the cost of being wrong is one tick, by somebody who has just read the
+ * reason.
+ */
+function stopPolling(deps: CrawlDeps, sourceId: string, err: PageNotReadError, nowISO: string): void {
+  const changed = deps.db
+    .prepare('UPDATE sources SET enabled = 0 WHERE id = ? AND enabled = 1')
+    .run(sourceId).changes;
+  // Already paused (a direct `runSource` call on a source the nightly crawl would skip): the flag
+  // is right and a second audit row would claim a decision nobody made twice.
+  if (changed === 0) return;
+  appendAuditLog(deps.db, {
+    userId: null,
+    action: 'source.gone',
+    entityType: 'source',
+    entityId: sourceId,
+    detail: JSON.stringify({ status: err.status, url: err.url, enabled: false }),
+    atISO: nowISO,
+  });
 }
 
 /**
@@ -301,6 +466,17 @@ export async function runSource(deps: CrawlDeps, sourceId: string): Promise<Sour
           ],
         });
       }
+    }
+
+    // A REFUSAL IS NOT AN EMPTY PAGE. Placed here, after the deterministic parse and after the
+    // salvage that only runs when that parse found nothing, and BEFORE the diff and the yield
+    // alarm: a source that was never served has no records to have lost, so it must not raise
+    // `parse_yield_dropped` (which says the parser broke) or a `vanished` event per published
+    // record (which says the funder withdrew them). See `refusalFor`.
+    const refusal = refusalFor(payloads, raws.length);
+    if (refusal !== undefined) {
+      if (refusal.permanent) stopPolling(deps, sourceId, refusal, now);
+      throw refusal;
     }
 
     const events: ChangeEvent[] = [];

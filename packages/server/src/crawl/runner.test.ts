@@ -7,6 +7,7 @@ import { ensureIngestionSchema } from '../db/ingestSchema.js';
 import { migrate } from '../db/migrate.js';
 import {
   ProgramUpsertConflictError,
+  listAuditLog,
   listChangeEvents,
   listProgramsBySource,
   listReviewItems,
@@ -1519,5 +1520,240 @@ describe('a source whose requests are alternatives stops at the first answer', (
     const health = listSourceHealth(db).find((h) => h.sourceId === 'grants-gov-extract');
     expect(health?.lastError).toMatch(/read failure, not an empty feed/);
     expect(health?.lastSuccessAt).toBeUndefined();
+  });
+});
+
+/**
+ * A REFUSAL IS NOT AN EMPTY PAGE (2026-08-11).
+ *
+ * Found while investigating why `ieee-student-branch-rebate` reported zero on the owner's live
+ * deployment while its parser, its committed fixture and the live page were all fine. The chain:
+ * `fetcher/index.ts` throws only for 429 and 5xx, so a 403 came back as an ordinary
+ * `FetchedPayload`; `runSource` called `recordPollSuccess` regardless of the status; and every
+ * parser skips a payload outside 200-299 (`isReadablePayload`) and returns `[]`. So
+ * "students.ieee.org refused us" — Cloudflare, which is the ordinary way a datacentre IP gets a
+ * 403 that a home VM does not — was stored as a successful poll of zero records and drawn on the
+ * Sources screen as `yield_dropped`: "your parser stopped working".
+ *
+ * These tests fix the whole shape of the answer, not just the headline: which statuses fail, what
+ * an operator is told, what is NOT emitted (a yield alarm and a `vanished` per published record
+ * are both statements about a page we never read), and the two cases the rule deliberately leaves
+ * alone.
+ */
+describe('a refusal is recorded as a refusal, not as an empty page', () => {
+  const IEEE_URL = 'https://students.ieee.org/topics/submit-your-student-branch-annual-plan/';
+
+  /** Answers every request with one status and no body — a site saying no. */
+  const refusing = (status: number) => ({
+    async fetch(req: FetchRequest): Promise<FetchedPayload> {
+      return { url: req.url, status, contentType: 'text/html', body: '', fetchedAt: NOW };
+    },
+  });
+
+  const healthOf = (sourceId: string) => listSourceHealth(db).find((h) => h.sourceId === sourceId);
+
+  it('fails the poll on a 403, naming the status and the address', async () => {
+    const result = await runSource(deps(refusing(403)), 'ieee-student-branch-rebate');
+    expect(result.parsedCount).toBe(0);
+    // Before this change: `result.error` was undefined and lastSuccessAt was NOW.
+    expect(result.error).toContain('HTTP 403');
+    expect(result.error).toContain(IEEE_URL);
+    expect(result.error).toContain('refusal, not an empty page');
+
+    const health = healthOf('ieee-student-branch-rebate');
+    expect(health?.lastPolledAt).toBe(NOW);
+    expect(health?.lastSuccessAt).toBeUndefined();
+    expect(health?.consecutiveFailures).toBe(1);
+    // `sources.last_error` must name BOTH, because the operator's next move differs by status and
+    // they cannot look the address up from the id without reading the source registry.
+    expect(health?.lastError).toContain('HTTP 403');
+    expect(health?.lastError).toContain(IEEE_URL);
+  });
+
+  it('blames neither the parser nor the funder: no yield alarm, no vanished record', async () => {
+    // A previous crawl published this source's one record. `expectedMinRecords` is 1, so
+    // `shouldSuppressVanished(0, 1)` is false and the diff WOULD emit a `vanished` event for it.
+    seedFunder('ieee');
+    const prior = makeProgram({
+      id: 'ieee-student-branch-rebate--ieee-student-branch-rebate--cafe1234',
+      funderId: 'ieee',
+      name: 'IEEE Student Branch Rebate',
+      tags: ['source:ieee-student-branch-rebate', 'key:ieee-student-branch-rebate'],
+    });
+    upsertProgram(db, prior, {
+      sourceId: 'ieee-student-branch-rebate',
+      externalKey: 'ieee-student-branch-rebate',
+    });
+
+    await runSource(deps(refusing(403)), 'ieee-student-branch-rebate');
+
+    // Both of these fired before the fix, and both are statements about a page nobody read:
+    // `parse_yield_dropped` says the parser broke, `vanished` says IEEE withdrew the programme.
+    expect(listChangeEvents(db, 50).filter((e) => e.kind === 'parse_yield_dropped')).toEqual([]);
+    expect(listChangeEvents(db, 50).filter((e) => e.kind === 'vanished')).toEqual([]);
+    expect(listReviewItems(db, 'pending')).toEqual([]);
+    expect(listProgramsBySource(db, 'ieee-student-branch-rebate')).toHaveLength(1);
+  });
+
+  it('tells 401, 403, 404 and 410 apart, because the operator does something different for each', async () => {
+    const said: Record<number, string> = {};
+    for (const status of [401, 403, 404, 410]) {
+      db.prepare('DELETE FROM sources').run();
+      const result = await runSource(deps(refusing(status)), 'ieee-student-branch-rebate');
+      said[status] = result.error ?? '';
+    }
+    expect(said[401]).toContain('credentials this source has never had');
+    expect(said[403]).toContain('the site refused us');
+    expect(said[404]).toContain('has moved or been withdrawn');
+    expect(said[410]).toContain('permanently gone');
+    expect(new Set(Object.values(said)).size).toBe(4);
+  });
+
+  it('stops asking after a 410, and says who decided to stop', async () => {
+    const result = await runSource(deps(refusing(410)), 'ieee-student-branch-rebate');
+    expect(result.error).toContain('HTTP 410');
+
+    const row = db
+      .prepare('SELECT enabled FROM sources WHERE id = ?')
+      .get('ieee-student-branch-rebate') as { enabled: number };
+    expect(row.enabled).toBe(0);
+
+    // An automatic pause is a decision, so it has an author and a reason on the record. The actor
+    // is null because the actor was the crawl; naming an account would be a false statement.
+    const audit = listAuditLog(db, 'ieee-student-branch-rebate');
+    expect(audit).toHaveLength(1);
+    expect(audit[0].action).toBe('source.gone');
+    expect(JSON.parse(audit[0].detail)).toEqual({ status: 410, url: IEEE_URL, enabled: false });
+
+    // And the pause is the one `runCrawl` already honours, on the nightly path and on the manual
+    // "run just this one" trigger alike — so tonight really was the last time we asked.
+    const asked: string[] = [];
+    const counting = {
+      async fetch(req: FetchRequest): Promise<FetchedPayload> {
+        asked.push(req.url);
+        return { url: req.url, status: 410, contentType: 'text/html', body: '', fetchedAt: NOW };
+      },
+    };
+    const again = await runCrawl(deps(counting), ['ieee-student-branch-rebate']);
+    expect(again).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
+  it('writes the pause and its audit row once, however many times the source is run directly', async () => {
+    await runSource(deps(refusing(410)), 'ieee-student-branch-rebate');
+    await runSource(deps(refusing(410)), 'ieee-student-branch-rebate');
+    expect(listAuditLog(db, 'ieee-student-branch-rebate')).toHaveLength(1);
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'ieee-student-branch-rebate')
+      ?.consecutiveFailures).toBe(2);
+  });
+
+  it('leaves a genuinely empty page alone — the reading this rule must not swallow', async () => {
+    // grants.austinhams.org answers 200 with "No opportunities available" from Aug 1 to Apr 30.
+    // Nothing was refused, so nothing failed: this is still a successful poll of zero records.
+    const { fetcher } = fixtureFetcher({
+      'austinhams.org': fixturePayload(
+        'austin-arc',
+        'empty-window.html',
+        'https://austinhams.org/scholarships/',
+      ),
+    });
+    const result = await runSource(deps(fetcher), 'austin-arc');
+    expect(result.error).toBeUndefined();
+    expect(healthOf('austin-arc')?.lastSuccessAt).toBe(NOW);
+    expect(healthOf('austin-arc')?.lastError).toBeUndefined();
+  });
+
+  it('does not fail a source that WAS served, however many of its other requests were refused', async () => {
+    // `grants-gov-extract` offers the seven days of the Grants.gov retention window as
+    // ALTERNATIVES, so a day that 404s is the window doing its job. Reading "any 4xx" as a failed
+    // poll would have marked the federal backbone `failing` on an ordinary night, forever.
+    const zip = loadFixture('grants-gov-extract', '00-extract.zip.b64');
+    let served = 0;
+    const oneGoodDay = {
+      async fetch(req: FetchRequest): Promise<FetchedPayload> {
+        served += 1;
+        return served === 1
+          ? { url: req.url, status: 404, contentType: 'text/html', body: '', fetchedAt: NOW }
+          : { url: req.url, status: 200, contentType: 'application/zip', body: zip, fetchedAt: NOW };
+      },
+    };
+    const result = await runSource(deps(oneGoodDay), 'grants-gov-extract');
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBe(2);
+    expect(healthOf('grants-gov-extract')?.lastSuccessAt).toBe(NOW);
+  });
+
+  it('never fires for a source that makes no requests at all', async () => {
+    // `manual-tier-d`'s 16 records are hand-curated precisely because those sites decline
+    // non-browser clients. It has `requests: []`, so it has no payloads — and an empty list of
+    // payloads is not a refusal.
+    const result = await runSource(deps(refusing(403)), 'manual-tier-d');
+    expect(result.error).toBeUndefined();
+    expect(result.parsedCount).toBeGreaterThan(0);
+    expect(healthOf('manual-tier-d')?.lastSuccessAt).toBe(NOW);
+  });
+});
+
+/**
+ * THE SUBTLE HALF: A 4xx ON robots.txt IS THE OPPOSITE EVENT, AND MUST STAY THAT WAY.
+ *
+ * RFC 9309 §2.3.1.3 is explicit — "unavailable" status codes (4xx) mean the site publishes no
+ * rules, so the crawler may access any resource. That is PERMISSION. The rule the block above
+ * installs says a 4xx on a PAGE is refusal. Both are right, they point in opposite directions, and
+ * the only thing keeping them apart is that they are decided in different files
+ * (`fetcher/robots.ts` and `sources/util/payload.ts`).
+ *
+ * So they are asserted in ONE test, through the REAL fetcher over a stub transport, with the same
+ * status on both: a later tidy-up that "unifies how we handle 4xx" cannot make this file green.
+ */
+describe('a 404 on robots.txt is permission; a 404 on the page is refusal', () => {
+  const AUSTIN_PAGE = 'https://austinhams.org/scholarships/';
+  const AUSTIN_ROBOTS = 'https://austinhams.org/robots.txt';
+
+  function realFetcher(transport: (url: string) => Promise<Response>) {
+    return createFetcher({
+      userAgent: buildUserAgent('https://w9xyz-radio-club.org/grantspotter'),
+      contactUrl: 'https://w9xyz-radio-club.org/grantspotter',
+      transport,
+      sleep: async () => {},
+      now: () => 0,
+      defaultMinIntervalMs: 0,
+    });
+  }
+
+  it('reads the page and records a success when only robots.txt 404s', async () => {
+    const calls: string[] = [];
+    const fetcher = realFetcher(async (url) => {
+      calls.push(url);
+      if (url === AUSTIN_ROBOTS) return new Response('', { status: 404 });
+      return new Response(loadFixture('austin-arc', 'empty-window.html'), {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    });
+
+    const [result] = await runCrawl({ db, fetcher, nowISO: () => NOW }, ['austin-arc']);
+    // The crawl PROCEEDED: the page was requested at all, which is what "no rules published"
+    // buys, and the poll succeeded.
+    expect(calls).toEqual([AUSTIN_ROBOTS, AUSTIN_PAGE]);
+    expect(result.error).toBeUndefined();
+    expect(listSourceHealth(db).find((h) => h.sourceId === 'austin-arc')?.lastSuccessAt).toBe(NOW);
+  });
+
+  it('fails the poll when the PAGE 404s, with robots.txt answering exactly the same status', async () => {
+    const calls: string[] = [];
+    const fetcher = realFetcher(async (url) => {
+      calls.push(url);
+      return new Response('', { status: 404 });
+    });
+
+    const [result] = await runCrawl({ db, fetcher, nowISO: () => NOW }, ['austin-arc']);
+    // Same status, same origin, same run — and the robots read still permitted the request.
+    expect(calls).toEqual([AUSTIN_ROBOTS, AUSTIN_PAGE]);
+    expect(result.error).toContain('HTTP 404');
+    expect(result.error).toContain(AUSTIN_PAGE);
+    const health = listSourceHealth(db).find((h) => h.sourceId === 'austin-arc');
+    expect(health?.lastSuccessAt).toBeUndefined();
+    expect(health?.lastError).toContain('HTTP 404');
   });
 });
