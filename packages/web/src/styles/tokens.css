@@ -9,7 +9,25 @@
   --surface-2: #eef1f5;
   --surface-3: #e4e8ee;
   --border: #d6dbe3;
-  --border-strong: #b6bec9;
+  /* THE TWO BORDER TOKENS ARE NOT TWO SHADES OF ONE IDEA. `--border` is a hairline — the rule
+     between two table cells, the edge of a card — and it is decoration: nothing is lost if it is
+     not seen. `--border-strong` is a BOUNDARY, and every one of its call sites is either the edge
+     of a control (`.btn`, `.signed-out-field input`, `.filter-field`, `.inbox-panel textarea`,
+     `.wl-field input`, and the `input, select` pairs in `.callsign-fill-field`, `.admin-form` and
+     `.profile-field`) or a mark whose COLOUR is what distinguishes one state from another
+     (`.fact-items > li.unconfirmed` against `.confirmed`'s `--ok`, `.inbox article.inbox-decided`
+     against `--accent`, `.status-pill`'s default against `--ok`/`--unk`/`--no`, `.agenda
+     li.estimated`). WCAG SC 1.4.11 holds both of those to 3:1. So the boundary token is asserted
+     at 3:1 against every neutral surface in `lib/contrast.test.ts`, and the hairline is not.
+
+     Was #b6bec9. Measured in Chromium against the backdrop each site actually paints on: 1.66:1 on
+     `--surface-2` (a `th` underline, a `.status-pill`), 1.76:1 on `--bg`, 1.88:1 on `--surface` —
+     the last being the signed-out inputs the owner photographed. Every one of the 17 rendered
+     boundaries failed. Worse, the signed-out inputs had carried NO border declaration until
+     374de2b, so Chromium drew its own rgb(118,118,118) at 4.54:1 there: naming a token made that
+     one measurably weaker. #67768b is 4.62:1 on the card, so the token is now stronger than the UA
+     border it displaced, and 3.76:1 on `--surface-3`, its worst neutral. */
+  --border-strong: #67768b;
 
   /* ---- text ---- */
   --text: #14181f;
@@ -100,7 +118,10 @@
   --surface-2: #1c242e;
   --surface-3: #232d39;
   --border: #2b3542;
-  --border-strong: #3d4a5a;
+  /* Was #3d4a5a: 1.73:1 on `--surface-2`, 1.92:1 on `--surface`, 2.10:1 on `--bg` — measured, and
+     failing the same way as the light palette. #72869f is 4.64:1 on the card and 3.74:1 on
+     `--surface-3`, matching the light token's margins rather than being set by eye. */
+  --border-strong: #72869f;
 
   --text: #e6edf3;
   --text-muted: #a8b3c1;
@@ -135,7 +156,8 @@
     --surface-2: #1c242e;
     --surface-3: #232d39;
     --border: #2b3542;
-    --border-strong: #3d4a5a;
+    /* Same value as the block above, and held equal to it by `lib/contrast.test.ts`. */
+    --border-strong: #72869f;
 
     --text: #e6edf3;
     --text-muted: #a8b3c1;

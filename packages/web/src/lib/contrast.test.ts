@@ -26,6 +26,7 @@ import { contrastRatio, parseHex } from './contrast.js';
  *   `--X-soft`                          that family's chip fill
  *   `--X-hover`                         that family's hover variant
  *   `--X-ink`                           the ink that renders ON `--X`
+ *   `--border`, `--border-*`            an edge drawn between two surfaces
  *
  * THE DERIVED RULES:
  *   A  every text ink on every neutral surface — `body` paints `--text` on `--bg`, and
@@ -36,6 +37,35 @@ import { contrastRatio, parseHex } from './contrast.js';
  *      render as plain coloured text in a cell, not only inside a chip
  *   D  every `--X-ink` on `--X` and on `--X-hover` — `.btn-primary` and its hover state
  *   E  every text ink on every chip fill — a chip may carry neutral metadata beside its label
+ *   F  every BOUNDARY border token on every neutral surface, at 3:1 and not 4.5:1
+ *
+ * WHY RULE F HAS ITS OWN NUMBER. A–E are SC 1.4.3, text contrast, which is 4.5:1 at AA. A border
+ * is not text. It falls under SC 1.4.11 NON-TEXT CONTRAST, which is 3:1 and covers two things: the
+ * boundary of a user-interface component, and any graphical object you must see to understand the
+ * page. Applying 4.5 to a border over-claims and would force the palette darker than the standard
+ * asks; applying nothing is what happened, and is how `--border-strong` shipped at 1.66:1.
+ *
+ * `--border-strong` had never been named in this file NOR in `test/a11y.test.tsx`, so the one
+ * token in the palette that draws a control's edge was the one token nothing measured. Measured in
+ * Chromium at 374de2b, over every place it renders in both themes: 1.66:1 to 1.88:1 light, 1.73:1
+ * to 2.10:1 dark. Seventeen boundaries, none of them at 3:1, and the suite was green.
+ *
+ * WHY IT IS A PROPERTY OF THE TOKEN AND NOT OF THE CALL SITE. A border token is applied BY NAME,
+ * and this file cannot see which surface a given rule paints it on. It could be given the three
+ * surfaces `--border-strong` happens to land on today — that is exactly the shape of the
+ * `--text-faint` defect above, a list kept by hand that was silent where it was incomplete. So
+ * every neutral surface, including `--surface-3`, which no border sits on yet.
+ *
+ * WHAT RULE F STILL CANNOT SEE, stated so it is not mistaken for coverage: that a control USES the
+ * boundary token. A rule that draws an input's edge in `--border` — decoration, and 1.13:1 at its
+ * worst — passes everything here, because tokens.css is all this file reads. Measured in Chromium
+ * at 374de2b, that is live on `.cal-tabs button` and `.profile-tabs button[aria-selected]` (1.31:1
+ * light, 1.39:1 dark). Two more controls declare no border at all — the role `<select>` in the
+ * Admin user table and `.source-config input[type="number"]` — so Chromium paints them from
+ * `color-scheme`, which follows the OPERATING SYSTEM and not `data-theme`: measured at 1.44:1 in a
+ * dark theme on a light desktop, the same mismatch `components/signedOut.css` says it fixed for
+ * its own fields. None of those four is a token defect and none is fixed by moving a token;
+ * catching them needs a sweep over the component stylesheets, which is a different test.
  *
  * WHAT IS DELIBERATELY NOT DERIVED: pairs with no possible co-occurrence, such as one family's
  * ink on another family's chip (`--ok` on `--no-soft`). Nothing in the design puts them together,
@@ -246,9 +276,9 @@ export function classifyValue(
   return { kind: 'unmeasurable', why: `unrecognised value \`${term}\`` };
 }
 
-/** Names the derivation grammar treats as an ink, a surface or a fill. These MUST be measurable. */
+/** Names the derivation grammar treats as an ink, a surface, a fill or an edge. MUST be measurable. */
 function isColourByGrammar(name: string, allNames: readonly string[]): boolean {
-  if (NEUTRAL_SURFACE.test(name) || TEXT_INK.test(name)) return true;
+  if (NEUTRAL_SURFACE.test(name) || TEXT_INK.test(name) || BORDER_TOKEN.test(name)) return true;
   if (/-(?:soft|hover|ink)$/.test(name)) return true;
   return allNames.includes(`${name}-soft`); // a semantic family root
 }
@@ -313,10 +343,43 @@ interface Pair {
   readonly bg: string;
   /** Which derivation rule produced this pair, so a failure says WHY the pair is asserted. */
   readonly rule: string;
+  /**
+   * The ratio this pair must clear. NOT one number for the whole file: text is SC 1.4.3 at 4.5,
+   * a component boundary is SC 1.4.11 at 3, and a rule that knew only one of them would either
+   * let a 1.66:1 border through or force the palette past what the standard asks.
+   */
+  readonly min: number;
 }
+
+/** WCAG 2.2 SC 1.4.3, AA: text and images of text. */
+const TEXT_MIN = 4.5;
+/** WCAG 2.2 SC 1.4.11: the boundary of a user-interface component, and graphical objects. */
+const NON_TEXT_MIN = 3;
 
 const NEUTRAL_SURFACE = /^--(?:bg|surface(?:-\d+)?)$/;
 const TEXT_INK = /^--text(?:-[a-z]+)?$/;
+/** `--border`, and any `--border-*` the palette grows. Every one is classified below. */
+const BORDER_TOKEN = /^--border(?:-[a-z0-9-]+)?$/;
+
+/**
+ * Border tokens that draw DECORATION — an edge that carries no information and gates no
+ * interaction, so SC 1.4.11 does not reach it and rule F does not assert it.
+ *
+ * The list is the escape hatch, and it is the whole reason rule F cannot be defeated by silence:
+ * a `--border-*` token that is in neither this map nor rule F fails the classification guard by
+ * name. Signing one is a written statement that nothing on screen depends on seeing that edge.
+ */
+const DECORATIVE_BORDER: Record<string, string> = {
+  '--border':
+    'The hairline. It rules one table cell off from the next (`.grid-table td`), closes a card ' +
+    '(`.card`) and separates a panel from its heading — edges that make a layout easier to read ' +
+    'and that lose NOTHING when they are not seen, because the thing they bound is already ' +
+    'bounded by its own fill, its whitespace and its heading. It is deliberately weak: at 1.13:1 ' +
+    'against `--surface-3` it is nearly invisible, which is the job. What it must never be is a ' +
+    "control's edge — see rule F's note about what this file cannot see — and the assertion " +
+    'below that `--border-strong` out-contrasts it on every surface is what keeps the two names ' +
+    'honest about which is which.',
+};
 
 /** Every foreground/background pair the token grammar says can co-occur. */
 export function derivePairs(tokens: Record<string, string>): Pair[] {
@@ -324,10 +387,11 @@ export function derivePairs(tokens: Record<string, string>): Pair[] {
   const surfaces = names.filter((n) => NEUTRAL_SURFACE.test(n));
   const textInks = names.filter((n) => TEXT_INK.test(n));
   const roots = names.filter((n) => names.includes(`${n}-soft`));
+  const boundaries = names.filter((n) => BORDER_TOKEN.test(n) && !(n in DECORATIVE_BORDER));
 
   const pairs: Pair[] = [];
-  const add = (fg: string, bg: string, rule: string): void => {
-    pairs.push({ fg, bg, rule });
+  const add = (fg: string, bg: string, rule: string, min = TEXT_MIN): void => {
+    pairs.push({ fg, bg, rule, min });
   };
 
   for (const fg of textInks) for (const bg of surfaces) add(fg, bg, 'A text-on-surface');
@@ -343,6 +407,9 @@ export function derivePairs(tokens: Record<string, string>): Pair[] {
     if (names.includes(`${base}-hover`)) add(name, `${base}-hover`, 'D ink-on-base-hover');
   }
   for (const fg of textInks) for (const root of roots) add(fg, `${root}-soft`, 'E text-on-chip');
+  for (const fg of boundaries) {
+    for (const bg of surfaces) add(fg, bg, 'F boundary-on-surface', NON_TEXT_MIN);
+  }
 
   return pairs;
 }
@@ -443,7 +510,17 @@ describe.each(ALL_BLOCKS)('the token block %s', (selector) => {
     const measured = tokensInBlock(tokensCss, selector);
     expect(Object.keys(declarations).length).toBeGreaterThan(20);
     expect(Object.keys(measured).length).toBeGreaterThan(20);
-    for (const name of ['--bg', '--surface', '--text', '--text-muted', '--accent', '--ok', '--warn']) {
+    for (const name of [
+      '--bg',
+      '--surface',
+      '--text',
+      '--text-muted',
+      '--accent',
+      '--ok',
+      '--warn',
+      '--border',
+      '--border-strong',
+    ]) {
       expect(measured[name], `${name} must resolve to a measurable colour`).toMatch(/^#[0-9a-f]{6}$/);
     }
   });
@@ -493,11 +570,13 @@ describe('the colour classifier', () => {
     expect(classifyValue('var(--a)', { '--a': 'var(--b)', '--b': 'var(--a)' }).kind).toBe('unmeasurable');
   });
 
-  it('holds a grammar-named ink to the colour rule whatever its value looks like', () => {
+  it('holds a grammar-named ink or edge to the colour rule whatever its value looks like', () => {
     // `4px` is an honest `not-a-colour` in general — but a token the derivation calls a text ink
-    // cannot be a length, and reporting it as "not a colour, skip" is how the hole worked.
-    const css = ':root { --text-dim: 4px; --r-9: 4px; }';
-    expect(unmeasurableIn(css, ':root').map((u) => u.name)).toEqual(['--text-dim']);
+    // cannot be a length, and reporting it as "not a colour, skip" is how the hole worked. A
+    // border token is in the same position: rule F asserts it, so it has to be a colour, and
+    // `--border-width: 1px` would have to be named something the grammar does not claim.
+    const css = ':root { --text-dim: 4px; --border-x: 4px; --r-9: 4px; }';
+    expect(unmeasurableIn(css, ':root').map((u) => u.name)).toEqual(['--text-dim', '--border-x']);
   });
 
   it('reads a declaration whatever its value syntax, not only #rrggbb', () => {
@@ -510,9 +589,9 @@ describe.each(THEMES)('token block %s (%s theme)', (selector) => {
   const tokens = tokensInBlock(tokensCss, selector);
   const pairs = derivePairs(tokens);
 
-  it.each(pairs.map((p): [string, string, string] => [p.fg, p.bg, p.rule]))(
-    '%s on %s clears WCAG AA 4.5:1 [%s]',
-    (fg, bg) => {
+  it.each(pairs.map((p): [string, string, number, string] => [p.fg, p.bg, p.min, p.rule]))(
+    '%s on %s clears WCAG AA %s:1 [%s]',
+    (fg, bg, min) => {
       const fgHex = tokens[fg];
       const bgHex = tokens[bg];
       expect(fgHex, `${fg} missing from ${selector}`).toBeTruthy();
@@ -521,7 +600,7 @@ describe.each(THEMES)('token block %s (%s theme)', (selector) => {
         throw new Error(`unreachable: the assertions above already failed for ${selector}`);
       }
       if (`${fg} on ${bg}` in EXEMPT) return;
-      expect(contrastRatio(fgHex, bgHex)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(fgHex, bgHex)).toBeGreaterThanOrEqual(min);
     },
   );
 });
@@ -545,7 +624,75 @@ describe('the contrast invariant can still see', () => {
       'D ink-on-base',
       'D ink-on-base-hover',
       'E text-on-chip',
+      'F boundary-on-surface',
     ]);
+  });
+
+  it.each(THEMES)('holds a boundary to 3:1 and text to 4.5:1 in %s (%s)', (selector) => {
+    // The distinction IS the rule. A file that applied one number to everything would either pass
+    // a 1.66:1 border (if the number were 3) or demand of a hairline what SC 1.4.11 never asks
+    // (if it were 4.5). Asserted rather than assumed, because `min` defaults to TEXT_MIN and a
+    // rule F written without its third argument would silently become a text rule.
+    const pairs = derivePairs(tokensInBlock(tokensCss, selector));
+    const mins = (rule: string): number[] => [
+      ...new Set(pairs.filter((p) => p.rule.startsWith(rule)).map((p) => p.min)),
+    ];
+    expect(mins('F')).toEqual([NON_TEXT_MIN]);
+    for (const rule of ['A', 'B', 'C', 'D', 'E']) expect(mins(rule)).toEqual([TEXT_MIN]);
+  });
+
+  it.each(THEMES)('classifies every border token in %s (%s)', (selector) => {
+    // TOTAL, in the sense the parser above is total: a `--border-*` token is either asserted by
+    // rule F or signed as decoration, and there is no third outcome in which it is neither. This
+    // is the guard that would have caught `--border-strong` — a token nothing in this file named,
+    // failing at 1.66:1, with the suite green.
+    const names = Object.keys(tokensInBlock(tokensCss, selector)).filter((n) =>
+      BORDER_TOKEN.test(n),
+    );
+    expect(names.length, 'the palette has no border token at all — the regex stopped matching')
+      .toBeGreaterThan(0);
+    const boundaries = names.filter((n) => !(n in DECORATIVE_BORDER));
+    expect(
+      boundaries,
+      'signing every border token as decorative empties rule F while leaving it green',
+    ).not.toEqual([]);
+    const derived = new Set(derivePairs(tokensInBlock(tokensCss, selector)).map((p) => p.fg));
+    for (const name of boundaries) expect([...derived]).toContain(name);
+  });
+
+  it.each(THEMES)('keeps --border-strong stronger than --border in %s (%s)', (selector) => {
+    // The names are a claim about the design, and a claim is worth what it is checked at. Raising
+    // `--border` past `--border-strong` — the obvious way to "fix" a hairline somebody found too
+    // faint — would leave two tokens whose names lie about which one you are meant to see, and
+    // every rule F assertion would still pass.
+    const tokens = tokensInBlock(tokensCss, selector);
+    const strong = tokens['--border-strong'];
+    const hairline = tokens['--border'];
+    expect(strong, '--border-strong is missing').toBeTruthy();
+    expect(hairline, '--border is missing').toBeTruthy();
+    if (strong === undefined || hairline === undefined) return;
+    for (const [name, hex] of Object.entries(tokens)) {
+      if (!NEUTRAL_SURFACE.test(name)) continue;
+      expect(
+        contrastRatio(strong, hex),
+        `--border-strong is no stronger than --border on ${name}`,
+      ).toBeGreaterThan(contrastRatio(hairline, hex));
+    }
+  });
+
+  it('carries no stale DECORATIVE_BORDER entry', () => {
+    for (const [name, reason] of Object.entries(DECORATIVE_BORDER)) {
+      expect(reason.trim().length, `${name} needs a real reason, not a placeholder`).toBeGreaterThan(
+        40,
+      );
+      expect(BORDER_TOKEN.test(name), `${name} is not a border token`).toBe(true);
+      for (const selector of ALL_BLOCKS) {
+        expect(
+          declarationsInBlock(tokensCss, selector)[name],
+          `${name} is signed as decorative but is not declared in ${selector}`,
+        ).toBeDefined();
+      }
+    }
   });
 
   it.each(THEMES)('subsumes every pair the old hand-written list checked in %s (%s)', (selector) => {
@@ -640,22 +787,27 @@ describe('the contrast invariant can still see', () => {
 
       for (const [selector] of THEMES) {
         const tokens = tokensInBlock(tokensCss, selector);
-        const derived = derivePairs(tokens).map((p) => `${p.fg} on ${p.bg}`);
+        const pairs = derivePairs(tokens);
+        const pair = pairs.find((p) => `${p.fg} on ${p.bg}` === key);
         expect(
-          derived,
+          pairs.map((p) => `${p.fg} on ${p.bg}`),
           `exemption "${key}" names a pair no rule derives in ${selector}`,
         ).toContain(key);
+        if (pair === undefined) continue;
 
         // The trap: an exemption that is no longer needed reads as documentation of a real
-        // constraint, and gets cited as proof the canary is healthy. If the pair now clears AA,
-        // the entry is a lie — delete it.
+        // constraint, and gets cited as proof the canary is healthy. If the pair now clears its
+        // own threshold, the entry is a lie — delete it. `pair.min` and not a literal 4.5: a
+        // boundary pair exempted here would otherwise be called stale at anything over 3:1 and
+        // sound like a defect for clearing the standard.
         const fgHex = tokens[fg];
         const bgHex = tokens[bg];
         if (fgHex === undefined || bgHex === undefined) continue;
         expect(
           contrastRatio(fgHex, bgHex),
-          `exemption "${key}" is STALE in ${selector}: it now clears AA. Delete the entry.`,
-        ).toBeLessThan(4.5);
+          `exemption "${key}" is STALE in ${selector}: it now clears ${String(pair.min)}:1. ` +
+            'Delete the entry.',
+        ).toBeLessThan(pair.min);
       }
     }
   });

@@ -13,6 +13,7 @@ import { Inbox } from '../routes/Inbox.js';
 import { Sources } from '../routes/Sources.js';
 import { Admin } from '../routes/Admin.js';
 import { Enroll } from '../routes/Enroll.js';
+import { FirstRun } from '../routes/FirstRun.js';
 import { Login } from '../routes/Login.js';
 import { Opportunity } from '../routes/Opportunity.js';
 import {
@@ -546,6 +547,23 @@ const ROUTES: Array<[string, JSX.Element, string, () => Promise<HTMLElement>]> =
     '/enrol',
     () => screen.findByRole('button', { name: /create my account/i }),
   ],
+  /**
+   * THE SCREEN A SELF-HOSTER SEES FIRST, AND THE ONE THIS FILE HAD NEVER RENDERED.
+   *
+   * `Login` and `Enroll` were both here from the start; `FirstRun` — the third form on the same
+   * panel, the only one that runs before an account exists, and the one the owner photographed —
+   * appeared zero times. It is also the largest of the three: six fields, four explanations and
+   * the callsign lookup embedded in one of them, which is more markup than the other two
+   * together and every bit of it unaudited.
+   *
+   * Mounted at `/`, because that is the path a fresh install answers with it.
+   */
+  [
+    'FirstRun',
+    <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
+    '/',
+    () => screen.findByRole('button', { name: /^create administrator$/i }),
+  ],
 ];
 
 describe('accessibility audit', () => {
@@ -568,6 +586,109 @@ describe('accessibility audit', () => {
     await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
     expect(auditA11y(container)).toEqual([]);
     await userEvent.click(screen.getByRole('button', { name: /^reject$/i }));
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  /**
+   * THE CALLSIGN PANEL, ON THE SCREEN IT IS HARDEST ON.
+   *
+   * `CallsignLookup` is closed on arrival everywhere it appears, so every audit above renders the
+   * BUTTON and none of them renders the panel — a `<section>` with its own heading, a live region
+   * and a fill-or-discard form. Opened here rather than on `Profile` because on first run there is
+   * no `AppShell` around it and no account behind it: this is the panel at its least supported.
+   *
+   * The record it opens on is W5NEW for a typed K9OLD, the superseded-callsign case, which is the
+   * branch that renders the extra "not the one you asked about" apparatus.
+   */
+  it('audits the callsign panel on the first-run screen, which no other audit opens', async () => {
+    const { container } = mount(
+      <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
+      '/',
+    );
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'K9OLD');
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await screen.findByRole('heading', { name: /FCC record for/i });
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  /**
+   * The refusal, and the state after it. Same shape as the Enroll test below — a form that has
+   * been told no is a different page from a form that has not been asked yet, and the alert that
+   * carries the refusal is the part a screen reader has to be told about.
+   */
+  it('audits the first-run form after the setup token is refused', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error: { code: 'unauthorized', message: 'Bad setup token.' },
+          requestId: 'req-a11y-2',
+        }),
+      }),
+    );
+    const { container } = mount(
+      <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
+      '/',
+    );
+    await userEvent.type(screen.getByLabelText(/setup token/i), 'not-the-token');
+    await userEvent.type(screen.getByLabelText(/^email$/i), 'operator@example.edu');
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
+    await userEvent.type(screen.getByLabelText(/confirm password/i), 'a-long-enough-password');
+    await userEvent.click(screen.getByRole('button', { name: /^create administrator$/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/setup token was not accepted/i);
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  /**
+   * "ADMINISTRATOR CREATED" — the mode with no form on it at all.
+   *
+   * The account exists and this browser is signed in, but the starter profile write failed, so the
+   * screen replaces its own form with a `role="alert"` and one button onwards. It is unreachable
+   * without making the second of two calls fail, which is why `e2e/signedOut.spec.ts` names it in
+   * its NOT COVERED list — and why nothing had ever audited it.
+   */
+  it('audits the stranded first-run screen, which replaces the form with an alert', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        Promise.resolve(
+          url === '/api/profiles/student'
+            ? {
+                ok: false,
+                status: 422,
+                json: async () => ({
+                  error: { code: 'validation_failed', message: 'Profile failed validation.' },
+                  requestId: 'req-a11y-3',
+                }),
+              }
+            : {
+                ok: true,
+                status: 201,
+                json: async () => ({
+                  user: { id: 'u-1', email: 'operator@example.edu', role: 'admin' },
+                }),
+              },
+        ),
+      ),
+    );
+    const { container } = mount(
+      <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
+      '/',
+    );
+    await userEvent.type(screen.getByLabelText(/setup token/i), 'a-setup-token');
+    await userEvent.type(screen.getByLabelText(/^email$/i), 'operator@example.edu');
+    // The callsign is what makes the profile write happen at all: with the field empty,
+    // `saveStarterProfile` returns before it calls anything and this mode is unreachable.
+    await userEvent.type(screen.getByLabelText(/^callsign/i), 'W1AW');
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
+    await userEvent.type(screen.getByLabelText(/confirm password/i), 'a-long-enough-password');
+    await userEvent.click(screen.getByRole('button', { name: /^create administrator$/i }));
+
+    await screen.findByRole('heading', { name: /administrator created/i });
     expect(auditA11y(container)).toEqual([]);
   });
 
