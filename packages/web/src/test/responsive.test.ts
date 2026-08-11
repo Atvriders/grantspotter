@@ -415,7 +415,7 @@ describe('a narrow screen never buys room by dropping an honesty marker', () => 
     selectorsOf(rule).flatMap((selector) => {
       const marker = mentionsMarker(selector);
       if (marker === undefined) return [];
-      return HIDING.filter(([prop, bad]) => bad.test(declared(rule, prop) ?? ' ')).map(
+      return HIDING.filter(([prop, bad]) => bad.test(declared(rule, prop) ?? '\0')).map(
         ([prop]) => `${rule.file} ${rule.conditions.join(' ')} ${selector} { ${prop} }`,
       );
     }),

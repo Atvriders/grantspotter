@@ -149,14 +149,22 @@ export class PageNotReadError extends Error {
   /** The status of the first unread payload, or 0 when the fetch produced no status at all. */
   readonly status: number;
   readonly url: string;
-  /** True only for {@link GONE}: this source is to stop being polled, not retried tonight. */
+  /**
+   * True only when EVERY address this source has answered {@link GONE}: it is to stop being polled,
+   * not retried tonight.
+   *
+   * Passed in rather than derived from `status`, which is what the caller could not express before:
+   * `status` is the FIRST unread payload's, and deriving permanence from it paused a source whose
+   * first address was gone and whose second was merely refused. The two questions — "what should
+   * the operator look at" and "is this over" — have different answers over the same list.
+   */
   readonly permanent: boolean;
-  constructor(url: string, status: number, requestCount: number) {
+  constructor(url: string, status: number, requestCount: number, permanent = status === GONE) {
     super(pageNotReadMessage(url, status, requestCount));
     this.name = 'PageNotReadError';
     this.status = status;
     this.url = url;
-    this.permanent = status === GONE;
+    this.permanent = permanent;
   }
 }
 
@@ -232,8 +240,22 @@ export function refusalFor(payloads: FetchedPayload[], parsedCount: number): Pag
   // Permanence has to be unanimous. "Every address this source has is gone" is a decision worth
   // acting on; one 410 beside a 403 is a site in some other kind of trouble, and pausing on it
   // would silence a source over a state nobody stated.
-  const status = payloads.every((p) => p.status === GONE) ? GONE : first.status;
-  return new PageNotReadError(first.url, status, payloads.length);
+  //
+  // THE FIRST VERSION OF THIS LINE WAS A NO-OP, and it is worth saying how, because it read
+  // correctly:
+  //
+  //     const status = payloads.every((p) => p.status === GONE) ? GONE : first.status;
+  //
+  // The fallback can be GONE too. When the 410 arrives FIRST and a 403 follows, the guard picks
+  // `first.status` — which is already 410 — and the source is paused on exactly the mixed evidence
+  // the guard exists to refuse. It only ever changed the answer when the 410 was not first, which
+  // is the case nobody needed protecting from.
+  //
+  // So permanence is now its own value, computed from the whole list, and the reported status stays
+  // the first one because that is the address the operator should look at. Two facts, two names —
+  // conflating them into one is what made the ternary look sufficient.
+  const permanent = payloads.every((p) => p.status === GONE);
+  return new PageNotReadError(first.url, first.status, payloads.length, permanent);
 }
 
 /**

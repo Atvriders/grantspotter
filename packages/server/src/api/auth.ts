@@ -1184,7 +1184,7 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
        * guessing against every account at once, which is the worse of the two. Left here, in the
        * open, rather than papered over.
        */
-      const key = `${peerAddress(req)} ${normalizeEmail(body.email)}`;
+      const key = `${peerAddress(req)}\x00${normalizeEmail(body.email)}`;
 
       /**
        * THE SAME SHAPE THE ENROLMENT ROUTE HAD, closed the same way and in the same change.

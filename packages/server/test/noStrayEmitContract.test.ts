@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 import { describe, it, expect } from 'vitest';
@@ -105,5 +105,61 @@ describe('no compiler output beside its source', () => {
         `${tree} contains no TypeScript — the path is wrong, so the check above is walking nothing`,
       ).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * No source file may contain a literal NUL byte.
+ *
+ * WHY THIS IS WORTH A TEST AND NOT A STYLE NOTE. A NUL is what `grep` uses to decide a file is
+ * BINARY, and a binary file is one it reports nothing about instead of reporting a match. So a
+ * source file carrying one drops silently out of every search anybody runs over this repository —
+ * including the searches this codebase relies on to keep its own invariants, several of which are
+ * tests that walk the tree looking for a pattern.
+ *
+ * TWO FILES HAD ONE, both the same slip: `\x00` and `\0` are what somebody meant to type, and the
+ * literal character is what arrived. `api/auth.ts:1187` used it to join a peer address to an email
+ * for a rate-limit key — a NUL is a good separator there precisely because neither half can contain
+ * one — and `web/src/test/responsive.test.ts:418` used it as a sentinel that could not match.
+ * Both intents were right; only the spelling was wrong, and it cost nothing until you searched.
+ *
+ * It was found by an adversarial verifier, and the way it was found is the argument for this test:
+ * an earlier agent had ALREADY met the symptom, noted that `grep` was skipping `auth.ts` as binary,
+ * and worked around it by passing `-a` — treating a broken file as a broken tool. A repository this
+ * one searches to check itself cannot afford a file that searches cannot see.
+ *
+ * Write the escape. It compiles to the same byte at runtime and leaves the source readable to
+ * everything that reads source.
+ */
+describe('no source file is invisible to search', () => {
+  it('contains no literal NUL byte in any source tree', () => {
+    const offenders: string[] = [];
+    const scan = (dir: string): void => {
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry === 'node_modules' || entry === 'dist') continue;
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          scan(full);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry)) continue;
+        if (readFileSync(full).includes(0)) offenders.push(relative(REPO_ROOT, full));
+      }
+    };
+    for (const tree of SOURCE_TREES) scan(join(REPO_ROOT, tree));
+
+    expect(
+      offenders.sort(),
+      'These files carry a literal NUL, so `grep` calls them binary and silently reports nothing ' +
+        'about them — including to the tests in this repository that search the tree to check an ' +
+        'invariant. Write the escape (`\\x00`, `\\0`) instead: same byte at runtime, still readable ' +
+        'to every tool that reads source.',
+    ).toEqual([]);
   });
 });
