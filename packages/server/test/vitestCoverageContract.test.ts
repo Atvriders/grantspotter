@@ -147,6 +147,20 @@ const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
       '143 records scrolling sideways on an unbreakable URL — is a property of the corpus a real ' +
       'install has. `npm run test:e2e` runs it, never `npm test`.',
   ],
+  [
+    'e2e/signedOut.spec.ts',
+    'Playwright, not vitest, and unable to be anything else for the same reason as ' +
+      'e2e/responsive.spec.ts: it measures rendered geometry — the gap between an input and its ' +
+      'hint, the rendered line length of that hint in `ch`, the height of every touch target — and ' +
+      'jsdom has no layout to measure. It covers the one route responsive.spec.ts names in its own ' +
+      'NOT COVERED list and that a self-hoster cannot avoid: the signed-out page, in all three of ' +
+      'its modes, including the first-run screen, which exists only while the users table is empty ' +
+      'and so needs a server booted from an empty DATA_DIR on a port of its own. It also emulates a ' +
+      'COARSE POINTER, which is a different rendering and not something a jsdom media query has an ' +
+      'opinion about. Its causes are asserted without a browser in ' +
+      '`packages/web/src/components/signedOut.css.test.ts`. `npm run test:e2e` runs it, never ' +
+      '`npm test`.',
+  ],
 ]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */

@@ -1,0 +1,287 @@
+/* THE SIGNED-OUT PAGE — one panel, three screens.
+   `SignedOutPage` in `routes/Login.tsx` is the single `main` that sign-in, first-run setup and
+   enrolment all render into, so this is where the three of them agree about width and spacing.
+
+   IT IS A STYLESHEET BECAUSE THE OLD VERSION WAS 31 INLINE `style` ATTRIBUTES, and two of the
+   three faults the owner reported were consequences of that rather than of the values chosen:
+
+     · the panel's width was `style={{ maxWidth: 380 }}` on the `main` element, and NO MEDIA QUERY
+       CAN REACH AN INLINE STYLE — so the panel measured 380px at 320px and 380px at 1920px, which
+       is why it could not be made wider on a desktop;
+     · nothing could assert the spacing, because there was no stylesheet to read. `HINT` carried
+       `marginTop: calc(-1 * var(--s-3))`, which pulled every explanation 4px INTO the bottom edge
+       of the input it explains (measured, Chromium, 390px: hint top minus input bottom = -4px).
+
+   Two phantom variables came out with them, both of which had been failing silently since the day
+   they were written. `color: var(--ink-2)` names no token — tokens.css has `--text-muted` and
+   `--text-faint` — so the declaration was invalid at computed-value time and every hint inherited
+   full-strength body ink instead of being muted. `font-family: var(--mono, monospace)` names no
+   token either, but its fallback hid that: the setup token and the enrollment code rendered in the
+   browser's generic monospace rather than in `--font-data`, the stack the rest of this app's data
+   is set in.
+
+   Every class is `signed-out-`-prefixed for the reason callsign.css and profile.css prefix theirs:
+   these stylesheets are bundled together and a generic name written here would restyle another
+   route's markup at a distance. Colours are semantic tokens only, so both themes and the AA
+   contrast invariant in `lib/contrast.test.ts` apply without a hex value here. */
+
+/* ---------------------------------------------------------------------------------------------
+   THE PANEL, AND WHY THERE ARE TWO WIDTHS
+   ---------------------------------------------------------------------------------------------
+
+   THE TARGET MEASURE IS 66 CHARACTERS OF HELP TEXT. Not of the input — an input is a box that
+   holds whatever it is given and reads at no measure at all — but of the paragraph under it, which
+   is prose and is the thing a person has to read a line of and then find the next line of. 66ch is
+   this codebase's existing answer for exactly this kind of text: `.callsign-hint`, `.callsign-note`
+   and `.callsign-source` are all capped at 66ch, and all three render ON THE FIRST-RUN SCREEN,
+   inside the lookup panel, a few pixels from the hints below. A setup form whose own explanations
+   wrapped at 43 characters while the control embedded in it wrapped at 66 was two typographies on
+   one page.
+
+   The panel width is then derived from that cap rather than chosen: 66ch of `--fs-200` text is
+   475px (measured in Chromium: 7.2px per `0` at 13px), plus this panel's `--s-5` padding on both
+   sides and its 1px border is 525px. `34rem` (544px) clears it with room for the CAP to be what
+   binds, so the hints sit at their stated measure instead of at whatever the panel happens to be —
+   measured at 768, 1024, 1440 and 1920: a 66.1ch box holding a 65.5ch longest line, at all four.
+
+   THE SIGN-IN BOX DOES NOT GET THAT WIDTH, and the reason is the same one that sets it: there is
+   no prose on it to measure. Two labelled fields and a button in a 544px panel is a wide empty
+   box; 380px was a good decision for that screen and this keeps it, restated as `24rem` so it
+   tracks the reader's own font size rather than pinning to a pixel count. What changed is that the
+   sign-in box's width stopped being every other screen's width by accident of a shared wrapper.
+
+   `max-width` and never `width`: a ceiling never forces a scrollbar, so the panel simply becomes
+   the viewport on a phone, and `test/responsive.test.ts` rule 3 stays satisfied by construction. */
+
+.signed-out {
+  margin: 12vh auto;
+  padding: var(--s-5);
+}
+
+/* THE GUTTER IS PART OF THE CEILING, not a margin, because `margin-inline: auto` is what centres
+   the panel and the two cannot both be written in that property. `100% - 2 * var(--s-2)` keeps 8px
+   of page either side of the card at every width the card would otherwise fill — a card whose
+   border sits exactly on the viewport edge stops reading as a card and starts reading as the page.
+   Written out in both rules rather than hoisted into a custom property: a `var()` naming something
+   undeclared is invalid at computed-value time and fails SILENTLY, which is precisely how
+   `var(--ink-2)` went unnoticed in the file this replaces. */
+
+/* The two-field sign-in box: today's 380px, in the unit that follows the reader's font size. */
+.signed-out-compact {
+  max-width: min(24rem, 100% - 2 * var(--s-2));
+}
+
+/* A form whose fields carry explanations — first-run setup and enrolment both do. */
+.signed-out-prose {
+  max-width: min(34rem, 100% - 2 * var(--s-2));
+}
+
+/* The same proximity rule the form below states, applied to the head of the panel: the product
+   name, the title and the sentence explaining the screen are one block, and the form is the next
+   one. Only top margins are set, so what is written is what is measured — two adjacent siblings
+   whose margins collapse take the larger, and mixing the two directions is how the old spacing
+   became arithmetic. */
+.signed-out > .eyebrow {
+  margin: 0 0 var(--s-2);
+}
+
+.signed-out h1 {
+  margin: 0;
+}
+
+/* The sentence under the title that says what this screen is for. */
+.signed-out-lede {
+  margin: var(--s-4) 0 0;
+}
+
+/* Whichever comes next — the form, or (in the stranded first-run mode, which has no form) the
+   button that leads onwards. Both are a new object, so both take the between-fields distance. */
+.signed-out-form,
+.signed-out > .btn {
+  margin-top: var(--s-5);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   SPACING IS SET BY THE RELATIONSHIP, NOT BY EYE
+   ---------------------------------------------------------------------------------------------
+
+   A label, its control and its explanation are ONE object; the next field is a DIFFERENT object.
+   So there are exactly two numbers here and the grid states both: `--s-2` (8px) inside a field and
+   `--s-5` (24px) between fields — a 3:1 ratio, which is the whole of the proximity rule this
+   screen was breaking.
+
+   GRID GAP AND NOT MARGINS, deliberately. Margins between siblings collapse, so the old form's
+   spacing was the arithmetic of an input's `margin-bottom`, a hint's negative `margin-top` and
+   whichever of them won — which is how a gap of -4px was reached by adding two positive-looking
+   numbers. A gap is not collapsible and not cancellable: what is written here is what is measured.
+
+   MEASURED after this change, Chromium at every width from 320 to 1920 in both themes: 8px from an
+   input to its own hint, 24px from one field to the next, on all three screens. */
+
+.signed-out-form {
+  display: grid;
+  gap: var(--s-5);
+}
+
+.signed-out-field {
+  display: grid;
+  gap: var(--s-2);
+}
+
+/* One long unbreakable word in a hint — an address, a token echoed back — would otherwise floor
+   this single-column track at its min-content width and take the page with it. See `.browse > *`. */
+.signed-out-form > *,
+.signed-out-field > * {
+  min-width: 0;
+}
+
+/* The lookup control is part of the callsign field, so the field's own gap is the spacing between
+   them. `callsign.css` gives it a `margin-top` for the profile editor, where it follows a bare
+   input with no explanation in between and has to make its own room. */
+.signed-out-field > .callsign-lookup {
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   THE CONTROLS
+   --------------------------------------------------------------------------------------------- */
+
+/* The same declarations `.callsign-fill-field input` carries, because that control renders inside
+   this very form on the setup screen and two form treatments on one panel read as an accident.
+   Stating the surface and the ink also means the panel is right in BOTH themes: an unstyled input
+   is painted by the UA from `color-scheme`, which follows the operating system, so a dark
+   `data-theme` on a light desktop drew white boxes inside a dark card. */
+.signed-out-field input {
+  width: 100%;
+  padding: var(--s-2);
+  font: inherit;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+}
+
+/* A setup token is 48 hex characters and an enrollment code is pasted from a chat message: both
+   are machine strings that get compared character by character, which is what the data font is
+   for. `--fs-200` rather than the body size for the same reason: measured in the 252px the field
+   has to itself on a 320px screen, 13px fits 32.3 of those characters at a time and the body's
+   15px fits 28.0. The whole 48 are in view from a 442px viewport up; below that the field scrolls
+   within itself, which loses nothing — the token is pasted, not typed — but is worth 4 characters
+   of check-it-yourself on the narrowest phone.
+
+   WRITTEN AS `input.signed-out-code` AND NOT AS THE CLASS ALONE. The rule above is
+   `.signed-out-field input` — one class and one type, so it OUTWEIGHS a bare class, and its `font`
+   shorthand sets `font-family` too. Measured with the class on its own: the token field rendered
+   in the body's sans-serif, which is the same defect as the `var(--mono, monospace)` it replaced,
+   arriving by a different route. */
+.signed-out-field input.signed-out-code {
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+}
+
+/* A callsign is written in capitals wherever this product prints one. */
+.signed-out-upper {
+  text-transform: uppercase;
+}
+
+/* A grid item is blockified, so `.btn`'s `inline-flex` becomes `flex` and the button would
+   otherwise stretch the width of the panel. */
+.signed-out-form > .btn {
+  justify-self: start;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   THE THINGS THE SCREEN SAYS
+   --------------------------------------------------------------------------------------------- */
+
+.signed-out-hint {
+  margin: 0;
+  /* Was `0.85em` of the body size, which is 12.75px: the same thing, rounded onto the token that
+     means "metadata" so it is one decision the type scale can move rather than a loose multiplier. */
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  /* The measure the panel above is sized for. It is stated here, on the text it is about, so that
+     widening the panel later cannot silently widen the line. */
+  max-width: 66ch;
+}
+
+/* `docker logs`, inside a hint. It is the app's ONE inline command and it was being set in the
+   UA's generic monospace — measured: the same 12.75px as its sentence, but a face whose glyphs are
+   wider and taller at that size, so it read as a jump in the middle of a line. Same two
+   declarations `.data` in base.css applies for the same reason. */
+.signed-out-hint code {
+  font-family: var(--font-data);
+  font-size: 0.95em;
+}
+
+/* A failure the person can act on. `--no` is the ineligible/refused ink, and the contrast
+   invariant already asserts it against every neutral surface. */
+.signed-out-alert {
+  margin: 0;
+  color: var(--no);
+}
+
+/* Something the gate could not establish — "we could not check whether this is a fresh install".
+   Not a refusal, so not `--no`.
+
+   Neither this nor `.signed-out-alert` carries the hint's `max-width`, and that is deliberate: both
+   are set at the BODY size, where the panel's own ceiling already holds them to 59 characters, and
+   a cap that can never bind is a claim the stylesheet does not keep. */
+.signed-out-notice {
+  margin: 0 0 var(--s-5);
+  color: var(--warn);
+}
+
+/* The way to the OTHER screen, below the form and outside it. */
+.signed-out-aside {
+  margin: var(--s-5) 0 0;
+}
+
+/* ---------------------------------------------------------------------------------------------
+   NARROW SCREENS
+   ---------------------------------------------------------------------------------------------
+
+   On a screen where the panel is the whole screen, the 24px inset is no longer breathing room
+   around a card — it is reading width, spent on nothing. 480px is where that trade turns: two
+   `--s-5` insets are 48px, a tenth of a 480px panel, and the share only climbs from there — 15% at
+   320px, where the help text is already down to 37 characters a line. So below it the inset drops
+   to `--s-4` and the text takes the difference.
+
+   MEASURED, Chromium, first-run: the hint's box is 57.5ch at 481px wide and 59.6ch at 480px, and
+   the setup-token field fits 50.9 characters at a time against 52.8. The step is in the direction
+   the rule intends — the line gets longer as the screen gets narrower, because that is the whole
+   point of spending less on the frame.
+
+   The top margin comes down with it. `12vh` centres a short card handsomely on a desktop; on a
+   390x844 phone it is 101px of empty screen above a setup form that is 1,177px tall, and the first
+   thing a first-run visitor should see is the title of the thing they are setting up. `margin-block`
+   and not `margin`, so the `auto` that centres the panel is left alone.
+
+   480px is a width, not a pointer, and that is right for THIS rule: it is about how much room the
+   card has, not about what is pressing it. The touch floor below is keyed on the pointer instead,
+   for the reason base.css gives. */
+
+@media (max-width: 480px) {
+  .signed-out {
+    margin-block: var(--s-5);
+    padding: var(--s-4);
+  }
+}
+
+/* base.css's `pointer: coarse` block gives the floor to `.btn`, `button`, `summary` and
+   `[role="tab"]`, and to the box of a checkbox — but not to a text input, which is as much a touch
+   target as any of them. Fixed here, for the fields this stylesheet owns, rather than in base.css:
+   these three screens are the ones being measured, and a floor applied app-wide is a change to
+   every form in the product — every other form in it still has 35px inputs under a thumb.
+
+   MEASURED, first-run at 320 and 390. Under a mouse: every input was 35px before this change; after
+   it a body-size field is 40.5px (it grew when `font: inherit` gave it the body's 15px) and the two
+   `--fs-200` code fields are 37.5px. Under an emulated coarse pointer, all of them are 44px.
+   `e2e/signedOut.spec.ts` asserts both renderings, and asserts that they DIFFER — a touch pass that
+   silently ran as a desktop one would pass the floor for the wrong reason. */
+@media (pointer: coarse) {
+  .signed-out-field input {
+    min-height: var(--tap-min);
+  }
+}

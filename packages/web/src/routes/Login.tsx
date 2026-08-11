@@ -2,6 +2,21 @@ import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { apiSend, ApiError } from '../api/client.js';
 import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
+import '../components/signedOut.css';
+
+/**
+ * How wide this screen's panel may get.
+ *
+ * A property of the SCREEN'S CONTENTS, which is why the wrapper cannot decide it: the three
+ * screens sharing this landmark are three different objects. `compact` is the sign-in box — two
+ * labelled fields, no prose, nothing on it that has to be read a line at a time. `prose` is a form
+ * whose fields each carry a paragraph of explanation, and its width is derived from the measure
+ * that text wants. `components/signedOut.css` states both numbers and the derivation.
+ *
+ * One inline `maxWidth: 380` on the element below used to answer for all three, which is how a
+ * six-field setup form full of help text came to render at 43 characters a line.
+ */
+export type SignedOutMeasure = 'compact' | 'prose';
 
 /**
  * The signed-out page's ONE `main` landmark.
@@ -14,13 +29,15 @@ import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
  * which that test's comment asks be a deliberate decision. Keeping the element here means
  * the signed-out tree has exactly one, in exactly one file, whichever form is showing.
  */
-export function SignedOutPage({ children }: { children: ReactNode }): JSX.Element {
+export function SignedOutPage({
+  children,
+  measure = 'compact',
+}: {
+  children: ReactNode;
+  measure?: SignedOutMeasure;
+}): JSX.Element {
   return (
-    <main
-      id="main"
-      style={{ maxWidth: 380, margin: '12vh auto', padding: 'var(--s-5)' }}
-      className="card"
-    >
+    <main id="main" className={`card signed-out signed-out-${measure}`}>
       <p className="eyebrow">GrantSpotter</p>
       {children}
     </main>
@@ -106,42 +123,45 @@ export function Login({
 
   return (
     <SignedOutPage>
-      <h1 style={{ marginBottom: 'var(--s-5)' }}>Sign in</h1>
+      <h1>Sign in</h1>
       {notice}
 
       <form
+        className="signed-out-form"
         onSubmit={(e) => {
           void submit(e);
         }}
       >
-        <label htmlFor="login-email" className="eyebrow">
-          Email
-        </label>
-        <input
-          id="login-email"
-          type="email"
-          autoComplete="username"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={{ width: '100%', marginBottom: 'var(--s-4)', padding: 'var(--s-2)' }}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="login-email" className="eyebrow">
+            Email
+          </label>
+          <input
+            id="login-email"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
 
-        <label htmlFor="login-password" className="eyebrow">
-          Password
-        </label>
-        <input
-          id="login-password"
-          type="password"
-          autoComplete="current-password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ width: '100%', marginBottom: 'var(--s-5)', padding: 'var(--s-2)' }}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="login-password" className="eyebrow">
+            Password
+          </label>
+          <input
+            id="login-password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
 
         {error !== null && (
-          <p role="alert" style={{ color: 'var(--no)' }}>
+          <p role="alert" className="signed-out-alert">
             {error}
           </p>
         )}
@@ -157,7 +177,7 @@ export function Login({
         address to go to: the signed-out gate swaps which form it is showing.
       */}
       {onEnrol !== undefined && (
-        <p style={{ marginTop: 'var(--s-5)' }}>
+        <p className="signed-out-aside">
           Been given an enrollment code?{' '}
           <button type="button" className="btn" onClick={onEnrol}>
             I have an enrollment code

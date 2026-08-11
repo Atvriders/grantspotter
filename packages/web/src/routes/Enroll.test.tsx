@@ -59,6 +59,30 @@ function expectNotGeneric(text: string): void {
 }
 
 describe('the enrolment form, before anything is submitted', () => {
+  it('opens the shared panel at the width its explanations need, and puts each hint in its field', () => {
+    /*
+      `SignedOutPage` is one wrapper for three screens, and the measure is the screen's decision:
+      the sign-in box has two fields and no prose, this has four fields under a three-sentence lede
+      with two of them explained in a paragraph. Rendered rather than grepped, because the class has
+      to be on the landmark that `components/signedOut.css` styles — see that stylesheet for the
+      66-character measure the prose width is derived from, and `signedOut.css.test.ts` for the
+      spacing relationship it carries.
+    */
+    const { container } = render(
+      <MemoryRouter>
+        <Enroll onAuthenticated={vi.fn()} onCancel={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const panel = container.querySelector('main#main');
+    expect(panel).toHaveClass('signed-out-prose');
+    expect(panel).not.toHaveClass('signed-out-compact');
+    // Each hint inside the field it explains, which is what makes the proximity readable at all.
+    for (const hint of container.querySelectorAll('.signed-out-hint')) {
+      expect(hint.closest('.signed-out-field')).not.toBeNull();
+    }
+    expect(container.querySelectorAll('.signed-out-hint')).toHaveLength(2);
+  });
+
   it('states the 12-character password rule up front, attached to the field it governs', () => {
     renderEnroll();
     const hint = screen.getByText(/at least 12 characters/i);

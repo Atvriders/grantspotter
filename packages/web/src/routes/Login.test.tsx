@@ -23,6 +23,26 @@ async function signIn(password = 'correct horse battery'): Promise<void> {
 }
 
 describe('Login', () => {
+  it('keeps the compact measure that suits two fields and no prose', () => {
+    /*
+      The one screen that does NOT take the wider panel, and the reason is what sets the width in
+      the first place: there is no help text here to measure. 380px was a good decision for a
+      sign-in box; what was wrong was that `SignedOutPage` applied it inline to two other screens
+      as well, where six fields each carry a paragraph. See `components/signedOut.css`.
+    */
+    const { container } = render(
+      <MemoryRouter>
+        <Login onAuthenticated={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const panel = container.querySelector('main#main');
+    expect(panel).toHaveClass('signed-out-compact');
+    expect(panel).not.toHaveClass('signed-out-prose');
+    expect(container.querySelectorAll('.signed-out-hint')).toHaveLength(0);
+    // An inline width is unreachable by a media query, which is the whole defect.
+    expect(panel?.getAttribute('style')).toBeNull();
+  });
+
   it('labels both fields', () => {
     renderLogin();
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();

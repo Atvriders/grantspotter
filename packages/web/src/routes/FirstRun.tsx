@@ -7,6 +7,7 @@ import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
 import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
 import { Enroll } from './Enroll.js';
 import { Login, SignedOutPage } from './Login.js';
+import '../components/signedOut.css';
 
 /**
  * FIRST RUN, FROM A BROWSER.
@@ -62,18 +63,13 @@ function messageForBootstrap(err: unknown): string {
   }
 }
 
-const FIELD: React.CSSProperties = {
-  width: '100%',
-  marginBottom: 'var(--s-4)',
-  padding: 'var(--s-2)',
-};
-
-const HINT: React.CSSProperties = {
-  marginTop: 'calc(-1 * var(--s-3))',
-  marginBottom: 'var(--s-4)',
-  fontSize: '0.85em',
-  color: 'var(--ink-2)',
-};
+/*
+ * The `FIELD` and `HINT` inline styles that used to sit here are gone, into
+ * `components/signedOut.css`. `HINT` carried `marginTop: calc(-1 * var(--s-3))`, which is what put
+ * every explanation 4px INSIDE the bottom edge of the input it explains, and `FIELD`'s
+ * `marginBottom` was what it was cancelling. The spacing between a control and its own hint is now
+ * one grid gap, stated once, next to the gap between fields it has to be smaller than.
+ */
 
 export interface FirstRunProps {
   /** Bootstrap signs the new administrator in, so this is the same callback a login uses. */
@@ -187,9 +183,9 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
 
   if (stranded !== null) {
     return (
-      <SignedOutPage>
-        <h1 style={{ marginBottom: 'var(--s-3)' }}>Administrator created</h1>
-        <p role="alert" style={{ marginBottom: 'var(--s-5)' }}>
+      <SignedOutPage measure="prose">
+        <h1>Administrator created</h1>
+        <p role="alert" className="signed-out-lede">
           The administrator account was created and this browser is signed in. The callsign was
           not saved to a profile: {stranded} Nothing else was lost, and setup is finished — open
           the Profile screen to enter it there.
@@ -202,144 +198,164 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
   }
 
   return (
-    <SignedOutPage>
-      <h1 style={{ marginBottom: 'var(--s-3)' }}>Set up GrantSpotter</h1>
-      <p style={{ marginBottom: 'var(--s-5)' }}>
+    /*
+      `prose`, not the sign-in box's width: six fields, four of which carry a paragraph explaining
+      themselves. At the 380px this screen inherited from the sign-in form those paragraphs
+      wrapped at 43 characters; see `components/signedOut.css` for the measure they are sized to
+      now.
+    */
+    <SignedOutPage measure="prose">
+      <h1>Set up GrantSpotter</h1>
+      <p className="signed-out-lede">
         This deployment has no accounts yet. Create the first administrator to continue.
       </p>
 
       <form
+        className="signed-out-form"
         onSubmit={(e) => {
           void submit(e);
         }}
       >
-        <label htmlFor="first-run-token" className="eyebrow">
-          Setup token
-        </label>
-        <input
-          id="first-run-token"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          required
-          aria-describedby="first-run-token-hint"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          style={{ ...FIELD, marginBottom: 'var(--s-2)', fontFamily: 'var(--mono, monospace)' }}
-        />
-        <p id="first-run-token-hint" style={HINT}>
-          Printed in the server&rsquo;s log when it starts — look for &ldquo;GrantSpotter
-          first-run setup&rdquo; (<code>docker logs</code> for a container deployment). A new
-          token is issued on every restart until this form is completed.
-        </p>
+        <div className="signed-out-field">
+          <label htmlFor="first-run-token" className="eyebrow">
+            Setup token
+          </label>
+          <input
+            id="first-run-token"
+            className="signed-out-code"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            required
+            aria-describedby="first-run-token-hint"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <p id="first-run-token-hint" className="signed-out-hint">
+            Printed in the server&rsquo;s log when it starts — look for &ldquo;GrantSpotter
+            first-run setup&rdquo; (<code>docker logs</code> for a container deployment). A new
+            token is issued on every restart until this form is completed.
+          </p>
+        </div>
 
-        <label htmlFor="first-run-email" className="eyebrow">
-          Email
-        </label>
-        <input
-          id="first-run-email"
-          type="email"
-          autoComplete="username"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={FIELD}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="first-run-email" className="eyebrow">
+            Email
+          </label>
+          <input
+            id="first-run-email"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
 
-        <label htmlFor="first-run-name" className="eyebrow">
-          Display name (optional)
-        </label>
-        <input
-          id="first-run-name"
-          type="text"
-          autoComplete="name"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          style={FIELD}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="first-run-name" className="eyebrow">
+            Display name (optional)
+          </label>
+          <input
+            id="first-run-name"
+            type="text"
+            autoComplete="name"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+          />
+        </div>
 
-        <label htmlFor="first-run-callsign" className="eyebrow">
-          Callsign (optional)
-        </label>
-        <input
-          id="first-run-callsign"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          aria-describedby="first-run-callsign-hint"
-          value={callsign}
-          onChange={(e) => {
-            setCallsign(e.target.value);
-            // A hand-edited callsign is no longer the one that was looked up, so the values
-            // that came with it stop applying. Keeping them would attach somebody else's
-            // state and licence class to a callsign nobody checked.
-            setAccepted(null);
-          }}
-          style={{ ...FIELD, marginBottom: 'var(--s-2)', textTransform: 'uppercase' }}
-        />
-        <p id="first-run-callsign-hint" style={HINT}>
-          The callsign you operate under. GrantSpotter starts a student profile with it, so the
-          first screen after setup already knows something about you — everything on it can be
-          changed later, and leaving this empty stores nothing at all.
-        </p>
-        <CallsignLookup
-          callsign={callsign}
-          target="student"
-          setupToken={token.trim()}
-          onAccept={(values) => {
-            setAccepted(values);
-            // The record's own callsign, which is not always the one that was typed: the panel
-            // does not hand a substituted callsign over until the operator has confirmed it.
-            setCallsign(values.callsign.value);
-          }}
-          clubNotice={
-            'This is a club station licence. GrantSpotter keeps a club on an organization ' +
-            'profile, which cannot be stored without an entity type, and this screen does not ' +
-            'ask for one — so nothing from this record will be stored here. Create the ' +
-            'administrator, then open the Profile screen: the same lookup is on its ' +
-            'Organization tab.'
-          }
-        />
-
-        <label htmlFor="first-run-password" className="eyebrow">
-          Password
-        </label>
-        <input
-          id="first-run-password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={MIN_PASSWORD_LENGTH}
-          aria-describedby="first-run-password-hint"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ ...FIELD, marginBottom: 'var(--s-2)' }}
-        />
         {/*
-          Stated before the operator submits, not after they are refused. The rule is
-          cheap to satisfy and expensive to discover by rejection, and this is the one
-          account in the product with no way back if it is lost.
+          The lookup control is INSIDE the callsign field rather than beside it: it reads that
+          input, writes to it, and explains itself in terms of it. Which is also what puts it at
+          the within-a-field distance from the hint above it instead of a field's width away.
         */}
-        <p id="first-run-password-hint" style={HINT}>
-          At least {MIN_PASSWORD_LENGTH} characters. There is no password reset for the first
-          administrator — store it somewhere you can find it again.
-        </p>
+        <div className="signed-out-field">
+          <label htmlFor="first-run-callsign" className="eyebrow">
+            Callsign (optional)
+          </label>
+          <input
+            id="first-run-callsign"
+            className="signed-out-upper"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            aria-describedby="first-run-callsign-hint"
+            value={callsign}
+            onChange={(e) => {
+              setCallsign(e.target.value);
+              // A hand-edited callsign is no longer the one that was looked up, so the values
+              // that came with it stop applying. Keeping them would attach somebody else's
+              // state and licence class to a callsign nobody checked.
+              setAccepted(null);
+            }}
+          />
+          <p id="first-run-callsign-hint" className="signed-out-hint">
+            The callsign you operate under. GrantSpotter starts a student profile with it, so the
+            first screen after setup already knows something about you — everything on it can be
+            changed later, and leaving this empty stores nothing at all.
+          </p>
+          <CallsignLookup
+            callsign={callsign}
+            target="student"
+            setupToken={token.trim()}
+            onAccept={(values) => {
+              setAccepted(values);
+              // The record's own callsign, which is not always the one that was typed: the panel
+              // does not hand a substituted callsign over until the operator has confirmed it.
+              setCallsign(values.callsign.value);
+            }}
+            clubNotice={
+              'This is a club station licence. GrantSpotter keeps a club on an organization ' +
+              'profile, which cannot be stored without an entity type, and this screen does not ' +
+              'ask for one — so nothing from this record will be stored here. Create the ' +
+              'administrator, then open the Profile screen: the same lookup is on its ' +
+              'Organization tab.'
+            }
+          />
+        </div>
 
-        <label htmlFor="first-run-confirm" className="eyebrow">
-          Confirm password
-        </label>
-        <input
-          id="first-run-confirm"
-          type="password"
-          autoComplete="new-password"
-          required
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          style={{ ...FIELD, marginBottom: 'var(--s-5)' }}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="first-run-password" className="eyebrow">
+            Password
+          </label>
+          <input
+            id="first-run-password"
+            type="password"
+            autoComplete="new-password"
+            required
+            minLength={MIN_PASSWORD_LENGTH}
+            aria-describedby="first-run-password-hint"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {/*
+            Stated before the operator submits, not after they are refused. The rule is
+            cheap to satisfy and expensive to discover by rejection, and this is the one
+            account in the product with no way back if it is lost.
+          */}
+          <p id="first-run-password-hint" className="signed-out-hint">
+            At least {MIN_PASSWORD_LENGTH} characters. There is no password reset for the first
+            administrator — store it somewhere you can find it again.
+          </p>
+        </div>
+
+        <div className="signed-out-field">
+          <label htmlFor="first-run-confirm" className="eyebrow">
+            Confirm password
+          </label>
+          <input
+            id="first-run-confirm"
+            type="password"
+            autoComplete="new-password"
+            required
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+          />
+        </div>
 
         {error !== null && (
-          <p role="alert" style={{ color: 'var(--no)' }}>
+          <p role="alert" className="signed-out-alert">
             {error}
           </p>
         )}
@@ -485,7 +501,7 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
       onAuthenticated={onAuthenticated}
       notice={
         notice === null ? undefined : (
-          <p role="alert" style={{ color: 'var(--warn, var(--ink-2))' }}>
+          <p role="alert" className="signed-out-notice">
             {notice}{' '}
             <button type="button" className="btn" onClick={recheck}>
               Retry

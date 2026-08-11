@@ -133,6 +133,33 @@ describe('SignedOut gate', () => {
 });
 
 describe('FirstRun form', () => {
+  it('opens the shared panel at the width its explanations need, and puts each hint in its field', () => {
+    /*
+      The owner's second and third reports, as a structure. `SignedOutPage` is one wrapper for
+      three screens and it used to hard-code the sign-in box's 380px inline, where no media query
+      could reach it; the measure is now the SCREEN'S decision, and this is the screen with six
+      fields and four paragraphs of explanation. The hint living inside its field is what makes
+      one grid gap able to say "these belong together" — see `components/signedOut.css`.
+    */
+    const { container } = render(
+      <MemoryRouter>
+        <FirstRun onAuthenticated={vi.fn()} onBootstrapClosed={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const panel = container.querySelector('main#main');
+    expect(panel).toHaveClass('signed-out-prose');
+    expect(panel).not.toHaveClass('signed-out-compact');
+    for (const hint of container.querySelectorAll('.signed-out-hint')) {
+      expect(hint.closest('.signed-out-field')).not.toBeNull();
+    }
+    expect(container.querySelectorAll('.signed-out-hint')).toHaveLength(3);
+    // The lookup control belongs to the callsign field, which is what puts it a field's-interior
+    // distance from the sentence above it rather than a field's-width away.
+    expect(
+      container.querySelector('#first-run-callsign')?.closest('.signed-out-field'),
+    ).toBe(container.querySelector('.callsign-lookup')?.closest('.signed-out-field'));
+  });
+
   it('states the password requirement before anything is submitted', () => {
     renderForm();
     // Before submit, before any request, and attached to the field it governs.

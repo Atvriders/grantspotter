@@ -5,6 +5,7 @@ import { postEnroll } from '../api/enrollment.js';
 import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
 import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
 import { SignedOutPage } from './Login.js';
+import '../components/signedOut.css';
 
 /**
  * ENROLMENT, FROM A BROWSER.
@@ -15,18 +16,11 @@ import { SignedOutPage } from './Login.js';
  * the signed-out tree has exactly one `main`, whichever of the three forms is showing.
  */
 
-const FIELD: React.CSSProperties = {
-  width: '100%',
-  marginBottom: 'var(--s-4)',
-  padding: 'var(--s-2)',
-};
-
-const HINT: React.CSSProperties = {
-  marginTop: 'calc(-1 * var(--s-3))',
-  marginBottom: 'var(--s-4)',
-  fontSize: '0.85em',
-  color: 'var(--ink-2)',
-};
+/*
+ * This file's copies of `FIELD` and `HINT` are gone with `FirstRun.tsx`'s, into
+ * `components/signedOut.css`. They were duplicated here because the two forms are the same shape,
+ * which is exactly why neither could be corrected on its own: see the note in `FirstRun.tsx`.
+ */
 
 /**
  * The states a code can be refused in, when the server names one in `AppError.details.reason`.
@@ -231,89 +225,98 @@ export function Enroll({ onAuthenticated, onCancel }: EnrollProps): JSX.Element 
   }
 
   return (
-    <SignedOutPage>
-      <h1 style={{ marginBottom: 'var(--s-3)' }}>Create your account</h1>
-      <p style={{ marginBottom: 'var(--s-5)' }}>
+    // `prose` for the same reason the setup screen takes it: four fields, two of them explained in
+    // a paragraph, under a lead paragraph of three sentences. The sign-in box's width is for the
+    // screen that has none of that.
+    <SignedOutPage measure="prose">
+      <h1>Create your account</h1>
+      <p className="signed-out-lede">
         An enrollment code from a club officer, an advisor or an administrator creates your own
         member account. It gives you the same account an admin would have made for you — browsing,
         matching, watchlists, exports and the review queue — and never administrator access.
       </p>
 
       <form
+        className="signed-out-form"
         onSubmit={(e) => {
           void submit(e);
         }}
       >
-        <label htmlFor="enrol-code" className="eyebrow">
-          Enrollment code
-        </label>
-        <input
-          id="enrol-code"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          required
-          aria-describedby="enrol-code-hint"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          style={{ ...FIELD, marginBottom: 'var(--s-2)', fontFamily: 'var(--mono, monospace)' }}
-        />
-        <p id="enrol-code-hint" style={HINT}>
-          Paste it exactly as you were given it. GrantSpotter stores only a hash of a code, so
-          nobody — including an administrator — can read yours back to you if it goes missing.
-        </p>
+        <div className="signed-out-field">
+          <label htmlFor="enrol-code" className="eyebrow">
+            Enrollment code
+          </label>
+          <input
+            id="enrol-code"
+            className="signed-out-code"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            required
+            aria-describedby="enrol-code-hint"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+          <p id="enrol-code-hint" className="signed-out-hint">
+            Paste it exactly as you were given it. GrantSpotter stores only a hash of a code, so
+            nobody — including an administrator — can read yours back to you if it goes missing.
+          </p>
+        </div>
 
-        <label htmlFor="enrol-email" className="eyebrow">
-          Email
-        </label>
-        <input
-          id="enrol-email"
-          type="email"
-          autoComplete="username"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={FIELD}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="enrol-email" className="eyebrow">
+            Email
+          </label>
+          <input
+            id="enrol-email"
+            type="email"
+            autoComplete="username"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
 
-        <label htmlFor="enrol-name" className="eyebrow">
-          Display name (optional)
-        </label>
-        <input
-          id="enrol-name"
-          type="text"
-          autoComplete="name"
-          value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
-          style={FIELD}
-        />
+        <div className="signed-out-field">
+          <label htmlFor="enrol-name" className="eyebrow">
+            Display name (optional)
+          </label>
+          <input
+            id="enrol-name"
+            type="text"
+            autoComplete="name"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+          />
+        </div>
 
-        <label htmlFor="enrol-password" className="eyebrow">
-          Password
-        </label>
-        <input
-          id="enrol-password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={MIN_PASSWORD_LENGTH}
-          aria-describedby="enrol-password-hint"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ ...FIELD, marginBottom: 'var(--s-2)' }}
-        />
-        {/*
-          Stated before the form is submitted, not after it is refused. The rule is cheap to
-          satisfy and expensive to discover by rejection, and here a rejection also spends an
-          attempt against the rate limiter that protects the code.
-        */}
-        <p id="enrol-password-hint" style={HINT}>
-          At least {MIN_PASSWORD_LENGTH} characters, and yours to choose. GrantSpotter sends no
-          password-reset email: a forgotten password has to be reset by an administrator.
-        </p>
+        <div className="signed-out-field">
+          <label htmlFor="enrol-password" className="eyebrow">
+            Password
+          </label>
+          <input
+            id="enrol-password"
+            type="password"
+            autoComplete="new-password"
+            required
+            minLength={MIN_PASSWORD_LENGTH}
+            aria-describedby="enrol-password-hint"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          {/*
+            Stated before the form is submitted, not after it is refused. The rule is cheap to
+            satisfy and expensive to discover by rejection, and here a rejection also spends an
+            attempt against the rate limiter that protects the code.
+          */}
+          <p id="enrol-password-hint" className="signed-out-hint">
+            At least {MIN_PASSWORD_LENGTH} characters, and yours to choose. GrantSpotter sends no
+            password-reset email: a forgotten password has to be reset by an administrator.
+          </p>
+        </div>
 
         {error !== null && (
-          <p role="alert" style={{ color: 'var(--no)' }}>
+          <p role="alert" className="signed-out-alert">
             {error}
           </p>
         )}
@@ -323,7 +326,7 @@ export function Enroll({ onAuthenticated, onCancel }: EnrollProps): JSX.Element 
         </button>
       </form>
 
-      <p style={{ marginTop: 'var(--s-5)' }}>
+      <p className="signed-out-aside">
         <button type="button" className="btn" onClick={onCancel}>
           I already have an account
         </button>
