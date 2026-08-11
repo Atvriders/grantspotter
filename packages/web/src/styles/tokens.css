@@ -11,14 +11,13 @@
   --border: #d6dbe3;
   /* THE TWO BORDER TOKENS ARE NOT TWO SHADES OF ONE IDEA. `--border` is a hairline — the rule
      between two table cells, the edge of a card — and it is decoration: nothing is lost if it is
-     not seen. `--border-strong` is a BOUNDARY, and every one of its call sites is either the edge
-     of a control (`.btn`, `.signed-out-field input`, `.filter-field`, `.inbox-panel textarea`,
-     `.wl-field input`, and the `input, select` pairs in `.callsign-fill-field`, `.admin-form` and
-     `.profile-field`) or a mark whose COLOUR is what distinguishes one state from another
-     (`.fact-items > li.unconfirmed` against `.confirmed`'s `--ok`, `.inbox article.inbox-decided`
-     against `--accent`, `.status-pill`'s default against `--ok`/`--unk`/`--no`, `.agenda
-     li.estimated`). WCAG SC 1.4.11 holds both of those to 3:1. So the boundary token is asserted
-     at 3:1 against every neutral surface in `lib/contrast.test.ts`, and the hairline is not.
+     not seen. `--border-strong` is a BOUNDARY: the edge of a control (`.btn`,
+     `.signed-out-field input`, `.filter-field`, `.inbox-panel textarea`, `.wl-field input`, and the
+     `input, select` pairs in `.callsign-fill-field`, `.admin-form` and `.profile-field`), or a mark
+     a reader has to SEE against the panel it sits on (`.agenda li.estimated`, `.prep-mark`,
+     `.chip-group`, `.inbox-note`). WCAG SC 1.4.11 holds both of those to 3:1 against the backdrop
+     they are drawn on, which is the thing this token can be set from: so it is asserted at 3:1
+     against every neutral surface in `lib/contrast.test.ts`, and the hairline is not.
 
      Was #b6bec9. Measured in Chromium against the backdrop each site actually paints on: 1.66:1 on
      `--surface-2` (a `th` underline, a `.status-pill`), 1.76:1 on `--bg`, 1.88:1 on `--surface` —
@@ -26,7 +25,34 @@
      boundaries failed. Worse, the signed-out inputs had carried NO border declaration until
      374de2b, so Chromium drew its own rgb(118,118,118) at 4.54:1 there: naming a token made that
      one measurably weaker. #67768b is 4.62:1 on the card, so the token is now stronger than the UA
-     border it displaced, and 3.76:1 on `--surface-3`, its worst neutral. */
+     border it displaced, and 3.76:1 on `--surface-3`, its worst neutral.
+
+     WHAT THIS VALUE DOES NOT DELIVER, AND WHY THE CLAIM IS NARROWER THAN THE ONE 57f0f5f WROTE.
+     That version of this comment also claimed the token for SC 1.4.11's OTHER case — "a mark whose
+     COLOUR is what distinguishes one state from another" — and said the standard held both to 3:1.
+     The standard does. THIS VALUE DOES NOT MEET THE SECOND ONE, and nothing in the suite ever
+     checked that it did, which is the same shape of defect as the token being unmeasured in the
+     first place. Measured against the inks each mark would have to be told apart from:
+
+       --border-strong from  --ok 1.33:1 · --accent 1.27:1 · --unk 1.31:1 · --no 1.42:1
+                             --warn 1.28:1 · --pref 1.56:1        (dark: 1.79 · 1.54 · 1.76 ·
+                                                                   1.48 · 1.98 · 1.55)
+
+     Not one of the twelve reaches 3:1, and no grey does: a neutral 3:1 from all six semantic inks
+     AND 3:1 from all four neutral surfaces is a far tighter box than the one this value was solved
+     for, and it would move a colour that 31 rules draw with. So the claim is narrowed to the half
+     that is measured and met, and the state-distinction half is written down with these numbers in
+     the WHAT RULE F STILL CANNOT SEE note in `lib/contrast.test.ts` for the change that takes it on.
+
+     Re-reading the four call sites 57f0f5f named, two of them were never colour-only anyway:
+     `.inbox article.inbox-decided` swaps its background to `--surface-2` as well as its rule from
+     `--accent`, and `StatusPill` renders the state as a WORD with an `aria-label` and swaps ink,
+     border and fill together. `.agenda li.estimated`, `.prep-mark` and `.chip-group` are not
+     colour pairs at all — the plain `.agenda li` has no left border, so what they need is to be
+     visible against the panel, which rule F does assert, and where two of them appear together
+     they differ by border STYLE (double, dotted, dashed). `.fact-items > li.unconfirmed` against
+     `.confirmed`'s `--ok` is the one place in the product where colour is the whole of the
+     difference between two states, and at 1.33:1 and 1.79:1 it is the one that needs the work. */
   --border-strong: #67768b;
 
   /* ---- text ---- */

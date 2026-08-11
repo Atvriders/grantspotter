@@ -56,16 +56,78 @@ import { contrastRatio, parseHex } from './contrast.js';
  * `--text-faint` defect above, a list kept by hand that was silent where it was incomplete. So
  * every neutral surface, including `--surface-3`, which no border sits on yet.
  *
- * WHAT RULE F STILL CANNOT SEE, stated so it is not mistaken for coverage: that a control USES the
- * boundary token. A rule that draws an input's edge in `--border` — decoration, and 1.13:1 at its
- * worst — passes everything here, because tokens.css is all this file reads. Measured in Chromium
- * at 374de2b, that is live on `.cal-tabs button` and `.profile-tabs button[aria-selected]` (1.31:1
- * light, 1.39:1 dark). Two more controls declare no border at all — the role `<select>` in the
- * Admin user table and `.source-config input[type="number"]` — so Chromium paints them from
- * `color-scheme`, which follows the OPERATING SYSTEM and not `data-theme`: measured at 1.44:1 in a
- * dark theme on a light desktop, the same mismatch `components/signedOut.css` says it fixed for
- * its own fields. None of those four is a token defect and none is fixed by moving a token;
- * catching them needs a sweep over the component stylesheets, which is a different test.
+ * WHAT RULE F STILL CANNOT SEE, stated so it is not mistaken for coverage. Rule F holds the TOKEN.
+ * It cannot see which token a control actually draws with, and it cannot see what happens to that
+ * token's colour between the stylesheet and the screen. Four things are live today, re-measured in
+ * Chromium at 1440x900 with `data-theme` set explicitly in both directions and — where a control
+ * is painted by the platform rather than by this palette — with the OS colour scheme emulated both
+ * ways too. None of the four is fixed by moving a token. Three of them are PRE-EXISTING: they are
+ * older than 374de2b/1046a3f/57f0f5f and those commits neither caused nor touched them.
+ *
+ *   1  AN ANCESTOR'S `opacity`, WHICH THIS FILE CANNOT SEE BY CONSTRUCTION. `/sources` renders 26
+ *      of its 27 rows inside `.source-paused td { opacity: 0.62 }` — a paused source is still
+ *      shown, deliberately, because deleting the row would hide the decision — and every one of
+ *      those rows carries an ENABLED Save button and an enabled `input[type="number"]`. `opacity`
+ *      composites the whole subtree, border and fill together, over whatever is behind it, so
+ *      `--border-strong` reaches the screen as a colour that appears in no stylesheet. Read off
+ *      screenshot pixels: the Save button's edge is #9da7b5 on the page's #f7f8fa at 2.29:1 light
+ *      and #4b596b on #0d1117 at 2.65:1 dark, against 4.62:1 and 4.64:1 for the SAME button in the
+ *      one row that is not paused.
+ *
+ *      57f0f5f IMPROVED THIS AND DID NOT FINISH IT, and the honest way to say that is with both
+ *      numbers: under the old #b6bec9/#3d4a5a those 26 buttons measured 1.42:1 and 1.50:1, so the
+ *      token move bought +0.87 and +1.15 — and 2.29:1 is still short of 3:1. It is NOT claimed by
+ *      that commit's sweep and it is not fixed by raising the token again. THE GENERAL LESSON, and
+ *      the reason this item is first: a contrast rule that reads TOKEN VALUES cannot see an opacity
+ *      on an ancestor, so this whole class of failure is invisible to rule F by construction. The
+ *      token is 4.62:1 and right; the composite is 2.29:1 and wrong; no value of `--border-strong`
+ *      makes both true, because the defect is that `.source-paused` dims controls a person can
+ *      still press rather than dimming only what is being reported.
+ *
+ *   2  PRE-EXISTING — A CONTROL DRAWN IN THE HAIRLINE. A rule that draws an input's edge in
+ *      `--border` — decoration, and 1.13:1 at its worst — passes everything here, because
+ *      tokens.css is all this file reads. Live on `.slot-form input[type="text"]`, 46 of them on a
+ *      draft, one per user-answerable slot, and on `.fact-items input[type="text"]`, 11 on the
+ *      draft measured, that count being however many checkable specifics the draft's own text
+ *      yields. All of them 1.39:1 against the `--surface` they sit on, in BOTH themes.
+ *
+ *   3  PRE-EXISTING — THE SAME FAULT ON TWO TAB STRIPS. `.cal-tabs button` and
+ *      `.profile-tabs button[aria-selected='true']` also draw in `--border`: 1.39:1 against their
+ *      own `--surface` fill in both themes, and 1.31:1 light / 1.52:1 dark against the page behind
+ *      them. An earlier version of this note read "1.31:1 light, 1.39:1 dark". Both numbers are
+ *      real and the pairing was not — 1.39 is the against-own-fill reading and it is the same in
+ *      both themes, and the dark against-the-page reading is 1.52.
+ *
+ *   4  PRE-EXISTING, AND NOT THE CONTRAST DEFECT IT WAS WRITTEN UP AS. The role `<select>` in the
+ *      Admin user table and `.source-config input[type="number"]` declare no border at all, so
+ *      Chromium paints them from `color-scheme`, which follows the OPERATING SYSTEM and not
+ *      `data-theme`: a dark theme on a light desktop leaves a light-mode widget sitting in a dark
+ *      card, which is the same mismatch `components/signedOut.css` says it fixed for its own
+ *      fields. THE 1.44:1 THIS NOTE PREVIOUSLY REPORTED FOR THEM IS WITHDRAWN — it is not
+ *      reproducible, and nothing measured here is near it. The `<select>`, off pixels, in all four
+ *      combinations of OS scheme and `data-theme`: a light desktop paints rgb(118,118,118)
+ *      whatever the theme, 4.54:1 against the widget's own fill and 3.81:1 against a dark card; a
+ *      dark desktop paints #858585 on #3b3b3b at 3.04:1, and 3.69:1 against a light card. Four
+ *      readings, all of them over 3:1. The number field on a light desktop reads 4.54:1 against
+ *      its own fill and 4.27:1 / 4.17:1 against the page — in the one row of 27 that is not
+ *      paused; the other 26 are item 1 and not this one. So what these two controls owe is a
+ *      theme, not a ratio.
+ *
+ * Catching 2 and 3 needs a sweep over the component stylesheets; catching 1 needs a sweep over
+ * RENDERED PIXELS, because there is no stylesheet in which the failing colour is written down.
+ * Both are a different test from this one, which is a statement about a palette.
+ *
+ * AND ONE MORE THING THIS FILE ASSERTS AND THE PALETTE DOES NOT DELIVER, moved here from the
+ * rationale in tokens.css where it was stated as though it were met. SC 1.4.11 covers a mark whose
+ * COLOUR is what distinguishes one state from another, and `--border-strong` is used that way in
+ * one place: `.fact-items > li.unconfirmed` draws a 3px left rule in it beside `.confirmed`'s
+ * identical rule in `--ok`. Measured, token against token: 1.33:1 light and 1.79:1 dark. Nothing
+ * asserts that pair and this value does not meet it — no neutral grey does, since it would have to
+ * be 3:1 from all six semantic inks AND 3:1 from all four neutral surfaces at once. Rule F is the
+ * boundary-against-backdrop half of SC 1.4.11 and is honest about being only that. The remaining
+ * ratios, for whoever takes this on: `--border-strong` is 1.27:1 from `--accent`, 1.31:1 from
+ * `--unk`, 1.42:1 from `--no`, 1.28:1 from `--warn` and 1.56:1 from `--pref` in the light palette
+ * (1.54 / 1.76 / 1.48 / 1.98 / 1.55 dark).
  *
  * WHAT IS DELIBERATELY NOT DERIVED: pairs with no possible co-occurrence, such as one family's
  * ink on another family's chip (`--ok` on `--no-soft`). Nothing in the design puts them together,

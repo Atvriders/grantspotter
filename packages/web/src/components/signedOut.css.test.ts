@@ -27,6 +27,31 @@ import path from 'node:path';
  * beside it. The rule for anything added later is the same one: assert the subject, not only the
  * number, or the number is a decoration on a sheet that does something else.
  *
+ * AND PRESENT IS NOT THE SAME AS WINNING, which is the half that fix still got wrong. Both of the
+ * checks it added asked whether a declaration EXISTED somewhere in the sheet and stopped at the
+ * first one they found. Two sabotages. Each was measured in Chromium and each left this file
+ * green — 26 of 26 — while the screen was wrong:
+ *
+ *   1. `@media (max-width: 480px) { .signed-out-field { display: block } }`. The unconditional
+ *      `display: grid` is still there, so the pairing check above was satisfied. `e2e/signedOut
+ *      .spec.ts` reported 60 hint/input pairs at 0px — every hint on every signed-out screen, at
+ *      320, 360, 390 and 480, in both themes. That is the owner's original complaint restored, at
+ *      the widths they are most likely to be holding, by a rule the check was written not to look
+ *      at: it read only the rules with NO conditions.
+ *   2. A second `min-height` later in base.css's coarse block, at the same specificity as the
+ *      floor: `input:not([type="checkbox"]):not([type="radio"]) { min-height: 20px }`. `hasFloor`
+ *      found the EARLIER rule declaring `min-height: var(--tap-min)`, answered yes and never asked
+ *      what came after it. Chromium takes the later one, and with the floor gone the fields fall
+ *      back to their content height: 48 controls under 44px across the signed-out sweep alone,
+ *      40.5px for a body-size field and 37.5px for the two `--fs-200` code fields.
+ *
+ * These are ONE defect, so they have one fix: `winner()` below resolves the actual cascade — higher
+ * specificity, then source order, with `!important` above both — and every claim about a
+ * declaration is now a claim about the declaration that WINS, evaluated in every combination of
+ * the sheet's own media conditions rather than only in the unconditional one. A check that reads a
+ * stylesheet cannot evaluate `max-width: 480px`, so it enumerates instead: a promise that has to
+ * hold on a phone and on a desktop has to hold in all of them.
+ *
  * IT ALSO READS base.css. The 44px touch floor for these fields is not written in this component's
  * stylesheet any more — it is one app-wide rule in base.css's `pointer: coarse` block — and an
  * assertion that follows the decision is worth more than one that stays where the decision used to
@@ -159,16 +184,151 @@ function inlineMargin(shorthand: string): string {
 }
 
 /**
- * The displays a selector is given UNCONDITIONALLY.
+ * CSS specificity as one sortable number: an id counts 10,000, a class / attribute / pseudo-class
+ * counts 100, a type or pseudo-element counts 1, and the universal selector and the combinators
+ * count nothing. `:where()` contributes nothing at all; `:not()`, `:is()` and `:has()` contribute
+ * the specificity of their MOST specific argument and nothing for themselves (Selectors 4 §17).
  *
- * Conditional ones are deliberately not counted. A `display: grid` written only inside
- * `max-width: 480px` leaves every wider screen with an inert `gap` — the same defect, hiding at a
- * viewport the test would not have thought to ask about.
+ * Needed because "which rule wins" is the whole question below, and `input` and
+ * `input:not([type="checkbox"])` are one clause apart and two very different weights — the first
+ * cannot override base.css's floor and the second can.
  */
-function unconditionalDisplaysOf(selector: string): string[] {
-  return RULES.filter(
-    (rule) => rule.conditions.length === 0 && selectorsOf(rule).includes(selector),
-  ).flatMap((rule) => declaredIn(rule, 'display'));
+function specificity(selector: string): number {
+  let rest = selector.trim();
+  let fromFunctions = 0;
+  // Innermost first: `[^()]*` cannot span a nested pair, so `:not(:is(.a))` resolves `:is(.a)`
+  // before the `:not()` around it, and each pass removes the one it has already counted.
+  for (;;) {
+    const fn = /:(not|is|has|where)\(([^()]*)\)/i.exec(rest);
+    if (fn === null) break;
+    const name = (fn[1] ?? '').toLowerCase();
+    const args = (fn[2] ?? '').split(',');
+    fromFunctions += name === 'where' ? 0 : Math.max(0, ...args.map((arg) => specificity(arg)));
+    rest = `${rest.slice(0, fn.index)} ${rest.slice(fn.index + fn[0].length)}`;
+  }
+  const take = (pattern: RegExp): number => {
+    const found = rest.match(pattern) ?? [];
+    rest = rest.replace(pattern, ' ');
+    return found.length;
+  };
+  // The order is the point: `::before` has to be taken before anything counts `:before` as a
+  // pseudo-class, and `[type="checkbox"]` before anything counts `checkbox` as a type.
+  const pseudoElements = take(/::[-\w]+/g);
+  const ids = take(/#[-\w]+/g);
+  const attributes = take(/\[[^\]]*\]/g);
+  const classes = take(/\.[-\w]+/g);
+  const pseudoClasses = take(/:[-\w]+/g);
+  const types = take(/[a-z][-\w]*/gi);
+  return (
+    fromFunctions +
+    ids * 10_000 +
+    (attributes + classes + pseudoClasses) * 100 +
+    types +
+    pseudoElements
+  );
+}
+
+/** A declaration that won, with the rule it came from, so a failure can name what beat what. */
+interface Winner {
+  readonly value: string;
+  readonly rule: Rule;
+}
+
+/** `!important` is a separate origin that outranks every normal declaration, whatever its weight. */
+const IMPORTANT = 1_000_000;
+
+/**
+ * The declaration of `prop` that WINS for the selectors `matches` admits, in a context where a
+ * rule's conditions are active exactly when `active` says they are.
+ *
+ * This is the cascade as far as a stylesheet can be read for it: higher specificity wins, equal
+ * specificity is settled by source order, `!important` beats both. Rules that do not declare
+ * `prop` are skipped BEFORE `matches` sees them — partly because it is pointless work, and partly
+ * because `matches` is jsdom, which is entitled to refuse a selector like `*::before` that no
+ * element can ever match.
+ *
+ * What it cannot model: the other stylesheets. Every sheet in this app is imported into one
+ * bundle, so a rule in another file could out-specify one here. Each caller below therefore reads
+ * the one file the decision it is checking is written in, and says which file that is.
+ */
+function winner(
+  rules: readonly Rule[],
+  matches: (selector: string) => boolean,
+  prop: string,
+  active: (conditions: readonly string[]) => boolean,
+): Winner | undefined {
+  let best: { won: Winner; weight: number; order: number } | undefined;
+  rules.forEach((rule, order) => {
+    const declarations = declaredIn(rule, prop);
+    if (declarations.length === 0) return;
+    if (!active(rule.conditions)) return;
+    const selected = selectorsOf(rule).filter(matches);
+    if (selected.length === 0) return;
+    // A rule's weight for THIS element is the weight of the selector in its list that selects it.
+    const base = Math.max(...selected.map(specificity));
+    for (const declared of declarations) {
+      const important = /!\s*important$/i.test(declared);
+      const weight = important ? base + IMPORTANT : base;
+      // `>=` on the order so that the LAST of two declarations of one property inside a single
+      // rule is the one kept, which is what a browser does with them.
+      if (
+        best === undefined ||
+        weight > best.weight ||
+        (weight === best.weight && order >= best.order)
+      ) {
+        best = {
+          won: { value: declared.replace(/\s*!\s*important$/i, '').trim(), rule },
+          weight,
+          order,
+        };
+      }
+    }
+  });
+  return best?.won;
+}
+
+/**
+ * Every combination of a sheet's `@media` conditions, as the set to treat as ACTIVE.
+ *
+ * A file that reads CSS cannot evaluate a media query, so it enumerates them instead. This is the
+ * half the previous version of these checks was missing: it looked only at the rules with no
+ * conditions at all, so a `display: block` written inside `max-width: 480px` was invisible to it
+ * while being exactly what a phone renders.
+ */
+function conditionContexts(rules: readonly Rule[]): string[][] {
+  const all = [...new Set(rules.flatMap((rule) => rule.conditions))];
+  expect(
+    all.length,
+    'this enumeration is 2^n — a sheet with that many conditions needs a different model, not a ' +
+      'longer loop',
+  ).toBeLessThanOrEqual(8);
+  const out: string[][] = [];
+  for (let mask = 0; mask < 1 << all.length; mask += 1) {
+    out.push(all.filter((_, index) => (mask & (1 << index)) !== 0));
+  }
+  return out;
+}
+
+/** A rule is live in a context when every condition it sits under is one that context turns on. */
+const activeIn =
+  (on: readonly string[]) =>
+  (conditions: readonly string[]): boolean =>
+    conditions.every((condition) => on.includes(condition));
+
+const describeContext = (on: readonly string[]): string =>
+  on.length === 0 ? 'with no media query active' : `under ${on.join(' and ')}`;
+
+/**
+ * The `display` that wins for an exact selector in this sheet, in one condition context.
+ *
+ * Matched by selector STRING, and that is the limit of this one: a rule written as
+ * `.signed-out .signed-out-field` also selects the box and is not seen here. The floor check below
+ * has an element and so uses jsdom instead; this one has only a name out of the sheet. Every rule
+ * in `signedOut.css` today names these boxes by the same single class, and the assertion that
+ * nothing anywhere reaches them by another route is the one this file does not make.
+ */
+function displayFor(selector: string, on: readonly string[]): Winner | undefined {
+  return winner(RULES, (candidate) => candidate === selector, 'display', activeIn(on));
 }
 
 /** The displays under which `gap`, `justify-self` and their neighbours mean anything at all. */
@@ -189,13 +349,31 @@ describe('spacing states the relationship between a field and its parts', () => 
   const withinField = (): number => spacingPx(valueOf('.signed-out-field', 'gap') ?? '');
   const betweenFields = (): number => spacingPx(valueOf('.signed-out-form', 'gap') ?? '');
 
-  it('writes those gaps on boxes that can have one, which is what makes the numbers below real', () => {
+  /** Why a box that carries a `gap` is not laying its children out, in one context, or ''. */
+  const notLayingOut = (selector: string, on: readonly string[]): string => {
+    const display = displayFor(selector, on);
+    if (display === undefined) return `nothing gives it a display ${describeContext(on)}`;
+    if (!LAYS_OUT_ITS_CHILDREN.test(display.value)) {
+      return `\`${display.rule.selector} { display: ${display.value} }\` wins ${describeContext(on)}`;
+    }
+    return '';
+  };
+
+  it('writes those gaps on boxes that can have one, at every combination of media conditions', () => {
     /*
       `gap` DOES NOTHING on a block container, and says nothing when it is ignored. This is the
       assertion the file was missing: with `display: grid` deleted from `.signed-out-field` the two
       tests below still read 8 and 24 out of the sheet, still found 24 ÷ 8 ≥ 2, and Chromium
       measured 0px from the input to the hint explaining it — the owner's original complaint,
       passing 21 of 21.
+
+      AND THE FIRST VERSION OF THIS CHECK ONLY LOOKED AT THE UNCONDITIONAL RULES, which is the same
+      hole one storey up. `@media (max-width: 480px) { .signed-out-field { display: block } }`
+      leaves the unconditional `display: grid` in place, so the check was satisfied — and
+      `e2e/signedOut.spec.ts` measured 60 hint/input pairs at 0px, every hint on every signed-out
+      screen at 320, 360, 390 and 480 in both themes. The reported fault, at the widths most likely
+      to meet it. So the question is not "is a grid declared" but "which display WINS", and it is
+      asked once per combination of the media conditions this sheet actually contains.
 
       Written over every gap in the sheet rather than over the two that are known about, because
       the next one will be written by somebody who has not read this comment.
@@ -208,39 +386,43 @@ describe('spacing states the relationship between a field and its parts', () => 
     // Otherwise vacuous: no gaps at all satisfies every check below, and would also mean the two
     // spacing tests are reading `undefined`.
     expect(written.length).toBeGreaterThanOrEqual(2);
-    const inert = written
-      .filter(
-        ({ selector }) =>
-          !unconditionalDisplaysOf(selector).some((display) => LAYS_OUT_ITS_CHILDREN.test(display)),
-      )
-      .map(({ selector, prop }) => `${selector} { ${prop} } — not a grid or a flex container`);
-    expect(inert).toEqual([]);
+    const contexts = conditionContexts(RULES);
+    expect(contexts.length, 'the context enumeration produced nothing to check under').toBeGreaterThan(1);
+    const inert: string[] = [];
+    for (const on of contexts) {
+      for (const { selector, prop } of written) {
+        const why = notLayingOut(selector, on);
+        if (why !== '') inert.push(`${selector} { ${prop} } — ${why}`);
+      }
+    }
+    expect([...new Set(inert)]).toEqual([]);
   });
 
   it('states a grid-item property only where there is a grid to be an item of', () => {
     // The same shape one level down. `.signed-out-form > .btn { justify-self: start }` is what
     // keeps the button from stretching the width of the panel, and it is dropped in silence the
-    // moment its parent stops laying its children out.
+    // moment its parent stops laying its children out — including at one viewport only.
     const items = RULES.flatMap((rule) =>
       ['justify-self', 'align-self'].flatMap((prop) =>
         declaredIn(rule, prop).flatMap(() => selectorsOf(rule).map((selector) => ({ selector, prop }))),
       ),
     );
     expect(items.length).toBeGreaterThan(0);
-    const orphans = items
-      .filter(({ selector }) => {
+    const orphans: string[] = [];
+    for (const on of conditionContexts(RULES)) {
+      for (const { selector, prop } of items) {
         // A direct-child selector names the box that has to do the laying out. A descendant
         // selector does not say whose child the item is, so this cannot check it and refuses it.
         const parts = selector.split('>').map((part) => part.trim());
-        return (
-          parts.length !== 2 ||
-          !unconditionalDisplaysOf(parts[0] ?? '').some((display) =>
-            LAYS_OUT_ITS_CHILDREN.test(display),
-          )
-        );
-      })
-      .map(({ selector, prop }) => `${selector} { ${prop} } — no grid parent named`);
-    expect(orphans).toEqual([]);
+        if (parts.length !== 2) {
+          orphans.push(`${selector} { ${prop} } — no grid parent named`);
+          continue;
+        }
+        const why = notLayingOut(parts[0] ?? '', on);
+        if (why !== '') orphans.push(`${selector} { ${prop} } — its parent ${why}`);
+      }
+    }
+    expect([...new Set(orphans)]).toEqual([]);
   });
 
   it('puts real space between a control and its own explanation', () => {
@@ -348,20 +530,65 @@ describe('the responsive rules', () => {
       rule.conditions.some((c) => /pointer\s*:\s*coarse/.test(c)) &&
       declaredIn(rule, 'min-height').includes('var(--tap-min)'),
   );
-  const floorSelectors = floorRules.flatMap(selectorsOf);
+
+  /** The contexts in base.css in which a thumb is driving the product. */
+  const coarseContexts = (): string[][] =>
+    conditionContexts(BASE_RULES).filter((on) => on.some((c) => /pointer\s*:\s*coarse/.test(c)));
+
+  /** `var(--tap-min)` → 44, `44px` → 44. Anything else is not a length this file can compare. */
+  const asPx = (value: string): number | undefined => {
+    if (/^var\(\s*--tap-min\s*\)$/.test(value)) return spacingPx('var(--tap-min)');
+    const px = /^(\d+(?:\.\d+)?)px$/.exec(value);
+    return px === null ? undefined : Number(px[1]);
+  };
 
   /**
-   * Does a rule that sets the floor actually SELECT this element? jsdom answers, not a regex —
-   * `input:not([type="checkbox"])` and `input` are the same string to a search and different
-   * rules to a browser, and which controls are covered is the entire question here.
+   * The `min-height` that WINS for this control under a coarse pointer, or undefined if no rule
+   * gives it one at all.
+   *
+   * NOT "is there a rule that sets the floor". The version this replaces stopped at the first
+   * coarse rule declaring `min-height: var(--tap-min)` and answered yes. Add a second rule of the
+   * same specificity later in the same block —
+   * `input:not([type="checkbox"]):not([type="radio"]) { min-height: 20px }` — and Chromium takes
+   * the later one: measured, 48 controls under 44px across the signed-out sweep, at 40.5px and
+   * 37.5px, with that check still green. A declaration being present is not a declaration taking
+   * effect, which is the same thing the gap check above had wrong; both now ask the cascade.
+   *
+   * jsdom decides what a rule SELECTS, not a regex: `input:not([type="checkbox"])` and `input` are
+   * the same string to a search and different rules to a browser, and which controls are covered
+   * is the entire question here.
    */
-  const hasFloor = (html: string): boolean => {
+  const winningFloor = (html: string, on: readonly string[]): Winner | undefined => {
     const host = document.createElement('div');
     host.innerHTML = html;
     const element = host.firstElementChild;
     expect(element, `${html} did not parse into an element`).not.toBeNull();
-    return floorSelectors.some((selector) => element?.matches(selector) === true);
+    return winner(
+      BASE_RULES,
+      (selector) => element?.matches(selector) === true,
+      'min-height',
+      activeIn(on),
+    );
   };
+
+  /** Every control a thumb has to be able to hit, and the two that are handled another way. */
+  const CONTROLS = [
+    '<input type="text" />',
+    '<input type="email" />',
+    '<input type="password" />',
+    '<input type="search" />',
+    '<input type="number" />',
+    '<input type="date" />',
+    '<input type="url" />',
+    '<input type="file" />',
+    '<select></select>',
+    '<textarea></textarea>',
+    '<button></button>',
+    '<a class="btn"></a>',
+    '<summary></summary>',
+    '<div role="tab"></div>',
+    '<label><input type="checkbox" /></label>',
+  ];
 
   it('re-spaces on a narrow screen without hiding anything', () => {
     // `test/responsive.test.ts` states this repo-wide: a breakpoint may re-flow, re-space and
@@ -379,7 +606,7 @@ describe('the responsive rules', () => {
     }
   });
 
-  it('gives every field in the product the touch floor, not only the three screens here', () => {
+  it('gives every field in the product the touch floor, and lets no later rule take it back', () => {
     /*
       base.css's coarse block covered `.btn`, `button`, `summary`, `[role="tab"]` and the box of a
       checkbox, and no field of any kind; this stylesheet answered that for its own three screens
@@ -387,34 +614,74 @@ describe('the responsive rules', () => {
       coarse pointer over every route that carries a form: /applications' 47 text inputs at 35px,
       /profile's eleven at 40.5px, its eight `<select>`s at 37px and its three date fields at
       42.5px. The owner asked whether mobile worked, not whether setup did.
+
+      What is asserted is the WINNING `min-height`, not the presence of one, and it is asserted as
+      a number against the token rather than as the string `var(--tap-min)`: a rule that overrode
+      the floor with `min-height: 20px` would be a floor written twice and honoured once, and the
+      old check — which stopped at the first rule naming the token — reported that as covered.
     */
     expect(floorRules.length).toBeGreaterThan(0);
-    const uncovered = [
-      '<input type="text" />',
-      '<input type="email" />',
-      '<input type="password" />',
-      '<input type="search" />',
-      '<input type="number" />',
-      '<input type="date" />',
-      '<input type="url" />',
-      '<input type="file" />',
-      '<select></select>',
-      '<textarea></textarea>',
-      '<button></button>',
-      '<a class="btn"></a>',
-      '<summary></summary>',
-      '<div role="tab"></div>',
-      '<label><input type="checkbox" /></label>',
-    ].filter((html) => !hasFloor(html));
-    expect(uncovered).toEqual([]);
+    const contexts = coarseContexts();
+    expect(contexts.length, 'no context in base.css turns a coarse pointer on').toBeGreaterThan(0);
+    const short: string[] = [];
+    for (const on of contexts) {
+      for (const html of CONTROLS) {
+        const won = winningFloor(html, on);
+        if (won === undefined) {
+          short.push(`${html} — no rule gives it a min-height ${describeContext(on)}`);
+          continue;
+        }
+        const px = asPx(won.value);
+        if (px === undefined || px < spacingPx('var(--tap-min)')) {
+          short.push(
+            `${html} — \`${won.rule.selector} { min-height: ${won.value} }\` wins ` +
+              `${describeContext(on)}`,
+          );
+        }
+      }
+    }
+    expect(short).toEqual([]);
   });
 
   it('leaves the tick boxes to the rule written for them', () => {
     // The negative half, and the reason the selector is written the awkward way it is. A checkbox
     // is the one control that must not be stretched to 44: base.css grows the BOX to 20px and puts
     // the floor on the label around it, so what a thumb aims at is the whole row.
-    expect(hasFloor('<input type="checkbox" />')).toBe(false);
-    expect(hasFloor('<input type="radio" />')).toBe(false);
+    for (const on of coarseContexts()) {
+      expect(winningFloor('<input type="checkbox" />', on)).toBeUndefined();
+      expect(winningFloor('<input type="radio" />', on)).toBeUndefined();
+    }
+  });
+
+  it('reads the cascade the way a browser does, so the two checks above are not guesses', () => {
+    // The weights the two checks turn on, stated directly. `input` cannot override base.css's
+    // floor and `input:not([type="checkbox"]):not([type="radio"])` can, and a check that got that
+    // backwards would either miss a real override or invent one.
+    expect(specificity('input')).toBe(1);
+    expect(specificity('.signed-out-field')).toBe(100);
+    expect(specificity('input:not([type="checkbox"]):not([type="radio"])')).toBe(201);
+    expect(specificity('label:has(> input[type="checkbox"])')).toBe(102);
+    expect(specificity('#id .cls tag')).toBe(10_101);
+    expect(specificity('[role="tab"]')).toBe(100);
+    expect(specificity('a::before')).toBe(2);
+    // `:where()` is the one functional pseudo-class that adds nothing, including for its argument.
+    expect(specificity(':where(#id) p')).toBe(1);
+    expect(specificity('*')).toBe(0);
+
+    // Source order settles a tie, and `!important` settles it regardless of order.
+    const sheet = parse(
+      '@media (pointer: coarse) { .a { min-height: 44px } .a { min-height: 20px } }',
+    );
+    expect(winner(sheet, (s) => s === '.a', 'min-height', () => true)?.value).toBe('20px');
+    const shouted = parse(
+      '@media (pointer: coarse) { .a { min-height: 44px !important } .a { min-height: 20px } }',
+    );
+    expect(winner(shouted, (s) => s === '.a', 'min-height', () => true)?.value).toBe('44px');
+    // ...and specificity beats source order.
+    const weighted = parse('div.a { min-height: 44px } .a { min-height: 20px }');
+    expect(winner(weighted, () => true, 'min-height', () => true)?.value).toBe('44px');
+    // A rule whose conditions the context does not turn on is not in the running at all.
+    expect(winner(sheet, (s) => s === '.a', 'min-height', (c) => c.length === 0)).toBeUndefined();
   });
 
   it('does not restate that floor here, where only three screens would get it', () => {
