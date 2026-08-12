@@ -1,11 +1,23 @@
 /**
  * Maidenhead locators: the arithmetic, and nothing else.
  *
- * A locator is not a point. `FN31pr` names a BOX roughly 2.5 arcminutes tall and 5 arcminutes
- * wide — about 2.9 by 3.5 miles at Newington's latitude — and every character added divides that
- * box further. The whole reason this module exists in `core` rather than as a one-line helper
- * beside a caller is that three different questions get asked of a locator and they are NOT the
- * same question:
+ * A locator is not a point. `FN31pr` names a BOX exactly 2.5 arcminutes tall and 5 arcminutes
+ * wide, and every character added divides that box further.
+ *
+ * THE ARCMINUTES ARE THE DEFINITION; MILES ARE A WORKED EXAMPLE AND NEED A LATITUDE BEFORE THEY
+ * MEAN ANYTHING. A degree of latitude is the same length everywhere, so the north-south figure is
+ * constant; a degree of longitude shrinks with the cosine of the latitude, so the east-west figure
+ * is not. Measured with `haversineMiles` and `EARTH_RADIUS_MILES` from `geo.ts`: `FN31pr` is 2.88
+ * miles north-south — at every latitude — by 4.30 east-west at Newington's 41.71°N, and `FN42li`
+ * is the same 2.88 by 4.26 at Boston's 42.35°N.
+ *
+ * This header said "about 2.9 by 3.5 miles" until 2026-08-11, which was no box at any latitude: it
+ * came from reading the 2.5 and 5 arcminutes as though arcminutes were miles, and it contradicted
+ * the two files consuming this one, each of which had computed 2.9 by 4.3 correctly and
+ * independently. The module that defines what a locator means was the one stating it wrong.
+ *
+ * The whole reason this module exists in `core` rather than as a one-line helper beside a caller
+ * is that three different questions get asked of a locator and they are NOT the same question:
  *
  *   1. where is it            -> `maidenheadRepresentativePoint` (a REPRESENTATIVE, not a place)
  *   2. what does it cover     -> `maidenheadBox` (south/north/west/east)
@@ -14,7 +26,10 @@
  * (3) is the one that pays for the pair of fields. callook states a latitude, a longitude AND a
  * grid square for the same station; when the coordinate does not fall inside its own stated
  * square the record disagrees with itself, and a caller has to be able to find that out rather
- * than average two contradictory answers into a confident one.
+ * than average two contradictory answers into a confident one. Its caller is `statedPoint` in
+ * `server/src/callsign/callook.ts`, which refuses the whole `location` when the two halves
+ * disagree — named here because between 2026-08-11's first two commits and its third, this
+ * function had no caller at all and the paragraph above was a justification for nothing.
  *
  * TWO DELIBERATE SHAPES IN THIS FILE
  *
@@ -22,9 +37,11 @@
  *   `representativeLat`/`representativeLon` plus the uncertainty either side. That is not
  *   verbosity for its own sake: `GeoLocation` in `geo.ts` is `{ lat?, lon?, ... }`, and a plain
  *   `{ lat, lon }` returned from here would be structurally assignable to it, so the centre of a
- *   two-character field — a box 10 degrees by 20, most of New England and a lot of the Atlantic —
- *   could reach radius matching as if someone had stated their address. The rename makes a caller
- *   write the conversion out, at which point the caller has noticed.
+ *   two-character field — a box 10 degrees by 20, which for `FN` (40°N to 50°N, 80°W to 60°W) is
+ *   691 miles north-south by 1029 east-west at Newington's latitude, holding all of New England
+ *   and all of New York with room to spare — could reach radius matching as if someone had stated
+ *   their address. The rename makes a caller write the conversion out, at which point they have
+ *   noticed.
  *
  * - Nothing here throws and nothing half-parses. `parseMaidenhead` returns a reason, because
  *   "FN31p" (odd length) and "FZ31pr" (Z is not a field character) are different defects in the
@@ -33,7 +50,10 @@
  * NO DEPENDENCIES, INCLUDING NOT `geo.ts`. Everything below is integer arithmetic on character
  * codes and one division. There is deliberately no "how many miles across is this box" helper:
  * that answer needs an Earth model and a latitude, `haversineMiles` in `geo.ts` already has one,
- * and a caller that wants miles can use it with these degrees.
+ * and a caller that wants miles can use it with these degrees. Every mileage quoted above is
+ * asserted against that function in `test/maidenhead.test.ts` — a test may import what this module
+ * may not, and a figure nothing executes is a figure that drifts, which is how the wrong one
+ * survived here for two commits.
  */
 
 /** How many characters of locator: field pair, square pair, subsquare pair, extended pair. */
@@ -46,9 +66,13 @@ export const MAIDENHEAD_PRECISIONS: readonly MaidenheadPrecision[] = [2, 4, 6, 8
  * INTEGER UNITS.
  *
  * Every edge in this module is computed as `wholeNumberOfCells / unitsPerDegree - origin`, never
- * by adding fractional spans together. `FN31pr`'s north edge is (43190 + 10) / 240 - 90 = exactly
- * 41.75, and the north edge of the topmost row is exactly 90.0 — where adding 10 + 1 + 23/24
- * degrees in floating point lands near 90 but not necessarily ON it. This matters more than it
+ * by adding fractional spans together. `FN31pr`'s south edge sits at 31610 units, so its north
+ * edge is (31610 + 10) / 240 - 90 = exactly 41.75; the topmost subsquare row starts at 43190, so
+ * its north edge is (43190 + 10) / 240 - 90 = exactly 90.0 — where adding 10 + 1 + 23/24
+ * degrees in floating point lands near 90 but not necessarily ON it. (Until 2026-08-11 this
+ * sentence carried the topmost row's 43190 under FN31pr's name and asserted the pair equalled
+ * 41.75; it equals 90. Two true numbers, one false identity — the arithmetic below was right all
+ * along, which is exactly why nothing caught it.) This matters more than it
  * sounds: `boxContainsCoordinate` treats the north edge as exclusive except at the pole, and that
  * exception can only be written as `north === 90` if 90 is what the arithmetic actually produces.
  *

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkCoordinateAgainstLocator } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_ROOT, loadFixture } from '../../test/fixtures.js';
 import {
@@ -11,6 +12,7 @@ import {
   type CallsignLookupDeps,
 } from './callook.js';
 import { COOLDOWN_FLOOR_MS, createHostCooldown, type HostCooldown } from './cooldown.js';
+import type { GeocodedPoint, MailingGeocode } from './types.js';
 
 /**
  * Every case here is driven by a file in `fixtures/callook/` — a real capture where committing one
@@ -70,6 +72,23 @@ interface CallookBody {
   /** Strings, all three of them, and `""` for "no data" — see `person-no-address.json`. */
   location: { latitude: string; longitude: string; gridsquare: string };
   otherInfo: { grantDate: string; expiryDate: string; frn: string; ulsUrl: string };
+}
+
+/**
+ * The point out of whichever arm holds it — the exhaustive `switch` a consumer has to write, which
+ * is the whole reason the three arms use three different keys. Written out here rather than
+ * reached for with a cast, because a test that casts past the discriminant is a test that would
+ * not notice the discriminant being removed.
+ */
+function statedPointOf(geocode: MailingGeocode): GeocodedPoint {
+  switch (geocode.geocodedFrom) {
+    case 'street_address':
+      return geocode.mailingAddress;
+    case 'po_box':
+      return geocode.poBox;
+    case 'address_not_stated':
+      return geocode.unattributed;
+  }
 }
 
 /** A fixture body with one field changed, for the shapes callook could serve but has not. */
@@ -344,22 +363,40 @@ describe('lookupCallsign: where the mail goes', () => {
    * prime meridian, and refusing it would be this parser ruling on which coordinates are PLAUSIBLE
    * for a US licensee instead of on which values the source stated — the guess it declines to make
    * about a licence class.
+   *
+   * THE GRID SQUARE MOVES WITH THE COORDINATE HERE, AND IT DID NOT UNTIL 2026-08-11. Both rows used
+   * to move the point to the equator or the prime meridian and leave `FN42li` sitting beside it,
+   * which was harmless while nothing compared the two and is a self-contradictory record now that
+   * `statedPoint` does. Left alone, this test would have gone on passing — the geocode is refused
+   * either way — while asserting nothing whatever about a lone zero, which is the assertion it
+   * exists to make. So the mutation now writes the locator the coordinate is actually in
+   * (`coordinateToLocator` at 6 characters: `FJ40la` and `JN02ai`), and the body is one callook
+   * could have sent. The assertion is the one it always was: a zero on one axis is kept.
    */
   it.each([
-    ['a zero latitude', { latitude: '0.0', longitude: '-71.0538559' }, 0, -71.0538559],
-    ['a zero longitude', { latitude: '42.34991837', longitude: '0' }, 42.34991837, 0],
+    [
+      'a zero latitude',
+      { latitude: '0.0', longitude: '-71.0538559', gridsquare: 'FJ40la' },
+      0,
+      -71.0538559,
+    ],
+    [
+      'a zero longitude',
+      { latitude: '42.34991837', longitude: '0', gridsquare: 'JN02ai' },
+      42.34991837,
+      0,
+    ],
   ])('keeps %s beside a real one', async (_what, edit, latitude, longitude) => {
     const { deps } = serve(
       mutate('01-callook-info-w1mx-json.json', (body) => {
-        body.location.latitude = edit.latitude;
-        body.location.longitude = edit.longitude;
+        body.location = { ...edit };
       }),
     );
     const result = await lookupCallsign('W1MX', deps);
 
     expect(result.record?.mailingGeocode).toEqual({
       geocodedFrom: 'po_box',
-      poBox: { latitude, longitude, gridsquare: 'FN42li' },
+      poBox: { latitude, longitude, gridsquare: edit.gridsquare },
     });
   });
 
@@ -403,8 +440,19 @@ describe('lookupCallsign: where the mail goes', () => {
   /**
    * ALL THREE OR NONE, the `CITY_STATE_ZIP` rule applied to the other compound field — plus a
    * reason of its own. The locator is the honest half of the answer: `FN42li` states a box measured
-   * at 2.9 by 4.3 miles, while `42.34991837` states a millimetre nobody has. Keeping the pair when
-   * the locator is unreadable would keep precisely the half that overstates itself.
+   * at 2.9 by 4.3 miles at Boston's latitude, while `42.34991837` states a millimetre nobody has.
+   * Keeping the pair when the locator is unreadable would keep precisely the half that overstates
+   * itself.
+   *
+   * WHAT COUNTS AS UNREADABLE IS CORE'S ANSWER NOW, not a regular expression in `callook.ts`, so
+   * the rows below are cases `parseMaidenhead` rejects — an odd length, a character outside its
+   * pair's alphabet, a length past eight. THE ROW THAT LEFT THIS LIST was `FN42li07`, labelled "an
+   * eight-character extended locator": eight characters are read now, and that row is in the
+   * consistency block below under the label it actually earns, because `FN42li07` is not a
+   * malformed locator, it is a well-formed one naming a box W1MX's coordinate is not in.
+   * `FN42lipr` replaces it as the syntax case, and pins the thing the old comment got wrong: the
+   * fourth pair is DIGITS, so a locator with letters there is not an alternative convention, it is
+   * not a locator. `FN` is refused for a different reason again — see `MINIMUM_LOCATOR_PRECISION`.
    */
   it.each([
     ['an empty latitude', { latitude: '' }],
@@ -418,7 +466,9 @@ describe('lookupCallsign: where the mail goes', () => {
     ['a latitude that is a word', { latitude: 'Infinity' }],
     ['a latitude of 400 digits', { latitude: '1'.repeat(400) }],
     ['a five-character locator', { gridsquare: 'FN42l' }],
-    ['an eight-character extended locator', { gridsquare: 'FN42li07' }],
+    ['a ten-character locator', { gridsquare: 'FN42li33aa' }],
+    ['an extended pair written as letters instead of digits', { gridsquare: 'FN42lipr' }],
+    ['a two-character field, too coarse to check anything', { gridsquare: 'FN' }],
     ['a locator with a field letter past R', { gridsquare: 'FZ42li' }],
     ['a locator with a subsquare letter past X', { gridsquare: 'FN42zz' }],
     ['a locator with no square digits', { gridsquare: 'FNxxli' }],
@@ -451,6 +501,29 @@ describe('lookupCallsign: where the mail goes', () => {
     expect(result.record?.mailingGeocode).toEqual({
       geocodedFrom: 'po_box',
       poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42' },
+    });
+  });
+
+  /**
+   * EIGHT CHARACTERS, WHICH THIS FILE REFUSED UNTIL 2026-08-11 AND CORE COULD ALREADY READ.
+   *
+   * `FN42li33` is not a guess about anybody's notation: it is what `coordinateToLocator` returns
+   * for W1MX's own stated coordinate at eight characters, so the record's two halves are the same
+   * place written to two precisions. The refusal it replaces cost the COORDINATE as well as the
+   * locator, because the parse is all-or-nothing — measured against the commit before this one, a
+   * body carrying this exact pair produced no `mailingGeocode` at all.
+   */
+  it('accepts the finer eight-character locator', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.gridsquare = 'FN42li33';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42li33' },
     });
   });
 
@@ -491,6 +564,163 @@ describe('lookupCallsign: where the mail goes', () => {
       expect(result.record).not.toHaveProperty(key);
     },
   );
+});
+
+/**
+ * THE TWO HALVES CHECK EACH OTHER, WHICH IS THE ONLY REASON BOTH ARE KEPT.
+ *
+ * `core/maidenhead.ts` was written on 2026-08-11 with `checkCoordinateAgainstLocator` in it, and
+ * three separate comment blocks justified carrying a coordinate AND a locator on the ground that
+ * each catches the other being wrong. Nothing called it. Measured against the commit before this
+ * one, with the probe in the first test below: a record was emitted as a clean `street_address`
+ * geocode whose stated point is 5,385 miles from the centre of its own stated square, with no
+ * marker of any kind on it.
+ *
+ * WHAT A CONTRADICTION DOES IS COST THE WHOLE FIELD, and these tests are where that decision is
+ * pinned rather than argued. Nothing in the response says which half is wrong, so nothing here can
+ * choose one; a marked-inconsistent state would be a state whose every handler says "treat this as
+ * absent". The tests below pin both directions of that: a contradictory record yields no geocode
+ * on any of the three arms, and — the half that would otherwise rot — a record that AGREES still
+ * yields one.
+ */
+describe('lookupCallsign: a record that contradicts itself', () => {
+  /**
+   * THE VERIFIER'S OWN PROBE. `FN31pr` is in Connecticut; (10, 10) is in the Atlantic off Liberia,
+   * `JK50aa`, 5,385 miles from the centre of the square the same record names.
+   */
+  it('keeps no coordinate from a point 5,385 miles outside its own stated square', async () => {
+    const { deps } = serve(
+      mutate('00-callook-info-w1aw-json.json', (body) => {
+        body.location = { latitude: '10.0', longitude: '10.0', gridsquare: 'FN31pr' };
+      }),
+    );
+    const result = await lookupCallsign('W1AW', deps);
+
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+    // One field refused, not a failed lookup: everything the record said that it did not
+    // contradict still arrives, and the person still gets their name and address filled in.
+    expect(result.status).toBe('found');
+    expect(result.record?.name).toBe('ARRL HQ OPERATORS CLUB');
+    expect(result.record?.city).toBe('NEWINGTON');
+    expect(result.record?.state).toBe('CT');
+  });
+
+  /**
+   * ON EVERY ARM, because the refusal is in the parse and not in one branch of the attribution. A
+   * contradiction that survived on the `po_box` arm would survive on the records this product is
+   * for: two of the three real captures are collegiate clubs at a PO box.
+   */
+  it.each([
+    ['a street address', '00-callook-info-w1aw-json.json', 'W1AW'],
+    ['a PO box', '01-callook-info-w1mx-json.json', 'W1MX'],
+    ['no address at all', 'person-no-address.json', 'NV0ZZZ'],
+  ])('refuses it when the address is %s', async (_what, file, callsign) => {
+    const { deps } = serve(
+      mutate(file, (body) => {
+        body.location = { latitude: '10.0', longitude: '10.0', gridsquare: 'FN31pr' };
+      }),
+    );
+    const result = await lookupCallsign(callsign, deps);
+
+    expect(result.status, _what).toBe('found');
+    expect(result.record, _what).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * A NEAR MISS IS STILL A MISS. `FN42li07` is a well-formed eight-character locator — the very
+   * string this file used to refuse as unreadable — naming a box that W1MX's coordinate misses by
+   * 0.0126° of latitude, which is 0.87 miles measured with `haversineMiles`. Small enough to
+   * change no radius verdict in this corpus, and still two statements computed from different data,
+   * which is the thing being detected. The check is about a record agreeing with itself, not about
+   * a distance being large enough to matter — a threshold in miles would be this file inventing a
+   * tolerance the source never published.
+   */
+  it('refuses a well-formed locator that misses by 0.87 miles', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.gridsquare = 'FN42li07';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.city).toBe('BOSTON');
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * A MISS OF EXACTLY ZERO IS NOT A DISAGREEMENT, AND THIS IS THE ONE EXCEPTION.
+   *
+   * 42.375 is `FN42li`'s north edge exactly. Core's boxes are half-open, so the point belongs to
+   * `FN42lj` and the answer is `outside` — with both offsets 0, which is what "on the line" looks
+   * like. Two implementations that disagree about which side of a boundary owns a point on it are
+   * not disagreeing about where the station is, and a coordinate rounded to eight places lands
+   * exactly there: 42.374999996 inside the box prints as 42.375 on its edge.
+   */
+  it('keeps a coordinate sitting exactly on its own square’s edge', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.latitude = '42.375';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 42.375, longitude: -71.0538559, gridsquare: 'FN42li' },
+    });
+  });
+
+  /**
+   * AND THE EXCEPTION IS EXACTLY THAT NARROW. One ten-millionth of a degree past the edge — 1.1 cm
+   * — is refused, and that is deliberate rather than an oversight in a tolerance. There is no
+   * tolerance: a geocoder that computed this locator FROM this coordinate would have named the box
+   * above, under either edge convention, so a point past the line was not computed from the same
+   * data. Nothing rounds to 1.1 cm outside a boundary; things round ONTO it, which is the case
+   * above.
+   */
+  it('refuses a coordinate 1.1 cm past that edge', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.latitude = '42.3750001';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * THE INVARIANT `types.ts` NOW PROMISES A CONSUMER, checked against every fixture rather than
+   * asserted in prose: if a record carries a `mailingGeocode` at all, its point is in its own
+   * locator's box or exactly on that box's edge. This is also the guard that stops the rule above
+   * from being satisfied by refusing everything — three real captures still produce a geocode.
+   */
+  it('emits no geocode whose two halves disagree, on any fixture', async () => {
+    const files = readdirSync(FIXTURES).filter((file) => file.endsWith('.json'));
+    let kept = 0;
+
+    for (const file of files) {
+      const { deps } = serveFixture(file);
+      const { record } = await lookupCallsign('W1MX', deps);
+      if (record?.mailingGeocode === undefined) continue;
+      kept += 1;
+      const point = statedPointOf(record.mailingGeocode);
+      const agreement = checkCoordinateAgainstLocator(
+        point.latitude,
+        point.longitude,
+        point.gridsquare,
+      );
+      if (agreement.status === 'outside') {
+        // Reported rather than folded into the boolean: a failure here should say how far out.
+        expect([file, agreement.latOffsetDeg, agreement.lonOffsetDeg]).toEqual([file, 0, 0]);
+      } else {
+        expect(agreement.status, file).toBe('inside');
+      }
+    }
+
+    // W1AW, W1MX and K2CC. The hand-built fixtures all carry the 0,0 placeholder and keep nothing.
+    expect(kept).toBe(3);
+  });
 });
 
 describe('lookupCallsign: the answers that are not a record', () => {

@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+// The only import here from outside the module under test. `maidenhead.ts` does not depend on
+// `geo.ts` on purpose — see its header — but the header quotes distances, and a distance needs an
+// Earth model. This is where the two meet, so that a mileage in a comment cannot drift again.
+import { haversineMiles } from '../src/geo.js';
 import {
   boxContainsCoordinate,
   boxRepresentativePoint,
@@ -81,6 +85,88 @@ describe('the fixtures are what this file thinks they are', () => {
       expect(Number.isFinite(station.lat)).toBe(true);
       expect(Number.isFinite(station.lon)).toBe(true);
     }
+  });
+});
+
+/**
+ * THE FIGURES IN THIS MODULE'S HEADER, CHECKED AGAINST THE ARITHMETIC THEY DESCRIBE.
+ *
+ * Until 2026-08-11 that header said `FN31pr` is "about 2.9 by 3.5 miles at Newington's latitude".
+ * The width was wrong by 23%, and it was wrong in the module that DEFINES what a locator means
+ * while its two consumers each had it right — nothing compared them, because a comment is not
+ * executable. These assertions make the numbers executable. `haversineMiles` lives in `geo.ts`,
+ * which `maidenhead.ts` deliberately does not import; a test may, and that is the point of putting
+ * the check here rather than a helper there.
+ */
+describe('the mileage quoted in the header', () => {
+  it('is 2.88 by 4.30 for FN31pr at Newington, not 3.5 across', () => {
+    const box = maidenheadBox(W1AW.grid);
+    expect(box).toBeDefined();
+    if (box === undefined) return;
+
+    const northSouth = haversineMiles(box.south, box.west, box.north, box.west);
+    const eastWest = haversineMiles(W1AW.lat, box.west, W1AW.lat, box.east);
+    expect(northSouth).toBeCloseTo(2.88, 2);
+    expect(eastWest).toBeCloseTo(4.3, 2);
+    // The figure that was there before is not merely imprecise, it is outside the box.
+    expect(eastWest).toBeGreaterThan(3.6);
+  });
+
+  it('is 2.88 by 4.26 for FN42li at Boston, which is why a pair needs a latitude', () => {
+    const box = maidenheadBox(W1MX.grid);
+    if (box === undefined) throw new Error('FN42li does not parse');
+
+    expect(haversineMiles(box.south, box.west, box.north, box.west)).toBeCloseTo(2.88, 2);
+    expect(haversineMiles(W1MX.lat, box.west, W1MX.lat, box.east)).toBeCloseTo(4.26, 2);
+  });
+
+  /**
+   * The reason the header quotes arcminutes first and states a latitude with every mileage: one of
+   * the two numbers is a constant and the other is a function of where you are standing.
+   */
+  it('changes east-west with latitude and never changes north-south', () => {
+    const widths: number[] = [];
+    const heights: number[] = [];
+    for (const lat of [0, 30, 41.714707, 60, 80]) {
+      const locator = coordinateToLocator(lat, -72.7, 6);
+      if (locator === undefined) throw new Error(`no locator at ${lat}`);
+      const box = maidenheadBox(locator);
+      if (box === undefined) throw new Error(`${locator} does not parse`);
+      widths.push(haversineMiles(lat, box.west, lat, box.east));
+      heights.push(haversineMiles(box.south, box.west, box.north, box.west));
+    }
+    for (const height of heights) expect(height).toBeCloseTo(heights[0], 9);
+    // The equator's box is more than five times the width of the one at 80 degrees north.
+    expect(widths[0] / widths[widths.length - 1]).toBeGreaterThan(5);
+  });
+
+  /**
+   * The other arithmetic the header states outright. It claimed `FN31pr`'s north edge was
+   * `(43190 + 10) / 240 - 90 = exactly 41.75`; 43190 is the topmost SUBSQUARE row's south edge, and
+   * that expression is 90. FN31pr's is 31610.
+   */
+  it('puts FN31pr at 31610 units and the topmost subsquare row at 43190', () => {
+    const box = maidenheadBox('FN31pr');
+    if (box === undefined) throw new Error('FN31pr does not parse');
+    expect(Math.round((box.south + 90) * 240)).toBe(31610);
+    expect((31610 + 10) / 240 - 90).toBe(41.75);
+    expect(box.north).toBe(41.75);
+
+    // The northernmost 6-character row: latitude field R, square 9, subsquare x.
+    const top = maidenheadBox('AR09ax');
+    if (top === undefined) throw new Error('AR09ax does not parse');
+    expect(Math.round((top.south + 90) * 240)).toBe(43190);
+    expect((43190 + 10) / 240 - 90).toBe(90);
+    expect(top.north).toBe(90);
+  });
+
+  /** The `FN` field in the `MaidenheadRepresentativePoint` note: 691 by 1029 at Newington. */
+  it('makes a two-character field 691 by 1029 miles at Newington', () => {
+    const box = maidenheadBox('FN');
+    if (box === undefined) throw new Error('FN does not parse');
+    expect([box.south, box.north, box.west, box.east]).toEqual([40, 50, -80, -60]);
+    expect(haversineMiles(box.south, box.west, box.north, box.west)).toBeCloseTo(691, 0);
+    expect(haversineMiles(W1AW.lat, box.west, W1AW.lat, box.east)).toBeCloseTo(1029, 0);
   });
 });
 

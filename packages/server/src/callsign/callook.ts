@@ -1,4 +1,4 @@
-import { type LicenseClass } from '@grantspotter/core';
+import { checkCoordinateAgainstLocator, type LicenseClass } from '@grantspotter/core';
 import { assertNotBlocked } from '../fetcher/blocklist.js';
 import { canonicalHostname } from '../net/hosts.js';
 import {
@@ -74,7 +74,8 @@ import type {
  * `01-callook-info-w1mx-json.json` — a collegiate club, the audience this product was built for —
  * is a post office box, answered to eight decimal places. The whole of that argument, and the shape
  * that stops a consumer walking into it, is in `types.ts` under {@link GeocodedFrom}; the parsing
- * of it is at {@link statedPoint} below.
+ * of it is at {@link statedPoint} below, which also asks core whether the coordinate and the grid
+ * square agree and keeps neither when they do not.
  */
 
 /** The documented pretty-URL base: `https://callook.info/<CALL>/json`. */
@@ -237,24 +238,35 @@ const US_DATE = /^(\d{2})\/(\d{2})\/(\d{4})$/;
 const DECIMAL_DEGREES = /^[+-]?\d+(?:\.\d+)?$/;
 
 /**
- * A Maidenhead locator: a field (`FN`), a square (`31`), and the subsquare (`pr`) that callook has
- * printed in every capture.
+ * The coarsest locator that can still check the coordinate printed beside it.
  *
- * FOUR CHARACTERS ARE ACCEPTED TOO, and eight are not, and neither of those is arbitrary. A
- * four-character locator is the same statement made coarsely — a bigger box, honestly labelled —
- * and refusing one would throw away a usable coordinate over a technicality. The eight-character
- * "extended" form is refused because there is no single convention for its fifth pair (digits in
- * some, letters in others), so reading one means guessing which convention wrote it, and this file
- * does not guess at a source's notation any more than it guesses at a licence class.
+ * THIS FILE NO LONGER HAS AN OPINION ABOUT WHAT A LOCATOR IS. It used to hold a regular expression
+ * of its own — `/^[A-R]{2}\d{2}(?:[A-X]{2})?$/i` — and two opinions about one notation is precisely
+ * how the repository came to state, in two files committed two minutes apart, both that an
+ * eight-character locator cannot be read and that here is the arithmetic for reading one. Syntax is
+ * `core/maidenhead.ts`'s answer now, the same way callsign shape is `shape.ts`'s. What is left here
+ * is the one question core cannot answer, because it is about this source and this use: how coarse
+ * a locator is still worth keeping.
  *
- * The letter ranges are the notation's own and are not decoration: a field letter runs A-R (18
- * fields of 20° longitude, 18 of 10° latitude) and a subsquare letter runs A-X (24 divisions). `S`
- * in a field or `Z` in a subsquare is not a coarse locator, it is not a locator.
+ * FOUR, NOT TWO. A four-character locator is the same statement made coarsely — a bigger box,
+ * honestly labelled — and refusing one would throw away a usable coordinate over a technicality.
+ * Two characters is where that argument runs out. `FN` is a box 10° by 20°, measured at 691 miles
+ * north-south by 1029 east-west at Newington's latitude: a coordinate a thousand miles from where
+ * the rest of the record puts it still falls inside it. The ONLY reason {@link statedPoint} keeps
+ * the locator beside the pair is that the two check each other, so a locator too coarse to perform
+ * that check is the absent one the all-or-nothing rule already refuses.
  *
- * Case-insensitive, because a locator means the same thing in any case; the value is nonetheless
- * stored exactly as it arrived. See {@link GeocodedPoint}.
+ * AND EIGHT IS ACCEPTED, which it was not until 2026-08-11. The comment that refused it said the
+ * extended form has "no single convention for its fifth pair" — an eight-character locator has FOUR
+ * pairs, and the fourth is not in dispute. The notation is built on an alternation, letters then
+ * digits, repeating: field A-R, square 0-9, subsquare A-X, extended square 0-9. Whatever
+ * disagreement exists further out is about the pair after that, at ten characters, which core
+ * refuses as `too_long` and this file therefore never sees. The measured cost of the refusal: a
+ * body carrying `FN42li33` — which is the correct eight-character locator for W1MX's own stated
+ * coordinate — produced NO geocode at all, because the parse is all-or-nothing, so a usable
+ * coordinate was discarded over a locator core could already read and had tested to eight places.
  */
-const MAIDENHEAD = /^[A-R]{2}\d{2}(?:[A-X]{2})?$/i;
+const MINIMUM_LOCATOR_PRECISION = 4;
 
 /** A trimmed non-empty string, or undefined. callook writes "no data" as `""`, never as null. */
 function text(value: unknown): string | undefined {
@@ -435,13 +447,57 @@ function decimalDegrees(value: unknown, limit: number): number | undefined {
  * one unit in that eighth decimal buys). Dropping the locator and keeping the pair would be
  * keeping precisely the half that overstates itself.
  *
- * WHAT IS NOT CHECKED HERE, AND WHERE IT BELONGS. The two halves can check each other: a point
- * outside its own stated grid square means the record is internally inconsistent and neither half
- * should be trusted quietly. Making that check needs Maidenhead-to-bounds arithmetic, that
- * arithmetic is core's — `shape.ts` already sets the precedent that this file asks rather than
- * minting a second opinion of its own — and a copy of it living here is how two answers to one
- * question start disagreeing. Measured by hand on 2026-08-11 rather than in code: all three real
- * captures state a point that falls inside their own locator.
+ * AND THE TWO HALVES HAVE TO AGREE, which is what makes keeping both of them worth anything.
+ *
+ * WHERE THAT CHECK LIVES. This comment used to say the check belonged in core and stop there, on
+ * the grounds that Maidenhead-to-bounds arithmetic is core's and a second copy here is how two
+ * answers to one question start disagreeing. The instinct was right; the conclusion drawn from it
+ * was that nobody made the check at all. Measured against the commit before this one: a body
+ * stating latitude 10, longitude 10 and gridsquare `FN31pr` — a point 5,385 miles from the centre
+ * of its own stated square, in the Atlantic off Liberia — was accepted and emitted as a clean
+ * `street_address` geocode carrying no marker of any kind. OWNING arithmetic and INVOKING it are
+ * different acts. So `core/maidenhead.ts` parses the locator and does the containment, and this
+ * file — the only place that knows the three values arrived in one field of one response — decides
+ * what the answer means for a record.
+ *
+ * AND WHAT IT MEANS IS THAT THE WHOLE `location` IS REFUSED. Three things could happen to a
+ * self-contradictory record and only one of them leaves a consumer better off:
+ *
+ *   - Keep it silently, which is what happened until now. That is a confident ELIGIBLE or NOT
+ *     ELIGIBLE printed about a coordinate the record's own other half says is wrong.
+ *   - Mark it and pass it on. Ask what a consumer would do with the mark: it cannot choose a half,
+ *     because two statements disagree and NOTHING IN THE RESPONSE SAYS WHICH ONE IS WRONG. The
+ *     profile would decline to prefill and the matcher would decline to match — which is what an
+ *     absent field already tells them both, in a shape neither can forget to read. And it would
+ *     have to be a SECOND axis rather than a fourth `geocodedFrom`, because a contradictory record
+ *     is still a PO box or still a street address; every exhaustive `switch` downstream would grow
+ *     a case whose body is "do what you do when there is nothing".
+ *   - Refuse the field. It costs both halves, and that is the honest price of not knowing which of
+ *     them is the wrong one. It is also this file's existing rule — `CITY_STATE_ZIP` drops city,
+ *     state and ZIP together, and the three values here are already all-or-nothing — for the
+ *     reason stated above: an empty field a person can see is better than a filled one they cannot
+ *     check.
+ *
+ * Refusing buys something marking cannot: the PRESENCE of a {@link MailingGeocode} now means the
+ * record agreed with itself. That is an invariant every consumer gets for free instead of a flag
+ * every consumer has to remember to test.
+ *
+ * A MISS OF EXACTLY ZERO IS NOT A DISAGREEMENT. `LocatorAgreement` reports how far outside the
+ * coordinate fell precisely so that a caller does not treat every `outside` alike, and an offset of
+ * exactly 0 on both axes has one meaning: the coordinate lies ON a boundary of its own stated box.
+ * The two halves name the same place and differ only over which side of a line a point on the line
+ * belongs to — core's boxes are half-open, `[south, north)` and `[west, east)`, and not every
+ * implementation picks the same end. It is also where a rounded decimal lands: a true position of
+ * 42.374999996 inside `FN42li`, printed to eight places, becomes 42.375, which is that box's north
+ * edge exactly. Anything further out was computed from different data and is refused — `FN42li07`
+ * beside W1MX's coordinate misses by 0.0126° of latitude, which is 0.87 miles.
+ *
+ * THIS AND THE NULL-ISLAND RULE BELOW ARE NOT SUBSTITUTES, IN EITHER DIRECTION. `0.0 / 0.0 /
+ * JJ00aa` passes this check perfectly — the locator was computed from the zeros, so the halves
+ * corroborate each other exactly as well as two facts would — and is refused by a rule written
+ * down. A record whose halves disagree is refused here even though each half, taken alone, is a
+ * perfectly plausible coordinate and a perfectly good locator. Neither rule can be dropped in
+ * favour of the other. All three real captures pass both, checked in code now rather than by hand.
  */
 function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefined {
   const latitude = decimalDegrees(location.latitude, 90);
@@ -450,7 +506,19 @@ function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefin
   if (latitude === undefined || longitude === undefined || gridsquare === undefined) {
     return undefined;
   }
-  if (!MAIDENHEAD.test(gridsquare)) return undefined;
+
+  const agreement = checkCoordinateAgainstLocator(latitude, longitude, gridsquare);
+  // `unknown` means core could not read the locator. It also covers a coordinate core will not
+  // accept, which `decimalDegrees` has already made unreachable — and the two need not be told
+  // apart, because the answer to both is the same: nothing here is checkable, so nothing is kept.
+  if (agreement.status === 'unknown') return undefined;
+  if (agreement.box.precision < MINIMUM_LOCATOR_PRECISION) return undefined;
+  if (
+    agreement.status === 'outside' &&
+    !(agreement.latOffsetDeg === 0 && agreement.lonOffsetDeg === 0)
+  ) {
+    return undefined;
+  }
 
   /*
    * (0, 0) IS NOT A PLACE ANY OF THESE RECORDS IS.
@@ -463,14 +531,16 @@ function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefin
    * real key." It is an absence written in the shape of an answer, and an absence that reaches
    * `withinRadius` is a confident NOT ELIGIBLE for every award on this continent.
    *
-   * THE CROSS-CHECK DESCRIBED ABOVE — the one this file leaves to core — WOULD NOT HAVE CAUGHT
-   * IT, which is why this is a rule written down and not something inferred later. `JJ00aa` is the subsquare whose south-west corner IS (0, 0) — it was computed
-   * from the zeros — so the pair and the locator corroborate each other perfectly. Two fields
-   * derived from one absence agree exactly as well as two facts do.
+   * THE CROSS-CHECK ABOVE DOES NOT CATCH IT, AND THAT IS NOT A GAP IN THE CROSS-CHECK. `JJ00aa`
+   * is the subsquare whose south-west corner IS (0, 0); it was computed from the zeros, so the
+   * pair and the locator corroborate each other perfectly. Two fields derived from one absence
+   * agree exactly as well as two facts do, and consistency was never the same claim as truth.
+   * Hence a rule written down, sitting after the check rather than replaced by it.
    *
    * ONLY THE PAIR. A lone zero is left alone: a latitude of 0 beside a real longitude is a
    * statement about the equator, and dropping it would be this file ruling on which coordinates
-   * are plausible rather than on which values the source actually stated.
+   * are plausible rather than on which values the source actually stated. That zero still has to
+   * agree with the locator beside it, which is a different question and is asked above.
    */
   if (latitude === 0 && longitude === 0) return undefined;
 

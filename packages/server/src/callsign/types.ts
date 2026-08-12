@@ -32,6 +32,15 @@ export type CallsignLookupStatus =
  * same record states, so the two halves agree with each other — and on this record they agree about
  * a post office.
  *
+ * THAT AGREEMENT IS AN INVARIANT OF THIS TYPE AND NOT AN OBSERVATION ABOUT THREE FILES. Since
+ * 2026-08-11 `callook.ts` asks `core`'s `checkCoordinateAgainstLocator` whether the stated point
+ * falls in the stated square and keeps NOTHING when it does not, so a consumer holding a
+ * {@link MailingGeocode} is holding a record that agreed with itself. It has no marked-inconsistent
+ * state to handle, because a state whose every handler would say "treat this as absent" is better
+ * expressed by the field being absent. What consistency does NOT mean is correctness: two fields
+ * computed from one wrong answer agree perfectly, which is why the `0.0 / 0.0 / JJ00aa` placeholder
+ * needs a rule of its own and gets one.
+ *
  * AND IT IS STATED TO EIGHT DECIMAL PLACES. One unit in the eighth decimal of a latitude is 1.1 mm
  * (measured here with the haversine in `core/geo.ts`). A millimetre, on a post office box. The grid
  * square is the honest half of the same answer: `FN42li` says "somewhere in this box" out loud, and
@@ -78,7 +87,16 @@ export interface GeocodedPoint {
   latitude: number;
   /** Degrees east, `-180` to `180`. */
   longitude: number;
-  /** A 4- or 6-character Maidenhead locator, e.g. `FN31pr`. Case as the record printed it. */
+  /**
+   * A 4-, 6- or 8-character Maidenhead locator, e.g. `FN31pr`. Case as the record printed it.
+   *
+   * Two characters is refused rather than kept coarsely, and eight is read rather than refused as
+   * ambiguous; both of those are decisions about this source, argued at `MINIMUM_LOCATOR_PRECISION`
+   * in `callook.ts`. The box this names contains the latitude and longitude above, or has them
+   * exactly on its edge — see the invariant in {@link GeocodedFrom}, and the boundary case in
+   * `statedPoint` — so the two fields are one place stated twice, coarsely and finely, rather than
+   * two places to choose between.
+   */
   gridsquare: string;
 }
 
