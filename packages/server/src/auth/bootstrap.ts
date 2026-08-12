@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, sep } from 'node:path';
 import type { Db } from '../db/migrate.js';
 
 export interface BootstrapState {
@@ -35,13 +35,57 @@ export const FIRST_RUN_TOKEN_FILE = 'first-run-token.txt';
  * this behaviour without either of them learning about a path, and a test that opens a database in
  * a throwaway directory gets a token file in that same throwaway directory.
  *
- * `null` for an in-memory database (`:memory:`, or a relative name), which has no data directory to
- * speak of. That is not a deployment; it is a test harness, and the caller falls back to printing.
+ * A RELATIVE `DATA_DIR` IS RESOLVED, NOT REFUSED — AND THE 2026-08-11 VERSION OF THIS FUNCTION
+ * REFUSED IT. It returned `null` for any name that was not already absolute, which sent the caller
+ * down the "no data directory" branch and printed the 48-hex token into the log the change existed
+ * to keep it out of. There is no such thing as a database with no directory just because the
+ * operator wrote `DATA_DIR=data`: SQLite resolved that name against the process's cwd, created the
+ * file, the WAL and the shared-memory index in a directory that demonstrably exists, and this
+ * function can resolve it against the same cwd and get the same place. MEASURED 2026-08-11 by
+ * booting the entrypoint with `DATA_DIR=data` from a scratch cwd: 1,454,080 bytes of
+ * `grantspotter.sqlite` in `$PWD/data` (with `-wal` and `-shm` beside it for the life of the
+ * process), and the code being replaced here called that directory nonexistent.
+ *
+ * It is not a hypothetical configuration either. `e2e/helpers.ts` sets `DATA_DIR=e2e/.tmp`, so
+ * EVERY end-to-end run of this project was a run in which the token went to the log.
+ *
+ * HOW THE PATH IS BUILT, AND WHAT IS DELIBERATELY NOT DONE TO IT. An absolute name is passed
+ * through with nothing collapsed and no `realpath`: the kernel resolved that exact byte sequence
+ * when SQLite opened the database, so handing it the same prefix puts the token beside the file it
+ * is derived from even when a symlink or a `..` is in it — which lexical normalisation could not
+ * promise, because `a/link/..` is only `a` when `link` is a directory. A relative name is anchored
+ * to `process.cwd()`, which is the same cwd SQLite resolved it against (nothing in this server
+ * chdirs, and this runs during startup), so that the banner names a path an operator can paste into
+ * `cat` from any directory. An absolute path is also what `chmod`, the delete on `consume` and the
+ * stale-file sweep need to stay pointed at one file for the life of the process.
+ *
+ * `null` MEANS ONE THING AND THE CALLER SAYS SO: the database has no file anywhere, because it is
+ * in memory. `db.memory` is better-sqlite3's own answer to that question and it is the whole test —
+ * MEASURED against the better-sqlite3 12.11.1 this repo pins, it is `true` for `:memory:`, `true`
+ * for `''` (the anonymous temporary database, whose `name` is the empty string and whose directory
+ * would otherwise resolve to the cwd), `true` for a database deserialised from a Buffer (whose
+ * `name` it reports as `:memory:`), and `false` for a file. A name that merely LOOKS relative is
+ * not this case and no longer reaches it.
  */
 export function firstRunTokenPath(db: Db): string | null {
-  const opened = db.name;
-  if (opened === '' || !isAbsolute(opened)) return null;
-  return join(dirname(opened), FIRST_RUN_TOKEN_FILE);
+  if (db.memory) return null;
+  const dir = dirname(db.name);
+  const absolute = isAbsolute(dir) ? dir : anchorToCwd(dir);
+  // `dirname('/x.sqlite')` is '/', the one directory that ends in a separator.
+  return absolute.endsWith(sep)
+    ? `${absolute}${FIRST_RUN_TOKEN_FILE}`
+    : `${absolute}${sep}${FIRST_RUN_TOKEN_FILE}`;
+}
+
+/**
+ * A relative directory made absolute WITHOUT `path.join`/`path.resolve`, which normalise: see the
+ * paragraph above on why nothing here may collapse a `..`. `dirname` returns '.' for a bare
+ * filename, and `${cwd}/.` is correct but is a path an operator would have to squint at, so that
+ * one case is spelled as the cwd itself.
+ */
+function anchorToCwd(dir: string): string {
+  const cwd = process.cwd();
+  return dir === '.' ? cwd : `${cwd}${sep}${dir}`;
 }
 
 /**
@@ -108,12 +152,24 @@ export function firstRunBanner(tokenPath: string): string {
  * happened and what it costs.
  *
  * A WHOLLY READ-ONLY `DATA_DIR` IS NOT ONE OF THE CASES, which is worth knowing before reading this
- * as the general answer. MEASURED 2026-08-11 against the built server with the data directory
- * chmod'ed unwritable: the process exits at `openDatabase` with `SQLITE_READONLY_DIRECTORY` long
- * before any of this runs, because SQLite cannot create its own WAL. What is left for this branch
- * is the narrower set where the directory takes a database but not this file. MEASURED in the same
- * session, with a directory occupying the token's name: the banner below printed, naming EISDIR,
- * and the deployment was still set up from the token in it.
+ * as the general answer. MEASURED 2026-08-11 against the entrypoint, both ways round, because the
+ * failure is not the same failure twice:
+ *
+ *   - directory unwritable and EMPTY — `SqliteError: unable to open database file`, `code:
+ *     'SQLITE_CANTOPEN'`, thrown by `new Database` in `openDatabase` (`db/migrate.ts:20`);
+ *   - directory unwritable with a database ALREADY IN IT — `SqliteError: attempt to write a
+ *     readonly database`, `code: 'SQLITE_READONLY_DIRECTORY'`, thrown three lines later by
+ *     `db.pragma('journal_mode = WAL')`, because WAL is a second and a third file SQLite has to
+ *     create beside the first.
+ *
+ * Both exit(1) before `createBootstrapState` is ever called. (The earlier version of this comment
+ * named only the second code, which is what a single measurement of a single starting state gets
+ * you.) What is left for this branch is the narrower set where the directory takes a database but
+ * not this file. MEASURED in the same session, with a directory occupying the token's name: the
+ * banner below printed, naming `EISDIR (is a directory)`, `grep -cE '[0-9a-f]{40,}'` counted one
+ * line on stdout and none on stderr, no file was left anywhere, and `POST /api/auth/bootstrap`
+ * with the token scraped out of that log answered 201 — which is the only thing that makes
+ * printing it worth doing.
  *
  * It is shouted rather than mentioned, and it names the remedy, because the operator is the only
  * person who can decide whether that log is somewhere a secret may sit.
@@ -182,10 +238,30 @@ export function createBootstrapState(
         log(firstRunFallbackBanner(token, err instanceof Error ? err.message : String(err)));
       }
     } else {
-      // No data directory at all — an in-memory database, which is a harness rather than a
-      // deployment. Printing is the only way the token can be reached, and saying so is better
-      // than a banner pointing at a file that was never written.
-      log(firstRunFallbackBanner(token, 'this server has no data directory (in-memory database)'));
+      /**
+       * THE ONE CASE THAT REALLY HAS NOWHERE TO WRITE, AND THE ONLY CASE THIS BRANCH NOW CLAIMS.
+       *
+       * `firstRunTokenPath` returns null for an in-memory database and for nothing else, so this
+       * message is true whenever it prints. It was not before: it printed for a relative `DATA_DIR`
+       * as well, telling an operator that a server with a 1.4 MB database, a WAL and an shm file on
+       * disk had no data directory — a wrong diagnosis, next to the secret it had just failed to
+       * protect, sending them to look for a problem that was not there.
+       *
+       * NO CALLER IN THIS REPOSITORY REACHES IT TODAY, and it is kept and tested anyway.
+       * `index.ts` opens a file under `config.dataDir`, `createTestDb` opens one under `mkdtemp`,
+       * and `createBootstrapState` is called with nothing else — but `app.ts` builds a bootstrap
+       * state from whatever database `createApp` is handed whenever `deps.bootstrap` is absent, and
+       * this repository opens `:memory:` in twenty-odd test files. One migrated `:memory:` database
+       * passed to `createApp` is all it takes; `bootstrap.test.ts` does exactly that, so the branch
+       * is exercised and the sentence below is checked rather than assumed. Printing is the only
+       * way the token could be reached from a database that will not outlive the process.
+       */
+      log(
+        firstRunFallbackBanner(
+          token,
+          'this database is in memory, so there is no directory to put the file in',
+        ),
+      );
     }
     if (written !== null) log(firstRunBanner(written));
   } else {
