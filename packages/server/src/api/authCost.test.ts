@@ -2,14 +2,11 @@ import type Database from 'better-sqlite3';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
+import { REGISTRATION_MAX_PER_CONNECTION } from './auth.js';
 import { createBootstrapState } from '../auth/bootstrap.js';
 import { hashPassword } from '../auth/password.js';
 import { createRateLimiter } from '../auth/rateLimit.js';
 import { loadConfig } from '../config.js';
-import {
-  createEnrollmentCodeRepo,
-  type EnrollmentCodeRepo,
-} from '../db/repositories/enrollmentCodes.js';
 import { createTestDb, type TestDb } from '../../test/helpers/tempDb.js';
 
 /**
@@ -17,10 +14,15 @@ import { createTestDb, type TestDb } from '../../test/helpers/tempDb.js';
  *
  * `enroll.test.ts` asserts what `POST /api/auth/enroll` ANSWERS. This file asserts what it COSTS —
  * and what `POST /api/auth/login` costs, because the two unauthenticated routes that hash a
- * password had the same defect and were fixed in the same change. The three findings pinned here
- * were all invisible to a suite that sent one request at a time and read only the status code: the
- * work is done between the check and the record, so a test that never overlaps two requests cannot
- * see it, and the ledger it should show up in is the one the defect skips.
+ * password had the same defect and were fixed in the same change. The findings pinned here were all
+ * invisible to a suite that sent one request at a time and read only the status code: the work is
+ * done between the check and the record, so a test that never overlaps two requests cannot see it,
+ * and the ledger it should show up in is the one the defect skips.
+ *
+ * THIS FILE MATTERS MORE AFTER 2026-08-11 THAN BEFORE IT. Until then an anonymous caller could not
+ * make this route run argon2id at all without a code an administrator had issued; registration is
+ * open now, so a POST from anybody buys 19 MiB and two passes of somebody else's CPU. Every number
+ * below is what bounds that.
  *
  * IT COUNTS THE REAL argon2id CALLS. The module is wrapped, not replaced — every hash below is a
  * genuine 19 MiB, two-pass hash, so the CPU figures are the ones a deployment would pay. Replacing
@@ -65,7 +67,6 @@ const config = loadConfig({
 
 const GOOD_PASSWORD = 'a-long-enough-password';
 const ADMIN_ID = 'admin-1';
-const WRONG_CODE = 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZ2';
 
 let seedHash: Promise<string> | undefined;
 function seededPasswordHash(): Promise<string> {
@@ -75,12 +76,12 @@ function seededPasswordHash(): Promise<string> {
 
 let harness: TestDb;
 let db: Database.Database;
-let codes: EnrollmentCodeRepo;
 
 beforeEach(async () => {
   harness = createTestDb();
   db = harness.db;
-  codes = createEnrollmentCodeRepo(db);
+  // Registration is closed until an administrator exists, so every cost measured here is measured
+  // in the state a live deployment is in.
   db.prepare(
     `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
      VALUES (?, 'admin@example.org', 'admin@example.org', ?, 'admin', 'ics-admin', ?)`,
@@ -101,27 +102,10 @@ function build() {
   });
 }
 
-/**
- * A generated code, unwrapped.
- *
- * `create` returns a union since an administrator may now TYPE a code and collide with an existing
- * one (`db/repositories/enrollmentCodes.ts`). Nothing in this file types one — every call here
- * passes `chosen: null` — so the refusal branch is unreachable, and it is thrown on rather than
- * asserted away so that a future edit which does collide fails HERE, naming itself, instead of
- * surfacing as an undefined `plaintext` twenty lines further down.
- */
-function issue(over: Partial<Parameters<EnrollmentCodeRepo['create']>[0]> = {}) {
-  const issued = codes.create({
-    label: 'W1MX autumn 2026 intake',
-    chosen: null,
-    maxUses: null,
-    expiresAt: null,
-    createdByUserId: ADMIN_ID,
-    nowISO: new Date().toISOString(),
-    ...over,
-  });
-  if (!issued.ok) throw new Error('issue(): the generated code collided with an existing one');
-  return issued;
+function memberCount(): number {
+  return (
+    db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'member'").get() as { n: number }
+  ).n;
 }
 
 /** Total CPU (user + system) burned by this process, in milliseconds. */
@@ -138,17 +122,18 @@ describe('what one unauthenticated burst can make this route do', () => {
    * the enrolment redemption had it (six accounts from a one-use code). Here it was the limiter
    * itself: `check()` ran before `await hashPassword(...)` and `recordFailure()` after it, so every
    * request that arrived before the first hashes finished passed a check that none of them had yet
-   * paid for.
+   * paid for. MEASURED then: 240 concurrent requests against a budget of ten produced 240 argon2id
+   * hashes and 10,181 ms of CPU.
    *
-   * MEASURED on this host before the fix, with exactly this harness: 240 concurrent wrong-code
-   * enrolments produced 240 argon2id hashes, 10,181 ms of CPU and 240 answers of "that code is not
-   * valid" — against a failure budget of ten. After it: 10 hashes, 991 ms of CPU, 10 answers and
-   * 230 refusals.
+   * THE BURST IS A DIFFERENT BURST NOW and the shape of the answer is the same. It used to be 240
+   * wrong codes, which cost a SHA-256 each and were refused before the hash by a credential check;
+   * with no credential to check, all 240 of these are requests this route would happily serve, and
+   * the only thing between them and 240 hashes is the ladder — read and charged in one synchronous
+   * stretch, which is what makes the number below the ceiling rather than the burst.
    */
   const BURST = 240;
 
-  it('performs at most ten argon2id hashes for a 240-request wrong-code burst', async () => {
-    issue();
+  it('performs at most sixty argon2id hashes for a 240-request registration burst', async () => {
     const app = build();
 
     const startCpu = cpuMs();
@@ -157,63 +142,53 @@ describe('what one unauthenticated burst can make this route do', () => {
       Array.from({ length: BURST }, (_unused, i) =>
         request(app)
           .post('/api/auth/enroll')
-          .send({
-            code: WRONG_CODE,
-            email: `burst-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
+          .send({ email: `burst-${String(i)}@example.org`, password: GOOD_PASSWORD }),
       ),
     );
     const spentCpu = cpuMs() - startCpu;
     const wall = Date.now() - startWall;
 
     const refused = responses.filter((r) => r.status === 429).length;
-    const answered = responses.filter((r) => r.status === 401).length;
+    const created = responses.filter((r) => r.status === 201).length;
     console.log(
       `[burst] requests=${String(BURST)} hashes=${String(argon2Calls.hash)} ` +
-        `cpu=${spentCpu.toFixed(0)}ms wall=${String(wall)}ms 401=${String(answered)} ` +
+        `cpu=${spentCpu.toFixed(0)}ms wall=${String(wall)}ms 201=${String(created)} ` +
         `429=${String(refused)}`,
     );
 
-    // THE CEILING THE COMMENT IN auth.ts CLAIMS. Ten failures per window means ten hashes per
-    // window, however many callers arrive at once.
-    expect(argon2Calls.hash).toBeLessThanOrEqual(10);
-    // Nobody got in, and everybody got an answer.
-    expect(answered + refused).toBe(BURST);
-    expect(
-      (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'member'").get() as { n: number }).n,
-    ).toBe(0);
-  }, 120_000);
+    // THE CEILING THE COMMENT IN auth.ts CLAIMS. Sixty registrations per connection per window
+    // means sixty hashes, however many callers arrive at once.
+    expect(argon2Calls.hash).toBeLessThanOrEqual(REGISTRATION_MAX_PER_CONNECTION);
+    // Everybody got an answer, and exactly the accounts the ceiling allows were created.
+    expect(created + refused).toBe(BURST);
+    expect(created).toBe(REGISTRATION_MAX_PER_CONNECTION);
+    expect(memberCount()).toBe(REGISTRATION_MAX_PER_CONNECTION);
+  }, 180_000);
 });
 
 /**
  * THE OTHER HALF OF EVERY RATE LIMIT: what it does to the people who are not attacking.
  *
  * A gate that bounds the work by refusing everybody bounds nothing worth having. These two pin what
- * the budget costs the people it is not aimed at, and they are the reason the claim is a budget of
- * ten rather than the single lane the callsign lookup uses: there the thing being rationed is
+ * the budget costs the people it is not aimed at, and they are the reason the claim is a ceiling of
+ * sixty rather than the single lane the callsign lookup uses: there the thing being rationed is
  * somebody else's server and one at a time is the promise, here it is this process's own CPU and a
  * club intake pressing submit together must not be serialised into a queue of refusals.
  */
 describe('what the gate does not do to legitimate traffic', () => {
-  it('lets ten people enrol at the same instant, all of them successfully', async () => {
-    const { code, plaintext } = issue({ maxUses: 10 });
+  it('lets ten people sign up at the same instant, all of them successfully', async () => {
     const app = build();
 
     const responses = await Promise.all(
       Array.from({ length: 10 }, (_unused, i) =>
         request(app)
           .post('/api/auth/enroll')
-          .send({
-            code: plaintext,
-            email: `together-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
+          .send({ email: `together-${String(i)}@example.org`, password: GOOD_PASSWORD }),
       ),
     );
 
     expect(responses.filter((r) => r.status === 201)).toHaveLength(10);
-    expect(codes.findById(code.id)?.uses).toBe(10);
+    expect(memberCount()).toBe(10);
   }, 120_000);
 
   it('does not put eight people signing in at once behind one another', async () => {
@@ -290,7 +265,29 @@ describe('the same shape on the other unauthenticated route that hashes', () => 
   }, 120_000);
 });
 
-describe('what a valid code tells its holder about other people', () => {
+/**
+ * WHAT A STRANGER CAN FIND OUT ABOUT OTHER PEOPLE, and the two assertions in this file that are
+ * DELIBERATELY GONE because the design they described is gone.
+ *
+ * WHAT USED TO BE HERE. Two tests pinned the disclosure budget: five addresses named per code per
+ * window, and — the more interesting one — a MEASURED RATIO showing that past that budget, asking
+ * about a member cost the same wall-clock as registering a stranger, because both paid one
+ * argon2id. That equality was the point: if the two answers cannot be made identical, at least make
+ * them cost the same, so a caller cannot sort a list faster than the route can hash.
+ *
+ * NEITHER SURVIVES OPEN REGISTRATION, and neither is quietly dropped. The budget was keyed on the
+ * digest of the code the question was asked with; there is no code, and every remaining candidate
+ * key is one the caller writes. And the cost equality was in service of hiding a difference the
+ * status line now states outright — 409 names the address, 201 creates the account — so paying an
+ * argon2id to make a hit as slow as a miss would buy nothing at all and would spend a legitimate
+ * returning member's time to buy it. A hit is now the CHEAPEST answer this route gives (no hash),
+ * and that is a deliberate reversal rather than a regression that slipped through.
+ *
+ * WHAT BOUNDS THE ORACLE INSTEAD IS THE LADDER, and that is what these tests measure: a probe is a
+ * registration attempt and is charged like one, so the number of addresses a caller can classify in
+ * a window is the number of accounts they could have created instead.
+ */
+describe('what a stranger can find out about other people', () => {
   const PROBES = 200;
 
   async function seedKnownMembers(): Promise<void> {
@@ -305,170 +302,62 @@ describe('what a valid code tells its holder about other people', () => {
     }
   }
 
-  /** A 409 that NAMES the address is the specific answer; one that does not is the vague one. */
+  /** A 409 that NAMES the address is the answer somebody learns something from. */
   function namesAddress(res: request.Response, email: string): boolean {
     return res.status === 409 && String(res.body?.error?.message ?? '').includes(email);
   }
 
-  /**
-   * MEASURED before the fix: 200 probes with one `maxUses: null` code returned 200 answers that
-   * separated "this address has an account" (409, naming it) from "this one does not" (201) — for
-   * free, in one window, with nothing written down anywhere. A club officer's code, read out to
-   * thirty people, was a membership oracle for the whole deployment.
-   *
-   * WHAT THIS TEST USED TO ASSERT, AND WHY IT NO LONGER DOES. It counted every 409 as an answer
-   * "learned" and required 195 of the 200 to be 429 — that is, it pinned the behaviour where a code
-   * that has been probed five times refuses everybody who uses it for the next fifteen minutes,
-   * including the students it was issued for. That refusal was the denial-of-service primitive an
-   * adversarial reader demonstrated on 2026-08-05 (five presses by one honest returning student
-   * closed her club's intake), so the 429 is gone and the count of "learned" has to mean something
-   * narrower and truer: how many of those answers NAMED the person asked about.
-   *
-   * It also asserted `argon2Calls.hash === 0`, on the reasoning that a probe should be cheap for
-   * this process. That assertion is inverted here, deliberately and with the same care: a probe
-   * being cheap is exactly what made 2.4 million addresses an hour possible. Past the budget a
-   * probe now pays the same argon2id an enrolment pays, which is what the next test measures.
-   */
-  it('names a handful of already-registered addresses and then names nobody', async () => {
-    const { code, plaintext } = issue();
+  it('answers about sixty of two hundred addresses and then refuses to answer at all', async () => {
     const app = build();
     await seedKnownMembers();
 
     argon2Calls.hash = 0;
     const named: number[] = [];
-    const vague: number[] = [];
     const refused: number[] = [];
+    const other: number[] = [];
     for (let i = 0; i < PROBES; i += 1) {
       const email = `known-${String(i)}@example.org`;
       const res = await request(app)
         .post('/api/auth/enroll')
-        .send({ code: plaintext, email, password: GOOD_PASSWORD });
+        .send({ email, password: GOOD_PASSWORD });
       if (namesAddress(res, email)) named.push(i);
-      else if (res.status === 409) vague.push(i);
-      else refused.push(i);
+      else if (res.status === 429) refused.push(i);
+      else other.push(i);
     }
 
     console.log(
       `[probe] probes=${String(PROBES)} named=${String(named.length)} ` +
-        `vague=${String(vague.length)} other=${String(refused.length)} ` +
+        `429=${String(refused.length)} other=${String(other.length)} ` +
         `hashes=${String(argon2Calls.hash)}`,
     );
 
-    // A person who genuinely already has an account is still told so, plainly. A caller asking the
-    // question about a LIST runs out of that answer almost immediately.
-    expect(named.length).toBeGreaterThan(0);
-    expect(named.length).toBeLessThanOrEqual(5);
-    // Everybody else is still answered — no refusals at all — and told nothing about anybody.
-    expect(named.length + vague.length).toBe(PROBES);
-    expect(refused).toEqual([]);
-    // And every NAMED one is written down against the code that asked it, so an administrator can
-    // see which code is being used this way and revoke it.
-    const trail = db
-      .prepare("SELECT entity_id, detail FROM audit_log WHERE action = 'enrollment_code.conflict'")
-      .all() as Array<{ entity_id: string; detail: string }>;
-    expect(trail).toHaveLength(named.length);
-    expect(trail.every((r) => r.entity_id === code.id)).toBe(true);
-    // Never the address that was asked about: the trail must not become the list it is there to
-    // stop somebody building.
-    expect(JSON.stringify(trail)).not.toContain('known-0@example.org');
-    // One argon2id for every probe past the budget, and none for the ones inside it. The number is
-    // here so that a change which makes probing cheap again shows up as a change in cost.
-    expect(argon2Calls.hash).toBe(vague.length);
-  }, 180_000);
+    // The ladder is the whole bound, and it is the same bound as on creating accounts: a caller
+    // classifies exactly as many addresses as they could have made accounts.
+    expect(named).toHaveLength(REGISTRATION_MAX_PER_CONNECTION);
+    expect(named.length + refused.length).toBe(PROBES);
+    expect(other).toEqual([]);
+    // NOT ONE argon2id FOR THE WHOLE RUN. Every one of these was a hit, and a hit is answered
+    // before the hash. The number is here so that a change which starts hashing on this path — or
+    // one which stops hashing on the miss path — shows up as a change in cost rather than silently.
+    expect(argon2Calls.hash).toBe(0);
+    // And the operator has exactly one row about it, written by the twentieth answer.
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.addresses_probed'")
+        .get() as { n: number },
+    ).toEqual({ n: 1 });
+  }, 300_000);
 
   /**
-   * INDISTINGUISHABLE HAS TO INCLUDE THE COST, or it is a property of the status line only.
+   * THE SAME PROBES, ALL AT ONCE — the shape of the defect this whole file is about, applied to the
+   * fix for it.
    *
-   * Past the disclosure budget the two answers still differ — a member gets 409, a stranger gets
-   * 201 and an account — and they always will, because making them identical means refusing to
-   * create the account, which is the denial this whole change removes. What CAN be equalised is
-   * what the two cost, and here it is: both pay one argon2id, so the wall clock cannot be used to
-   * sort a list faster than the route can hash.
-   *
-   * MEASURED before the fix, with the address check above the password floor: 200 probes at 554/sec
-   * against 23/sec for a probe that had to carry a legal password — a 24x discount for asking about
-   * somebody who exists. The assertion below is a ratio rather than a rate because the absolute
-   * numbers belong to whichever machine runs it.
+   * A ladder read at the top of the handler and charged after the hash would be exactly as leaky as
+   * the wrong-code budget was: every probe that arrived before the first one finished would read a
+   * budget at zero and be answered. It is charged in the same synchronous stretch as it is read
+   * instead, which is why concurrency makes no difference to this number.
    */
-  it('makes an already-registered address cost what a new one costs, past the budget', async () => {
-    const { plaintext } = issue();
-    const app = build();
-    await seedKnownMembers();
-
-    const SAMPLE = 12;
-    // Spend the disclosure budget first: this measures the past-the-budget path on both sides.
-    for (let i = 0; i < 6; i += 1) {
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD });
-    }
-
-    async function timeOne(email: string): Promise<number> {
-      const started = performance.now();
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email, password: GOOD_PASSWORD });
-      return performance.now() - started;
-    }
-
-    // INTERLEAVED, AND A MEDIAN, because the first version of this was measuring the machine as
-    // much as the route. It timed all twelve member requests and THEN all twelve stranger
-    // requests, so any slowdown arriving between the two batches — another job landing on a
-    // shared runner — was charged entirely to whichever side went second. It failed CI at
-    // ratio 0.408 while five consecutive local runs sat between 0.81 and 1.02, and a threshold
-    // widened to swallow that would have been the assertion giving up rather than the
-    // measurement improving.
-    //
-    // Alternating the two makes drift hit both sides equally, and alternating WHICH GOES FIRST
-    // within each pair cancels any residual advantage in being second (a warm connection, a
-    // settled thread pool). The median then stops one stalled request deciding the result, which
-    // a mean over twelve cannot.
-    //
-    // The threshold below is unchanged at 0.5. That is the point: the fix belongs in how the
-    // number is obtained, not in how much wrongness it is willing to accept.
-    const hits: number[] = [];
-    const misses: number[] = [];
-    for (let i = 0; i < SAMPLE; i += 1) {
-      const member = `known-${String(i + 20)}@example.org`;
-      const stranger = `stranger-${String(i)}@example.org`;
-      if (i % 2 === 0) {
-        hits.push(await timeOne(member));
-        misses.push(await timeOne(stranger));
-      } else {
-        misses.push(await timeOne(stranger));
-        hits.push(await timeOne(member));
-      }
-    }
-
-    const median = (xs: readonly number[]): number => {
-      const sorted = [...xs].sort((a, b) => a - b);
-      const mid = sorted.length >> 1;
-      return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
-    };
-    const hit = median(hits);
-    const miss = median(misses);
-    const ratio = hit / miss;
-    console.log(
-      `[cost] member=${hit.toFixed(1)}ms stranger=${miss.toFixed(1)}ms ratio=${ratio.toFixed(2)} (medians of ${String(SAMPLE)} interleaved pairs)`,
-    );
-
-    // Both paths are one argon2id plus a few indexed statements; a factor of two either way is
-    // noise on a shared machine, and anything outside it means one of them stopped hashing.
-    expect(ratio).toBeGreaterThan(0.5);
-    expect(ratio).toBeLessThan(2);
-  }, 180_000);
-
-  /**
-   * THE SAME 200 PROBES, ALL AT ONCE — the shape of the defect this whole change is about, applied
-   * to the fix for it.
-   *
-   * A budget read at the top of the handler and charged after the hash would be exactly as leaky as
-   * the wrong-code budget was: every probe that arrived before the first one finished hashing would
-   * read a budget at zero and be answered. It is charged in the same synchronous stretch as it is
-   * read instead, which is why concurrency makes no difference to this number.
-   */
-  it('names no more people when the 200 probes arrive at once', async () => {
-    const { plaintext } = issue();
+  it('answers no more of them when the two hundred probes arrive at once', async () => {
     const app = build();
     await seedKnownMembers();
 
@@ -476,24 +365,19 @@ describe('what a valid code tells its holder about other people', () => {
       Array.from({ length: PROBES }, (_unused, i) =>
         request(app)
           .post('/api/auth/enroll')
-          .send({
-            code: plaintext,
-            email: `known-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
+          .send({ email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD }),
       ),
     );
 
     const named = responses.filter((r, i) => namesAddress(r, `known-${String(i)}@example.org`));
-    const conflicts = responses.filter((r) => r.status === 409);
+    const refused = responses.filter((r) => r.status === 429);
     console.log(
       `[probe-burst] probes=${String(PROBES)} named=${String(named.length)} ` +
-        `conflicts=${String(conflicts.length)}`,
+        `429=${String(refused.length)}`,
     );
-    expect(named).toHaveLength(5);
-    // Everybody was answered, and nobody was refused.
-    expect(conflicts).toHaveLength(PROBES);
-  }, 180_000);
+    expect(named).toHaveLength(REGISTRATION_MAX_PER_CONNECTION);
+    expect(named.length + refused.length).toBe(PROBES);
+  }, 300_000);
 });
 
 /**
@@ -508,8 +392,7 @@ describe('what a valid code tells its holder about other people', () => {
 describe('how much argon2id one burst can have running at once', () => {
   const BURST = 40;
 
-  it('never exceeds four concurrent hashes, and still enrols all forty', async () => {
-    const { code, plaintext } = issue({ maxUses: BURST });
+  it('never exceeds four concurrent hashes, and still registers all forty', async () => {
     const app = build();
 
     let live = 0;
@@ -530,18 +413,14 @@ describe('how much argon2id one burst can have running at once', () => {
         Array.from({ length: BURST }, (_unused, i) =>
           request(app)
             .post('/api/auth/enroll')
-            .send({
-              code: plaintext,
-              email: `crowd-${String(i)}@example.org`,
-              password: GOOD_PASSWORD,
-            }),
+            .send({ email: `crowd-${String(i)}@example.org`, password: GOOD_PASSWORD }),
         ),
       );
       console.log(`[gate] burst=${String(BURST)} peakConcurrentHashes=${String(peak)}`);
       expect(peak).toBeGreaterThan(1);
       expect(peak).toBeLessThanOrEqual(4);
       expect(responses.filter((r) => r.status === 201)).toHaveLength(BURST);
-      expect(codes.findById(code.id)?.uses).toBe(BURST);
+      expect(memberCount()).toBe(BURST);
     } finally {
       argon2Hooks.onHash = previous;
     }
@@ -552,18 +431,18 @@ describe('how much argon2id one burst can have running at once', () => {
  * WHAT ONE STRANGER CAN DO TO EVERYBODY ELSE, which is a different question from what they can do
  * to a route and is the one the tests above could not see.
  *
- * THE FINDING. `POST /api/auth/login` runs a real argon2id verify per request on purpose — against
- * a dummy hash when no such account exists, so that response timing does not say which addresses
- * are accounts — and its budget is keyed `(peer, email)`. A caller who never uses the same address
- * twice therefore never meets it, and until 2026-08-09 every one of those requests took a place in
- * a shared, unbounded, first-come-first-served queue that `POST /api/auth/enroll` waits in too.
+ * THE FINDING, 2026-08-09. `POST /api/auth/login` runs a real argon2id verify per request on
+ * purpose — against a dummy hash when no such account exists, so that response timing does not say
+ * which addresses are accounts — and its budget is keyed `(peer, email)`. A caller who never uses
+ * the same address twice therefore never meets it, and every one of those requests took a place in
+ * a shared, unbounded, first-come-first-served queue that the sign-up route waits in too.
  *
  * MEASURED against a real listening server in its own process, 512 connections, rotating email,
- * no account and no code, one reverse proxy in front (the documented deployment, so every request
- * shares a TCP peer and `req.ip` is what the proxy wrote):
+ * one reverse proxy in front (the documented deployment, so every request shares a TCP peer and
+ * `req.ip` is what the proxy wrote):
  *
  *                        before (a4a863b)     after
- *   student's enrolment  5,036 ms (91.6x)     330 ms (5.5x)
+ *   student's sign-up    5,036 ms (91.6x)     330 ms (5.5x)
  *   attacker's rate      6,462 req/min        67,710 req/min, 15,942 of them refused
  *   audit rows about it  0                    2
  *
@@ -571,21 +450,24 @@ describe('how much argon2id one burst can have running at once', () => {
  * 24 connections 243 ms, 96 → 967 ms, 256 → 2,507 ms, 512 → 4,881 ms — which is the property that
  * makes it a denial of service rather than a slow afternoon: the caller chooses everyone's wait.
  *
+ * THE DIRECTION IS NOW BOTH WAYS, which is what the last test in this block is for. Open
+ * registration means an anonymous caller can aim argon2id at this process without a credential, so
+ * "a sign-up flood must not starve sign-in" is a claim that has to be measured and not inherited.
+ *
  * THESE TESTS COUNT PLACES IN THE QUEUE RATHER THAN MILLISECONDS. The wall-clock figures above
- * belong to the machine that produced them; what belongs to the code is that the student is served
- * after a couple of turns instead of after the whole flood, and that holds at any hash speed.
+ * belong to the machine that produced them; what belongs to the code is that the person who is not
+ * in the flood is served after a couple of turns instead of after the whole of it.
  *
  * The lanes are `X-Forwarded-For` because supertest is loopback and every request shares a TCP
  * peer, which is exactly the documented deployment: one tunnel in front, `trust proxy` 1, so
  * `req.ip` is the address the tunnel wrote and is what tells two of its users apart.
  */
-describe('what a sign-in flood does to somebody who is not in it', () => {
+describe('what a flood does to somebody who is not in it', () => {
   const FLOOD = 300;
   const ATTACKER = '203.0.113.9';
   const STUDENT = '198.51.100.4';
 
   it('serves the student in a couple of turns instead of behind three hundred strangers', async () => {
-    const { plaintext } = issue();
     const app = build();
 
     let settled = 0;
@@ -607,7 +489,7 @@ describe('what a sign-in flood does to somebody who is not in it', () => {
     const student = await request(app)
       .post('/api/auth/enroll')
       .set('X-Forwarded-For', STUDENT)
-      .send({ code: plaintext, email: 'student@example.org', password: GOOD_PASSWORD });
+      .send({ email: 'student@example.org', password: GOOD_PASSWORD });
     const servedAhead = settled - aheadAtStart;
 
     const statuses = await Promise.all(flood);
@@ -634,7 +516,6 @@ describe('what a sign-in flood does to somebody who is not in it', () => {
    * also served early, the number above would be measuring luck rather than the round.
    */
   it('does not give the flood a shortcut by joining its own lane', async () => {
-    const { plaintext } = issue();
     const app = build();
 
     let settled = 0;
@@ -655,7 +536,7 @@ describe('what a sign-in flood does to somebody who is not in it', () => {
     const inLane = await request(app)
       .post('/api/auth/enroll')
       .set('X-Forwarded-For', ATTACKER)
-      .send({ code: plaintext, email: 'in-lane@example.org', password: GOOD_PASSWORD });
+      .send({ email: 'in-lane@example.org', password: GOOD_PASSWORD });
     const servedAhead = settled - aheadAtStart;
     await Promise.all(flood);
 
@@ -667,6 +548,77 @@ describe('what a sign-in flood does to somebody who is not in it', () => {
     // largest contributor to it. Both are the rule working; being served in two turns is not.
     if (inLane.status === 201) expect(servedAhead).toBeGreaterThan(FLOOD / 4);
     else expect(inLane.status).toBe(429);
+  }, 180_000);
+
+  /**
+   * THE DIRECTION THE 2026-08-11 CHANGE OPENED, and the one the brief for it asked to be measured:
+   * a burst of REGISTRATIONS must not delay a member signing in.
+   *
+   * That exact starvation was a confirmed defect two days ago in the other direction, and the
+   * reason it cannot recur in this one is not new code — it is that the gate's round is between
+   * callers rather than between routes. What IS new is that the flood arrives at all: before today
+   * a caller with no credential could not make this route hash anything.
+   *
+   * TWO MECHANISMS ARE VISIBLE IN THE NUMBERS THIS PRINTS, and they compose. The ladder refuses
+   * most of the flood before it reaches the gate at all (60 of 300 from one address are served, the
+   * other 240 are refused without hashing), and the gate then takes turns between what is left and
+   * the member. Either alone would be enough for this assertion; the test logs both so that a
+   * regression in one is not hidden by the other.
+   *
+   * WHAT IS COUNTED IS THE HASHES SERVED AHEAD, NOT THE RESPONSES. The sibling tests above count
+   * settled responses, which is the right measure when every request in the flood does a real
+   * argon2id. It is the wrong measure here: 240 of these 300 are refused by the ladder in
+   * microseconds, so counting responses says "253 went first" about a member who waited 144 ms —
+   * the number would be measuring the ladder working and calling it starvation. The queue position
+   * that matters is how many of the flood's HASHES were served first.
+   */
+  it('signs a member in while three hundred registrations are in flight', async () => {
+    const app = build();
+    createUserRepoRow(db, 'quiet-member@example.org', await seededPasswordHash());
+
+    let settled = 0;
+    let hashed = 0;
+    const flood = Array.from({ length: FLOOD }, (_unused, i) =>
+      request(app)
+        .post('/api/auth/enroll')
+        .set('X-Forwarded-For', ATTACKER)
+        .send({ email: `signup-flood-${String(i)}@example.net`, password: GOOD_PASSWORD })
+        .then((res) => {
+          settled += 1;
+          if (res.status === 201) hashed += 1;
+          return res.status;
+        }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const hashedAtStart = hashed;
+    const settledAtStart = settled;
+    const startedAt = performance.now();
+    const member = await request(app)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', STUDENT)
+      .send({ email: 'quiet-member@example.org', password: 'a-seeded-password-not-a-real-secret' });
+    const waited = performance.now() - startedAt;
+    const servedAhead = hashed - hashedAtStart;
+
+    const statuses = await Promise.all(flood);
+    const created = statuses.filter((s) => s === 201).length;
+    const refused = statuses.filter((s) => s === 429).length;
+    console.log(
+      `[signup-flood] flood=${String(FLOOD)} created=${String(created)} refused=${String(refused)} ` +
+        `alreadySettledWhenMemberPressed=${String(settledAtStart)} ` +
+        `memberStatus=${String(member.status)} memberWaited=${waited.toFixed(0)}ms ` +
+        `floodHashesBeforeMember=${String(servedAhead)}`,
+    );
+
+    // The member signs in, and is served after a handful of the flood's hashes rather than behind
+    // all of them. A quarter of what the ladder let through is the same fraction the two tests
+    // above use, and it is generous: the round-robin serves the member in one or two turns.
+    expect(member.status).toBe(200);
+    expect(servedAhead).toBeLessThan(REGISTRATION_MAX_PER_CONNECTION / 4);
+    // The ladder is the first of the two mechanisms: most of the flood never reached the hash.
+    expect(created).toBe(REGISTRATION_MAX_PER_CONNECTION);
+    expect(created + refused).toBe(FLOOD);
   }, 180_000);
 
   /**
@@ -702,44 +654,12 @@ describe('what a sign-in flood does to somebody who is not in it', () => {
   }, 180_000);
 });
 
-describe('whether a success refills the guess budget', () => {
-  /**
-   * MEASURED before the fix: `reset()` on a successful enrolment let the holder of a multi-use code
-   * alternate — nine wrong codes, one real redemption, repeat. Five rounds fitted 45 wrong-code
-   * guesses inside one fifteen-minute window against a ceiling of ten.
-   */
-  it('counts the guesses across the successes, so ten is ten', async () => {
-    const { plaintext } = issue({ maxUses: 5 });
-    const app = build();
-
-    async function guess(n: number): Promise<number> {
-      const res = await request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: WRONG_CODE,
-          email: `guess-${String(n)}@example.org`,
-          password: GOOD_PASSWORD,
-        });
-      return res.status;
-    }
-
-    let wrongAccepted = 0;
-    let n = 0;
-    for (let round = 0; round < 5; round += 1) {
-      for (let i = 0; i < 9; i += 1) {
-        n += 1;
-        if ((await guess(n)) === 401) wrongAccepted += 1;
-      }
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: plaintext,
-          email: `real-${String(round)}@example.org`,
-          password: GOOD_PASSWORD,
-        });
-    }
-    console.log(`[alternate] wrong guesses answered in one window=${String(wrongAccepted)}`);
-
-    expect(wrongAccepted).toBe(10);
-  }, 180_000);
-});
+/** One member row, inserted directly: the sign-in flood tests need somebody to sign in AS. */
+function createUserRepoRow(handle: Database.Database, email: string, passwordHash: string): void {
+  handle
+    .prepare(
+      `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+       VALUES (?, ?, ?, ?, 'member', ?, ?)`,
+    )
+    .run(`u-${email}`, email, email, passwordHash, `ics-${email}`, '2026-09-01T00:00:00.000Z');
+}

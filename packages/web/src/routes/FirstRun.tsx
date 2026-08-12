@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { apiSend, ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
-import { getEnrollmentOpen } from '../api/enrollment.js';
-import { CallsignLookup } from '../components/CallsignLookup.js';
-import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
+import { ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
 import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
 import { Enroll } from './Enroll.js';
 import { Login, SignedOutPage } from './Login.js';
@@ -82,55 +79,31 @@ export interface FirstRunProps {
   onBootstrapClosed: () => void;
 }
 
+/*
+ * THE CALLSIGN FIELD AND ITS LOOKUP PANEL WERE HERE AND ARE GONE (2026-08-11), along with the
+ * starter profile this screen used to write and the `stranded` state that existed for the one case
+ * where the account was created and that write then failed.
+ *
+ * The owner asked for account creation to stop asking for a callsign. The lookup is not deleted —
+ * it moves to the profile screen, where the same panel fills the same fields for somebody who is
+ * already signed in and can see what it did. Setup is the wrong place for it twice over: it made
+ * the very first screen of the product a six-field form with a network call in the middle of it,
+ * and it was the reason an unauthenticated caller holding the setup token could ask this server to
+ * reach callook at all (`api/callsign.ts` still accepts that token; see the report).
+ *
+ * What this costs: the first screen after setup no longer knows anything about the operator. That
+ * was the argument for having it here, and it is a smaller thing than it sounds — the profile
+ * screen is one click away, it has the same lookup, and it can show what was filled in.
+ */
+
 export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps): JSX.Element {
   const [token, setToken] = useState('');
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [callsign, setCallsign] = useState('');
-  const [accepted, setAccepted] = useState<AcceptedCallsign | null>(null);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /**
-   * The administrator exists and this browser is signed in, but the starter profile did not
-   * save. There is no retry that helps here — bootstrap answers 409 from now on — so the
-   * form is replaced by the truth and a way onwards, rather than a form that can only fail.
-   */
-  const [stranded, setStranded] = useState<string | null>(null);
-
-  /**
-   * The starter profile, written AFTER the account exists because that is the first moment
-   * there is a session to write it with. It carries only what the profile actually stores:
-   * a callsign, a state and — when the record's operator class maps exactly onto one of
-   * GrantSpotter's four — a licence class. No street address, and never `licensedSince`.
-   *
-   * A club station is deliberately NOT written. Club details belong on the organization
-   * profile, which cannot be stored without an entity type, and this screen does not ask for
-   * one; inventing an entity to make the write succeed is exactly the kind of guess this
-   * product refuses. The lookup panel says so before the account is created.
-   */
-  async function saveStarterProfile(): Promise<void> {
-    if (accepted !== null && accepted.type === 'CLUB') return;
-    const typed = callsign.trim().toUpperCase();
-    if (typed === '') return;
-
-    // WHICH values are recorded as fetched is `fillFromLookup`'s decision, not this screen's, so
-    // the setup screen and the profile editor cannot disagree about it — and neither can disagree
-    // with core's schema, which the registry behind it is asserted against. It marks only the
-    // values the SOURCE stated: a licence class the operator picked for a legacy record is theirs,
-    // and so is the callsign they typed. A callsign the lookup ANSWERED with — callook returns the
-    // licensee's current record for a superseded call — is the source's, and is marked as such.
-    const fill = accepted === null ? null : fillFromLookup(accepted, 'student');
-    const fieldSources = fill?.fieldSources ?? {};
-
-    await apiSend('PUT', '/api/profiles/student', {
-      kind: 'student',
-      callsign: typed,
-      ...fill?.values,
-      ...(Object.keys(fieldSources).length === 0 ? {} : { fieldSources }),
-    });
-  }
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -157,18 +130,10 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
         password,
         ...(displayName.trim() === '' ? {} : { displayName: displayName.trim() }),
       });
-      // From here the account exists and this browser holds its session, so a failure below
-      // is no longer a failure to set the deployment up.
-      try {
-        await saveStarterProfile();
-      } catch (err) {
-        setStranded(
-          err instanceof ApiError && err.status !== 0
-            ? err.message
-            : 'The GrantSpotter API could not be reached.',
-        );
-        return;
-      }
+      // Nothing runs between the account existing and the handover now. The starter-profile write
+      // that used to sit here is gone with the callsign field, and with it the one state this
+      // screen had for "the administrator exists but the second write failed" — a screen a person
+      // could reach, and could do nothing about, and which cannot happen any more.
       onAuthenticated();
     } catch (err) {
       setError(messageForBootstrap(err));
@@ -181,33 +146,19 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
     }
   }
 
-  if (stranded !== null) {
-    return (
-      <SignedOutPage measure="prose">
-        <h1>Administrator created</h1>
-        <p role="alert" className="signed-out-lede">
-          The administrator account was created and this browser is signed in. The callsign was
-          not saved to a profile: {stranded} Nothing else was lost, and setup is finished — open
-          the Profile screen to enter it there.
-        </p>
-        <button type="button" className="btn btn-primary" onClick={onAuthenticated}>
-          Continue to GrantSpotter
-        </button>
-      </SignedOutPage>
-    );
-  }
-
   return (
     /*
-      `prose`, not the sign-in box's width: six fields, four of which carry a paragraph explaining
+      `prose`, not the sign-in box's width: five fields, two of which carry a paragraph explaining
       themselves. At the 380px this screen inherited from the sign-in form those paragraphs
       wrapped at 43 characters; see `components/signedOut.css` for the measure they are sized to
-      now.
+      now. It was six fields until the callsign went, which is a change of degree and not of kind:
+      the token hint and the password hint are still paragraphs.
     */
     <SignedOutPage measure="prose">
       <h1>Set up GrantSpotter</h1>
       <p className="signed-out-lede">
-        This deployment has no accounts yet. Create the first administrator to continue.
+        This deployment has no accounts yet. Create the first administrator to continue — until it
+        exists, nobody can create any account here, and once it does, anybody can sign up.
       </p>
 
       <form
@@ -231,10 +182,19 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
+          {/*
+            THE HINT MOVED WITH THE TOKEN. It used to say the token was printed in the log, which
+            was true and is now the thing that was wrong with it: a secret in `docker logs` stays
+            in `docker logs`. The server writes it to a file in its data directory instead, and
+            says the exact path in the banner it still prints on startup — so this hint names the
+            file and sends the operator to the log for the path rather than for the secret.
+          */}
           <p id="first-run-token-hint" className="signed-out-hint">
-            Printed in the server&rsquo;s log when it starts — look for &ldquo;GrantSpotter
-            first-run setup&rdquo; (<code>docker logs</code> for a container deployment). A new
-            token is issued on every restart until this form is completed.
+            Written to <code>first-run-token.txt</code> in the server&rsquo;s data directory when it
+            starts, readable only by the user the server runs as. Its full path is in the
+            &ldquo;GrantSpotter first-run setup&rdquo; block in the startup log (<code>docker logs</code>{' '}
+            for a container deployment); the token itself is not. A new one is issued on every
+            restart until this form is completed, and the file is deleted the moment it is used.
           </p>
         </div>
 
@@ -262,56 +222,6 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
             autoComplete="name"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-          />
-        </div>
-
-        {/*
-          The lookup control is INSIDE the callsign field rather than beside it: it reads that
-          input, writes to it, and explains itself in terms of it. Which is also what puts it at
-          the within-a-field distance from the hint above it instead of a field's width away.
-        */}
-        <div className="signed-out-field">
-          <label htmlFor="first-run-callsign" className="eyebrow">
-            Callsign (optional)
-          </label>
-          <input
-            id="first-run-callsign"
-            className="signed-out-upper"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            aria-describedby="first-run-callsign-hint"
-            value={callsign}
-            onChange={(e) => {
-              setCallsign(e.target.value);
-              // A hand-edited callsign is no longer the one that was looked up, so the values
-              // that came with it stop applying. Keeping them would attach somebody else's
-              // state and licence class to a callsign nobody checked.
-              setAccepted(null);
-            }}
-          />
-          <p id="first-run-callsign-hint" className="signed-out-hint">
-            The callsign you operate under. GrantSpotter starts a student profile with it, so the
-            first screen after setup already knows something about you — everything on it can be
-            changed later, and leaving this empty stores nothing at all.
-          </p>
-          <CallsignLookup
-            callsign={callsign}
-            target="student"
-            setupToken={token.trim()}
-            onAccept={(values) => {
-              setAccepted(values);
-              // The record's own callsign, which is not always the one that was typed: the panel
-              // does not hand a substituted callsign over until the operator has confirmed it.
-              setCallsign(values.callsign.value);
-            }}
-            clubNotice={
-              'This is a club station licence. GrantSpotter keeps a club on an organization ' +
-              'profile, which cannot be stored without an entity type, and this screen does not ' +
-              'ask for one — so nothing from this record will be stored here. Create the ' +
-              'administrator, then open the Profile screen: the same lookup is on its ' +
-              'Organization tab.'
-            }
           />
         </div>
 
@@ -388,7 +298,7 @@ export function FirstRun({ onAuthenticated, onBootstrapClosed }: FirstRunProps):
 /**
  * Which screen an unauthenticated visitor gets.
  *
- * Five states now, because a self-hoster meets all of them and only one is the ordinary one. The
+ * Four states, because a self-hoster meets all of them and only one is the ordinary one. The
  * check is a request, so it can be in flight, and it can fail — a server that is still opening its
  * database answers nothing at all, and guessing in that moment is how a screen ends up lying:
  * offering setup on a deployment that has accounts, or a sign-in form on one that has none.
@@ -399,58 +309,44 @@ type Gate =
   /** `notice` is null for the ordinary case: accounts exist, nothing to explain. */
   | { kind: 'sign-in'; notice: string | null }
   /**
-   * Enrolment. It carries the sign-in notice it interrupted so that going back does not
+   * Signing up. It carries the sign-in notice it interrupted so that going back does not
    * silently drop something the gate had to say — "we could not check", most of all.
    */
   | { kind: 'enrol'; notice: string | null };
 
-/**
- * Whether to offer the enrolment form at all.
+/*
+ * `EnrolmentOffer` WAS HERE AND IS GONE (2026-08-11), along with the second request that answered
+ * it. It was a four-state answer — unasked, open, closed, did-not-say — to "does this deployment
+ * accept enrollment codes", because a sign-in form that offers a way in which does not exist is
+ * worse than one that offers none.
  *
- * `unasked` while the first-run question is still outstanding, because there is no sign-in form to
- * put the answer on yet; `unknown` when the server answered something other than a boolean, or
- * did not answer.
+ * Registration is open on every deployment now, so the question has one answer and the state
+ * machine that carried it was a way of being unsure about a constant. The sign-up link is
+ * unconditional. What that costs, stated: a visitor to a deployment whose first administrator does
+ * not exist yet would be offered sign-up — except that they never see the sign-in form at all,
+ * because `bootstrap-status` sends them to the setup screen, and the one moment where both could
+ * be true (setup finished in another tab between the two renders) ends in the server's own
+ * "not set up yet" sentence, which `Enroll.tsx` renders in full.
  */
-type EnrolmentOffer = 'unasked' | 'open' | 'closed' | 'unknown';
 
 export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }): JSX.Element {
   const [gate, setGate] = useState<Gate>({ kind: 'checking' });
-  const [offer, setOffer] = useState<EnrolmentOffer>('unasked');
   const [attempt, setAttempt] = useState(0);
 
   const recheck = useCallback(() => {
     setGate({ kind: 'checking' });
-    setOffer('unasked');
     setAttempt((n) => n + 1);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     getBootstrapStatus()
-      .then(async (status) => {
+      .then((status) => {
         if (cancelled) return;
-        if (status.required) {
-          // A deployment with no accounts has no admin, and only an admin can issue an
-          // enrollment code — so there is nothing to ask about and nobody to ask for.
-          setGate({ kind: 'first-run' });
-          return;
-        }
-        setGate({ kind: 'sign-in', notice: null });
-        /*
-          The second question, asked only once the first one has settled on a sign-in form.
-          The form is already on screen while this is outstanding: an unanswered question about
-          a secondary way in must not hold up the ordinary one.
-
-          A null answer — the server said something that was not a boolean, or said nothing —
-          leaves the offer STANDING rather than hiding it. The two mistakes are not symmetric.
-          Hiding the link from somebody holding a valid code is a dead end with no way past it,
-          and the enrol form is perfectly honest on a deployment that issues no codes: it says
-          the code was not accepted, which is true. Showing it to somebody without a code costs
-          a line they ignore.
-        */
-        const open = await getEnrollmentOpen().catch(() => null);
-        if (cancelled) return;
-        setOffer(open === null ? 'unknown' : open ? 'open' : 'closed');
+        // A deployment with no accounts cannot create one except through the setup form, which is
+        // the whole of the first-run design: `POST /api/auth/enroll` refuses while
+        // `bootstrap-status` says `required`, so there is no second door to offer here.
+        setGate(status.required ? { kind: 'first-run' } : { kind: 'sign-in', notice: null });
       })
       .catch(() => {
         if (cancelled) return;
@@ -470,10 +366,6 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
             'Could not check whether this deployment has been set up yet — the server may ' +
             'still be starting. If this is a fresh install, retry to reach the setup screen.',
         });
-        // Nothing was learned about enrolment either, and the same asymmetry applies: an
-        // unanswered question is not a "no", and hiding the way in from a code holder here
-        // would strand them on the one screen that already admits it is unsure.
-        setOffer('unknown');
       });
     return () => {
       cancelled = true;
@@ -526,12 +418,10 @@ export function SignedOut({ onAuthenticated }: { onAuthenticated: () => void }):
           </p>
         )
       }
-      // 'closed' is the server's definite no, and the only answer that takes the offer away.
-      onEnrol={
-        offer === 'open' || offer === 'unknown'
-          ? () => setGate({ kind: 'enrol', notice })
-          : undefined
-      }
+      // Unconditional: there is nothing left to be unsure about. Even on the one screen that
+      // admits it could not reach the server, the offer stands — the person who needs it is
+      // somebody with no account, and sending them nowhere is the worse of the two mistakes.
+      onEnrol={() => setGate({ kind: 'enrol', notice })}
     />
   );
 }

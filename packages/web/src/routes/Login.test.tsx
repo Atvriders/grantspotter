@@ -43,6 +43,40 @@ describe('Login', () => {
     expect(panel?.getAttribute('style')).toBeNull();
   });
 
+  /**
+   * THE ASIDE UNDER THE FORM, AND THE SENTENCE THAT CHANGED WITH THE PRODUCT.
+   *
+   * It read "Been given an enrollment code? / I have an enrollment code" and pointed at a form
+   * that only a code holder could complete. Registration is open (2026-08-11), so it asks the
+   * question everybody without an account can answer, and the gate now passes `onEnrol`
+   * unconditionally because there is nothing left to be unsure about.
+   *
+   * The prop stays optional for the renders that have nowhere to send anybody — the accessibility
+   * audit is the caller — so both halves are pinned here: present when there is a destination,
+   * absent when there is not, and never a dangling offer.
+   */
+  it('offers sign-up when there is somewhere to send them, and nothing when there is not', async () => {
+    const onEnrol = vi.fn();
+    const { unmount } = render(
+      <MemoryRouter>
+        <Login onAuthenticated={vi.fn()} onEnrol={onEnrol} />
+      </MemoryRouter>,
+    );
+    const offer = screen.getByRole('button', { name: /create an account/i });
+    expect(offer).toBeInTheDocument();
+    expect(screen.queryByText(/enrollment code/i)).not.toBeInTheDocument();
+    await userEvent.click(offer);
+    expect(onEnrol).toHaveBeenCalled();
+    unmount();
+
+    render(
+      <MemoryRouter>
+        <Login onAuthenticated={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /create an account/i })).not.toBeInTheDocument();
+  });
+
   it('labels both fields', () => {
     renderLogin();
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();

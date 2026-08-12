@@ -95,10 +95,18 @@ export function Login({
    */
   notice?: ReactNode;
   /**
-   * Switch to the enrolment form. Optional, and absent is meaningful: WHETHER a deployment
-   * accepts enrollment codes is a question only the server can answer (`GET
-   * /api/auth/enrollment-open`), the gate is what asks it, and a sign-in form that offers a
-   * way in that does not exist is worse than one that offers none.
+   * Switch to the sign-up form.
+   *
+   * OPTIONAL, AND THE REASON HAS CHANGED. It used to be optional because WHETHER a deployment
+   * accepted enrollment codes was a question only the server could answer (`GET
+   * /api/auth/enrollment-open`), and a sign-in form offering a way in that did not exist was worse
+   * than one offering none. Registration is open on every deployment now, so the gate always
+   * passes this and the answer is never in doubt.
+   *
+   * It stays optional because one caller still needs it absent: the accessibility audit renders
+   * this form on its own, and a prop that has to be threaded through every such render to say
+   * something that is always true is ceremony. Absent now means "this render has nowhere to send
+   * them", not "this deployment is closed".
    */
   onEnrol?: () => void;
 }): JSX.Element {
@@ -178,9 +186,9 @@ export function Login({
       */}
       {onEnrol !== undefined && (
         <p className="signed-out-aside">
-          Been given an enrollment code?{' '}
+          No account yet?{' '}
           <button type="button" className="btn" onClick={onEnrol}>
-            I have an enrollment code
+            Create an account
           </button>
         </p>
       )}

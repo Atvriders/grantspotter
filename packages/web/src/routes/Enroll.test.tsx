@@ -4,6 +4,22 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Enroll } from './Enroll.js';
 
+/**
+ * THE SIGN-UP SCREEN.
+ *
+ * WHAT WENT FROM THIS FILE ON 2026-08-11, and it is a third of it: every test about an enrollment
+ * code. There were five failures that were STATES OF A CODE — unknown, expired, revoked, used up,
+ * and a wrong-but-plausible one that had to read identically to an unknown one — and a whole
+ * describe block ("what the enrolment screen refuses to reveal") pinning that this form could not
+ * be used to find out which codes exist. None of those states can occur any more, so the tests are
+ * deleted rather than adapted: a test for a branch that cannot be reached is a test that will pass
+ * forever and mean nothing.
+ *
+ * What replaces them is smaller and is the whole of what this screen can now be told: the password
+ * is too short, the address is taken, the deployment is not set up yet, the server is too busy, or
+ * it could not be reached.
+ */
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -38,10 +54,7 @@ function renderEnroll(onAuthenticated = vi.fn(), onCancel = vi.fn()) {
   return { onAuthenticated, onCancel };
 }
 
-async function fillEnrol(
-  options: { code?: string; password?: string; email?: string } = {},
-): Promise<void> {
-  await userEvent.type(screen.getByLabelText(/enrollment code/i), options.code ?? 'JOIN-W1MX-2026');
+async function fillSignUp(options: { password?: string; email?: string } = {}): Promise<void> {
   await userEvent.type(screen.getByLabelText(/^email$/i), options.email ?? 'student@example.edu');
   await userEvent.type(
     screen.getByLabelText(/^password$/i),
@@ -58,15 +71,19 @@ function expectNotGeneric(text: string): void {
   expect(text).not.toMatch(/something went wrong/i);
 }
 
-describe('the enrolment form, before anything is submitted', () => {
+describe('the sign-up form, before anything is submitted', () => {
   it('opens the shared panel at the width its explanations need, and puts each hint in its field', () => {
     /*
       `SignedOutPage` is one wrapper for three screens, and the measure is the screen's decision:
-      the sign-in box has two fields and no prose, this has four fields under a three-sentence lede
-      with two of them explained in a paragraph. Rendered rather than grepped, because the class has
-      to be on the landmark that `components/signedOut.css` styles — see that stylesheet for the
+      the sign-in box has two fields and no prose, this has three fields under a lede with one of
+      them explained in a paragraph. Rendered rather than grepped, because the class has to be on
+      the landmark that `components/signedOut.css` styles — see that stylesheet for the
       66-character measure the prose width is derived from, and `signedOut.css.test.ts` for the
       spacing relationship it carries.
+
+      ONE HINT, NOT TWO. The second belonged to the enrollment-code field and said that
+      GrantSpotter stores only a hash of a code, so nobody — including an administrator — could
+      read one back. There is no code to say it about.
     */
     const { container } = render(
       <MemoryRouter>
@@ -76,11 +93,10 @@ describe('the enrolment form, before anything is submitted', () => {
     const panel = container.querySelector('main#main');
     expect(panel).toHaveClass('signed-out-prose');
     expect(panel).not.toHaveClass('signed-out-compact');
-    // Each hint inside the field it explains, which is what makes the proximity readable at all.
     for (const hint of container.querySelectorAll('.signed-out-hint')) {
       expect(hint.closest('.signed-out-field')).not.toBeNull();
     }
-    expect(container.querySelectorAll('.signed-out-hint')).toHaveLength(2);
+    expect(container.querySelectorAll('.signed-out-hint')).toHaveLength(1);
   });
 
   it('states the 12-character password rule up front, attached to the field it governs', () => {
@@ -93,19 +109,29 @@ describe('the enrolment form, before anything is submitted', () => {
     );
   });
 
-  it('says what an enrolled account is — and is not — before the code is spent on finding out', () => {
+  it('says that anybody may sign up, and that it is not an administrator account', () => {
     renderEnroll();
+    expect(screen.getByText(/anybody can create an account/i)).toBeInTheDocument();
     expect(screen.getByText(/never administrator access/i)).toBeInTheDocument();
   });
 
-  it('collects a code, an email, a password and an optional display name, and nothing else', () => {
+  /**
+   * THE FIELD THAT IS GONE IS THE POINT OF THE CHANGE, so it is asserted absent rather than left to
+   * the absence of a test. A code field that came back — from a revert, a merge, a copied screen —
+   * would fail here and nowhere else.
+   */
+  it('asks for an email, a password and an optional display name, and nothing else', () => {
     renderEnroll();
-    expect(screen.getByLabelText(/enrollment code/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^email$/i)).toHaveAttribute('type', 'email');
     expect(screen.getByLabelText(/^password$/i)).toHaveAttribute('type', 'password');
     expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/enrollment code/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/code/i)).not.toBeInTheDocument();
     // Nothing on this screen may ask for, or offer, a role.
     expect(screen.queryByLabelText(/role/i)).not.toBeInTheDocument();
+    // Or a callsign: sign-up asks for the smallest thing that can make an account, and the lookup
+    // that used to run during setup now lives on the profile.
+    expect(screen.queryByLabelText(/callsign/i)).not.toBeInTheDocument();
   });
 
   it('offers the way back for somebody who already has an account', async () => {
@@ -115,19 +141,18 @@ describe('the enrolment form, before anything is submitted', () => {
   });
 });
 
-describe('redeeming a code', () => {
-  it('posts the code, email and password, and signs the new member in', async () => {
+describe('creating the account', () => {
+  it('posts the email and password, and signs the new member in', async () => {
     const fetchMock = vi.fn().mockResolvedValue(CREATED);
     vi.stubGlobal('fetch', fetchMock);
     const { onAuthenticated } = renderEnroll();
 
-    await fillEnrol();
+    await fillSignUp();
     await submit();
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/auth/enroll');
     expect(JSON.parse(init.body as string)).toEqual({
-      code: 'JOIN-W1MX-2026',
       email: 'student@example.edu',
       password: 'a-long-enough-password',
     });
@@ -141,15 +166,11 @@ describe('redeeming a code', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderEnroll();
 
-    await fillEnrol();
+    await fillSignUp();
     await submit();
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(Object.keys(JSON.parse(init.body as string)).sort()).toEqual([
-      'code',
-      'email',
-      'password',
-    ]);
+    expect(Object.keys(JSON.parse(init.body as string))).toEqual(['email', 'password']);
   });
 
   it('sends a display name only when one was typed', async () => {
@@ -157,33 +178,20 @@ describe('redeeming a code', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderEnroll();
 
-    await fillEnrol();
-    await userEvent.type(screen.getByLabelText(/display name/i), 'Jamie (KD9XYZ)');
+    await fillSignUp();
+    await userEvent.type(screen.getByLabelText(/display name/i), '  Jo Student  ');
     await submit();
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string).displayName).toBe('Jamie (KD9XYZ)');
-  });
-
-  it('trims the code, because it is always pasted', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(CREATED);
-    vi.stubGlobal('fetch', fetchMock);
-    renderEnroll();
-
-    await fillEnrol({ code: '  JOIN-W1MX-2026  ' });
-    await submit();
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string).code).toBe('JOIN-W1MX-2026');
+    expect(JSON.parse(init.body as string).displayName).toBe('Jo Student');
   });
 
   /**
-   * ONE PRESS, ONE REDEMPTION.
-   *
-   * The server makes redemption atomic, and that is where a single-use code redeemed by two
-   * people at the same instant is decided. This is the other half, and it is the browser's own:
-   * an impatient double-press must not spend a one-use code twice and leave the person reading
-   * that their code is used up. Both clicks are dispatched before the in-flight POST resolves.
+   * ONE PRESS, ONE ACCOUNT. The button is disabled while a request is in flight and `submit`
+   * refuses as well, because Enter submits a form from any field. Two POSTs from one intent is how
+   * a person ends up reading that their own address already has an account — and now that every
+   * attempt is charged to the registration ladder, it is also how they spend two of their own
+   * places instead of one. Both clicks are dispatched before the in-flight POST resolves.
    */
   it('sends exactly one request when the button is pressed twice in a row', async () => {
     let release: (value: unknown) => void = () => undefined;
@@ -197,7 +205,7 @@ describe('redeeming a code', () => {
     vi.stubGlobal('fetch', fetchMock);
     const { onAuthenticated } = renderEnroll();
 
-    await fillEnrol();
+    await fillSignUp();
     const button = screen.getByRole('button', { name: /create my account/i });
     await userEvent.click(button);
     await userEvent.click(button);
@@ -213,11 +221,11 @@ describe('redeeming a code', () => {
   });
 });
 
-describe('every way enrolment fails has its own words', () => {
+describe('every way signing up fails has its own words', () => {
   async function failWith(response: unknown): Promise<HTMLElement> {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
     renderEnroll();
-    await fillEnrol();
+    await fillSignUp();
     await submit();
     return screen.findByRole('alert');
   }
@@ -227,7 +235,7 @@ describe('every way enrolment fails has its own words', () => {
     vi.stubGlobal('fetch', fetchMock);
     const { onAuthenticated } = renderEnroll();
 
-    await fillEnrol({ password: 'short' });
+    await fillSignUp({ password: 'short' });
     await submit();
 
     const alert = await screen.findByRole('alert');
@@ -253,7 +261,7 @@ describe('every way enrolment fails has its own words', () => {
         ),
     );
     renderEnroll();
-    await fillEnrol({ password: '              !' });
+    await fillSignUp({ password: '              !' });
     await submit();
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -261,205 +269,93 @@ describe('every way enrolment fails has its own words', () => {
     );
   });
 
-  it('tells the holder of a wrong code what to check, and calls it nothing else', async () => {
-    const alert = await failWith(
-      errorResponse(401, 'unauthorized', 'That enrollment code was not accepted.'),
-    );
-    expect(alert).toHaveTextContent(/was not accepted/i);
-    // Something the person can actually act on. It does not mention trailing whitespace, because
-    // the form trims the code before sending it and that can no longer be the cause.
-    expect(alert).toHaveTextContent(/missing or swapped character/i);
-    expectNotGeneric(alert.textContent ?? '');
-  });
-
-  it('says a code has expired, and whose problem that is', async () => {
-    const alert = await failWith(
-      errorResponse(403, 'forbidden', 'This enrollment code expired on 2026-07-01.', {
-        reason: 'expired',
-      }),
-    );
-    expect(alert).toHaveTextContent(/has expired/i);
-    // Not the person's mistake, and the fix is not on this screen.
-    expect(alert).toHaveTextContent(/nothing you typed is wrong/i);
-    expect(alert).toHaveTextContent(/ask whoever gave you the code/i);
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
-  });
-
-  it('says a code has been revoked, without implying the person did something', async () => {
-    const alert = await failWith(
-      errorResponse(403, 'forbidden', 'This enrollment code has been revoked.', {
-        reason: 'revoked',
-      }),
-    );
-    expect(alert).toHaveTextContent(/withdrawn by an administrator/i);
-    expect(alert).toHaveTextContent(/not something you did/i);
-    expect(alert).toHaveTextContent(/ask whoever gave you the code/i);
-  });
-
-  it('says a code is used up, and sends them back for one of their own', async () => {
-    const alert = await failWith(
-      errorResponse(403, 'forbidden', 'This enrollment code has no uses left.', {
-        reason: 'exhausted',
-      }),
-    );
-    expect(alert).toHaveTextContent(/used as many times as it allows/i);
-    expect(alert).toHaveTextContent(/not something you did/i);
-    expect(alert).toHaveTextContent(/one of your own/i);
-  });
-
   it('names a registered email as a registered email, and points at signing in', async () => {
-    const alert = await failWith(
-      errorResponse(409, 'conflict', 'student@example.edu already has an account.', {
-        reason: 'email_taken',
-      }),
-    );
-    expect(alert).toHaveTextContent(/already an account for that email/i);
-    expect(alert).toHaveTextContent(/sign in with it instead/i);
-    // It is an email problem, not a code problem: nothing here may send them back to the code.
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
-  });
-
-  it('says the same thing about a bare 409, because that is all a 409 means here', async () => {
-    // `POST /api/auth/enroll` raises exactly one conflict, and it is this one — so the sentence
-    // that says where to go instead does not have to wait for the server to label it.
     const alert = await failWith(
       errorResponse(409, 'conflict', 'student@example.edu already has an account.'),
     );
-    expect(alert).toHaveTextContent(/already an account for that email/i);
+    expect(alert).toHaveTextContent(/already an account for that email address/i);
     expect(alert).toHaveTextContent(/sign in with it instead/i);
-  });
-
-  /**
-   * THE SHAPE THE SERVER SENDS TODAY.
-   *
-   * `/api/auth/enroll` refuses a real-but-unusable code with `forbidden` and a sentence of its
-   * own, and attaches no `details.reason` — so this is the branch a live holder of an expired code
-   * actually reaches. What it must never do is swallow that sentence for one of ours: the
-   * server's copy is the only thing on screen that says which state the code is in.
-   */
-  it('shows the server’s own sentence when it names no reason, rather than an apology of ours', async () => {
-    const alert = await failWith(
-      errorResponse(
-        403,
-        'forbidden',
-        'That enrollment code has expired. Ask whoever gave it to you for a new one — they can issue one immediately.',
-      ),
-    );
-    expect(alert).toHaveTextContent(/has expired/i);
-    expect(alert).toHaveTextContent(/ask whoever gave it to you/i);
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
     expectNotGeneric(alert.textContent ?? '');
   });
 
-  it('names the cooldown when the attempt is rate-limited, and blames neither the code nor the person', async () => {
+  /**
+   * THE OTHER 409, AND THE ONE THAT MUST NOT BE MISTAKEN FOR THE FIRST.
+   *
+   * `POST /api/auth/enroll` refuses everybody while no administrator exists, because a stranger's
+   * account on a fresh deployment would make the operator's one-time setup token useless forever.
+   * The advice is the opposite of the taken-address advice: telling somebody to "sign in instead"
+   * on a deployment with NO accounts sends them to a form that cannot work.
+   */
+  it('tells somebody at an unclaimed deployment to wait for its operator, not to sign in', async () => {
     const alert = await failWith(
-      errorResponse(429, 'rate_limited', 'Too many enrolment attempts.'),
+      errorResponse(
+        409,
+        'conflict',
+        'This GrantSpotter has not been set up yet, so it cannot create accounts. Whoever runs ' +
+          'it has to create the administrator account first — once they have, anybody can sign up here.',
+      ),
     );
-    expect(alert).toHaveTextContent(/too many attempts/i);
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
+    expect(alert).toHaveTextContent(/has not been set up yet/i);
+    expect(alert).toHaveTextContent(/administrator account first/i);
+    expect(alert).not.toHaveTextContent(/already an account for that email/i);
   });
 
   /**
-   * THE NUMBER THE SERVER SENT, NOT ONE OF OURS.
-   *
-   * `apiFetch` parses `details` and hands it over, and this screen used to drop it and print "wait
-   * a minute" for every 429 — including one the server had said was fifteen minutes. A refusal a
-   * person cannot plan around is a refusal they retry immediately, which is the behaviour every
-   * limit on this route is trying to reduce, and "wait a minute" for a nine-hundred-second pause is
-   * simply a false statement.
+   * THE SERVER'S OWN SENTENCE FOR A 429, because there are two conditions behind that status and
+   * only the server knows which it hit: the registration ladder (this connection, this network or
+   * this whole server has created too many accounts in the last fifteen minutes) and the hash queue
+   * shedding under load. Its sentences already distinguish them, and both say the thing this screen
+   * would otherwise have to guess at — that nothing is wrong with the person's details.
    */
-  it('says how long the server actually asked for, rounded up', async () => {
+  it('repeats what the server said about the ladder, and how long it asked for', async () => {
     const alert = await failWith(
-      errorResponse(429, 'rate_limited', 'Too many enrollment codes have been tried.', {
-        retryAfterSec: 842,
-      }),
+      errorResponse(
+        429,
+        'rate_limited',
+        'Too many accounts have been created from this connection in the last few minutes, so ' +
+          'GrantSpotter is not making another one right now. Nothing is wrong with your details ' +
+          'and nothing has been used up — wait a few minutes and try again. If you already have ' +
+          'an account, signing in is not affected by this.',
+        { retryAfterSec: 900 },
+      ),
     );
-    // 842 s is 14.03 minutes; rounding DOWN would send them back to a second refusal.
+    expect(alert).toHaveTextContent(/too many accounts have been created from this connection/i);
+    expect(alert).toHaveTextContent(/nothing is wrong with your details/i);
+    expect(alert).toHaveTextContent(/signing in is not affected/i);
+    // The number the server actually sent, not a made-up minute.
     expect(alert).toHaveTextContent(/try again in 15 minutes/i);
-    expect(alert).not.toHaveTextContent(/wait a minute/i);
-    // And it says whose problem this is not, because on this route it is never the code's fault.
-    expect(alert).toHaveTextContent(/nothing is wrong with your code/i);
   });
 
   it('says nothing about time when the server named no number', async () => {
-    const alert = await failWith(errorResponse(429, 'rate_limited', 'Too many attempts.'));
-    expect(alert).not.toHaveTextContent(/try again in \d/i);
+    const alert = await failWith(
+      errorResponse(429, 'rate_limited', 'This server is already doing as much password checking as it can right now.'),
+    );
+    expect(alert).toHaveTextContent(/as much password checking as it can/i);
+    expect(alert.textContent ?? '').not.toMatch(/\d+ (second|minute)/i);
   });
 
-  it('does not blame the code when the API never answered', async () => {
+  it('does not blame the person when the API never answered', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-    const { onAuthenticated } = renderEnroll();
-    await fillEnrol();
+    renderEnroll();
+    await fillSignUp();
     await submit();
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/could not be reached/i);
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
-    // A request with no answer is not a request that failed: it may have created the account.
+    // The honest hedge: the request may have arrived, so the account may exist.
     expect(alert).toHaveTextContent(/signing in with this email and password will work/i);
-    expect(onAuthenticated).not.toHaveBeenCalled();
   });
 
-  it('reports a server fault as a server fault, not as a bad code', async () => {
-    const alert = await failWith(errorResponse(500, 'internal', 'Something went wrong.'));
-    expect(alert).toHaveTextContent(/the server answered 500/i);
-    expect(alert).not.toHaveTextContent(/was not accepted/i);
+  it('reports a server fault as a server fault', async () => {
+    const alert = await failWith(errorResponse(503, 'internal', 'upstream unavailable'));
+    expect(alert).toHaveTextContent(/fault on the server/i);
+    expectNotGeneric(alert.textContent ?? '');
   });
 
-  it('re-enables the button after a failure so the code can be retyped', async () => {
-    await failWith(errorResponse(401, 'unauthorized', 'That enrollment code was not accepted.'));
+  it('re-enables the button after a failure so the form can be retried', async () => {
+    await failWith(errorResponse(409, 'conflict', 'student@example.edu already has an account.'));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /create my account/i })).toBeEnabled();
     });
-  });
-});
-
-/**
- * NO ENUMERATION.
- *
- * A code is guessable only by trying, so the one thing this screen must never become is an oracle
- * for which codes exist. An unknown code and a mistyped real one have to be indistinguishable
- * here, whichever way the server phrases its refusal.
- */
-describe('what the enrolment screen refuses to reveal', () => {
-  async function messageFor(response: unknown): Promise<string> {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
-    const { unmount } = render(
-      <MemoryRouter>
-        <Enroll onAuthenticated={vi.fn()} onCancel={vi.fn()} />
-      </MemoryRouter>,
-    );
-    await fillEnrol();
-    await submit();
-    const text = (await screen.findByRole('alert')).textContent ?? '';
-    unmount();
-    vi.unstubAllGlobals();
-    return text;
-  }
-
-  it('answers a code that does not exist exactly as it answers a wrong one', async () => {
-    const unnamed = await messageFor(
-      errorResponse(401, 'unauthorized', 'That enrollment code was not accepted.'),
-    );
-    const named = await messageFor(
-      errorResponse(401, 'unauthorized', 'No such enrollment code.', {
-        reason: 'unknown_code',
-      }),
-    );
-    // Same words, and the server's own "no such code" is not one of them.
-    expect(named).toBe(unnamed);
-    expect(named).not.toMatch(/no such/i);
-  });
-
-  it('does not turn a 404 into a different answer than a 401', async () => {
-    const notFound = await messageFor(errorResponse(404, 'not_found', 'Unknown code.'));
-    const unauthorized = await messageFor(errorResponse(401, 'unauthorized', 'Nope.'));
-    expect(notFound).toBe(unauthorized);
-  });
-
-  it('says nothing about how many codes exist, or who else holds one', async () => {
-    const text = await messageFor(errorResponse(401, 'unauthorized', 'Not accepted.'));
-    expect(text).not.toMatch(/\d+ codes?\b/i);
-    expect(text).not.toMatch(/other (code|account|person)/i);
   });
 });

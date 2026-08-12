@@ -419,16 +419,23 @@ export interface RateLimiter {
    * HOW MANY FAILURES ARE RECORDED AGAINST `key` RIGHT NOW, for a caller that wants to SAY
    * something rather than refuse something.
    *
-   * `check` answers "may this one proceed?", which is a boolean and is the wrong question for the
-   * one place this is used: `api/auth.ts` writes an audit row when an account is created from a
-   * source that has just been getting codes wrong, and "seven" and "one" are the same boolean.
-   * MEASURED on 2026-08-10 against the built server: seven wrong codes from one address, then a
-   * chosen code found on the eighth, produced an account and no row an operator could see, because
-   * every one of those seven was inside a budget that never closed.
+   * WHY IT EXISTS. `check` answers "may this one proceed?", which is a boolean and was the wrong
+   * question for the place this was written for: `api/auth.ts` wrote an audit row when an account
+   * came out of a source that had just been getting enrollment codes wrong, and "seven" and "one"
+   * are the same boolean. MEASURED on 2026-08-10 against the built server: seven wrong codes from
+   * one address, then a chosen code found on the eighth, produced an account and no row an
+   * operator could see, because every one of those seven was inside a budget that never closed.
+   *
+   * IT HAS NO PRODUCTION CALLER SINCE 2026-08-11, and that is stated rather than left for somebody
+   * to discover with a search. Registration is open, so there are no wrong codes and no such row
+   * to write. It is kept because it is part of this interface's contract and is depended on by a
+   * test double in `api/callsign.test.ts` — and because the thing it does, turning a limiter into
+   * something an audit row can quote, is the shape any future "say it, do not refuse it" control
+   * will want. If a second release goes by with nothing calling it, delete it.
    *
    * IN-FLIGHT ATTEMPTS ARE NOT COUNTED, unlike `check`'s reading of the same key. This number goes
    * into a sentence about what has already happened; an attempt whose outcome is still unknown is
-   * not yet a wrong code, and counting it would let a burst of requests that all turn out to be
+   * not yet a failure, and counting it would let a burst of requests that all turn out to be
    * correct inflate the figure in the row.
    */
   count(key: string, nowMs?: number): number;

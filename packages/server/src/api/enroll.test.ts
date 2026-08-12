@@ -1,36 +1,39 @@
 import { Agent as httpAgent } from 'node:http';
 import type Database from 'better-sqlite3';
-import { MEASURED_GUESSES_PER_DAY } from '@grantspotter/core';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
 import {
-  ENROLLMENT_MAX_FAILURES,
-  ENROLLMENT_MAX_FAILURES_DEPLOYMENT,
-  ENROLLMENT_MAX_FAILURES_PER_NETWORK,
-  ENROLLMENT_WINDOW_MS,
+  REGISTRATION_MAX_DEPLOYMENT,
+  REGISTRATION_MAX_PER_CONNECTION,
+  REGISTRATION_MAX_PER_NETWORK,
+  REGISTRATION_WINDOW_MS,
 } from './auth.js';
 import { createBootstrapState } from '../auth/bootstrap.js';
 import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from '../auth/password.js';
 import { createRateLimiter } from '../auth/rateLimit.js';
 import { SESSION_COOKIE } from '../auth/session.js';
 import { loadConfig } from '../config.js';
-import {
-  createEnrollmentCodeRepo,
-  hashEnrollmentCode,
-  type EnrollmentCodeRepo,
-} from '../db/repositories/enrollmentCodes.js';
 import { createUserRepo } from '../db/repositories/users.js';
 import { createTestDb, type TestDb } from '../../test/helpers/tempDb.js';
 
 /**
- * THE PUBLIC HALF OF ENROLMENT: `POST /api/auth/enroll` and `GET /api/auth/enrollment-open`.
+ * `POST /api/auth/enroll` — REGISTRATION, THE WAY IN THAT NOBODY HAS TO BE PRESENT FOR.
  *
- * `test/api.auth.test.ts` covers login, /me and logout; `api/auth.test.ts` covers the first-run
- * token. This file covers the third way an account can come into existence — the one nobody has to
- * be present for — and the properties it has to hold are not the properties of a sign-in form:
- * exactly one account per available use no matter how many people press at once, one answer for
- * every wrong code, and never an administrator.
+ * THIS FILE USED TO BE ABOUT ENROLLMENT CODES and most of it has gone with them. It held 1,332
+ * lines: one account per available use however many people pressed at once, one answer for every
+ * wrong code, three ceilings on guessing, a disclosure budget per code, and a control test that
+ * reproduced a six-accounts-from-a-one-use-code race on purpose. None of those properties exist to
+ * hold any more — there is no code, no use count, and nothing to guess — so the tests are deleted
+ * rather than adapted, and what replaces them tests the properties open registration actually has.
+ *
+ * THE FILE KEEPS ITS NAME because the route keeps its path; `api/auth.ts` says why the path did not
+ * change with the meaning. A test file that searches cannot find is a defect this project has paid
+ * for before.
+ *
+ * `test/api.auth.test.ts` covers login, /me, logout and the first-run token; `api/auth.test.ts`
+ * covers the first-run password floor; `api/authCost.test.ts` covers what this route COSTS, which
+ * is a different question and now the more important one.
  *
  * IT DRIVES THE WHOLE APP (`createApp`) rather than the router in isolation, because half of what
  * is being asserted is about the composition: the JSON body limit, the error envelope, the session
@@ -55,15 +58,13 @@ function seededPasswordHash(): Promise<string> {
 
 let harness: TestDb;
 let db: Database.Database;
-let codes: EnrollmentCodeRepo;
 
 beforeEach(async () => {
   harness = createTestDb();
   db = harness.db;
-  codes = createEnrollmentCodeRepo(db);
-  // A real administrator row: `create` refuses to attribute a code to a user that does not exist
-  // (migration 094 dropped the foreign key that used to refuse it), and its presence is also what
-  // makes first-run bootstrap closed, which is the state a live deployment is in.
+  // A real administrator row, because that is the state a live deployment is in and because
+  // registration is CLOSED until one exists — see the last describe in this file, which is the
+  // only one that deliberately runs without it.
   db.prepare(
     `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
      VALUES (?, 'admin@example.org', 'admin@example.org', ?, 'admin', 'ics-admin', ?)`,
@@ -82,50 +83,15 @@ function build() {
   });
 }
 
-/**
- * A generated code, unwrapped.
- *
- * `create` returns a union since an administrator may now TYPE a code and collide with an existing
- * one (`db/repositories/enrollmentCodes.ts`). Nothing in this file types one — every call here
- * passes `chosen: null` — so the refusal branch is unreachable, and it is thrown on rather than
- * asserted away so that a future edit which does collide fails HERE, naming itself, instead of
- * surfacing as an undefined `plaintext` twenty lines further down.
- */
-function issue(over: Partial<Parameters<EnrollmentCodeRepo['create']>[0]> = {}) {
-  const issued = codes.create({
-    label: 'W1MX autumn 2026 intake',
-    chosen: null,
-    maxUses: null,
-    expiresAt: null,
-    createdByUserId: ADMIN_ID,
-    nowISO: new Date().toISOString(),
-    ...over,
-  });
-  if (!issued.ok) throw new Error('issue(): the generated code collided with an existing one');
-  return issued;
-}
-
 function memberCount(): number {
   return (
     db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'member'").get() as { n: number }
   ).n;
 }
 
-function usesOf(id: string): number {
-  return codes.findById(id)?.uses ?? -1;
-}
-
-/** Status plus the error envelope, with the per-request id removed: what a caller can tell apart. */
-function refusal(res: request.Response): unknown {
-  return { status: res.status, error: res.body.error };
-}
-
-describe('enrolling with a code', () => {
-  it('creates a member, signs them in, and spends exactly one use', async () => {
-    const { code, plaintext } = issue({ maxUses: 30 });
-
+describe('signing up', () => {
+  it('creates a member from an email and a password, and signs them in', async () => {
     const res = await request(build()).post('/api/auth/enroll').send({
-      code: plaintext,
       email: 'New.Student@Example.org',
       password: GOOD_PASSWORD,
       displayName: 'New Student',
@@ -139,7 +105,7 @@ describe('enrolling with a code', () => {
       role: 'member',
       createdAt: expect.any(String),
     });
-    // Signed in on the way out: the point of enrolling is to arrive inside the product.
+    // Signed in on the way out: the point of signing up is to arrive inside the product.
     const setCookie = res.headers['set-cookie'];
     expect((Array.isArray(setCookie) ? setCookie : [setCookie]).join(';')).toContain(
       `${SESSION_COOKIE}=`,
@@ -151,50 +117,68 @@ describe('enrolling with a code', () => {
     expect(stored?.role).toBe('member');
     await expect(verifyPassword(stored!.passwordHash, GOOD_PASSWORD)).resolves.toBe(true);
 
-    // Exactly one use, stamped.
-    expect(codes.findById(code.id)).toMatchObject({ uses: 1, lastUsedAt: expect.any(String) });
-
-    // …and an administrator can find out where this account came from, without the code appearing.
+    // …and an administrator can find out where this account came from. `user.register` and not
+    // `user.enroll`: the old action named the enrollment code an account came from, and rows
+    // carrying it are history now rather than a thing this route writes.
     const audit = db
       .prepare('SELECT actor_user_id, action, entity_type, detail FROM audit_log')
       .all() as Array<Record<string, string>>;
     expect(audit).toEqual([
       {
         actor_user_id: stored!.id,
-        action: 'user.enroll',
+        action: 'user.register',
         entity_type: 'user',
-        detail: JSON.stringify({ enrollmentCodeId: code.id, label: 'W1MX autumn 2026 intake' }),
+        // The coarse source network and nothing else — never the address, which is already in the
+        // users table and does not need repeating into a record kept for longer and read by more
+        // people. Loopback in this harness, which coarsens to a /24 like any other v4 address.
+        detail: JSON.stringify({ origin: '127.0.0.0/24' }),
       },
     ]);
-    expect(JSON.stringify(audit)).not.toContain(plaintext.replace(/-/g, ''));
   }, 30_000);
 
-  it('accepts the code as it was written down, not as it was generated', async () => {
-    const { plaintext } = issue();
+  /**
+   * NOBODY HAS TO BE ASKED. This is the whole of the owner's change, expressed as the shortest
+   * possible test: a body with no credential in it at all, on a deployment that has issued nothing
+   * to anybody, makes an account.
+   */
+  it('needs no code, no invitation and nobody else present', async () => {
     const res = await request(build())
       .post('/api/auth/enroll')
-      .send({ code: ` ${plaintext.toLowerCase()} `, email: 'a@example.org', password: GOOD_PASSWORD });
+      .send({ email: 'stranger@example.org', password: GOOD_PASSWORD });
+
     expect(res.status).toBe(201);
+    expect(memberCount()).toBe(1);
+  }, 30_000);
+
+  /**
+   * A BROWSER TAB LEFT OPEN ACROSS THE UPGRADE. It is holding the old sign-up form, which has a
+   * code field in it, and it will POST that field. zod strips a key an object schema does not
+   * declare, so the request succeeds instead of being answered with a validation error the old
+   * screen has no wording for.
+   */
+  it('ignores a code sent by a browser that has not been reloaded yet', async () => {
+    const res = await request(build())
+      .post('/api/auth/enroll')
+      .send({ code: 'W1MX-SPRING-2027', email: 'stale-tab@example.org', password: GOOD_PASSWORD });
+
+    expect(res.status).toBe(201);
+    expect(memberCount()).toBe(1);
   }, 30_000);
 
   it('never emits a hash, a token or anything else the account is held together with', async () => {
-    const { plaintext } = issue();
     const res = await request(build())
       .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: GOOD_PASSWORD });
+      .send({ email: 'a@example.org', password: GOOD_PASSWORD });
 
     const body = JSON.stringify(res.body);
     expect(body).not.toMatch(/argon2|passwordHash|icsToken/i);
     expect(body).not.toContain(createUserRepo(db).findByEmail('a@example.org')!.icsToken);
-    expect(body).not.toContain(hashEnrollmentCode(plaintext));
   }, 30_000);
 });
 
-describe('enrolment never grants admin', () => {
+describe('registration never grants admin', () => {
   it('ignores a role the caller asked for, and makes a member', async () => {
-    const { plaintext } = issue();
     const res = await request(build()).post('/api/auth/enroll').send({
-      code: plaintext,
       email: 'aspiring@example.org',
       password: GOOD_PASSWORD,
       role: 'admin',
@@ -205,124 +189,94 @@ describe('enrolment never grants admin', () => {
     expect(res.body.user.role).toBe('member');
     expect(createUserRepo(db).findByEmail('aspiring@example.org')?.role).toBe('member');
     // The only admin in this deployment is still the one that was seeded.
-    expect(
-      db.prepare("SELECT id FROM users WHERE role = 'admin'").all(),
-    ).toEqual([{ id: ADMIN_ID }]);
+    expect(db.prepare("SELECT id FROM users WHERE role = 'admin'").all()).toEqual([
+      { id: ADMIN_ID },
+    ]);
   }, 30_000);
 });
 
-describe('a code that cannot be redeemed', () => {
-  it('answers an unknown code and a wrong-but-plausible one identically', async () => {
-    // A real code exists; neither of these is it. One is shaped exactly like a code from this
-    // deployment's own alphabet, the other is the real code with its last character changed — the
-    // guess somebody makes if they think they mistyped one character.
-    const { code, plaintext } = issue();
-    const app = build();
-
-    const lastIsZero = plaintext.endsWith('0');
-    const nearMiss = `${plaintext.slice(0, -1)}${lastIsZero ? '2' : '0'}`;
-    expect(nearMiss).not.toBe(plaintext);
-
-    const unknown = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ', email: 'a@example.org', password: GOOD_PASSWORD });
-    const plausible = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: nearMiss, email: 'b@example.org', password: GOOD_PASSWORD });
-
-    expect(unknown.status).toBe(401);
-    expect(unknown.body.error.code).toBe('unauthorized');
-    // Byte-identical, envelope and all: nothing here tells the caller that some OTHER code exists,
-    // how many there are, or that they were one character away from one.
-    expect(refusal(plausible)).toEqual(refusal(unknown));
-
-    expect(memberCount()).toBe(0);
-    expect(usesOf(code.id)).toBe(0);
-  }, 30_000);
-
-  it('tells the holder of a revoked code that it was withdrawn', async () => {
-    const { code, plaintext } = issue();
-    codes.revoke(code.id, new Date().toISOString());
-
+describe('a body that costs the caller nothing', () => {
+  it('refuses a password below the floor and says what the floor is', async () => {
     const res = await request(build())
       .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: GOOD_PASSWORD });
-
-    expect(res.status).toBe(403);
-    expect(res.body.error.message).toMatch(/withdrawn/i);
-    expect(memberCount()).toBe(0);
-  }, 30_000);
-
-  it('tells the holder of an expired code that it expired', async () => {
-    const { plaintext } = issue({ expiresAt: '2020-01-01T00:00:00.000Z' });
-
-    const res = await request(build())
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: GOOD_PASSWORD });
-
-    expect(res.status).toBe(403);
-    expect(res.body.error.message).toMatch(/expired/i);
-    expect(memberCount()).toBe(0);
-  }, 30_000);
-
-  /**
-   * THE THIRTY-FIRST PERSON.
-   *
-   * A club officer issues a thirty-use code for an intake and thirty-one people turn up. The
-   * thirty-first has typed everything correctly, has done nothing wrong, and is the single most
-   * likely person in this whole feature to conclude that the product is broken and give up. What
-   * this message has to do is tell them it is not their fault and name the one action that fixes
-   * it — ask the person who gave them the code — rather than say "not valid" and let them retype
-   * it eleven times.
-   */
-  it('tells the person who arrived after a code ran out that it is not their fault', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
-    const app = build();
-
-    const first = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'first@example.org', password: GOOD_PASSWORD });
-    expect(first.status).toBe(201);
-
-    const second = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'second@example.org', password: GOOD_PASSWORD });
-
-    expect(second.status).toBe(403);
-    expect(second.body.error.message).toMatch(/already been used/i);
-    // The two things the sentence exists to say.
-    expect(second.body.error.message).toMatch(/not.*wrong|nothing is wrong/i);
-    expect(second.body.error.message).toMatch(/ask the person who gave you the code/i);
-
-    expect(memberCount()).toBe(1);
-    expect(usesOf(code.id)).toBe(1);
-  }, 30_000);
-});
-
-describe('a body that costs the holder nothing', () => {
-  it('refuses a password below the floor without spending the code', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
-
-    const res = await request(build())
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: 'short' });
+      .send({ email: 'a@example.org', password: 'short' });
 
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe('validation_failed');
     // The number is in the sentence: "the request body is invalid" makes them guess.
     expect(res.body.error.message).toContain(String(MIN_PASSWORD_LENGTH));
-
-    // Their one place is still theirs.
-    expect(usesOf(code.id)).toBe(0);
     expect(memberCount()).toBe(0);
+
     const retry = await request(build())
       .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: GOOD_PASSWORD });
+      .send({ email: 'a@example.org', password: GOOD_PASSWORD });
     expect(retry.status).toBe(201);
   }, 30_000);
 
-  it('refuses an address that already has an account without spending the code', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
+  it('refuses something that could never be an email address', async () => {
+    const res = await request(build())
+      .post('/api/auth/enroll')
+      .send({ email: 'not-an-address', password: GOOD_PASSWORD });
+
+    expect(res.status).toBe(422);
+    expect(memberCount()).toBe(0);
+  }, 30_000);
+
+  /**
+   * THE FLOOR IS CHECKED BEFORE THE ADDRESS, and this is the test that keeps it there.
+   *
+   * MEASURED 2026-08-05 with the order reversed: a one-character password answered 409 "<address>
+   * already has an account" for a member and 422 for everybody else, which classified 2,000
+   * addresses in 2,983 ms with nothing created and nothing charged. The cheap invalid input must
+   * not be able to separate two answers the design has decided to separate expensively.
+   */
+  it('answers a too-short password identically for a member and a stranger', async () => {
+    createUserRepo(db).create({
+      email: 'member@example.org',
+      passwordHash: await seededPasswordHash(),
+      role: 'member',
+    });
+    const app = build();
+
+    const known = await request(app)
+      .post('/api/auth/enroll')
+      .send({ email: 'member@example.org', password: 'x' });
+    const stranger = await request(app)
+      .post('/api/auth/enroll')
+      .send({ email: 'nobody@example.org', password: 'x' });
+
+    expect(known.status).toBe(422);
+    expect({ status: known.status, error: known.body.error }).toEqual({
+      status: stranger.status,
+      error: stranger.body.error,
+    });
+  }, 30_000);
+});
+
+/**
+ * THE ACCOUNT-EXISTENCE ORACLE, WHICH IS NOW OPEN AND IS SAID TO BE OPEN.
+ *
+ * WHAT THE PREVIOUS DESIGN DID AND WHY IT CANNOT BE KEPT. `ENROLLMENT_CONFLICT_MAX` rationed the
+ * specific answer per CODE — five namings per code per window, then the same question cost an
+ * argon2id and got a sentence naming nobody. That was affordable because the key was a credential
+ * an administrator had issued: minting a fresh bucket meant obtaining a second real code. With
+ * registration open there is no such key. Every candidate is either chosen by the caller
+ * (`X-Forwarded-For`, the address itself) or shared by everybody behind the tunnel, and a budget
+ * whose key the caller writes is not a budget.
+ *
+ * SO THE ANSWER IS NO LONGER RATIONED AND THE ROUTE IS. A probe is a registration attempt, charged
+ * to all three rungs before the address is looked at, so classifying addresses costs exactly what
+ * creating accounts costs and stops at the same ceiling. `authCost.test.ts` measures that ceiling
+ * against a real burst; these tests are about what a person is TOLD.
+ *
+ * AND THE ANSWER STAYS THE USEFUL ONE, which is the part worth defending: the person who meets it
+ * most often is not an attacker, it is somebody who signed up last term and has forgotten. Making
+ * a hit indistinguishable from a miss would mean refusing to create the account for the miss, or
+ * claiming to have created one that does not exist — the second of which sends that person to a
+ * sign-in screen with a password nobody stored.
+ */
+describe('an address that already has an account', () => {
+  it('says so, names it, and sends the person to the sign-in screen', async () => {
     createUserRepo(db).create({
       email: 'taken@example.org',
       passwordHash: await seededPasswordHash(),
@@ -331,1002 +285,349 @@ describe('a body that costs the holder nothing', () => {
 
     const res = await request(build())
       .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'Taken@Example.org', password: GOOD_PASSWORD });
+      .send({ email: 'Taken@Example.org', password: GOOD_PASSWORD });
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('conflict');
-    // The one action that gets this person into the product. Being told only "that did not work"
-    // sends somebody who enrolled last term to their club officer instead of to the sign-in screen,
-    // which is why this answer stays specific even though it is also an account-existence answer —
-    // see `ENROLLMENT_CONFLICT_MAX` in api/auth.ts for what bounds the question instead.
+    expect(res.body.error.message).toContain('Taken@Example.org');
     expect(res.body.error.message).toMatch(/sign in/i);
-    expect(usesOf(code.id)).toBe(0);
+    // Nothing was created, and the account that exists is untouched.
     expect(memberCount()).toBe(1);
-  }, 30_000);
-
-  it('refuses something that could never be an email address', async () => {
-    const { code, plaintext } = issue();
-    const res = await request(build())
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'not-an-address', password: GOOD_PASSWORD });
-
-    expect(res.status).toBe(422);
-    expect(usesOf(code.id)).toBe(0);
-  }, 30_000);
-});
-
-/**
- * THE HEART OF THIS FEATURE, AND THE DEFECT IT IS SHAPED AGAINST.
- *
- * This project shipped a check-then-act with an `await` between the check and the write once
- * already, in the callsign lookup: eight concurrent presses all read the same empty ledger, all
- * passed a limit meant to allow one, and all sent a request. Nothing about that was visible to a
- * test that made the presses one after another.
- *
- * So the first test below is a CONTROL rather than a test of the product: it drives the naive shape
- * — read the row, await an argon2id hash, write `uses + 1` computed in JavaScript — through the
- * same `Promise.all` harness, and proves the harness genuinely overlaps by watching that shape
- * fail. Without it, the second test passing would be evidence of nothing: a harness that serialised
- * its requests would pass it just as happily against a broken implementation.
- */
-describe('two people redeeming the last use at the same instant', () => {
-  const RACERS = 6;
-
-  it('CONTROL: the naive read-await-write shape hands out six accounts from a one-use code', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
-    const codeHash = hashEnrollmentCode(plaintext);
-    const users = createUserRepo(db);
-
-    // Deliberately NOT `repo.redeem`. This is what the route would look like if the check and the
-    // write were separated by the password hash, which is the only await on the real path.
-    async function naiveRedeem(email: string): Promise<boolean> {
-      const row = db
-        .prepare('SELECT id, uses, max_uses FROM enrollment_codes WHERE code_hash = ?')
-        .get(codeHash) as { id: string; uses: number; max_uses: number | null };
-      if (row.max_uses !== null && row.uses >= row.max_uses) return false;
-
-      const passwordHash = await hashPassword(GOOD_PASSWORD);
-
-      db.prepare('UPDATE enrollment_codes SET uses = ? WHERE id = ?').run(row.uses + 1, row.id);
-      users.create({ email, passwordHash, role: 'member' });
-      return true;
-    }
-
-    const results = await Promise.all(
-      Array.from({ length: RACERS }, (_unused, i) => naiveRedeem(`racer-${String(i)}@example.org`)),
-    );
-
-    // Every one of them believed it had the last use. This is the bug, reproduced on purpose.
-    expect(results.filter(Boolean)).toHaveLength(RACERS);
-    expect(memberCount()).toBe(RACERS);
-
-    // AND THE LEDGER DOES NOT EVEN RECORD IT. Measured, not predicted: this assertion was written
-    // as `toBe(RACERS)` and came back 1. All six racers read `uses = 0` and all six wrote
-    // `uses = 0 + 1`, so five of the writes are lost and the table ends up saying that a one-use
-    // code was used once — while six accounts exist. An officer auditing this afterwards would see
-    // nothing wrong at all, which is the part that makes this class of defect survive: it is silent
-    // in exactly the record you would go and check. `uses = uses + 1` in the WHERE-guarded UPDATE
-    // is what makes the count arithmetic rather than a guess.
-    expect(usesOf(code.id)).toBe(1);
-  }, 30_000);
-
-  it('produces exactly one account, and exactly one use, from a one-use code', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
-    const app = build();
-
-    const responses = await Promise.all(
-      Array.from({ length: RACERS }, (_unused, i) =>
-        request(app)
-          .post('/api/auth/enroll')
-          .send({
-            code: plaintext,
-            email: `racer-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
-      ),
-    );
-
-    const created = responses.filter((r) => r.status === 201);
-    expect(created).toHaveLength(1);
-    expect(memberCount()).toBe(1);
-    expect(usesOf(code.id)).toBe(1);
-
-    // The five who lost are told the truthful thing — the code ran out — and not "invalid".
-    const losers = responses.filter((r) => r.status !== 201);
-    expect(losers).toHaveLength(RACERS - 1);
-    for (const loser of losers) {
-      expect(loser.status).toBe(403);
-      expect(loser.body.error.message).toMatch(/already been used/i);
-    }
-    // Exactly one account exists, and it belongs to whichever racer won.
-    const emails = (db.prepare("SELECT email FROM users WHERE role = 'member'").all() as Array<{
-      email: string;
-    }>).map((r) => r.email);
-    expect(emails).toHaveLength(1);
-    expect(emails[0]).toMatch(/^racer-\d@example\.org$/);
-    expect(created[0].body.user.email).toBe(emails[0]);
-  }, 30_000);
-
-  it('hands out no more than the limit when many race for a few places', async () => {
-    const { code, plaintext } = issue({ maxUses: 2 });
-    const app = build();
-
-    const responses = await Promise.all(
-      Array.from({ length: RACERS }, (_unused, i) =>
-        request(app)
-          .post('/api/auth/enroll')
-          .send({
-            code: plaintext,
-            email: `crowd-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
-      ),
-    );
-
-    expect(responses.filter((r) => r.status === 201)).toHaveLength(2);
-    expect(memberCount()).toBe(2);
-    expect(usesOf(code.id)).toBe(2);
-  }, 30_000);
-});
-
-/**
- * ONE VALID CODE USED AS A MEMBERSHIP DIRECTORY.
- *
- * The 409 above is genuinely useful to the person it is written for, and it is also an answer to
- * the question "does this address have an account here?" — which anybody holding one code could
- * ask about any address, as often as they liked. MEASURED, 2026-08-05: 200 probes with one
- * `maxUses: null` code, all 200 answered, nothing charged and nothing written down. A club
- * officer's code, shared with thirty people, was a membership oracle for the whole deployment.
- *
- * The counting is asserted in `api/authCost.test.ts`, which drives 200 of them. What is asserted
- * here is the product's side of the trade: the answer stays useful for the people who need it, the
- * SPECIFIC form of it is bounded per CODE, one code's budget is not another's — and running a
- * budget out does not stop anybody enrolling.
- *
- * TWO ASSERTIONS IN THIS BLOCK WERE CHANGED ON 2026-08-05, NOT WEAKENED. They read
- * `expect(refused.status).toBe(429)` and pinned the behaviour that the sixth caller to a probed
- * code — including a brand-new person with a fresh address — was refused for fifteen minutes. That
- * was the mechanism by which one honest returning student, pressing submit five times with the
- * right password, closed her club's intake for the other thirty (measured, 2026-08-05), and by
- * which a stranger holding the club's own code could keep it closed for 20 requests an hour. The
- * property those assertions were reaching for — that a caller past the budget cannot tell a member
- * from a stranger by the words they get back — is asserted below and asserted harder, because it
- * now also has to hold for the COST. What is gone is the refusal, and it was the defect.
- */
-describe('what one code can be used to find out about other people', () => {
-  const CONFLICT_MAX = 5;
-
-  async function seedMember(email: string): Promise<void> {
-    createUserRepo(db).create({
-      email,
-      passwordHash: await seededPasswordHash(),
-      role: 'member',
-    });
-  }
-
-  it('answers five people plainly, then stops naming anybody, and never stops enrolling', async () => {
-    const { code, plaintext } = issue();
-    const app = build();
-    for (let i = 0; i < CONFLICT_MAX + 1; i += 1) await seedMember(`member-${String(i)}@x.org`);
-
-    async function ask(i: number) {
-      return request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `member-${String(i)}@x.org`, password: GOOD_PASSWORD });
-    }
-
-    for (let i = 0; i < CONFLICT_MAX; i += 1) {
-      const answered = await ask(i);
-      expect(answered.status).toBe(409);
-      expect(answered.body.error.message).toMatch(/sign in/i);
-      // The specific answer, which is the one worth rationing: it names the address, which is what
-      // turns "that did not work" into "go to the sign-in screen".
-      expect(answered.body.error.message).toContain(`member-${String(i)}@x.org`);
-    }
-
-    // The sixth is still answered, still told where to go, and told nothing about anybody.
-    const vague = await ask(CONFLICT_MAX);
-    expect(vague.status).toBe(409);
-    expect(vague.body.error.message).toMatch(/sign in/i);
-    expect(vague.body.error.message).not.toContain(`member-${String(CONFLICT_MAX)}@x.org`);
-    expect(vague.body.error.code).toBe('conflict');
-
-    // AND THE CODE IS STILL A CODE. This is what the old `toBe(429)` denied: the person after the
-    // probing is a stranger with a fresh address and a real code, and nothing anybody did to that
-    // budget is any of her business.
-    const newcomer = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'brand-new@x.org', password: GOOD_PASSWORD });
-    expect(newcomer.status).toBe(201);
-    expect(usesOf(code.id)).toBe(1);
-    expect(memberCount()).toBe(CONFLICT_MAX + 2);
-
-    // Said as its own assertion because it is the property, not a side effect of the two above:
-    // running this budget out refuses nobody.
-    for (const res of [vague, newcomer]) expect(res.status).not.toBe(429);
-  }, 60_000);
-
-  it('bounds the specific answer per code, so one probed code does not blunt another club’s', async () => {
-    const probed = issue({ label: 'probed' });
-    const other = issue({ label: 'another club' });
-    const app = build();
-    for (let i = 0; i < CONFLICT_MAX; i += 1) await seedMember(`member-${String(i)}@x.org`);
-
-    for (let i = 0; i < CONFLICT_MAX; i += 1) {
-      expect(
-        (
-          await request(app).post('/api/auth/enroll').send({
-            code: probed.plaintext,
-            email: `member-${String(i)}@x.org`,
-            password: GOOD_PASSWORD,
-          })
-        ).status,
-      ).toBe(409);
-    }
-    // Spent: this code's answers are now the vague one, and still 409, and still not a refusal.
-    const blunted = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: probed.plaintext, email: 'member-0@x.org', password: GOOD_PASSWORD });
-    expect(blunted.status).toBe(409);
-    expect(blunted.body.error.message).not.toContain('member-0@x.org');
-
-    // The other club's code has its own budget and its own intake, and neither has moved.
-    const theirs = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: other.plaintext, email: 'member-0@x.org', password: GOOD_PASSWORD });
-    expect(theirs.status).toBe(409);
-    expect(theirs.body.error.message).toContain('member-0@x.org');
-    const newPerson = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: other.plaintext, email: 'brand-new@x.org', password: GOOD_PASSWORD });
-    expect(newPerson.status).toBe(201);
-    expect(usesOf(other.code.id)).toBe(1);
-    // …and the probed code has still spent nothing, because a conflict rolls its transaction back.
-    expect(usesOf(probed.code.id)).toBe(0);
-
-    // The probed code still enrols the person it was issued for.
-    const student = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: probed.plaintext, email: 'late-student@x.org', password: GOOD_PASSWORD });
-    expect(student.status).toBe(201);
-    expect(usesOf(probed.code.id)).toBe(1);
-  }, 60_000);
-
-  it('writes each answered question against the code, and never the address it was asked about', async () => {
-    const { code, plaintext } = issue();
-    await seedMember('quiet-member@x.org');
-
-    const res = await request(build())
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'quiet-member@x.org', password: GOOD_PASSWORD });
-    expect(res.status).toBe(409);
-
-    const trail = db
-      .prepare('SELECT actor_user_id, action, entity_type, entity_id, detail FROM audit_log')
-      .all() as Array<Record<string, string | null>>;
-    expect(trail).toEqual([
-      {
-        // Nobody signed in did this: the actor is an anonymous caller holding a code. Naming the
-        // code's issuer here would be a false statement in the one record kept to be believed.
-        actor_user_id: null,
-        action: 'enrollment_code.conflict',
-        entity_type: 'enrollment_code',
-        entity_id: code.id,
-        detail: JSON.stringify({ label: 'W1MX autumn 2026 intake' }),
-      },
-    ]);
-    // An administrator learns WHICH CREDENTIAL is being used this way, which is what they can act
-    // on. A trail of the addresses would be the very list this limit exists to stop somebody
-    // building — and it would be readable by more people than the one who asked.
-    expect(JSON.stringify(trail)).not.toContain('quiet-member@x.org');
   }, 30_000);
 
   /**
-   * THE ROW AN ADMINISTRATOR ACTS ON, written by the answer that spends the budget and by no other.
+   * SOMEBODY WORKING THROUGH A LIST LEAVES A MARK, and one mark rather than one per question.
    *
-   * Five specific answers is where this code stops naming people, and an operator who is going to
-   * revoke a credential needs to be told that it happened. The sixth, seventh and hundredth probe
-   * write nothing: an audit trail a caller can fill at will is one that hides everything else in
-   * it, which is the reason the row is bound to the transition and not to the condition.
+   * The threshold refuses nothing — the ladder is what refuses — so being wrong about the number
+   * costs one audit row per source network per window and nothing else.
    */
-  it('records the moment a code stops naming people, once, against the code', async () => {
-    const { code, plaintext } = issue();
-    const app = build();
-    for (let i = 0; i < CONFLICT_MAX + 3; i += 1) await seedMember(`m${String(i)}@x.org`);
-
-    for (let i = 0; i < CONFLICT_MAX + 3; i += 1) {
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `m${String(i)}@x.org`, password: GOOD_PASSWORD });
+  it('writes the operator one row when a source network is told about twenty of them', async () => {
+    const stmt = db.prepare(
+      `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+       VALUES (?, ?, ?, ?, 'member', ?, ?)`,
+    );
+    const hash = await seededPasswordHash();
+    for (let i = 0; i < 25; i += 1) {
+      const email = `known-${String(i)}@example.org`;
+      stmt.run(`u-${String(i)}`, email, email, hash, `ics-${String(i)}`, '2026-09-01T00:00:00.000Z');
     }
-
-    const paused = db
-      .prepare(
-        "SELECT actor_user_id, entity_id, detail FROM audit_log WHERE action = 'enrollment_code.conflict_paused'",
-      )
-      .all() as Array<Record<string, string | null>>;
-    expect(paused).toEqual([
-      {
-        actor_user_id: null,
-        entity_id: code.id,
-        detail: JSON.stringify({
-          label: 'W1MX autumn 2026 intake',
-          answers: CONFLICT_MAX,
-          windowSec: 900,
-        }),
-      },
-    ]);
-    // Five specific answers plus this one, and not one row for the three probes after it.
-    expect(
-      (
-        db
-          .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'enrollment_code.conflict'")
-          .get() as { n: number }
-      ).n,
-    ).toBe(CONFLICT_MAX);
-    expect(JSON.stringify(paused)).not.toContain('@x.org');
-  }, 60_000);
-});
-
-/**
- * THE MEASUREMENTS THAT REFUTED THE FIRST VERSION OF THIS FEATURE, TURNED INTO ASSERTIONS.
- *
- * Every `it` in this block corresponds to something an adversarial reader demonstrated on
- * 2026-08-05 against the previous commit, with the number they measured in the comment. None of
- * these were visible to the suite as it stood, because every one of them is about what a limit does
- * to somebody who is NOT attacking, and the suite only ever asserted what it does to somebody who
- * is.
- */
-describe('what a limit must never do to the people it is not aimed at', () => {
-  async function seedMember(email: string): Promise<void> {
-    createUserRepo(db).create({ email, passwordHash: await seededPasswordHash(), role: 'member' });
-  }
-
-  /**
-   * MEASURED before the fix: five presses, and a DIFFERENT student was answered 429 with
-   * retryAfterSec 900. No attacker, no wrong code, no wrong password — a returning student who had
-   * forgotten she already had an account, pressing the button.
-   */
-  it('lets one returning student press submit six times without closing her club’s intake', async () => {
-    const { plaintext } = issue({ maxUses: 30 });
     const app = build();
-    await seedMember('returning.student@example.org');
 
-    for (let press = 1; press <= 6; press += 1) {
-      const res = await request(app).post('/api/auth/enroll').send({
-        code: plaintext,
-        email: 'returning.student@example.org',
-        password: GOOD_PASSWORD,
-      });
+    for (let i = 0; i < 25; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/enroll')
+        .send({ email: `known-${String(i)}@example.org`, password: GOOD_PASSWORD });
       expect(res.status).toBe(409);
-      expect(res.body.error.message).toMatch(/sign in/i);
-    }
-
-    const classmate = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'student-01@example.org', password: GOOD_PASSWORD });
-    expect(classmate.status).toBe(201);
-    expect(memberCount()).toBe(2);
-  }, 60_000);
-
-  /**
-   * MEASURED before the fix: 12 wrong codes from an address with no code at all, and the honest
-   * student holding a real one was answered 429 with retryAfterSec 900. 48 requests held every club
-   * on the deployment closed for an hour.
-   *
-   * The guess budget still closes — the eleventh wrong code from this connection is refused, which
-   * `closes the door after ten wrong codes` pins — but a caller holding a code this deployment
-   * issued never reads that counter, so nothing a guesser does can reach them.
-   */
-  it('does not let a stranger’s wrong codes close enrolment for somebody with a real one', async () => {
-    const { plaintext } = issue({ maxUses: 30 });
-    const app = build();
-
-    for (let i = 0; i < 12; i += 1) {
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: `ZZZZZ-ZZZZZ-ZZZZZ-ZZZ${String(i).padStart(2, '0')}`,
-          email: `junk-${String(i)}@example.net`,
-          password: GOOD_PASSWORD,
-        });
-    }
-
-    const student = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'legit@example.org', password: GOOD_PASSWORD });
-    expect(student.status).toBe(201);
-    expect(memberCount()).toBe(1);
-  }, 60_000);
-
-  /**
-   * The guess budget is per caller as well, so even two people who are BOTH getting it wrong do not
-   * spend each other's patience. Two real sockets with different source addresses: 127.0.0.0/8 is
-   * all local on Linux, and with no `X-Forwarded-For` in play express reports the peer, so this is a
-   * genuinely different client rather than a header saying so.
-   */
-  it('spends one connection’s guesses without spending another’s', async () => {
-    issue();
-    const app = build();
-    const noisy = new httpAgent({ localAddress: '127.0.0.2' });
-
-    for (let i = 0; i < 12; i += 1) {
-      await request(app)
-        .post('/api/auth/enroll')
-        .agent(noisy)
-        .send({
-          code: `ZZZZZ-ZZZZZ-ZZZZZ-ZZZ${String(i).padStart(2, '0')}`,
-          email: `junk-${String(i)}@example.net`,
-          password: GOOD_PASSWORD,
-        });
-    }
-    const noisyAgain = await request(app)
-      .post('/api/auth/enroll')
-      .agent(noisy)
-      .send({ code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZ99', email: 'j@example.net', password: GOOD_PASSWORD });
-    expect(noisyAgain.status).toBe(429);
-
-    // Somebody else, mistyping their own code for the first time, is answered about the code.
-    const elsewhere = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZ98', email: 'other@example.org', password: GOOD_PASSWORD });
-    expect(elsewhere.status).toBe(401);
-  }, 60_000);
-
-  /**
-   * MEASURED before the fix: `audit_log` was EMPTY after ten wrong codes had closed enrolment for
-   * the whole deployment. The operator saw a page refusing everybody and had nothing to read.
-   */
-  it('writes one row when a connection is cut off, with no address and no code in it', async () => {
-    issue();
-    const app = build();
-
-    for (let i = 0; i < 14; i += 1) {
-      await request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: `ZZZZZ-ZZZZZ-ZZZZZ-ZZZ${String(i).padStart(2, '0')}`,
-          email: `junk-${String(i)}@example.net`,
-          password: GOOD_PASSWORD,
-        });
     }
 
     const rows = db
-      .prepare(
-        "SELECT actor_user_id, entity_type, entity_id, detail FROM audit_log WHERE action = 'enrollment.code_guessing'",
-      )
-      .all() as Array<Record<string, string | null>>;
-    // ONE row, not fourteen: written by the guess that closed the budget, not by every refusal
-    // after it.
+      .prepare("SELECT entity_id, detail FROM audit_log WHERE action = 'auth.addresses_probed'")
+      .all() as Array<{ entity_id: string; detail: string }>;
+    // Exactly one: the twentieth answer writes it and the five after it write nothing, so a caller
+    // cannot bury the rest of the trail under their own noise.
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ actor_user_id: null, entity_type: 'enrollment' });
-    // Where from, coarsely, so the operator can recognise their own NAT or block a building —
-    // never the host, and never a code or an address, neither of which this caller even had.
-    expect(rows[0].entity_id).toMatch(/\/(24|48)$/);
-    expect(JSON.stringify(rows)).not.toContain('example.net');
-    expect(JSON.stringify(rows)).not.toContain('ZZZZZ');
+    // A network, never a host, and never an address that was asked about — the trail must not
+    // become the list it exists to make visible.
+    expect(rows[0]?.entity_id).toBe('127.0.0.0/24');
+    expect(JSON.stringify(rows)).not.toContain('known-0@example.org');
+    expect(JSON.parse(rows[0]?.detail ?? '{}')).toMatchObject({ answers: 20 });
   }, 60_000);
+});
 
-  /**
-   * MEASURED before the fix: 30 valid students pressing submit together produced 10 accounts and 20
-   * answers of "Too many enrollment attempts. Try again later." The budget meant to bound argon2id
-   * was being charged for the successes as well as the guesses.
-   */
-  it('gives thirty students with a valid code thirty accounts, all at once', async () => {
-    const { code, plaintext } = issue({ maxUses: 30 });
+/**
+ * TWO PEOPLE, ONE ADDRESS, ONE INSTANT.
+ *
+ * The check that decides this is inside the transaction, in the same synchronous stretch as the
+ * INSERT, and the argon2id that used to sit between a check and a write is paid before the
+ * transaction opens. `Promise.all` overlaps the handlers for real: every one of these requests
+ * reads an empty table, and then all but one of them loses.
+ */
+describe('two people registering the same address at the same instant', () => {
+  const RACERS = 6;
+
+  it('produces exactly one account and refuses the others without a fault', async () => {
     const app = build();
 
-    const responses = await Promise.all(
-      Array.from({ length: 30 }, (_unused, i) =>
+    const statuses = await Promise.all(
+      Array.from({ length: RACERS }, () =>
         request(app)
           .post('/api/auth/enroll')
-          .send({
-            code: plaintext,
-            email: `student-${String(i)}@example.org`,
-            password: GOOD_PASSWORD,
-          }),
+          .send({ email: 'contested@example.org', password: GOOD_PASSWORD })
+          .then((res) => res.status),
+      ),
+    );
+
+    expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 409)).toHaveLength(RACERS - 1);
+    // Nothing 500s: losing a race is an answer, not a fault.
+    expect(statuses.filter((s) => s >= 500)).toHaveLength(0);
+    expect(memberCount()).toBe(1);
+  }, 60_000);
+});
+
+/**
+ * THE LADDER, AND THE QUESTION THAT DECIDES EVERY NUMBER IN IT: what does it cost the people it is
+ * not aimed at?
+ *
+ * THIS IS THE PART OF THE CHANGE THAT IS EASIEST TO GET WRONG, and this codebase has got it wrong
+ * three times. The rungs were sized against a caller GUESSING a secret and were charged only when
+ * one was wrong, so no legitimate person ever met them. They are now charged on every registration,
+ * which puts them in front of exactly the traffic the product exists for — so the numbers moved,
+ * and these tests are about the moving rather than the numbers.
+ */
+describe('what the ladder must never do to the people it is not aimed at', () => {
+  const app = () => build();
+
+  it('gives thirty students signing up together thirty accounts', async () => {
+    const server = app();
+    const responses = await Promise.all(
+      Array.from({ length: 30 }, (_unused, i) =>
+        request(server)
+          .post('/api/auth/enroll')
+          .send({ email: `intake-${String(i)}@example.org`, password: GOOD_PASSWORD }),
       ),
     );
 
     expect(responses.filter((r) => r.status === 201)).toHaveLength(30);
-    expect(responses.filter((r) => r.status === 429)).toHaveLength(0);
     expect(memberCount()).toBe(30);
-    expect(usesOf(code.id)).toBe(30);
-  }, 120_000);
+  }, 180_000);
 
   /**
-   * THE ORACLE THAT THE PREVIOUS FIX OPENED, closed by ordering.
-   *
-   * MEASURED before the fix: one valid code and a ONE-CHARACTER password answered 409 naming the
-   * address for a member and 422 "Password must be at least 12 characters." for anybody else. The
-   * 422 was unmetered, unlogged and free — 2,000 addresses classified in 2,983 ms.
-   *
-   * The floor is checked first, so this body cannot separate anybody from anybody. It is not
-   * reachable from the product at all: `routes/Enroll.tsx` checks the same floor before it POSTs.
+   * THE INTAKE ARRIVES FROM ONE BUILDING. Behind the documented tunnel `req.ip` is whatever
+   * Cloudflare reported, which for a lecture hall is the campus NAT — one bucket for all thirty.
+   * The connection rung was TEN while it counted wrong codes; ten here would have answered twenty
+   * of these students "try again later", which is the 2026-08-05 defect this file has already paid
+   * for once.
    */
-  it('answers a too-short password identically for a member and a stranger', async () => {
-    const { code, plaintext } = issue();
-    const app = build();
-    await seedMember('officer@example.org');
-
-    const member = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'officer@example.org', password: 'x' });
-    const stranger = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'nobody@example.org', password: 'x' });
-
-    expect(member.status).toBe(422);
-    // Byte-identical, envelope and all.
-    expect(refusal(member)).toEqual(refusal(stranger));
-    expect(usesOf(code.id)).toBe(0);
-    expect(memberCount()).toBe(1);
-  }, 30_000);
-
-  /**
-   * WHAT STILL BOUNDS THE ORACLE, now that a probe past the disclosure budget is answered rather
-   * than refused: the code's own `maxUses`.
-   *
-   * Classifying an address that is NOT a member costs a place, because the answer IS the account.
-   * A thirty-use code therefore buys about thirty of those and then answers 403 to everybody,
-   * including the caller doing the asking — and it does so from `inspect`, before the address is
-   * ever looked up, so an exhausted code cannot be used to ask about anybody at all. An officer who
-   * issues `maxUses: null` has issued something else, which is why that is an explicit decision.
-   */
-  it('stops answering about anybody once the code it was asked with has run out', async () => {
-    const { plaintext } = issue({ maxUses: 2 });
-    const app = build();
-    await seedMember('officer@example.org');
-
-    for (let i = 0; i < 2; i += 1) {
-      expect(
-        (
-          await request(app)
-            .post('/api/auth/enroll')
-            .send({ code: plaintext, email: `probe-${String(i)}@x.org`, password: GOOD_PASSWORD })
-        ).status,
-      ).toBe(201);
+  it('does not refuse a whole intake because it shares one address', async () => {
+    const server = app();
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      const res = await request(server)
+        .post('/api/auth/enroll')
+        .set('X-Forwarded-For', '203.0.113.7')
+        .send({ email: `nat-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      statuses.push(res.status);
     }
-
-    // The code is spent. Now the two questions that used to be tellable apart:
-    const aboutMember = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'officer@example.org', password: GOOD_PASSWORD });
-    const aboutStranger = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'nobody@x.org', password: GOOD_PASSWORD });
-
-    expect(aboutMember.status).toBe(403);
-    expect(refusal(aboutMember)).toEqual(refusal(aboutStranger));
-    expect(memberCount()).toBe(3);
-  }, 60_000);
-
-  /**
-   * The same body against a code that is NOT valid: the password floor answers first there too, so
-   * a short password cannot be used to sort real codes from wrong ones either.
-   */
-  it('answers a too-short password identically for a real code and a wrong one', async () => {
-    const { plaintext } = issue();
-    const app = build();
-
-    const real = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: 'x' });
-    const wrong = await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZ2', email: 'a@example.org', password: 'x' });
-
-    expect(real.status).toBe(422);
-    expect(refusal(real)).toEqual(refusal(wrong));
-  }, 30_000);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(30);
+  }, 180_000);
 });
 
-describe('the rate limiter is what makes the entropy mean something', () => {
-  /**
-   * The shipped numbers, not injected ones: ten wrong codes in fifteen minutes, PER CONNECTION.
-   * There is no seam to inject a smaller limiter through `createApp` — `AppDeps` does not carry one
-   * — and testing the real configuration is worth more than testing a fake anyway, because the
-   * number that matters operationally is the one that ships. Every request below comes down one
-   * loopback connection, which is why ten is still ten here; the test above named
-   * "spends one connection's guesses without spending another's" is the other half.
-   */
-  it('closes the door after ten wrong codes and says how long for', async () => {
-    issue();
-    const app = build();
-
-    async function guess(n: number) {
-      return request(app)
+/**
+ * WHAT THE LADDER DOES TO THE CALLER IT IS AIMED AT.
+ *
+ * These run the SHIPPED numbers rather than an injected small one, for the reason the old file gave
+ * and which has not changed: a limiter tested at a ceiling of three proves that a limiter works,
+ * not that this deployment's limiter is set where its comment says. Sixty-one requests is cheap
+ * because the refused ones cost no argon2id — that is the property, not an accident of the test.
+ */
+describe('the ceiling on how many accounts one caller can make', () => {
+  it('creates sixty from one connection and then says how long to wait', async () => {
+    const server = build();
+    const statuses: number[] = [];
+    for (let i = 0; i < REGISTRATION_MAX_PER_CONNECTION + 1; i += 1) {
+      const res = await request(server)
         .post('/api/auth/enroll')
-        .send({
-          code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZ2',
-          email: `guess-${String(n)}@example.org`,
-          password: GOOD_PASSWORD,
-        });
+        .send({ email: `bulk-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      statuses.push(res.status);
+      if (res.status === 429) {
+        expect(res.body.error.code).toBe('rate_limited');
+        expect(res.body.error.details.retryAfterSec).toBeGreaterThan(0);
+        expect(res.body.error.details.retryAfterSec).toBeLessThanOrEqual(
+          REGISTRATION_WINDOW_MS / 1000,
+        );
+        // The three things this sentence has to say to somebody who is not the attacker.
+        expect(res.body.error.message).toMatch(/nothing is wrong with your details/i);
+        expect(res.body.error.message).toMatch(/wait a few minutes/i);
+        expect(res.body.error.message).toMatch(/signing in is not affected/i);
+      }
     }
 
-    for (let i = 0; i < 10; i += 1) {
-      expect((await guess(i)).status).toBe(401);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(REGISTRATION_MAX_PER_CONNECTION);
+    expect(statuses.at(-1)).toBe(429);
+    expect(memberCount()).toBe(REGISTRATION_MAX_PER_CONNECTION);
+  }, 300_000);
+
+  /**
+   * A REFUSAL CHARGES NOTHING, which is the arithmetic the whole ladder rests on: one network can
+   * only ever put its own ceiling into the deployment-wide counter, so closing that one takes at
+   * least two networks acting together.
+   *
+   * Asserted here on the connection rung against the network rung, because that is the pair a
+   * single caller can actually exercise — sixty-one requests, of which the sixty-first is refused
+   * and must not appear anywhere. If a refusal charged, this caller would be able to spend the
+   * network's 120 by knocking, and the ratio would be decorative.
+   */
+  it('does not charge a refused request to the rungs below it', async () => {
+    const server = build();
+    for (let i = 0; i < REGISTRATION_MAX_PER_CONNECTION + 20; i += 1) {
+      await request(server)
+        .post('/api/auth/enroll')
+        .send({ email: `charge-${String(i)}@example.org`, password: GOOD_PASSWORD });
+    }
+    // Twenty requests past the connection ceiling, all refused. If any of them had been charged to
+    // the network rung, a SECOND connection in the same network would now have fewer than
+    // (120 - 60) registrations left; it has exactly that many, so it can make sixty more.
+    const second: number[] = [];
+    for (let i = 0; i < REGISTRATION_MAX_PER_NETWORK - REGISTRATION_MAX_PER_CONNECTION; i += 1) {
+      const res = await request(server)
+        .post('/api/auth/enroll')
+        .set('X-Forwarded-For', '198.51.100.4')
+        .send({ email: `second-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      second.push(res.status);
+    }
+    expect(second.filter((s) => s === 201)).toHaveLength(
+      REGISTRATION_MAX_PER_NETWORK - REGISTRATION_MAX_PER_CONNECTION,
+    );
+    // …and the network rung is now exactly spent, so a third connection in it is refused with the
+    // sentence that says so rather than the connection one.
+    const third = await request(server)
+      .post('/api/auth/enroll')
+      .set('X-Forwarded-For', '198.51.100.9')
+      .send({ email: 'third@example.org', password: GOOD_PASSWORD });
+    expect(third.status).toBe(429);
+    expect(third.body.error.message).toMatch(/from your network/i);
+  }, 600_000);
+
+  /**
+   * THE ROW AN OPERATOR READS WHEN SIGN-UP STOPS WORKING.
+   *
+   * It is more important than it was. When these rungs counted wrong codes, a closed budget refused
+   * an attacker; now it refuses whoever arrives next, and the row is the only evidence that anybody
+   * was turned away at all. One per rung per window, keyed on something the caller cannot mint.
+   */
+  it('writes one row when a rung closes, with no address in it', async () => {
+    const server = build();
+    for (let i = 0; i < REGISTRATION_MAX_PER_CONNECTION + 5; i += 1) {
+      await request(server)
+        .post('/api/auth/enroll')
+        .send({ email: `noticed-${String(i)}@example.org`, password: GOOD_PASSWORD });
     }
 
-    const blocked = await guess(10);
-    expect(blocked.status).toBe(429);
-    expect(blocked.body.error.code).toBe('rate_limited');
-    expect(blocked.body.error.details.retryAfterSec).toBeGreaterThan(0);
-    expect(memberCount()).toBe(0);
-  }, 60_000);
+    const rows = db
+      .prepare("SELECT entity_id, detail FROM audit_log WHERE action = 'auth.registration_limited'")
+      .all() as Array<{ entity_id: string; detail: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entity_id).toBe('127.0.0.0/24');
+    expect(JSON.parse(rows[0]?.detail ?? '{}')).toMatchObject({
+      rung: 'connection',
+      registrations: REGISTRATION_MAX_PER_CONNECTION,
+      windowSec: REGISTRATION_WINDOW_MS / 1000,
+    });
+    expect(JSON.stringify(rows)).not.toContain('noticed-0@example.org');
+  }, 300_000);
+});
 
-  it('does not charge the holder of a real code that has run out', async () => {
-    const { plaintext } = issue({ maxUses: 1 });
+/**
+ * A CALLER WHO WRITES THEIR OWN `X-Forwarded-For`, which is every caller when nothing sits in front
+ * of this process.
+ *
+ * The connection rung is theirs to rotate and always was; what stops that being unlimited is the
+ * two rungs underneath it, which are derived from the TCP peer and from nothing at all. This is the
+ * same pair of tests the guess ladder had, re-pointed: what they pin is the SHAPE — that rotating
+ * the header buys the network's ceiling and not the deployment's.
+ */
+describe('a caller who mints their own address', () => {
+  /**
+   * One socket, reused, so every request really does share a TCP peer. Without the agent, supertest
+   * opens a connection per request and the peer differs only in port — which `coarseOrigin` strips
+   * anyway, so this is belt and braces made explicit rather than assumed.
+   */
+  const agent = new httpAgent({ keepAlive: true, maxSockets: 8 });
+
+  it('gets the network ceiling however many addresses they claim', async () => {
+    const server = build();
+    let created = 0;
+    let refused = 0;
+    for (let i = 0; i < REGISTRATION_MAX_PER_NETWORK + 10; i += 1) {
+      const res = await request(server)
+        .post('/api/auth/enroll')
+        .agent(agent)
+        // A FRESH ADDRESS EVERY TIME: the connection rung can never fire on this caller.
+        .set('X-Forwarded-For', `203.0.113.${String(i % 254)}`)
+        .send({ email: `minted-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      if (res.status === 201) created += 1;
+      else if (res.status === 429) refused += 1;
+    }
+
+    expect(created).toBe(REGISTRATION_MAX_PER_NETWORK);
+    expect(refused).toBe(10);
+    // Not the deployment rung: one network cannot spend more than its own share, which is what
+    // keeps the deployment-wide ceiling out of one caller's reach.
+    expect(created).toBeLessThan(REGISTRATION_MAX_DEPLOYMENT);
+  }, 600_000);
+});
+
+/**
+ * THE ONE PROPERTY THAT KEEPS OPEN REGISTRATION FROM LOSING A DEPLOYMENT ITS ADMINISTRATOR.
+ *
+ * `bootstrap.required()` is "no accounts exist", and the first-run token is the only thing that can
+ * create an administrator. A stranger registering on a fresh deployment would make that false and
+ * the operator's token useless — not "somebody else is the admin", but "nobody can ever be", with
+ * no repair short of deleting the database. So the door opens in the order the deployment is built.
+ */
+describe('a deployment nobody has set up yet', () => {
+  it('creates no account at all, and says why', async () => {
+    // The one test in this file that runs without the seeded administrator.
+    db.prepare('DELETE FROM users').run();
     const app = build();
+
+    const res = await request(app)
+      .post('/api/auth/enroll')
+      .send({ email: 'first@example.org', password: GOOD_PASSWORD });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('conflict');
+    expect(res.body.error.message).toMatch(/has not been set up/i);
+    // The sentence has to point at the person who can fix it, and say that the door opens after.
+    expect(res.body.error.message).toMatch(/administrator account first/i);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(0);
+  }, 30_000);
+
+  it('opens the moment the administrator exists, on the same running server', async () => {
+    db.prepare('DELETE FROM users').run();
+    const bootstrap = createBootstrapState(db, () => undefined);
+    const app = createApp({
+      db,
+      config,
+      bootstrap,
+      loginLimiter: createRateLimiter({ windowMs: 15 * 60 * 1000, maxFailures: 5 }),
+      logger: () => undefined,
+    });
+
     expect(
       (
         await request(app)
           .post('/api/auth/enroll')
-          .send({ code: plaintext, email: 'first@example.org', password: GOOD_PASSWORD })
+          .send({ email: 'early@example.org', password: GOOD_PASSWORD })
       ).status,
-    ).toBe(201);
+    ).toBe(409);
 
-    // Eleven attempts with a REAL code that has run out — one more than the failure budget. Their
-    // holder is not guessing, so none of them is charged and the eleventh is still answered with
-    // the truth rather than with a lockout.
-    for (let i = 0; i < 11; i += 1) {
-      const res = await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `late-${String(i)}@example.org`, password: GOOD_PASSWORD });
-      expect(res.status).toBe(403);
-    }
-  }, 60_000);
+    const setUp = await request(app)
+      .post('/api/auth/bootstrap')
+      .send({ token: bootstrap.token(), email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(setUp.status).toBe(201);
 
-  /**
-   * WHAT THIS TEST USED TO SAY, AND WHY IT NO LONGER SAYS IT.
-   *
-   * It was called "forgets the failures as soon as somebody enrolls successfully", and it asserted
-   * the `reset()` the handler used to run on a successful redemption. That reset was a hole in the
-   * ceiling this whole describe block is about: a holder of a multi-use code could alternate nine
-   * wrong codes with one real redemption and start again. MEASURED, 2026-08-05, five rounds of that
-   * loop: 45 wrong-code guesses answered inside one fifteen-minute window, against a budget of ten.
-   *
-   * The old assertions are not weakened here — the last one (`after.status === 401`) still holds
-   * and is still asserted below, because the tenth guess IS answered; it was simply never evidence
-   * of the property its title claimed, since ten guesses fit in the budget whether or not the
-   * success cleared it. What follows adds the eleventh, which is the request that tells the two
-   * behaviours apart.
-   *
-   * The intake itself still carries on: a success is never charged, and neither is a real code that
-   * has expired or run out (the two tests above). What no longer happens is a success paying off
-   * somebody else's guesses.
-   */
-  it('counts the wrong codes through a success rather than forgetting them', async () => {
-    const { plaintext } = issue({ maxUses: 5 });
-    const app = build();
-
-    async function guess(who: string) {
-      return request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: 'ZZZZZ-ZZZZZ-ZZZZZ-ZZZZ2',
-          email: `${who}@example.org`,
-          password: GOOD_PASSWORD,
-        });
-    }
-
-    for (let i = 0; i < 9; i += 1) {
-      expect((await guess(`guess-${String(i)}`)).status).toBe(401);
-    }
-
-    // Nine wrong codes have not closed the door on the person who has a real one.
-    const good = await request(app)
+    const now = await request(app)
       .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'real@example.org', password: GOOD_PASSWORD });
-    expect(good.status).toBe(201);
-
-    // The tenth guess is the last one the budget allows…
-    expect((await guess('another')).status).toBe(401);
-    // …and the eleventh is refused, because the success in the middle bought nobody a fresh nine.
-    const blocked = await guess('eleventh');
-    expect(blocked.status).toBe(429);
-    expect(blocked.body.error.code).toBe('rate_limited');
+      .send({ email: 'early@example.org', password: GOOD_PASSWORD });
+    expect(now.status).toBe(201);
+    expect(now.body.user.role).toBe('member');
   }, 60_000);
 });
 
 /**
- * THE RUNG BELOW THE ONE THE CALLER CHOOSES, AND WHAT IT IS FOR.
+ * THE ROUTE THAT ANSWERED "IS ENROLMENT OPEN?" IS GONE, and this is the test that says so rather
+ * than the absence of one.
  *
- * WHAT WAS MEASURED, on this host on 2026-08-10 against the BUILT server in its own process, with
- * `5d25533` in place and an administrator's chosen code live:
- *
- *   · 20,008 wrong codes at `POST /api/auth/enroll` in 10.12 s across 256 keep-alive connections,
- *     every one answered 401, from ONE machine rotating `X-Forwarded-For` — 1,977 a second.
- *   · Zero rows in `audit_log` afterwards.
- *   · `W1MX-SPRING-2027` found on the seventh club-shaped guess from one address, and the account
- *     it made followed by sixty more, until the harness stopped asking.
- *
- * The per-connection budget was not defeated by a trick; it was keyed on `req.ip`, which the caller
- * writes when this process is reachable directly, so it was never in the way. It is kept — behind
- * the documented tunnel it is the real client and it is the precise one — and two rungs that the
- * caller has nothing to rotate now sit underneath it. See `ENROLLMENT_WINDOW_MS` in `api/auth.ts`
- * for the derivation of each ceiling and for what an attacker can still reach.
+ * It existed so the sign-in screen could decide whether to offer a way in that would work. The
+ * answer is now a constant, and a browser that still asks gets the 404 any unknown /api path gets —
+ * which `routes/FirstRun.tsx` treated as "did not say" and which left the offer standing, so a tab
+ * open across the upgrade behaves correctly by accident and by design at once.
  */
-describe('a guesser who writes their own address', () => {
-  /** A fresh reported origin per request: the probe that made the old budget irrelevant. */
-  function forged(app: ReturnType<typeof build>, n: number, agent?: httpAgent) {
-    const req = request(app).post('/api/auth/enroll');
-    if (agent !== undefined) req.agent(agent);
-    return req
-      .set('x-forwarded-for', `203.0.${String((n >> 8) & 255)}.${String(n & 255)}`)
-      .send({
-        code: `ZZZZZ-ZZZZZ-ZZZZZ-Z${String(n).padStart(4, '0')}`,
-        email: `forged-${String(n)}@example.net`,
-        password: GOOD_PASSWORD,
-      });
-  }
-
-  async function flood(
-    app: ReturnType<typeof build>,
-    count: number,
-    agent?: httpAgent,
-    from = 0,
-  ): Promise<{ answered: number; refused: number; last: request.Response }> {
-    let answered = 0;
-    let refused = 0;
-    let last!: request.Response;
-    for (let i = 0; i < count; i += 1) {
-      last = await forged(app, from + i, agent);
-      if (last.status === 401) answered += 1;
-      else if (last.status === 429) refused += 1;
-    }
-    return { answered, refused, last };
-  }
-
-  function guessingRows(): Array<Record<string, string | null>> {
-    return db
-      .prepare(
-        `SELECT actor_user_id, entity_type, entity_id, detail FROM audit_log
-          WHERE action = 'enrollment.code_guessing' ORDER BY rowid`,
-      )
-      .all() as Array<Record<string, string | null>>;
-  }
-
-  it('gets a hundred and twenty answers however many addresses they claim', async () => {
-    issue();
-    const app = build();
-
-    const { answered, refused, last } = await flood(app, 130);
-
-    // The connection rung is bypassed exactly as it was — 120 is far past its ten — and the rung
-    // under it is the one that stops this.
-    expect(answered).toBe(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
-    expect(refused).toBe(130 - ENROLLMENT_MAX_FAILURES_PER_NETWORK);
-    expect(last.status).toBe(429);
-    expect(last.body.error.code).toBe('rate_limited');
-    // The sentence names the rung, and ends by telling the person most likely to be reading it —
-    // somebody who mistyped a real code while this was going on — that they are not shut out.
-    expect(last.body.error.message).toMatch(/from your network/);
-    expect(last.body.error.message).toMatch(/a code this server does recognise is not held up/);
-    expect(memberCount()).toBe(0);
-  }, 120_000);
-
-  /**
-   * THE 2026-08-05 LESSON AS ARITHMETIC RATHER THAN AS A HOPE. A single bucket for the whole
-   * deployment was a switch any stranger could flip with ten requests. The deployment-wide rung is
-   * twice the per-network one AND a refused request charges nothing, so one source can put at most
-   * its own 120 into it and closing it takes two.
-   */
-  it('cannot close the deployment-wide ceiling from one network however long they keep going', async () => {
-    issue();
-    const app = build();
-
-    const first = await flood(app, 200);
-    expect(first.answered).toBe(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
-    // ONE ROW, FROM THE NETWORK RUNG, AND THE ABSENCE OF THE OTHER TWO IS THE POINT. There is no
-    // `connection` row because a caller minting a fresh origin per request never fills a connection
-    // bucket — which is exactly why that rung could not be the only one — and no `server` row
-    // because one network cannot reach the deployment-wide ceiling.
-    expect(guessingRows().map((r) => JSON.parse(String(r.detail)).tier)).toEqual(['network']);
-
-    // Somebody in a different building, mistyping for the first time, is still answered about the
-    // code rather than about the flood.
-    const elsewhere = new httpAgent({ localAddress: '127.1.0.1' });
-    const other = await flood(app, 1, elsewhere, 9000);
-    expect(other.answered).toBe(1);
-  }, 120_000);
-
-  it('closes it once two networks have between them, and says so once', async () => {
-    issue();
-    const app = build();
-    const second = new httpAgent({ localAddress: '127.1.0.1' });
-
-    const a = await flood(app, 130);
-    const b = await flood(app, 130, second, 20_000);
-    expect(a.answered + b.answered).toBe(ENROLLMENT_MAX_FAILURES_DEPLOYMENT);
-
-    // A third network, which has done nothing at all, now meets the ceiling too — that is the cost
-    // of this rung, and it is only ever paid by a caller whose code was already wrong.
-    const third = new httpAgent({ localAddress: '127.2.0.1' });
-    const late = await flood(app, 1, third, 30_000);
-    expect(late.last.status).toBe(429);
-    expect(late.last.body.error.message).toMatch(/on this server/);
-
-    const tiers = guessingRows().map((r) => JSON.parse(String(r.detail)).tier);
-    // Two networks closed their own rung, one row each; the server rung closed once. Not 260 rows.
-    expect(tiers.filter((t) => t === 'network')).toHaveLength(2);
-    expect(tiers.filter((t) => t === 'server')).toHaveLength(1);
-  }, 240_000);
-
-  /**
-   * MEASURED before this change: 20,008 wrong codes, zero rows. The reason was not that nothing was
-   * written on principle — a closed budget already wrote one — it is that the row was bounded per
-   * KEY and the key was the header. Ten guesses an address bought one row an address, which is a
-   * trail an attacker fills at 197 rows a second to bury whatever else is in it.
-   */
-  it('leaves the operator a bounded trail with no address, no code and no digest in it', async () => {
-    issue();
-    const app = build();
-    await flood(app, 200);
-
-    const rows = guessingRows();
-    // ONE, for the one rung that closed, against two hundred requests and two hundred claimed
-    // addresses. Before this change the same two hundred requests wrote twenty rows — ten guesses
-    // an address bought a row an address — and at the measured 1,977 a second that is 197 rows a
-    // second, which is how an attacker buries the row an operator would have acted on.
-    expect(rows).toHaveLength(1);
-    for (const row of rows) {
-      expect(row.actor_user_id).toBeNull();
-      expect(row.entity_type).toBe('enrollment');
-      // A /24 or a /48, never a host: this row outlives the incident and is read by more people.
-      expect(row.entity_id).toMatch(/\/(24|48)$/);
-      expect(JSON.parse(String(row.detail)).reportedOrigin).toMatch(/\/(24|48)$/);
-    }
-    const trail = JSON.stringify(rows);
-    expect(trail).not.toContain('example.net');
-    expect(trail).not.toContain('ZZZZZ');
-    expect(trail).not.toContain('203.0.113.');
-  }, 120_000);
-});
-
-/**
- * THE SECOND HALF OF "A CHOSEN CODE CAN BE GUESSED": SOMEBODY HAS TO BE ABLE TO NOTICE.
- *
- * MEASURED 2026-08-10 against the built server: seven wrong codes shaped like a club callsign, then
- * the code, from one address, all eight inside the per-connection budget — one account and one
- * ordinary `user.enroll` row, indistinguishable from a student who pasted their code correctly.
- */
-describe('an account that came out of a run of wrong codes', () => {
-  async function wrongThenRight(app: ReturnType<typeof build>, wrong: number, plaintext: string) {
-    for (let i = 0; i < wrong; i += 1) {
-      const miss = await request(app)
-        .post('/api/auth/enroll')
-        .send({
-          code: `ZZZZZ-ZZZZZ-ZZZZZ-ZZZ${String(i).padStart(2, '0')}`,
-          email: `guess-${String(i)}@example.org`,
-          password: GOOD_PASSWORD,
-        });
-      expect(miss.status).toBe(401);
-    }
-    return request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'found@example.org', password: GOOD_PASSWORD });
-  }
-
-  function noticedRows(): Array<Record<string, string | null>> {
-    return db
-      .prepare(
-        `SELECT actor_user_id, entity_type, entity_id, detail FROM audit_log
-          WHERE action = 'enrollment_code.redeemed_after_wrong_codes' ORDER BY rowid`,
-      )
-      .all() as Array<Record<string, string | null>>;
-  }
-
-  it('is written down, naming the code so it can be revoked and never the code itself', async () => {
-    const { code, plaintext } = issue({ maxUses: 30 });
-    const app = build();
-
-    const found = await wrongThenRight(app, 7, plaintext);
-    expect(found.status).toBe(201);
-
-    const rows = noticedRows();
-    expect(rows).toHaveLength(1);
-    // The credential an operator can act on, by its id — the row says somebody arrived at it, and
-    // is not a copy of it.
-    expect(rows[0].entity_id).toBe(code.id);
-    expect(rows[0].entity_type).toBe('enrollment_code');
-    expect(JSON.parse(String(rows[0].detail))).toMatchObject({
-      label: 'W1MX autumn 2026 intake',
-      fromConnection: 7,
-      threshold: 3,
-    });
-    const trail = JSON.stringify(rows);
-    expect(trail).not.toContain(plaintext);
-    expect(trail).not.toContain(hashEnrollmentCode(plaintext));
-  }, 120_000);
-
-  it('says nothing about an intake where nobody was guessing', async () => {
-    const { plaintext } = issue({ maxUses: 30 });
-    const app = build();
-
-    for (let i = 0; i < 5; i += 1) {
-      const res = await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `student-${String(i)}@example.org`, password: GOOD_PASSWORD });
-      expect(res.status).toBe(201);
-    }
-    expect(noticedRows()).toEqual([]);
-  }, 120_000);
-
-  /**
-   * A found code with uses left mints accounts as fast as they are asked for, so the row that says
-   * "this came out of guessing" must not be one per account — that is the trail-flooding shape
-   * again, aimed at the one row an operator would have acted on.
-   */
-  it('writes one row for the whole run, not one per account it goes on to make', async () => {
-    const { plaintext } = issue({ maxUses: 30 });
-    const app = build();
-
-    expect((await wrongThenRight(app, 7, plaintext)).status).toBe(201);
-    for (let i = 0; i < 10; i += 1) {
-      const res = await request(app)
-        .post('/api/auth/enroll')
-        .send({ code: plaintext, email: `minted-${String(i)}@example.org`, password: GOOD_PASSWORD });
-      expect(res.status).toBe(201);
-    }
-
-    expect(noticedRows()).toHaveLength(1);
-    // …and every account it made is still enumerable, from the rows that cannot be suppressed.
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'user.enroll'")
-        .get() as { n: number },
-    ).toEqual({ n: 11 });
-  }, 240_000);
-});
-
-/**
- * THE FIGURE THE PRODUCT QUOTES AND THE CEILING THE SERVER ENFORCES ARE THE SAME FACT.
- *
- * `MEASURED_GUESSES_PER_DAY` lives in core because the admin console and the refusals both print
- * sentences derived from it, and the ceiling lives in `api/auth.ts` because that is where it is
- * enforced. Nothing in the type system ties them, and the last time a sentence about a limiter
- * outlived the limiter it described, the product spent a release telling administrators that
- * twelve characters were worth something because of a rate that no longer applied.
- */
-describe('what the product says the ceiling is', () => {
-  it('is the ceiling the enrolment route actually enforces', () => {
-    const windowsPerDay = 86_400_000 / ENROLLMENT_WINDOW_MS;
-    expect(MEASURED_GUESSES_PER_DAY).toBe(ENROLLMENT_MAX_FAILURES_DEPLOYMENT * windowsPerDay);
-  });
-
-  it('keeps the deployment rung out of reach of any single network', () => {
-    // The property, not the numbers: a refused request charges nothing, so one source can only ever
-    // put its own per-network ceiling into the deployment-wide one.
-    expect(ENROLLMENT_MAX_FAILURES_DEPLOYMENT).toBeGreaterThan(ENROLLMENT_MAX_FAILURES_PER_NETWORK);
-    expect(ENROLLMENT_MAX_FAILURES_PER_NETWORK).toBeGreaterThan(ENROLLMENT_MAX_FAILURES);
-  });
-});
-
-describe('whether the sign-in screen should offer to enrol at all', () => {
-  it('is false on a deployment that has never issued a code', async () => {
+describe('the enrollment-open question', () => {
+  it('is no longer a route, and 404s like anything else that is not there', async () => {
     const res = await request(build()).get('/api/auth/enrollment-open');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ open: false });
-  });
-
-  it('is true while one code could be redeemed, and false once none can', async () => {
-    const { code, plaintext } = issue({ maxUses: 1 });
-    const app = build();
-    expect((await request(app).get('/api/auth/enrollment-open')).body).toEqual({ open: true });
-
-    await request(app)
-      .post('/api/auth/enroll')
-      .send({ code: plaintext, email: 'a@example.org', password: GOOD_PASSWORD });
-
-    expect(usesOf(code.id)).toBe(1);
-    expect((await request(app).get('/api/auth/enrollment-open')).body).toEqual({ open: false });
-  }, 30_000);
-
-  it('answers one boolean and nothing else — no label, no count, no id', async () => {
-    issue({ label: 'W1MX autumn 2026 intake', maxUses: 30 });
-    const res = await request(build()).get('/api/auth/enrollment-open');
-    expect(Object.keys(res.body)).toEqual(['open']);
-    expect(JSON.stringify(res.body)).not.toMatch(/W1MX|30|intake/);
+    expect(res.status).toBe(404);
   });
 });

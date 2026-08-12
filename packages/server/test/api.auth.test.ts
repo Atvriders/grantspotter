@@ -1,8 +1,10 @@
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { Agent as httpAgent } from 'node:http';
+import { join } from 'node:path';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
-import { createBootstrapState } from '../src/auth/bootstrap.js';
+import { createBootstrapState, FIRST_RUN_TOKEN_FILE } from '../src/auth/bootstrap.js';
 import {
   coarseOrigin,
   createConcurrencyGate,
@@ -469,10 +471,97 @@ describe('coarsening an origin for the audit trail', () => {
 });
 
 describe('first-run bootstrap', () => {
-  it('prints a one-time token to the log when no accounts exist', () => {
-    const { logLines } = build();
-    expect(logLines.join('\n')).toContain('GrantSpotter first-run setup');
-    expect(logLines.join('\n')).toMatch(/[0-9a-f]{48}/);
+  /**
+   * THIS TEST'S ASSERTION IS INVERTED, DELIBERATELY, AND THE OLD ONE WAS NOT WRONG.
+   *
+   * It required the startup banner to CONTAIN a 48-hex token, and for the life of this project that
+   * was the design: the token was printed to the container log, `createBootstrapState` printed it
+   * only while no account existed, and the README told the operator to read it with `awk`.
+   *
+   * The owner asked for it to stop being in the log, and the reason is one printing-only-once never
+   * addressed: `docker logs` does not forget. The token is dead the moment it is spent, but the
+   * line stays in the operator's scrollback, in journald, in whatever ships their logs, and in the
+   * screenshot they paste into an issue. So the token goes to a file in `DATA_DIR` — mode 0600,
+   * beside the database whose reader can already read every password hash in the deployment, and
+   * removed the moment it is used — and the banner says where rather than what.
+   */
+  it('writes the one-time token to a file and keeps it out of the log', () => {
+    const { bootstrap, logLines } = build();
+    const printed = logLines.join('\n');
+    expect(printed).toContain('GrantSpotter first-run setup');
+    // The thing this change exists for.
+    expect(printed).not.toMatch(/[0-9a-f]{48}/);
+
+    const path = join(harness.dir, FIRST_RUN_TOKEN_FILE);
+    expect(printed).toContain(path);
+    // The token really is somewhere the operator can get it, and it is the one the route accepts.
+    // The token in the file is the one this process will accept — not merely a token-shaped
+    // string. A second `createBootstrapState` would mint and write a FRESH one (that is the
+    // documented per-restart behaviour), so the comparison has to be against the live state.
+    const written = readFileSync(path, 'utf8').trim();
+    expect(written).toMatch(/^[0-9a-f]{48}$/);
+    expect(written).toBe(bootstrap.token());
+    // Owner-readable only. `DATA_DIR` is a mounted volume on the deployment this ships to, and the
+    // mode is what stops a second container or another user on the host reading it.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  /**
+   * A SPENT TOKEN LEAVES NOTHING BEHIND. Its absence is also how an operator can tell from the
+   * outside that setup finished, without signing in to find out.
+   */
+  it('deletes the file when the token is used', async () => {
+    const { app, bootstrap } = build();
+    const path = join(harness.dir, FIRST_RUN_TOKEN_FILE);
+    expect(existsSync(path)).toBe(true);
+
+    const res = await request(app)
+      .post('/api/auth/bootstrap')
+      .send({ token: bootstrap.token(), email: 'admin@example.org', password: GOOD_PASSWORD });
+    expect(res.status).toBe(201);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  /**
+   * THE FILE COULD NOT BE WRITTEN, AND THE DEPLOYMENT IS STILL SETTABLE-UP.
+   *
+   * The alternative to printing here is a first-run screen asking for a token that exists nowhere,
+   * which is a deployment nobody can finish — so the token goes to the log, loudly, with the
+   * reason and the fact that it will stay there. The failure is simulated by a directory occupying
+   * the file's name, which is the same `writeFileSync` error a full disk or a per-file permission
+   * produces. A wholly unwritable `DATA_DIR` never reaches this: SQLite cannot create its WAL and
+   * the process exits before `createBootstrapState` is called (measured against the built server).
+   */
+  it('prints the token, with the reason, when the file cannot be written', () => {
+    mkdirSync(join(harness.dir, FIRST_RUN_TOKEN_FILE));
+    const { bootstrap, logLines } = build();
+    const printed = logLines.join('\n');
+
+    expect(printed).toContain('could NOT be written');
+    // The operator can still finish setup, which is the whole reason this branch prints a secret.
+    expect(printed).toContain(bootstrap.token());
+    // And it says what that costs them, rather than leaving a stray credential in a log unremarked.
+    expect(printed).toMatch(/will stay in this log/i);
+  });
+
+  /**
+   * A TOKEN FILE FROM AN EARLIER BOOT IS SWEPT BY THE FIRST BOOT THAT FINDS THE DEPLOYMENT CLAIMED.
+   * The ordinary path is `consume` deleting it; this is the path where the container was replaced,
+   * or the account came from somewhere else, between one boot and the next.
+   */
+  it('sweeps a stale file left over from a boot that never finished setup', () => {
+    const path = join(harness.dir, FIRST_RUN_TOKEN_FILE);
+    build();
+    expect(existsSync(path)).toBe(true);
+
+    harness.db
+      .prepare(
+        'INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at) VALUES (?,?,?,?,?,?,?)',
+      )
+      .run('u1', 'a@example.org', 'a@example.org', 'h', 'admin', 'tok', 'now');
+
+    createBootstrapState(harness.db, () => undefined);
+    expect(existsSync(path)).toBe(false);
   });
 
   it('reports that bootstrap is required, then that it is not', async () => {
@@ -710,10 +799,31 @@ describe('login, me and logout', () => {
     expect(owner.body.user.email).toBe('admin@example.org');
   }, 20_000);
 
-  it('does not expose a signup route', async () => {
-    const { app } = build();
-    const res = await request(app).post('/api/auth/register').send({});
-    expect(res.status).toBe(404);
+  /**
+   * THIS TEST USED TO BE CALLED "does not expose a signup route" AND ITS CLAIM IS NOW FALSE.
+   *
+   * It POSTed `/api/auth/register`, expected 404, and stood for a real design property: for the
+   * life of this project every account came from the first-run token, an administrator, or (later)
+   * an enrollment code, and there was nowhere a stranger could make one. The owner has removed that
+   * property on purpose. Leaving the test as it was would have kept it GREEN — nothing answers on
+   * `/api/auth/register` — while the thing it was protecting had been deleted, which is the worst
+   * of the three options.
+   *
+   * What survives is the narrower claim, and it is the one worth pinning: the public sign-up route
+   * cannot mint an administrator, whatever it is sent. `api/enroll.test.ts` holds the rest.
+   */
+  it('has a public sign-up route that cannot make an administrator', async () => {
+    const { app, bootstrap } = build();
+    await seedAdmin(app, bootstrap);
+
+    const res = await request(app)
+      .post('/api/auth/enroll')
+      .send({ email: 'stranger@example.org', password: GOOD_PASSWORD, role: 'admin' });
+    expect(res.status).toBe(201);
+    expect(res.body.user.role).toBe('member');
+    expect(
+      harness.db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get(),
+    ).toEqual({ n: 1 });
   });
 
   // Fix round 1: login previously called sessions.removeAllForUser(user.id),
