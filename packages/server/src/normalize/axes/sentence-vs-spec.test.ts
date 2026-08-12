@@ -485,18 +485,70 @@ const LEVEL_SAYS: Record<string, RegExp> = {
 const OR_HIGHER = /\bor (?:higher|above|beyond|greater)\b|\band (?:higher|above)\b/i;
 
 /**
- * Every degree level the sentence names, "or higher" included. Split out of `levelsUnnamed`
- * unchanged, for the reason `placesNamed` gives: W3 and W10 read the same sentence and must reach
- * the same reading of it, or one of them is quietly excusing what the other flags.
+ * A SCHOOL TIER IS NOT A CREDENTIAL, AND READING IT AS ONE IS WHAT MADE W3 AND W10 BOTH WRONG ABOUT
+ * THE SAME TWENTY-SIX RECORDS.
+ *
+ * `LEVEL_SAYS` above reads bare year-phrases: "4-year" names BACH, "2-year" names ASSOC. That is
+ * right about a CREDENTIAL — "a four-year degree" is a bachelor's — and wrong about a BUILDING. When
+ * the year-phrase qualifies a school noun the funder has named a PLACE, and a place awards a BAND of
+ * credentials, not one rung:
+ *
+ *   "4-year college or university"   awards BACH *and* GRAD. A master's candidate attends a
+ *                                    four-year university; nobody earns a certificate there.
+ *   "2-year / community / junior
+ *    college"                        awards CERT *and* ASSOC. A certificate student at a community
+ *                                    college is a student at a community college.
+ *   "trade / vocational / technical
+ *    school"                         awards CERT — already read by `LEVEL_SAYS.CERT`.
+ *
+ * Both halves of that fact were load-bearing and both were missing, in opposite directions:
+ *
+ *   UPWARD, W3 flagged 20 records as over-claims for admitting GRAD under "4-year college or
+ *   university" — every record the round-nine floor fix had just corrected. They are not over-claims.
+ *   The funder named the building a graduate student studies in.
+ *
+ *   DOWNWARD, W10 accused 6 records of enforcing nothing because they did not refuse a CERTIFICATE
+ *   student under "Any accredited 2- or 4-year college or university". That accusation was false:
+ *   the union of the two tiers is the whole ladder, so there is no rung the sentence puts outside,
+ *   and `degreeLevels: []` is the honest record of a funder who barred nobody by credential. Six
+ *   entries of `KNOWN_TOOTHLESS` were a rule crying wolf, pinned as a product defect.
+ *
+ * This is a fact about American higher education, restated here rather than imported, for the reason
+ * the header gives — `institution.ts` reaches the same reading through `statesAFourYearFloor`, and
+ * the two must be able to disagree or neither is evidence about the other.
+ */
+const SCHOOL_NOUN = String.raw`(?:colleges?|universit(?:y|ies)|institutions?|schools?)`;
+const FOUR_YEAR_SCHOOL = new RegExp(
+  String.raw`\b(?:4|four)\s*-?\s*years?\s+(?:[\w.'-]+[\s,]+){0,3}?${SCHOOL_NOUN}\b`,
+  'i',
+);
+const TWO_YEAR_SCHOOL = new RegExp(
+  String.raw`\b(?:2|two)\s*-?\s*(?:or\s+(?:4|four)\s*-?\s*)?years?\s+(?:[\w.'-]+[\s,]+){0,3}?${SCHOOL_NOUN}\b` +
+    String.raw`|\b(?:community|junior)\s+colleges?\b`,
+  'i',
+);
+/** The band of credentials each named school tier awards. See the note above. */
+const TIER_AWARDS: Array<[RegExp, readonly string[]]> = [
+  [FOUR_YEAR_SCHOOL, ['BACH', 'GRAD']],
+  [TWO_YEAR_SCHOOL, ['CERT', 'ASSOC']],
+];
+
+/**
+ * Every degree level the sentence names — outright, through "or higher", or through the band of
+ * credentials a school tier it names awards. Split out of `levelsUnnamed`, for the reason
+ * `placesNamed` gives: W3 and W10 read the same sentence and must reach the same reading of it, or
+ * one of them is quietly excusing what the other flags.
  */
 function levelsNamed(rawText: string): string[] {
-  let ceiling = -1;
-  if (OR_HIGHER.test(rawText)) {
-    for (let i = 0; i < LEVEL_ORDER.length; i += 1) {
-      if (LEVEL_SAYS[LEVEL_ORDER[i]].test(rawText)) ceiling = Math.max(ceiling, i);
-    }
+  const named = new Set<string>(LEVEL_ORDER.filter((l) => LEVEL_SAYS[l].test(rawText)));
+  for (const [tier, awards] of TIER_AWARDS) {
+    if (tier.test(rawText)) for (const level of awards) named.add(level);
   }
-  return LEVEL_ORDER.filter((l) => LEVEL_SAYS[l].test(rawText) || (ceiling >= 0 && LEVEL_ORDER.indexOf(l) > ceiling));
+  if (OR_HIGHER.test(rawText)) {
+    const ceiling = Math.max(-1, ...[...named].map((l) => LEVEL_ORDER.indexOf(l)));
+    if (ceiling >= 0) for (const level of LEVEL_ORDER.slice(ceiling + 1)) named.add(level);
+  }
+  return LEVEL_ORDER.filter((l) => named.has(l));
 }
 
 function levelsUnnamed(spec: ConstraintSpec, rawText: string): string[] {
@@ -522,9 +574,16 @@ describe('W3 — a degree level the level list admits, that the funder never nam
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard: 33 level lists publishing 83 levels — the largest hard-bar axis in the corpus.
-    expect(checked).toBe(33);
-    expect(admittedValues).toBe(83);
+    // Vacuity guard: 53 level lists publishing 123 levels — the largest hard-bar axis in the corpus.
+    //
+    // 33 AND 83 UNTIL ROUND 9. The 20 records that read "4-year college or university" published
+    // `degreeLevels: []` and were SKIPPED here, at `if (admitted.size === 0) continue` — the exact
+    // blindness W10 was written to cover. Now that each publishes a floor, this rule sees them for
+    // the first time, and it is the harder audience: every one of them is a spec admitting GRAD
+    // under a sentence that never says "graduate". It reports none, because a four-year university
+    // is where graduate study happens — see the school-tier note above.
+    expect(checked).toBe(53);
+    expect(admittedValues).toBe(123);
   });
 
   it('…and it catches a graduate route added to a sentence that stops at the bachelor', () => {
@@ -539,6 +598,31 @@ describe('W3 — a degree level the level list admits, that the funder never nam
     expect(
       levelsUnnamed(institutionAdmitting(['ASSOC', 'BACH']), 'Accredited undergraduate degree-granting institution'),
     ).toEqual([]);
+  });
+
+  /**
+   * …AND A SCHOOL TIER NAMES THE BAND IT AWARDS, which is the reading the 20 records the round-nine
+   * floor fix corrected turn on. Asserted here as a rule about the sentence, not about those
+   * records, so it goes red if the reading is ever quietly narrowed back.
+   */
+  it('…and a named school tier names every credential that school awards, and no other', () => {
+    const fourYear = 'Accredited 4-year college or university';
+    // The building a graduate student studies in. GRAD is named; the funder wrote the place.
+    expect(levelsNamed(fourYear)).toEqual(['BACH', 'GRAD']);
+    expect(levelsUnnamed(institutionAdmitting(['BACH', 'GRAD']), fourYear)).toEqual([]);
+    // …and it reaches no lower. A certificate is not awarded by a four-year university, so a spec
+    // admitting one under this sentence is still the over-claim W3 exists to find.
+    expect(levelsUnnamed(institutionAdmitting(['CERT', 'BACH', 'GRAD']), fourYear)).toEqual(['CERT']);
+    // The two-year tier awards downward, not upward: certificates and associate degrees.
+    expect(levelsNamed('Accredited 2-year college')).toEqual(['CERT', 'ASSOC']);
+    expect(levelsUnnamed(institutionAdmitting(['ASSOC', 'BACH']), 'Accredited 2-year college')).toEqual(['BACH']);
+    expect(levelsNamed('a community college')).toEqual(['CERT', 'ASSOC']);
+    // Both tiers named is the whole ladder, and that is why those six records bar nobody by
+    // credential — see the `KNOWN_TOOTHLESS` note.
+    expect(levelsNamed('Any accredited 2- or 4-year college or university')).toEqual(LEVEL_ORDER);
+    // A BARE year-phrase is a credential, not a building, and keeps `LEVEL_SAYS`'s narrow reading:
+    // "a four-year degree" is a bachelor's and says nothing about a master's.
+    expect(levelsNamed("a four-year degree in engineering")).toEqual(['BACH']);
   });
 });
 
@@ -1068,26 +1152,32 @@ describe('W9 — a widened field list that used to admit every major there is', 
  * the only two failures in the file were W10's. Before this block, `grep -n '\.hard\b'` over this
  * file returned three hits, all of them inside W9's census bucketing, none of them a rule.
  *
- * THE SAME BLINDNESS HAS A SECOND DOOR, AND 26 RECORDS ARE STANDING IN IT. A tier can admit exactly
- * the values its sentence names and still refuse nobody, because it holds NO value at all:
+ * THE SAME BLINDNESS HAD A SECOND DOOR, AND 26 RECORDS WERE STANDING IN IT — 20 OF THEM REALLY.
+ * A tier can admit exactly the values its sentence names and still refuse nobody, because it holds
+ * NO value at all:
  *
  *   Richard W. Bendicksen N7ZL  "4-year college or university"            -> `degreeLevels: []`
  *   L. B. Cebik W4RNL           "4-year college or university"            -> `degreeLevels: []`
  *   Henry Broughton K2AE        "Accredited 4-year college or university" -> `degreeLevels: []`
  *   YASME Foundation            "Accredited four-year college or university" -> `degreeLevels: []`
- *   Tom & Judith Comstock       "…accepted at a 2 or 4-year college…"     -> `degreeLevels: []`
- *   …and 21 more, pinned in full as `KNOWN_TOOTHLESS`.
+ *   …and 16 more.
  *
- * W3 reads "4-year" as naming BACH — `LEVEL_SAYS.BACH` matches `\b(?:4|four)\s*-?\s*years?\b` —
- * and it must, or the sibling records that DO publish `['BACH']` under that wording would all be
- * reported as over-claims. And W3 skips every one of the 26, at `if (admitted.size === 0) continue`,
- * because an EMPTY list is never wider than its sentence by value-count. It is infinitely wider by
- * enforcement: a student one rung below the floor the funder wrote is told `eligible`, and every
- * one of the 26 is HARD, so that is the verdict on the screen. That is a false include, it is the
- * subject of this round, and it is what the seven previous rounds of false-exclude hunting left
- * behind — `institution.ts` says so in its own words: "WIDENING tokens … may only ADD to a list
- * that is already non-empty, never create one, so no entry ever gains a bar it did not have …
- * while 'Accredited 4-year college or university' stays unrestricted."
+ * W3 skipped every one of them, at `if (admitted.size === 0) continue`, because an EMPTY list is
+ * never wider than its sentence by value-count. It is infinitely wider by enforcement: a student one
+ * rung below the floor the funder wrote was told `eligible`, and every one was HARD, so that was the
+ * verdict on the screen. That is a false include, it was the subject of round nine, and it is what
+ * seven previous rounds of false-exclude hunting left behind — `institution.ts` said so in its own
+ * words: "WIDENING tokens … may only ADD to a list that is already non-empty, never create one, so
+ * no entry ever gains a bar it did not have … while 'Accredited 4-year college or university' stays
+ * unrestricted."
+ *
+ * ALL 26 ARE CLOSED AND `KNOWN_TOOTHLESS` IS EMPTY. 20 by a product fix — a bare four-year school
+ * tier now states a FLOOR — and 6 by fixing this file, which was reading a BUILDING as a CREDENTIAL
+ * and accusing "Any accredited 2- or 4-year college or university" of failing to refuse a
+ * certificate student it plainly admits. The full account is on `KNOWN_TOOTHLESS` itself. The
+ * paragraphs above are kept in the past tense rather than deleted, because the shape of the hole is
+ * the reason this rule exists and a rule whose reason has been deleted is the next one to be
+ * simplified away.
  *
  * ================================ WHAT THIS RULE ASKS INSTEAD =============================
  * The mirror of W1-W8, one turn further round. Where they ask "every value the spec ADMITS — did
@@ -1156,12 +1246,14 @@ describe('W9 — a widened field list that used to admit every major there is', 
  * that moves neither number is a mutation this rule is blind on, and the battery names it. What was
  * measured:
  *
- *   D1  W10b flags all 144, and W10a's census is byte-identical — the proof, made inside the test,
- *       that any rule reading only `spec` and `rawText` is blind here by construction.
- *   D2  211 checked, 211 flagged. No survivors.
+ *   D1  W10b flags all 204, and W10a's census is byte-identical — the proof, made inside the test,
+ *       that any rule reading only `spec` and `rawText` is blind here by construction. W11's
+ *       coverage collapses to 0, because a soft constraint is W10b's finding by name.
+ *   D2  246 constraints checked, 268 probes built, 268 flagged. No survivors. W11 flags too.
  *   D3  BLIND ON THE OFFENDER LIST, AND IT SAYS SO. W10a exempts `orUnrepresented`, so nothing is
- *       flagged; what moves is coverage, from 203 checked to 0, with 247 constraints in a bucket
- *       that asks them nothing. Reported, not hidden.
+ *       flagged; what moves is coverage, from 238 checked to 0, with 282 constraints in a bucket
+ *       that asks them nothing. Reported, not hidden. W11 is blind to D3 with NOTHING moving at
+ *       all, which is worse and is asserted rather than argued — see the battery's W11 case.
  *   D4  flags more, and every added offender is on `field_of_study` — the one axis it reaches.
  *
  * That is the honest form of the claim, and it is bounded in a way the previous three guards were
@@ -1169,6 +1261,11 @@ describe('W9 — a widened field list that used to admit every major there is', 
  * does not claim the battery is complete. It claims the battery is the place to look, and that
  * adding a fifth mutation is cheap, mechanical, and does not require re-reading a thousand lines of
  * prose to know what it proved.
+ *
+ * AND ROUND NINE RAN IT AGAINST A NEW RULE, which is the return on writing it as a procedure: W11
+ * was answerable by running the battery it inherited, and the two mutations that can reach a verdict
+ * both move it. The one that cannot is asserted to be a hole in the battery's coverage of W11
+ * rather than a property of W11.
  *
  * WHAT THE BATTERY DOES *NOT* COVER, stated so the next round starts from it rather than
  * rediscovering it: every mutation above widens the product. None of them narrows it, so the
@@ -1224,14 +1321,228 @@ const ALL_ACTIVITY_KINDS = Object.keys(ACTIVITY_SAYS);
  * sentence names EVERY value the axis has, there is no such applicant and the answer is `undefined`
  * — the funder named the whole world, which is their right and is not an over-claim.
  */
-function theApplicantTheSentenceExcludes(
-  spec: ConstraintSpec,
-  rawText: string,
-): { profile: StudentProfile; excluded: string } | undefined {
+interface Probe {
+  /** The applicant the sentence puts outside the award. */
+  profile: StudentProfile;
+  /**
+   * THE SAME APPLICANT, STANDING ON A VALUE THE SENTENCE DOES NAME, and it is the half that makes a
+   * probe evidence instead of an anecdote. A `fail` proves nothing on its own: the profile could
+   * have been refused for a reason that has nothing to do with the field under test, and a rule
+   * built on that reads green while measuring the wrong thing. That is the R6 defect exactly — a
+   * fixture that could not reach the failure it existed to catch — and the control is how this file
+   * stops asserting it away. W11 counts every record whose control is not admitted as UNREACHABLE
+   * rather than passing it, so coverage is a measured number and never an assumption.
+   */
+  control: StudentProfile;
+  excluded: string;
+}
+
+/**
+ * THE ACCREDITATION AND ENROLMENT BARS, which the level ladder is not the only way to state.
+ * `institution` is the one axis in this schema holding THREE enforceable fields, and until round
+ * nine this rule read one of them. Five of the six records it was accusing of enforcing nothing —
+ * CTRI, John C. York, Lois Manley, MARCO, Peoria — publish `accreditationRequired: true` under
+ * their own "Any ACCREDITED 2- or 4-year college or university", so they refuse an applicant at an
+ * unaccredited school and always did. The rule simply never asked.
+ *
+ * `tradeSchoolOK` is deliberately not probed: `matcher.ts` says in its own words that it is
+ * informational because CONTRACT §3 has no profile field for it, so no applicant can be built who
+ * answers it. That is a schema gap and it is counted below rather than flagged — see `typeOnly`.
+ */
+const ACCREDITATION_REQUIRED = /\baccredit(?:ed|ation)\b/i;
+/**
+ * "Full-time" QUALIFYING ENROLMENT, forward-only and on a short leash, AND ONLY WHERE THE FUNDER
+ * NEVER SAYS "PART-TIME". Both halves were measured, and each one caught a real record:
+ *
+ *   forward-only  the YLRL Marte Wessel K0EPE award reads "For part-time students working
+ *                 full-time", where "full-time" qualifies EMPLOYMENT and is followed by nothing.
+ *   never says
+ *   "part-time"   the Six Meter Club of Chicago reads "PART-TIME OR FULL-TIME post-secondary
+ *                 student at a regionally accredited technical school". The first draft of this
+ *                 probe flagged it — the funder inviting part-time students in their opening two
+ *                 words, read as a funder barring them. That is the cry-wolf this file's header
+ *                 says is where an exemption gets bolted on, and it was caught by running the rule
+ *                 rather than by reading it.
+ *
+ * A funder who wrote the words "part-time" at all has not put a part-time student outside their
+ * award on any reading this test may make.
+ */
+const FULL_TIME_REQUIRED =
+  /\bfull[\s-]?time\b[\s,]+(?:[\w.'-]+[\s,]+){0,2}?(?:students?|enrol|stud(?:y|ies|ent)|attendance|basis|status|programs?|courses?)/i;
+const PART_TIME_MENTIONED = /\bpart[\s-]?time\b/i;
+
+/**
+ * EVERY LADDER, READ OFF THE SENTENCE ALONE AND NOT OFF THE AXIS IT WAS FILED UNDER.
+ *
+ * These nine functions take `rawText` and nothing else. That is the whole point, and it is the
+ * repair of the blind spot round nine was set to close: W10's institution arm read `levelsNamed`
+ * only for constraints whose OWN `spec.axis` was `institution`, so a funder who wrote a degree floor
+ * into a `geography`, `age_stage`, `field_of_study` or `other` sentence was invisible to it. The
+ * previous verifier swept the corpus by hand and found the five non-pinned hits all dissolved on
+ * reading — which made the pin complete BY HAND CHECK, not by any rule. W11 below reads all nine
+ * against every sentence in the corpus, whatever axis carried it.
+ *
+ * Each returns the applicant that ladder puts outside, and the CONTROL that proves the probe could
+ * have been admitted. `undefined` means the sentence says nothing this ladder can read, which is not
+ * a defect and is counted rather than flagged.
+ */
+const LOCATION_ONLY_STATE = { lat: undefined, lon: undefined, county: undefined, callDistrict: undefined };
+
+function placeExcluded(rawText: string): Probe | undefined {
+  if (GEO_WIDENED.test(rawText)) return undefined;
+  const named = placesNamed(rawText);
+  if (named.size === 0) return undefined;
+  const outside = Object.values(PLACE_BY_NAME).find((code) => !named.has(code));
+  if (outside === undefined) return undefined;
+  // A radius, a county and a call district cannot be answered by naming a state, so the probe
+  // STATES no answer to them: cleared, they come back `unknown`, which is never an `eligible` and
+  // so can never make this rule flag a record it cannot read. A confident wrong answer is the
+  // expensive kind, and that applies to the rule as much as to the product.
+  return {
+    profile: { ...ENFORCEMENT_PROBE, ...LOCATION_ONLY_STATE, state: outside },
+    control: { ...ENFORCEMENT_PROBE, ...LOCATION_ONLY_STATE, state: [...named].sort()[0] },
+    excluded: `state ${outside}`,
+  };
+}
+
+function levelExcluded(rawText: string): Probe | undefined {
+  // DOWNWARD ONLY, and this is W5's doctrine applied to the other ladder in the schema: "the
+  // sentence's LOWEST named class is the most generous reading of what the funder asked for".
+  // Upward is not probed at all, and the school-tier note on `levelsNamed` is why the question no
+  // longer even arises: a funder who wrote "4-year college or university" named the building a
+  // graduate student studies in, so GRAD is NAMED rather than arguably-excluded. Reading it the
+  // other way would report a defect on every record whose funder wrote "college" and meant the
+  // whole building, and that cry-wolf is how an exemption gets bolted on — measured, at a 36% rate,
+  // in the ceiling case below.
+  //
+  // Downward is where the false include lives — and only when the sentence leaves a rung below.
+  // "Any accredited 2- or 4-year college or university" names both tiers, whose bands cover the
+  // whole ladder, so there is no such rung and this arm correctly builds no probe from it.
+  const named = levelsNamed(rawText);
+  if (named.length === 0) return undefined;
+  const floor = Math.min(...named.map((l) => LEVEL_ORDER.indexOf(l)));
+  if (floor <= 0) return undefined;
+  const outside = LEVEL_ORDER[floor - 1];
+  return {
+    profile: { ...ENFORCEMENT_PROBE, degreeLevel: outside as DegreeLevel },
+    control: { ...ENFORCEMENT_PROBE, degreeLevel: LEVEL_ORDER[floor] as DegreeLevel },
+    excluded: `degreeLevel ${outside}`,
+  };
+}
+
+function accreditationExcluded(rawText: string): Probe | undefined {
+  if (!ACCREDITATION_REQUIRED.test(rawText)) return undefined;
+  return {
+    profile: { ...ENFORCEMENT_PROBE, accredited: false },
+    control: ENFORCEMENT_PROBE,
+    excluded: 'accredited false',
+  };
+}
+
+function fullTimeExcluded(rawText: string): Probe | undefined {
+  if (!FULL_TIME_REQUIRED.test(rawText) || PART_TIME_MENTIONED.test(rawText)) return undefined;
+  return {
+    profile: { ...ENFORCEMENT_PROBE, partTime: true },
+    control: ENFORCEMENT_PROBE,
+    excluded: 'partTime true',
+  };
+}
+
+function stageExcluded(rawText: string): Probe | undefined {
+  const named = ALL_STAGES.filter((s) => STAGE_SAYS[s].test(rawText));
+  if (named.length === 0) return undefined;
+  const outside = STAGE_PROBE_ORDER.find((s) => !named.includes(s));
+  if (outside === undefined) return undefined;
+  // `stagesSatisfiedBy` reads `degreeLevel` too, and a probe carrying BACH would satisfy an
+  // UNDERGRAD tier no matter what stage it stated. The probe states its stage and nothing else.
+  return {
+    profile: { ...ENFORCEMENT_PROBE, stage: outside as StudentProfile['stage'], degreeLevel: undefined },
+    control: { ...ENFORCEMENT_PROBE, stage: named[0] as StudentProfile['stage'], degreeLevel: undefined },
+    excluded: `stage ${outside}`,
+  };
+}
+
+function activityExcluded(rawText: string): Probe | undefined {
+  const named = ALL_ACTIVITY_KINDS.filter((k) => ACTIVITY_SAYS[k].test(rawText));
+  if (named.length === 0) return undefined;
+  const outside = ALL_ACTIVITY_KINDS.find((k) => !named.includes(k));
+  if (outside === undefined) return undefined;
+  return {
+    profile: { ...ENFORCEMENT_PROBE, activityKinds: [outside as ActivityKind] },
+    control: { ...ENFORCEMENT_PROBE, activityKinds: named as ActivityKind[] },
+    excluded: `activityKinds [${outside}]`,
+  };
+}
+
+function licenseExcluded(rawText: string): Probe | undefined {
+  if (ANY_CLASS.test(rawText)) return undefined;
+  const named = classesNamed(rawText);
+  if (named.length === 0) return undefined;
+  const floor = Math.min(...named.map((n) => LICENSE_RANK[n]));
+  const below = Object.keys(LICENSE_RANK).find((k) => LICENSE_RANK[k] === floor - 1);
+  if (below === undefined) return undefined;
+  return {
+    profile: { ...ENFORCEMENT_PROBE, licenseClass: below as StudentProfile['licenseClass'] },
+    control: ENFORCEMENT_PROBE,
+    excluded: `licenseClass ${below}`,
+  };
+}
+
+function citizenshipExcluded(rawText: string): Probe | undefined {
+  if (CITIZENSHIP_SAYS_ANY.test(rawText)) return undefined;
+  if (!/\bcitizen/i.test(rawText) && !CITIZENSHIP_SAYS_RESIDENT.test(rawText)) return undefined;
+  // `Citizenship` has no "neither" member; `'ANY'` on a PROFILE is the applicant who is neither
+  // a citizen nor a resident, which is what `evaluateTier`'s allow-list test does with it.
+  return {
+    profile: { ...ENFORCEMENT_PROBE, citizenship: 'ANY' },
+    control: ENFORCEMENT_PROBE,
+    excluded: 'citizenship neither',
+  };
+}
+
+function gpaExcluded(rawText: string): Probe | undefined {
+  const named = gpasNamed(rawText);
+  if (named.length === 0) return undefined;
+  const floor = Math.min(...named);
+  if (floor <= 0) return undefined;
+  return {
+    profile: { ...ENFORCEMENT_PROBE, gpa: Math.max(0, floor - 0.5), classRankTopPct: 100 },
+    control: { ...ENFORCEMENT_PROBE, gpa: floor, classRankTopPct: 1 },
+    excluded: `gpa ${Math.max(0, floor - 0.5)}`,
+  };
+}
+
+/**
+ * ALL NINE LADDERS, each named with the axis that OWNS it — the axis whose own constraint W10 holds
+ * responsible for it. A rule reading these cross-axis skips the owner, so W10 and W11 can never
+ * report one record twice and a fix cannot close one rule by hiding in the other.
+ *
+ * THIS FULL SET IS NOT WHAT W11 READS. It is the naive rule, kept because the measurement against it
+ * is the evidence for reading one ladder instead of nine — see `CREDENTIAL_NAMED` and the 81-record
+ * case below. `CROSS_AXIS_LADDERS` is the set that ships.
+ */
+const SENTENCE_LADDERS: Array<{ owner: ConstraintSpec['axis']; read: (rawText: string) => Probe | undefined }> = [
+  { owner: 'geography', read: placeExcluded },
+  { owner: 'institution', read: levelExcluded },
+  { owner: 'institution', read: accreditationExcluded },
+  { owner: 'institution', read: fullTimeExcluded },
+  { owner: 'age_stage', read: stageExcluded },
+  { owner: 'ham_activity', read: activityExcluded },
+  { owner: 'license', read: licenseExcluded },
+  { owner: 'citizenship', read: citizenshipExcluded },
+  { owner: 'gpa', read: gpaExcluded },
+];
+
+/**
+ * W10's reading: the ladders belonging to THIS constraint's own axis, plus the two spec-dependent
+ * guards that cannot be decided from a sentence. W10 asks whether one constraint's own spec
+ * enforces its own sentence, so it is right for it to stay keyed on the axis; W11 asks whether the
+ * PROGRAM enforces the sentence, and reads all nine.
+ */
+function theApplicantsTheSentenceExcludes(spec: ConstraintSpec, rawText: string): Probe[] {
   switch (spec.axis) {
-    case 'geography': {
-      // A radius, a call district and a county cannot be answered by naming a state, and this file
-      // exists to say that a confident wrong answer is the expensive kind.
+    case 'geography':
+      // A radius, a call district and a county tier publishes no state to compare against.
       //
       // `any` IS answerable, and W1 skipping it is the difference between the two questions. W1
       // asks which values a tier admits, and `any` publishes none to check. W10 asks whether the
@@ -1243,99 +1554,44 @@ function theApplicantTheSentenceExcludes(
           (g) => g.type !== 'state' && g.type !== 'arrl_division' && g.type !== 'arrl_section' && g.type !== 'any',
         )
       ) {
-        return undefined;
+        return [];
       }
-      if (GEO_WIDENED.test(rawText)) return undefined;
-      const named = placesNamed(rawText);
-      if (named.size === 0) return undefined;
-      const outside = Object.values(PLACE_BY_NAME).find((code) => !named.has(code));
-      if (outside === undefined) return undefined;
-      return { profile: { ...ENFORCEMENT_PROBE, state: outside }, excluded: `state ${outside}` };
-    }
-    case 'institution': {
-      // DOWNWARD ONLY, and this is W5's doctrine applied to the other ladder in the schema: "the
-      // sentence's LOWEST named class is the most generous reading of what the funder asked for".
-      // A sentence reading "four-year college or university" plainly puts a CERTIFICATE student
-      // outside the award; whether it puts a DOCTORAL student outside is genuinely arguable, since
-      // a university is where graduate study happens. Probing upward would report a defect on every
-      // record whose funder wrote "college" and meant the whole building, and that cry-wolf is how
-      // an exemption gets bolted on. Downward is where the false include actually lives.
-      const named = levelsNamed(rawText);
-      if (named.length === 0) return undefined;
-      const floor = Math.min(...named.map((l) => LEVEL_ORDER.indexOf(l)));
-      if (floor <= 0) return undefined;
-      const outside = LEVEL_ORDER[floor - 1];
-      return {
-        profile: { ...ENFORCEMENT_PROBE, degreeLevel: outside as DegreeLevel },
-        excluded: `degreeLevel ${outside}`,
-      };
-    }
-    case 'age_stage': {
-      const named = ALL_STAGES.filter((s) => STAGE_SAYS[s].test(rawText));
-      if (named.length === 0) return undefined;
-      const outside = STAGE_PROBE_ORDER.find((s) => !named.includes(s));
-      if (outside === undefined) return undefined;
-      // `stagesSatisfiedBy` reads `degreeLevel` too, and a probe carrying BACH would satisfy an
-      // UNDERGRAD tier no matter what stage it stated. The probe states its stage and nothing else.
-      return {
-        profile: { ...ENFORCEMENT_PROBE, stage: outside as StudentProfile['stage'], degreeLevel: undefined },
-        excluded: `stage ${outside}`,
-      };
-    }
-    case 'ham_activity': {
-      const named = ALL_ACTIVITY_KINDS.filter((k) => ACTIVITY_SAYS[k].test(rawText));
-      if (named.length === 0) return undefined;
-      const outside = ALL_ACTIVITY_KINDS.find((k) => !named.includes(k));
-      if (outside === undefined) return undefined;
-      return {
-        profile: { ...ENFORCEMENT_PROBE, activityKinds: [outside as ActivityKind] },
-        excluded: `activityKinds [${outside}]`,
-      };
-    }
-    case 'license': {
-      if (ANY_CLASS.test(rawText)) return undefined;
-      const named = classesNamed(rawText);
-      if (named.length === 0) return undefined;
-      const floor = Math.min(...named.map((n) => LICENSE_RANK[n]));
-      const below = Object.keys(LICENSE_RANK).find((k) => LICENSE_RANK[k] === floor - 1);
-      if (below === undefined) return undefined;
-      return {
-        profile: { ...ENFORCEMENT_PROBE, licenseClass: below as StudentProfile['licenseClass'] },
-        excluded: `licenseClass ${below}`,
-      };
-    }
-    case 'citizenship': {
-      if (CITIZENSHIP_SAYS_ANY.test(rawText)) return undefined;
-      if (!/\bcitizen/i.test(rawText) && !CITIZENSHIP_SAYS_RESIDENT.test(rawText)) return undefined;
-      // `Citizenship` has no "neither" member; `'ANY'` on a PROFILE is the applicant who is neither
-      // a citizen nor a resident, which is what `evaluateTier`'s allow-list test does with it.
-      return { profile: { ...ENFORCEMENT_PROBE, citizenship: 'ANY' }, excluded: 'citizenship neither' };
-    }
+      return [placeExcluded(rawText)].filter((p): p is Probe => p !== undefined);
+    case 'institution':
+      return [levelExcluded(rawText), accreditationExcluded(rawText), fullTimeExcluded(rawText)].filter(
+        (p): p is Probe => p !== undefined,
+      );
+    case 'age_stage':
+      return [stageExcluded(rawText)].filter((p): p is Probe => p !== undefined);
+    case 'ham_activity':
+      return [activityExcluded(rawText)].filter((p): p is Probe => p !== undefined);
+    case 'license':
+      return [licenseExcluded(rawText)].filter((p): p is Probe => p !== undefined);
+    case 'citizenship':
+      return [citizenshipExcluded(rawText)].filter((p): p is Probe => p !== undefined);
+    case 'gpa':
+      return [gpaExcluded(rawText)].filter((p): p is Probe => p !== undefined);
     case 'field_of_study': {
       // A TIER WITH NO FIELDS IS A ROUTE THAT IS NOT ABOUT THE FIELD OF STUDY, and it is the
       // funder's own. IRARC's "Undergraduate degree or electronic technician certification program"
       // mints an `anyOf` tier with `fields: []`; an award open to any undergraduate is open to a
       // poetry undergraduate, in the funder's words. W9 pins that record from the other side.
-      if (tiers(spec).some((t) => t.axis === 'field_of_study' && t.fields.length === 0)) return undefined;
+      if (tiers(spec).some((t) => t.axis === 'field_of_study' && t.fields.length === 0)) return [];
       // W7 proved every entry in `fields` is a quotation of the sentence, so the sentence names
       // exactly the list; a major sharing no word with any of them is outside all of it.
       const outside = PLAINLY_UNRELATED[0];
-      return { profile: { ...ENFORCEMENT_PROBE, fieldOfStudy: outside }, excluded: `fieldOfStudy ${outside}` };
-    }
-    case 'gpa': {
-      const named = gpasNamed(rawText);
-      if (named.length === 0) return undefined;
-      const floor = Math.min(...named);
-      if (floor <= 0) return undefined;
-      return {
-        profile: { ...ENFORCEMENT_PROBE, gpa: Math.max(0, floor - 0.5), classRankTopPct: 100 },
-        excluded: `gpa ${Math.max(0, floor - 0.5)}`,
-      };
+      return [
+        {
+          profile: { ...ENFORCEMENT_PROBE, fieldOfStudy: outside },
+          control: ENFORCEMENT_PROBE,
+          excluded: `fieldOfStudy ${outside}`,
+        },
+      ];
     }
     default:
       // `arrl_membership`, `recommendation`, `financial_need`, `gender` and `other` publish no
       // allow-list or floor a sentence could be read against; they are counted, never flagged.
-      return undefined;
+      return [];
   }
 }
 
@@ -1375,17 +1631,56 @@ function funderNamedARouteTheSchemaCannotCheck(spec: ConstraintSpec): boolean {
 interface EnforcementCensus {
   admitsEverybody: string[];
   checked: number;
+  probes: number;
   opened: number;
   unrepresented: number;
+  typeOnly: number;
   silent: number;
 }
 
+/**
+ * THE SENTENCE NAMES A SCHOOL TIER AND THIS RULE STILL BUILDS NO PROBE FROM IT. Two records, and
+ * they are here for two different reasons, both named so that a third of either kind is a question
+ * asked again rather than a silent arrival:
+ *
+ *   Tom and Judith Comstock   "Applicant must be a high school senior accepted at a 2 or 4-year
+ *                             college or a student currently enrolled at a 2 or 4-year college."
+ *                             Both tiers named, so their bands cover the whole credential ladder and
+ *                             no rung is outside; no accreditation bar, no enrolment intensity. What
+ *                             the sentence DOES exclude is a student whose school is neither — a
+ *                             trade school, an unaccredited academy — and `matcher.ts` says in its
+ *                             own words that it cannot ask: "tradeSchoolOK is informational:
+ *                             CONTRACT §3 has no profile field for it." A SCHEMA gap, not a record
+ *                             defect, counted rather than flagged for exactly the reason
+ *                             `orUnrepresented` is: flagging it would demand a refusal the product
+ *                             has no question with which to justify itself.
+ *
+ *   NEAR-Fest Memorial        "Any undergraduate degree or a two-year technical school in radio
+ *                             communications." The lowest rung named is the lowest rung there is, so
+ *                             nothing is below it. What this sentence bounds is a CEILING — it
+ *                             stops short of GRAD — and W10's institution arm is downward-only by
+ *                             doctrine. Its spec publishes `['CERT','ASSOC','BACH']` and does refuse
+ *                             a graduate student, so nothing is wrong here; it is simply a bar this
+ *                             rule declines to measure. Why it declines is measured, not assumed —
+ *                             see the note on the ceiling below.
+ */
+function boundsTheSchoolTypeOnly(spec: ConstraintSpec, rawText: string): boolean {
+  return (
+    spec.axis === 'institution' &&
+    theApplicantsTheSentenceExcludes(spec, rawText).length === 0 &&
+    TIER_AWARDS.some(([tier]) => tier.test(rawText))
+  );
+}
+
 function readEnforcementWidth(all: Array<{ program: Program; c: Constraint }>): EnforcementCensus {
-  const census: EnforcementCensus = { admitsEverybody: [], checked: 0, opened: 0, unrepresented: 0, silent: 0 };
+  const census: EnforcementCensus = {
+    admitsEverybody: [], checked: 0, probes: 0, opened: 0, unrepresented: 0, typeOnly: 0, silent: 0,
+  };
   for (const { program, c } of all) {
-    const probe = theApplicantTheSentenceExcludes(c.spec, c.rawText);
-    if (probe === undefined) {
-      census.silent += 1;
+    const probes = theApplicantsTheSentenceExcludes(c.spec, c.rawText);
+    if (probes.length === 0) {
+      if (boundsTheSchoolTypeOnly(c.spec, c.rawText)) census.typeOnly += 1;
+      else census.silent += 1;
       continue;
     }
     if (funderDeclinedToBar(c.rawText)) {
@@ -1397,11 +1692,17 @@ function readEnforcementWidth(all: Array<{ program: Program; c: Constraint }>): 
       continue;
     }
     census.checked += 1;
-    const verdict = evaluateConstraint(c.spec, probe.profile, NOW, c.rawText);
-    if (verdict.status !== 'fail') {
-      census.admitsEverybody.push(
-        `${program.name} [${c.spec.axis}] ${probe.excluded} -> ${verdict.status} — ${JSON.stringify(c.rawText.slice(0, 90))}`,
-      );
+    // EVERY applicant the sentence excludes, not the first one. A constraint that refuses the
+    // unaccredited student and admits the certificate student has enforced half of its sentence,
+    // and a rule that stopped at the first probe would call that clean.
+    for (const probe of probes) {
+      census.probes += 1;
+      const verdict = evaluateConstraint(c.spec, probe.profile, NOW, c.rawText);
+      if (verdict.status !== 'fail') {
+        census.admitsEverybody.push(
+          `${program.name} [${c.spec.axis}] ${probe.excluded} -> ${verdict.status} — ${JSON.stringify(c.rawText.slice(0, 90))}`,
+        );
+      }
     }
   }
   census.admitsEverybody.sort();
@@ -1409,52 +1710,45 @@ function readEnforcementWidth(all: Array<{ program: Program; c: Constraint }>): 
 }
 
 /**
- * THE RECORDS WHERE A STATED REQUIREMENT ENFORCES NOTHING, pinned as a list that may only ever
- * SHRINK, exactly as `KNOWN_GEO_OVERCLAIMS` is.
+ * THE RECORDS WHERE A STATED REQUIREMENT ENFORCES NOTHING. THERE ARE NONE, AND THE LIST IS EMPTY.
  *
- * Every one is the same defect, on the same axis, through the same door: the funder wrote a degree
- * level into their own sentence and `institution.ts` published `degreeLevels: []`. The tier holds
- * no value, so it refuses nobody, so a student one rung BELOW the floor the funder wrote is told
- * `eligible`. Every one is HARD. This is a false include of exactly the kind this round is about,
- * and it is invisible to W3 — an EMPTY list is never wider than its sentence by value-count, and
- * W3 skips it at `if (admitted.size === 0) continue`.
+ * IT HELD 26 AT THE START OF ROUND NINE, all one defect on one axis: the funder wrote a degree level
+ * into their own sentence and `institution.ts` published `degreeLevels: []`, so a student one rung
+ * BELOW the floor the funder wrote was told `eligible` by a HARD constraint. The previous gate agent
+ * pinned them rather than fixing them and wrote "WHY PINNED AND NOT FIXED HERE… It is reported in the
+ * round summary." That comment is deleted with the list, because AN ALLOWLIST THAT OUTLIVES ITS
+ * DEFECT IS HOW A FIXED BUG COMES BACK: every remaining entry is a hole the rule has been instructed
+ * not to see, and after one round nobody re-reads which.
  *
- * WHY PINNED AND NOT FIXED HERE. `institution.ts` is not this territory, and the fix is not a
- * missing constant: sibling records read the very same "4-year college or university" wording and
- * publish `['BACH']` or `['BACH','GRAD']` correctly, so which branch these fall down is a live
- * extractor question. It is reported in the round summary.
+ * THE 26 CLOSED IN TWO DIFFERENT WAYS, and it matters which, because only one of them is a fix:
  *
- * A LIST, NOT A SKIP. It goes red in BOTH directions — red when a new record joins them, red when
- * one is fixed and its entry goes stale.
+ *   20 WERE A REAL DEFECT AND THE PRODUCT FIXED IT. `institution.ts` gained `statesAFourYearFloor`:
+ *      a bare four-year school tier, on a sentence where no clause created a level and no lower tier
+ *      is named, now publishes `['BACH','GRAD']` instead of `[]`. Measured end-to-end below, on the
+ *      Bendicksen record, through `matchProgram`: an associate-degree student who read `eligible`
+ *      now reads `ineligible`, and the bachelor's and graduate applicants the funder DID name are
+ *      untouched.
+ *
+ *    6 WERE THIS RULE CRYING WOLF, and no product change was needed or made. All six read "…2- or
+ *      4-year college or university", and W10 accused them of admitting a CERTIFICATE student the
+ *      sentence excluded. The sentence does not exclude them: a certificate student at an accredited
+ *      two-year college is a student at a two-year college, and the union of the two named tiers is
+ *      the entire credential ladder. The bug was in `levelsNamed`, which read a BUILDING as a
+ *      CREDENTIAL — see the school-tier note above, which fixes both directions of it at once.
+ *      Five of the six were never toothless in the first place: they publish
+ *      `accreditationRequired: true` and refuse an applicant at an unaccredited school, which this
+ *      rule could not see because it probed one of the institution axis's three enforceable fields.
+ *      It now probes all three it can build an applicant for.
+ *
+ * SO THE PIN IS RETIRED AND THE COVERAGE IS LARGER, which is the only combination worth having:
+ * 203 constraints checked -> 238, over 271 probes rather than 203, and W3's own population went
+ * 33 -> 53 as the 20 stopped being skipped for holding nothing.
+ *
+ * IT MAY ONLY EVER GROW BACK THROUGH A RED TEST. An empty equality is the strongest form this
+ * assertion has: any record that starts admitting the applicant its own sentence excludes fails
+ * here with its own name in the diff, and there is no longer any list to quietly add it to.
  */
-const KNOWN_TOOTHLESS = [
-  'The Alan G. Thorpe, K1TMW, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "Any accredited 4-year college or university"',
-  'The Bill, W2ONV, and Ann Salerno Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "accredited 4-year college or university"',
-  'The CTRI/Chris Seeber, KA1GEU, Memorial Scholarship [institution] degreeLevel CERT -> pass — "Any accredited 2- or 4-year college or university"',
-  'The Dayton Amateur Radio Association Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The Ernest L. Baulch, W2TX, and Marcia E. Baulch, WA2AKJ, Scholarship [institution] degreeLevel ASSOC -> pass — "Any 4-year college or university"',
-  'The Gary Wagner, K3OMI, Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university in NC, VA, WV, MD or TN"',
-  'The Gwinnett Amateur Radio Society Scholarship [institution] degreeLevel ASSOC -> pass — "4 year college or university"',
-  'The Helen Laughlin AM Mode Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The Henry Broughton, K2AE, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The John C. York, KE5V, Scholarship [institution] degreeLevel CERT -> pass — "Any accredited 2- or 4-year college or university"',
-  'The L. B. Cebik, W4RNL, and Jean Cebik, N4TZP, Scholarship [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The Lois Manley, K7LMZ, and Randall Pitchford, WW7ZZ, Scholarship [institution] degreeLevel CERT -> pass — "Any accredited 2- or 4-year college or university"',
-  'The Medical Amateur Radio Council (MARCO) Scholarship [institution] degreeLevel CERT -> pass — "Accredited 2- or 4-year college or university."',
-  'The Michael Holt, K8MJH, and Mary Holt, KC8OIP, Scholarship [institution] degreeLevel ASSOC -> pass — "Full-time student at an accredited 4-year college or university\\nMust be a citizen of the U"',
-  'The Orlando HamCation Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The Peoria Area Amateur Radio Club Scholarship [institution] degreeLevel CERT -> pass — "Accredited 2 or 4-year college or university"',
-  'The Pikes Peak Radio Amateur Association (PPRAA) Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The Ray, NØRP, & Katie, WØKTE, Pautz Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The Richard W. Bendicksen, N7ZL, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The Scholarship of the Morris Radio Club of New Jersey [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The Ted, W4VHF, and Itice, K4LVV, Goldthorpe Scholarship [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The Tom and Judith Comstock Scholarship [institution] degreeLevel CERT -> pass — "Applicant must be a high school senior accepted at a 2 or 4-year college or a student curr"',
-  'The Wayne Nelson, KB4UT, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "Any accredited 4-year college or university"',
-  'The William Bennett, W7PHO, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "4-year college or university"',
-  'The William C. Winscott, N6CHA, Memorial Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited 4-year college or university"',
-  'The YASME Foundation Scholarship [institution] degreeLevel ASSOC -> pass — "Accredited four-year college or university"',
-];
+const KNOWN_TOOTHLESS: string[] = [];
 
 /** One pass of W10b, shared with the battery for the same reason `readEnforcementWidth` is. */
 interface EnforcementReach {
@@ -1466,12 +1760,12 @@ interface EnforcementReach {
 function readEnforcementReach(all: Array<{ program: Program; c: Constraint }>): EnforcementReach {
   const reach: EnforcementReach = { notedOnly: [], checked: 0, preferences: 0 };
   for (const { program, c } of all) {
-    const probe = theApplicantTheSentenceExcludes(c.spec, c.rawText);
-    if (probe === undefined || funderDeclinedToBar(c.rawText)) continue;
+    const probes = theApplicantsTheSentenceExcludes(c.spec, c.rawText);
+    if (probes.length === 0 || funderDeclinedToBar(c.rawText)) continue;
     if (funderNamedARouteTheSchemaCannotCheck(c.spec)) continue;
     // W10b is asked only of a spec that CAN refuse. A spec that cannot is W10a's finding, and
     // reporting it twice would let one fix close two rules and hide whichever it did not fix.
-    if (evaluateConstraint(c.spec, probe.profile, NOW, c.rawText).status !== 'fail') continue;
+    if (!probes.some((probe) => evaluateConstraint(c.spec, probe.profile, NOW, c.rawText).status === 'fail')) continue;
     if (PREFERRED.test(c.rawText) || CASCADE_CONDITION.test(c.rawText)) {
       reach.preferences += 1;
       continue;
@@ -1507,35 +1801,51 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
   it('every closed sentence produces a spec that can refuse the applicant it excludes', async () => {
     const census = readEnforcementWidth(await everyConstraint());
     expect(census.admitsEverybody).toEqual(KNOWN_TOOTHLESS);
-    // Vacuity guard, and these four numbers add to all 649 constraints in the corpus — every one
-    // is either checked or in a named bucket, and no constraint falls out of this rule unseen.
+    // Vacuity guard, and these six numbers add to all 649 constraints in the corpus — every one is
+    // either checked or in a named bucket, and no constraint falls out of this rule unseen.
     //
-    //   checked        203  the funder named values on an axis this schema holds, and closed them.
-    //                       The rule had 203 chances to be wrong and took 26.
+    //   checked        238  the funder named values on an axis this schema holds, and closed them.
+    //                       203 UNTIL ROUND NINE. It rose because the institution arm now builds an
+    //                       applicant from all three enforceable fields of that axis rather than
+    //                       one: 35 constraints state an accreditation or a full-time bar without
+    //                       stating a degree floor, and every one of them was `silent` before.
+    //   probes         260  applicants built, which is the number of chances the rule had to be
+    //                       wrong. It took none.
     //   opened          36  "etc.", "such as", "or similar" — the funder declining to close a list.
     //   unrepresented   44  `orUnrepresented` — see the note on it above; this is D3 occurring
     //                       naturally, and it is the bucket to watch, because a constraint moving
     //                       INTO it stops being checked at all.
-    //   silent         366  the sentence names nothing on an axis a sentence can be read against —
+    //   typeOnly         2  the sentence bounds the school and this rule builds no applicant from
+    //                       it — Comstock and NEAR-Fest, both named above, for two reasons.
+    //   silent         329  the sentence names nothing on an axis a sentence can be read against —
     //                       `recommendation`, `financial_need`, `other`, and the many records whose
     //                       rawText is "Any" or a bare place name on an axis about schooling.
     expect({
       checked: census.checked,
+      probes: census.probes,
       opened: census.opened,
       unrepresented: census.unrepresented,
+      typeOnly: census.typeOnly,
       silent: census.silent,
-    }).toEqual({ checked: 203, opened: 36, unrepresented: 44, silent: 366 });
+    }).toEqual({ checked: 238, probes: 260, opened: 36, unrepresented: 44, typeOnly: 2, silent: 329 });
+    expect(
+      census.checked + census.opened + census.unrepresented + census.typeOnly + census.silent,
+    ).toBe((await everyConstraint()).length);
   });
 
   /**
-   * …AND THEY ARE REAL, read end-to-end rather than off the spec. `evaluateConstraint` returning
-   * `pass` is not by itself a claim about a student; `matchProgram` returning `eligible` is. This
-   * case takes one of the 26, hands the whole program to the matcher, and shows the verdict a
-   * community-college student is actually shown.
+   * …AND THE 20 THAT WERE REAL ARE FIXED, read end-to-end rather than off the spec.
+   * `evaluateConstraint` returning `pass` is not by itself a claim about a student; `matchProgram`
+   * returning `eligible` is. This case takes the record the pin named first, hands the whole program
+   * to the matcher, and shows the verdict a community-college student is now actually shown.
    *
-   * WHEN THESE LINES GO RED THE DEFECT IS FIXED: delete this case and the 26 entries above.
+   * IT IS THE SAME CASE, INVERTED RATHER THAN DELETED. The previous gate agent's instruction was
+   * "WHEN THESE LINES GO RED THE DEFECT IS FIXED: delete this case and the 26 entries above."
+   * Deleting it would leave nothing standing between this corpus and the defect coming back, and a
+   * fix with no test is a fix until the next extractor change. Every line below is the line that was
+   * there, with the expectation moved to what the funder's sentence says.
    */
-  it('…and the 26 are real: the verdict a student one rung below the floor is shown', async () => {
+  it('…and the false include is closed: the verdict a student one rung below the floor is shown', async () => {
     const { programs } = await corpus();
     const bendicksen = programs.find((p) => p.name.includes('Bendicksen'));
     if (bendicksen === undefined) throw new Error('The Richard W. Bendicksen Scholarship is missing from the corpus');
@@ -1544,18 +1854,67 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // From the sentence first: change the funder's wording and this line fails before the rest.
     expect(inst.rawText).toContain('4-year college');
     expect(inst.hard).toBe(true);
-    // W3 reads that sentence as naming the bachelor and nothing lower, and it must — sibling
-    // records publish `['BACH']` under the very same words.
-    expect(levelsNamed(inst.rawText)).toEqual(['BACH']);
-    // The tier holds no value at all, so the axis cannot refuse an associate-degree student…
+    // The four-year tier names the band that school awards, and nothing below it.
+    expect(levelsNamed(inst.rawText)).toEqual(['BACH', 'GRAD']);
+    // The axis now refuses an associate-degree student…
     const assoc = { ...ENFORCEMENT_PROBE, degreeLevel: 'ASSOC' as const };
-    expect(evaluateConstraint(inst.spec, assoc, NOW, inst.rawText).status).toBe('pass');
-    // …and that is what they are told, through the whole matcher, on the funder's own program.
+    expect(evaluateConstraint(inst.spec, assoc, NOW, inst.rawText).status).toBe('fail');
+    // …and that refusal reaches the verdict, through the whole matcher, on the funder's own program.
     const alone: Program = { ...bendicksen, constraints: [inst] };
-    expect(matchProgram(assoc, alone, NOW).kind).toBe('eligible');
-    // THE OTHER DIRECTION, and it is what makes this a false INCLUDE and not a parse complaint:
-    // the applicant the funder did name is admitted, and must stay admitted after any fix.
+    expect(matchProgram(assoc, alone, NOW).kind).toBe('ineligible');
+    // A CERTIFICATE student is one further down and must be refused too — the rung this rule probes.
+    expect(matchProgram({ ...ENFORCEMENT_PROBE, degreeLevel: 'CERT' }, alone, NOW).kind).toBe('ineligible');
+    // THE OTHER DIRECTION, and it is the half a fix in this direction can quietly undo: both
+    // applicants the funder DID name are admitted, and the graduate student is the one an over-tight
+    // reading ("4-year" names BACH alone) would have newly refused. Zero false excludes was the
+    // measured state at the start of this round and it is not this round's to spend.
     expect(matchProgram(ENFORCEMENT_PROBE, alone, NOW).kind).toBe('eligible');
+    expect(matchProgram({ ...ENFORCEMENT_PROBE, degreeLevel: 'GRAD' }, alone, NOW).kind).toBe('eligible');
+  });
+
+  /**
+   * THE CEILING IS NOT PROBED, AND THAT IS A MEASUREMENT RATHER THAN A PREFERENCE.
+   *
+   * W10's institution arm is downward-only. Once `levelsNamed` stopped reading a four-year school as
+   * the single rung BACH, the obvious next question was whether the doctrine still held — a funder
+   * who names "any undergraduate degree" has put a doctoral candidate outside just as plainly as a
+   * funder who names "4-year college" has put a certificate student outside.
+   *
+   * SO IT WAS RUN. Across the corpus, 14 institution sentences name a band with a rung above it, and
+   * probing one rung above the highest named flags 5. Every one of the 5 is this rule crying wolf,
+   * and all 5 are one shape — a funder who wrote a bare school noun with no tier on it:
+   *
+   *   Frankford Radio Club   "Any accredited college, university or trade school"          -> ASSOC
+   *   Harry A. Hodges W6YOO  "Any accredited college, university, junior college or trade
+   *                           technical school in the United States"                       -> BACH
+   *   Magnolia DX            "…an accredited college, university, or technical school"     -> ASSOC
+   *   Palomar ARC            "Accredited college, university, junior college or trade school" -> BACH
+   *   Ronald Hesselbrock     "Any community college, college, university or trade school…"  -> BACH
+   *
+   * "Any accredited college or university" names no year tier, so the vocabulary reads only the
+   * "trade school" in it and computes a ceiling at CERT — and then reports an over-claim because an
+   * ASSOC student is admitted. That is absurd on its face, and a rule shipped in that state gets an
+   * exemption bolted on, which the header says is where the real offender walks through.
+   *
+   * A 36% cry-wolf rate is the finding. It is recorded rather than acted on, and this case pins the
+   * shape so the next round starts from the measurement instead of re-running it.
+   */
+  it('…and the ceiling stays unprobed, because a bare "college" names no tier at all', () => {
+    // The five above, in one sentence: nothing but "trade school" is a level word here.
+    expect(levelsNamed('Any accredited college, university or trade school')).toEqual(['CERT']);
+    // …so a ceiling read off that sentence would sit at CERT and call an associate student excluded,
+    // which the funder's own "any accredited college" plainly admits. No such applicant is built.
+    // The accreditation bar the funder DID write is, and it is the only one on this sentence.
+    expect(theApplicantsTheSentenceExcludes(
+      institutionAdmitting(['CERT', 'ASSOC', 'BACH', 'GRAD']),
+      'Any accredited college, university or trade school',
+    ).map((p) => p.excluded)).toEqual(['accredited false']);
+    // A sentence that DOES name a tier is read, and downward only.
+    const probes = theApplicantsTheSentenceExcludes(
+      institutionAdmitting(['BACH', 'GRAD']),
+      'Accredited 4-year college or university',
+    );
+    expect(probes.map((p) => p.excluded)).toEqual(['degreeLevel ASSOC', 'accredited false']);
   });
 
   /**
@@ -1572,7 +1931,13 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // The `preferences` bucket is the funder RANKING rather than barring — "preference will be
     // given to…", "if no qualified applicant is identified…" — where soft is the right answer and
     // `matchProgram` ordering them is what the funder asked for.
-    expect({ checked: w10b.checked, preferences: w10b.preferences }).toEqual({ checked: 144, preferences: 33 });
+    //
+    // 144 AND 33 UNTIL ROUND NINE. Both rose for the same two reasons W10a's `checked` did: the 20
+    // records that now publish a floor can refuse somebody for the first time, and the accreditation
+    // probe reaches constraints whose sentence states no degree floor at all. Every one of the 60
+    // new arrivals is a hard constraint; the list of requirements stated and not enforced did not
+    // grow by one.
+    expect({ checked: w10b.checked, preferences: w10b.preferences }).toEqual({ checked: 204, preferences: 34 });
   });
 
   /**
@@ -1592,16 +1957,16 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // so a disarm cannot be reported green here by a battery that drifted from the rule.
     const w10a = readEnforcementWidth(all);
     const w10b = readEnforcementReach(all);
-    expect(w10a.admitsEverybody).toHaveLength(26);
-    expect(w10a.checked).toBe(203);
+    expect(w10a.admitsEverybody).toHaveLength(0);
+    expect(w10a.checked).toBe(238);
     expect(w10b.notedOnly).toHaveLength(KNOWN_NOTED_ONLY.length);
-    expect(w10b.checked).toBe(144);
+    expect(w10b.checked).toBe(204);
 
     // D1 — EVERY HARD CONSTRAINT BECOMES SOFT. Every requirement in the product stops barring
     // anyone: `matchProgram` demotes a soft failure to "preference not met" and returns `eligible`.
-    // W1 through W8 do not move by a single assertion. W10b flags every one of the 144.
+    // W1 through W8 do not move by a single assertion. W10b flags every one of the 204.
     const d1 = readEnforcementReach(mutated((c) => ({ ...c, hard: false })));
-    expect(d1.notedOnly).toHaveLength(144);
+    expect(d1.notedOnly).toHaveLength(204);
     // AND THE PROOF THAT D1 IS INVISIBLE TO A VALUE-WIDTH RULE, made here rather than asserted
     // about W1-W8 from outside them. Every one of those rules reads `c.spec` and `c.rawText` and
     // nothing else; so does `readEnforcementWidth`; so its census is IDENTICAL under D1. Any rule
@@ -1612,27 +1977,29 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
 
     // D2 — EVERY SPEC BECOMES ITS EMPTY FORM, so no tier holds a value to test against. Value-width
     // is untouched in the only sense W1-W8 can measure: an empty list admits no value they can
-    // find, so they skip it at `if (admitted.size === 0) continue`. W10a checks 211 rather than
-    // 203 — an emptied geography tier is `any`, which this rule reads and W1 does not — and flags
-    // every single one of them.
+    // find, so they skip it at `if (admitted.size === 0) continue`. W10a checks 246 rather than
+    // 238 — an emptied geography tier is `any`, which this rule reads and W1 does not — and flags
+    // every single applicant it can build.
     const d2 = readEnforcementWidth(mutated((c) => ({ ...c, spec: emptied(c.spec) })));
-    expect({ flagged: d2.admitsEverybody.length, checked: d2.checked }).toEqual({ flagged: 211, checked: 211 });
-    // Every constraint the rule can still see is flagged — no survivors, not "most".
-    expect(d2.admitsEverybody).toHaveLength(d2.checked);
+    expect({ flagged: d2.admitsEverybody.length, checked: d2.checked }).toEqual({ flagged: 268, checked: 246 });
+    // Every PROBE the rule can still build is flagged — no survivors, not "most". `emptied` clears
+    // `accreditationRequired` and opens `partTimeOK`, so the two institution bars added this round
+    // are disarmed by D2 as well and this line is what proves it: 268 probes, 268 flags.
+    expect(d2.admitsEverybody).toHaveLength(d2.probes);
 
     // D3 — EVERY CONSTRAINT GAINS `orUnrepresented`, which turns every `fail` into an `unknown`
     // with nothing to fill in, while changing not one admitted value.
     //
     // AND HERE IS THE BLIND SPOT, REPORTED RATHER THAN HIDDEN. W10a exempts that field, for the
     // reason `funderNamedARouteTheSchemaCannotCheck` gives, so its offender list does NOT grow —
-    // it empties. What moves instead is COVERAGE: 203 constraints checked falls to none, and 247
+    // it empties. What moves instead is COVERAGE: 238 constraints checked falls to none, and 282
     // land in a bucket that asks them nothing. A rule with nothing left to say has said something.
     const d3 = readEnforcementWidth(
       mutated((c) => ({ ...c, spec: { ...c.spec, orUnrepresented: 'the funder named another route' } })),
     );
     expect(d3.checked).toBe(0);
     expect(d3.admitsEverybody).toEqual([]);
-    expect(d3.unrepresented).toBe(247);
+    expect(d3.unrepresented).toBe(282);
 
     // D4 — EVERY FIELD LIST IS WIDENED: W9's mechanism, applied corpus-wide. Narrower than D2 by
     // construction, since it reaches only the one axis that has a widening — which is the point of
@@ -1642,6 +2009,52 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     expect(d4.admitsEverybody.filter((o) => o.includes('[field_of_study]'))).toHaveLength(
       d4.admitsEverybody.length - w10a.admitsEverybody.length,
     );
+  });
+
+  /**
+   * AND THE BATTERY IS RUN AGAINST W11 TOO, which is the whole reason it was written as a procedure
+   * rather than as an argument: a new guard should be answerable by running the existing battery,
+   * not by re-reading a thousand lines of prose to decide whether to believe it.
+   *
+   * W11 reads a VERDICT rather than a spec, so it is D1 and D2 that reach it — D1 because a soft
+   * constraint's refusal never reaches `matchProgram`'s verdict, D2 because an emptied spec has
+   * nothing to refuse with. Both must move it, and both are asserted below. A third mutation is
+   * asserted NOT to move it, and that is the honest half: D3 sets `orUnrepresented`, which turns a
+   * `fail` into an `unknown`, and `unknown` is not an `eligible` — W11 is deliberately blind to it,
+   * for the reason the doctrine gives, and blind is what it is asserted to be rather than assumed.
+   */
+  it('and W11 goes red under the same battery, on the two mutations that can reach a verdict', async () => {
+    const { programs } = await corpus();
+    const mutatedPrograms = (mutate: (c: Constraint) => Constraint): Program[] =>
+      programs.map((p) => ({ ...p, constraints: p.constraints.map(mutate) }));
+
+    // THE CONTROL: the corpus as it stands, read by the same function the rule above calls.
+    expect(readCrossAxisReach(programs).enforcedNowhere).toEqual([]);
+
+    // D1 — every hard constraint becomes soft, so no refusal reaches a verdict. W11 must notice.
+    // Its own `noted` bucket hands soft constraints to W10b, so what moves here is COVERAGE: every
+    // one of the seven it was checking lands in a bucket that asks it nothing. A rule with nothing
+    // left to say has said something — the same shape D3 takes for W10a.
+    const d1 = readCrossAxisReach(mutatedPrograms((c) => ({ ...c, hard: false })));
+    expect(d1.checked).toBe(0);
+    expect(d1.noted).toBe(7);
+
+    // D2 — every spec becomes its empty form, so the sentences are untouched and nothing enforces
+    // them. This is the mutation that produces the exact shape 20 records were in this round, and
+    // W11 flags every record it can still reach.
+    const d2 = readCrossAxisReach(mutatedPrograms((c) => ({ ...c, spec: emptied(c.spec) })));
+    expect(d2.enforcedNowhere.length).toBeGreaterThan(0);
+    expect(d2.enforcedNowhere).toHaveLength(d2.checked);
+
+    // D3 — and here is where it is blind, asserted rather than argued. `orUnrepresented` softens
+    // every `fail` to an `unknown`, and W11 counts `unknown` as the programme declining to admit
+    // the applicant, which is the doctrine and is not negotiable. So the offender list does not
+    // grow. What moves is nothing at all: unlike W10a, W11 has no bucket that catches this, and
+    // that is a real hole in the battery's coverage of this rule rather than a property of it.
+    const d3 = readCrossAxisReach(
+      mutatedPrograms((c) => ({ ...c, spec: { ...c.spec, orUnrepresented: 'the funder named another route' } })),
+    );
+    expect(d3.enforcedNowhere).toEqual([]);
   });
 });
 
@@ -1674,6 +2087,351 @@ function widenedFields(spec: ConstraintSpec): ConstraintSpec {
   if (spec.axis !== 'field_of_study' || spec.fields.length === 0) return spec;
   return { ...spec, fields: [...spec.fields, 'or related fields'] };
 }
+
+// ================================= W11: the axis the sentence was NOT filed under
+
+/**
+ * A FUNDER WRITES ONE SENTENCE. THIS PRODUCT FILES IT UNDER AN AXIS. W10 THEN CHECKS IT AGAINST THE
+ * AXIS IT WAS FILED UNDER, AND NOTHING ELSE.
+ *
+ * That is the blind spot, stated plainly. `theApplicantsTheSentenceExcludes` switches on
+ * `spec.axis`, so "Bachelor's degree or higher in electronics, communications, or related fields" —
+ * recorded as `field_of_study`, because the fields are what that clause was split for — is never
+ * read for the degree floor sitting in its first three words. Nine records in this corpus write a
+ * credential into a `field_of_study` sentence; more write one into `geography` ("Residence or
+ * student of 4-year university or college in Oklahoma"), into `gpa` ("Any fully accredited 4-year US
+ * college or university or graduate school thereof, and have a GPA of 3.0"), into `age_stage`, into
+ * `citizenship`. W10 sees none of them.
+ *
+ * The previous verifier swept those by hand, found all five non-pinned hits dissolved on reading,
+ * and said so honestly: THE PIN LIST WAS COMPLETE BY HAND CHECK, NOT BY ANY RULE. A hand check does
+ * not survive the next record. This is the rule.
+ *
+ * ============================== WHAT IT ASKS, AND WHY AT THE PROGRAM ==========================
+ * W10 asks whether ONE CONSTRAINT's spec enforces its own sentence. That is the right question for
+ * the axis a sentence was filed under, and the wrong one for every other axis: nobody should demand
+ * that a `field_of_study` spec hold a degree floor. The obligation belongs where the reader meets
+ * it — the VERDICT. So W11 asks:
+ *
+ *   the funder's sentence puts this applicant outside the award. Does `matchProgram`, given the
+ *   whole programme, decline to tell them `eligible`?
+ *
+ * `unknown` counts as declining. It is the answer this product prefers over a confident wrong one,
+ * it costs the applicant nothing, and demanding a refusal instead would push the corpus back toward
+ * the false excludes seven rounds drained. Only `eligible` and `eligible_preferred` are flagged,
+ * because only those two spend somebody's application fee.
+ *
+ * ==================== AND HOW WOULD YOU KNOW *THIS* GUARD IS BLIND? ==========================
+ * This is the fourth guard in four rounds to be asked, and the question deserves better than the
+ * assurance the previous three gave. The three failures — a copy census that dropped every
+ * interpolated sentence, an R6 fixture whose applicant could not reach the failure it existed to
+ * catch, W1-W8 surviving the entire product being disarmed — share ONE shape, and it is not
+ * carelessness: THE GUARD'S PROBE COULD NOT REACH THE THING THE GUARD WAS ABOUT, and from inside the
+ * guard everything looked fine, because everything it could see WAS fine.
+ *
+ * So the answer here is not prose. It is two mechanisms, and both are numbers that go red:
+ *
+ *   1. THE CONTROL, PER PROBE. Every flagged applicant has a twin standing one rung higher — on a
+ *      value the funder's own sentence NAMES — and W11 refuses to count a record at all unless that
+ *      twin is told `eligible`. A programme whose Texas-only geography refuses this Connecticut
+ *      probe for reasons having nothing to do with degrees is `unreachable`, not `checked`, and the
+ *      two counts are pinned separately. The R6 defect cannot hide here: "the probe could not reach
+ *      the failure" is not a silent pass, it is a number, and it is asserted to be smaller than the
+ *      number of records the rule really did read.
+ *
+ *   2. THE DISARM BATTERY, EXTENDED. D1 and D2 already exist; W11 is asserted to go red under both,
+ *      in the battery below, alongside W10. A rule that survives the product being disarmed is
+ *      measuring something other than what it claims.
+ *
+ * AND HERE IS WHAT IT IS STILL BLIND TO, stated because a bounded claim is the only honest kind:
+ *
+ *   - `field_of_study` IS NOT ONE OF THE NINE LADDERS. Deciding that a major is outside a funder's
+ *     list needs the list, which is a spec, not a sentence; W9 owns that question and owns it with a
+ *     stronger instrument (it removes the widening and re-runs). Adding a tenth ladder here would
+ *     re-decide it worse.
+ *   - IT READS ONE SENTENCE AT A TIME. A floor assembled across two sentences of one programme —
+ *     neither stating it alone — is invisible, and no measurement in this round says how common that
+ *     is, because nothing looked.
+ *   - IT IS A CENSUS OF THIS CORPUS. 150 programmes' worth of English. A wording no funder here uses
+ *     is a wording none of the nine vocabularies has been tried against.
+ */
+/**
+ * AND HERE IS WHY W11 READS ONE LADDER AND NOT NINE. THIS IS A MEASUREMENT, NOT A PREFERENCE.
+ *
+ * The obvious W11 reads every sentence against all nine ladders. It was built that way, run over the
+ * corpus, and it flagged 81 records — 28 of them before the probe's home state was derived per
+ * programme, and 81 once it was, which is itself worth noticing: making a rule REACH more made a
+ * bad rule wrong more often. Every shape was read. NOT ONE IS A DEFECT. They are one mistake, made
+ * nine ways, and it is worth stating exactly because it is not obvious from inside the rule:
+ *
+ *   THE VOCABULARIES OF W1-W8 ARE GENEROUS BY DESIGN, AND GENEROSITY DOES NOT SURVIVE INVERSION.
+ *   Every list in this file "credits the sentence with every reading a funder could have meant", so
+ *   that anything still flagged is a value NO reading supports. In the crediting direction that is
+ *   safe: over-crediting produces FEWER accusations. W11 inverts them — "the funder excluded
+ *   everything they did not name" — and there over-crediting MANUFACTURES exclusions, because a word
+ *   that lands in a sentence about something else now stands for a bar the funder never wrote:
+ *
+ *     "a sitting officer of an ARRL-affiliated CLUB"     -> `club_member` is named, so every other
+ *      (Goldwater, a RECOMMENDATION sentence)               activity is excluded. It is where the
+ *                                                           letter comes from, not what the
+ *                                                           applicant does.
+ *     "RESIDENCE in ARRL New England Division"           -> `CITIZENSHIP_SAYS_RESIDENT` matches
+ *      (Byron Blanchard, a GEOGRAPHY sentence)              "residence", so a non-citizen is
+ *                                                           excluded. It is a state, not a status.
+ *     "the GENERAL coverage areas of ECARS"              -> `classesNamed` matches "general", so a
+ *      (ECARS, a GEOGRAPHY sentence)                        Technician is excluded by a sentence
+ *                                                           about radio coverage.
+ *     "an accredited 2- or 4-year COLLEGE, university"   -> `STAGE_SAYS.UNDERGRAD` matches
+ *      (CARA, an INSTITUTION sentence)                      "college", so a high-school senior is
+ *                                                           excluded — from an award for students
+ *                                                           entering college.
+ *     "Recipient's COLLEGE of choice."                   -> the same, on four words.
+ *      (Richard G. Kirkpatrick)
+ *
+ * A rule shipping in that state gets an exemption bolted on within a round, and this file's own
+ * header says the exemption is where the real offender walks through. So W11 reads the ladder whose
+ * vocabulary survives inversion, and the test below pins the finding rather than deleting it.
+ *
+ * WHAT SURVIVES INVERSION IS A WORD THAT CANNOT MEAN ANYTHING ELSE. "Bachelor's", "associate's",
+ * "master's", "certificate", and an N-year school tier are credential nouns: a sentence containing
+ * one is making a statement about the applicant's course of study whatever axis recorded it. A bare
+ * "college", "undergraduate" or "graduate" is not anchored — `LEVEL_SAYS` reads "undergraduate" as
+ * naming ASSOC, deliberately and correctly for W3, and inverting that would put a certificate
+ * student outside every sentence containing the word. So the cross-axis level ladder fires only on
+ * an anchor, and the anchor is checked before the reading, never after.
+ */
+const CREDENTIAL_NAMED =
+  /\b(?:bachelors?|baccalaureates?|associates?|masters?|doctoral|doctorates?|ph\.?d|certificates?|diplomas?)\b/i;
+
+function levelExcludedCrossAxis(rawText: string): Probe | undefined {
+  if (!CREDENTIAL_NAMED.test(rawText) && !FOUR_YEAR_SCHOOL.test(rawText) && !TWO_YEAR_SCHOOL.test(rawText)) {
+    return undefined;
+  }
+  return levelExcluded(rawText);
+}
+
+/** The ladders W11 reads against a sentence filed under some other axis. See the note above. */
+const CROSS_AXIS_LADDERS: Array<{ owner: ConstraintSpec['axis']; read: (rawText: string) => Probe | undefined }> = [
+  { owner: 'institution', read: levelExcludedCrossAxis },
+];
+
+interface CrossAxisCensus {
+  enforcedNowhere: string[];
+  checked: number;
+  unreachable: number;
+  ranked: number;
+  opened: number;
+  noted: number;
+  silent: number;
+}
+
+const ADMITTED = ['eligible', 'eligible_preferred'];
+/** Every place a probe can be from, so the control's home is searched for rather than assumed. */
+const HOMES = Object.values(PLACE_BY_NAME);
+
+function readCrossAxisReach(
+  programs: Program[],
+  ladders = CROSS_AXIS_LADDERS,
+): CrossAxisCensus {
+  const census: CrossAxisCensus = {
+    enforcedNowhere: [], checked: 0, unreachable: 0, ranked: 0, opened: 0, noted: 0, silent: 0,
+  };
+  for (const program of programs) {
+    for (const c of program.constraints) {
+      for (const { owner, read } of ladders) {
+        // The axis a sentence was filed under is W10's to check. W11 is the rest of the sentence.
+        if (owner === c.spec.axis) continue;
+        const probe = read(c.rawText);
+        if (probe === undefined) {
+          census.silent += 1;
+          continue;
+        }
+        if (funderDeclinedToBar(c.rawText)) {
+          census.opened += 1;
+          continue;
+        }
+        if (PREFERRED.test(c.rawText) || CASCADE_CONDITION.test(c.rawText)) {
+          census.ranked += 1;
+          continue;
+        }
+        // A soft constraint that cannot bar anybody is W10b's finding, by name, and reporting it
+        // again here would let one fix close two rules and hide whichever it did not fix.
+        if (!c.hard) {
+          census.noted += 1;
+          continue;
+        }
+        // WHERE THE CONTROL HAS TO LIVE, DERIVED FROM THE PROGRAMME RATHER THAN WRITTEN DOWN. The
+        // probe is a Connecticut resident, and most of these awards are not open to one; with the
+        // state fixed, this rule read 2 records and could not have failed on the other 19. That is
+        // the R6 defect precisely, and it was caught here by the `checked > unreachable` assertion
+        // rather than by anybody re-reading the rule. So the state is searched for: whichever place
+        // lets the funder's own named credential be told `eligible` is the place the probe stands
+        // in, and both twins stand in the same one.
+        const home = HOMES.find((state) =>
+          ADMITTED.includes(matchProgram({ ...probe.control, state }, program, NOW).kind),
+        );
+        if (home === undefined) {
+          census.unreachable += 1;
+          continue;
+        }
+        census.checked += 1;
+        const verdict = matchProgram({ ...probe.profile, state: home }, program, NOW).kind;
+        if (ADMITTED.includes(verdict)) {
+          census.enforcedNowhere.push(
+            `${program.name} [${c.spec.axis} sentence, ${owner} ladder] ${probe.excluded} -> ${verdict} — ` +
+              `${JSON.stringify(c.rawText.slice(0, 90))}`,
+          );
+        }
+      }
+    }
+  }
+  census.enforcedNowhere.sort();
+  return census;
+}
+
+
+describe('W11 — a bar the funder wrote into a sentence filed under another axis', () => {
+  it('a requirement stated anywhere in a programme is enforced by that programme', async () => {
+    const { programs } = await corpus();
+    const census = readCrossAxisReach(programs);
+    // NO RECORD IN THIS CORPUS STATES A CREDENTIAL FLOOR ON ONE AXIS AND ENFORCES IT ON NONE. The
+    // list is empty, and it is an equality with a diff rather than a silent pass: a record arriving
+    // in this state fails here with its own name and the funder's own sentence beside it.
+    expect(census.enforcedNowhere).toEqual([]);
+    // Vacuity guard. 21 anchored cross-axis readings in the corpus, in four buckets:
+    //
+    //   checked        7  a hard sentence, closed, whose control the programme really does admit.
+    //                     All seven are the same shape and it is the shape the round was set to
+    //                     find: "Bachelor's degree or higher…" filed under `field_of_study`, and
+    //                     "…4-year college or university" filed under `citizenship` and `gpa`.
+    //                     Every one is refused by its own programme.
+    //   unreachable    0  and this number is the one to watch, not the offender list. See below.
+    //   ranked         7  "preference to baccalaureate or higher degree candidates" — the funder
+    //                     ranking rather than barring, exempt exactly as it is in W10b.
+    //   opened         7  "…or related fields", "including but not limited to" — a funder who
+    //                     declined to close the sentence the floor was written into.
+    //   noted          0  soft constraints, which are W10b's finding by name.
+    expect({
+      checked: census.checked,
+      unreachable: census.unreachable,
+      ranked: census.ranked,
+      opened: census.opened,
+      noted: census.noted,
+    }).toEqual({ checked: 7, unreachable: 0, ranked: 7, opened: 7, noted: 0 });
+    // THE ANTI-R6 ASSERTION, and it is the one this block exists to be able to make. A rule whose
+    // probes could not reach a yes is a rule that cannot fail, and it reports green forever. So the
+    // number of records the rule really read is pinned against the number it could not.
+    expect(census.checked).toBeGreaterThan(census.unreachable);
+  });
+
+  it('…and it catches a degree floor that only a non-institution sentence states', async () => {
+    const { programs } = await corpus();
+    const metzger = programs.find((p) => p.name.includes('Metzger'));
+    if (metzger === undefined) throw new Error('The Edmond A. Metzger Scholarship is missing from the corpus');
+    // The sentence, and the axis it is filed under: a degree floor inside a FIELD OF STUDY clause.
+    const field = metzger.constraints.find(
+      (c) => c.spec.axis === 'field_of_study' && /bachelor/i.test(c.rawText),
+    );
+    if (field === undefined) throw new Error('Metzger states its bachelor floor on the field_of_study axis');
+    expect(levelExcluded(field.rawText)?.excluded).toBe('degreeLevel ASSOC');
+    // W10 cannot see it, and this is the blindness stated as an assertion rather than as prose:
+    // asked of the constraint that carries the sentence, the level ladder is not among the probes.
+    expect(theApplicantsTheSentenceExcludes(field.spec, field.rawText).map((p) => p.excluded)).not.toContain(
+      'degreeLevel ASSOC',
+    );
+    // W11 does see it, and the programme refuses the applicant. The control is admitted first, so
+    // the refusal is the floor doing the work and not the probe being unable to qualify at all —
+    // Metzger is an ARRL Central Division award and a Connecticut probe would have been refused on
+    // its geography, proving nothing. The home is derived, exactly as the rule derives it.
+    const probe = levelExcludedCrossAxis(field.rawText);
+    if (probe === undefined) throw new Error('unreachable');
+    const home = HOMES.find((state) =>
+      ADMITTED.includes(matchProgram({ ...probe.control, state }, metzger, NOW).kind),
+    );
+    expect(home).toBe('IL');
+    expect(matchProgram({ ...probe.control, state: home }, metzger, NOW).kind).toBe('eligible');
+    expect(matchProgram({ ...probe.profile, state: home }, metzger, NOW).kind).toBe('ineligible');
+  });
+
+  /**
+   * THE 28, PINNED AS A MEASUREMENT RATHER THAN LEFT AS A CLAIM IN A COMMENT.
+   *
+   * The note on `CREDENTIAL_NAMED` says the nine-ladder version of this rule flags 81 records and
+   * that all 81 are cry-wolf. A sentence saying so decays; this asserts it. If somebody widens the
+   * cross-axis ladders, or loosens a vocabulary, this number moves and the diff names the records.
+   *
+   * The second assertion is the load-bearing one: NOT ONE of the 28 is reached by an anchored
+   * reading. Every one comes from a ladder inverted outside its own axis — which is why exactly one
+   * ladder is read cross-axis, and why "read the sentence with every vocabulary" is not the
+   * generalisation it looks like.
+   */
+  it('…and reading all nine ladders cross-axis flags 81 records, every one of them a false alarm', async () => {
+    const { programs } = await corpus();
+    const naive = readCrossAxisReach(programs, SENTENCE_LADDERS);
+    expect(naive.enforcedNowhere).toHaveLength(81);
+    // THE PARTITION, WHICH IS THE CLAIM AND IS STRONGER THAN THE COUNT. Nobody adjudicated 81
+    // records one at a time; they were read as six shapes, and the shape is what makes each one a
+    // false alarm. Pinning the shapes means a genuinely new kind of hit cannot arrive disguised as
+    // one of these — it lands in a bucket whose count is asserted and the diff names it.
+    //
+    //   29  a GEOGRAPHY sentence read as a citizenship bar. "RESIDENCE in ARRL New England
+    //       Division" matches `CITIZENSHIP_SAYS_RESIDENT`. A state is not an immigration status.
+    //   20  a recommendation / membership / licence / field sentence read as an activity bar.
+    //       "a sitting officer of an ARRL-affiliated CLUB" names `club_member`, so every other
+    //       activity is "excluded" — by the sentence describing where a LETTER comes from.
+    //   18  an INSTITUTION sentence read as an audience bar. `STAGE_SAYS.UNDERGRAD` matches
+    //       "college", so "Recipient's college of choice." puts a high-school senior outside an
+    //       award for students entering college.
+    //    7  an unanchored institution reading: "graduating high school seniors and UNDERGRADUATE
+    //       students" -> `LEVEL_SAYS.ASSOC` matches "undergraduate", so a certificate student is
+    //       "excluded". This is the shape the anchor exists to refuse, and the assertion below is
+    //       that not one of the seven survives it.
+    //    6  an INSTITUTION sentence read as a geography bar, and it is the subtlest of the six:
+    //       "Accredited 4-year college or university in NC, VA, WV, MD or TN" names where the
+    //       SCHOOL is, and `state` on a profile is where the APPLICANT lives. A Georgian at a
+    //       Virginia college satisfies that sentence; the schema has no field for the other one.
+    //    1  a GEOGRAPHY sentence read as a licence bar: ECARS's "the GENERAL coverage areas of
+    //       ECARS" matches `classesNamed`, so a Technician is refused by a sentence about radio
+    //       propagation.
+    const shape = (o: string) => (/\[[a-z_]+ sentence, ([a-z_]+) ladder\]/.exec(o) ?? [])[1];
+    const byShape: Record<string, number> = {};
+    for (const o of naive.enforcedNowhere) byShape[shape(o)] = (byShape[shape(o)] ?? 0) + 1;
+    expect(byShape).toEqual({
+      citizenship: 29, ham_activity: 20, age_stage: 18, institution: 7, geography: 6, license: 1,
+    });
+    // The anchored rule shares this whole population and flags none of it.
+    expect(readCrossAxisReach(programs).enforcedNowhere).toEqual([]);
+    // …and the load-bearing half, asserted by running the SAME ladder with and without its anchor
+    // rather than by re-reading the offender strings: the anchor is the whole difference, and it
+    // removes all seven without removing a single record the anchored rule would have checked.
+    const unanchored = readCrossAxisReach(programs, [{ owner: 'institution', read: levelExcluded }]);
+    expect(unanchored.enforcedNowhere).toHaveLength(7);
+    expect(readCrossAxisReach(programs).enforcedNowhere).toHaveLength(0);
+    expect(readCrossAxisReach(programs).checked).toBe(7);
+  });
+
+  /**
+   * THE MUTATION PROOF, and the OPPOSITE one beside it — the third obligation in this file's header,
+   * which every other rule here meets and which a program-level rule has to meet differently. There
+   * is no spec to plant a value in: W11 reads a VERDICT. So the mutation is planted in the programme.
+   */
+  it('…and it flags a programme whose sentence states a floor no constraint enforces', async () => {
+    const { programs } = await corpus();
+    const metzger = programs.find((p) => p.name.includes('Metzger'));
+    if (metzger === undefined) throw new Error('The Edmond A. Metzger Scholarship is missing from the corpus');
+    // THE PLANT: the funder's sentences are left exactly as they are, and every constraint that
+    // could enforce the floor is emptied — the shape 20 records were in at the start of this round.
+    const disarmed: Program = {
+      ...metzger,
+      constraints: metzger.constraints.map((c) => ({ ...c, spec: emptied(c.spec) })),
+    };
+    const flagged = readCrossAxisReach([disarmed]);
+    expect(flagged.enforcedNowhere.some((o) => o.includes('degreeLevel ASSOC'))).toBe(true);
+    // AND THE OPPOSITE: the record as the funder wrote it is silent, so the rule is not simply
+    // flagging everything it is handed.
+    expect(readCrossAxisReach([metzger]).enforcedNowhere).toEqual([]);
+  });
+});
 
 // ============================================================ the fixture that could not fail
 

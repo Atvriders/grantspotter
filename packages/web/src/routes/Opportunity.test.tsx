@@ -789,8 +789,10 @@ describe('Opportunity detail — an unknown with nothing to fill in', () => {
  * `IneligibilityDrawer` — and both are reachable only from a verdict that is not `eligible`.
  * `ProgramTable` reads `reason.rawText`, which is ineligible-only too. So a reader told YES saw no
  * funder requirement sentence anywhere: `rawOtherText` carried some of it on some records and
- * nothing on the rest (of the 26 records in the class this round closes, 15 and 11 respectively),
- * and the full hard-constraint list lived only in `requirementsChecklistMarkdown` inside the
+ * nothing on the rest (measured over the 26 records of the toothless-institution class, 15 and 11
+ * respectively — that class has since been closed at the extractor and the count is now zero, which
+ * changes nothing here: the reader told YES still saw no funder sentence on ANY record), and the
+ * full hard-constraint list lived only in `requirementsChecklistMarkdown` inside the
  * application-packet ZIP — downloadable after the decision to apply has already been made.
  *
  * That reader is about to spend an application fee, transcript fees and three recommendation
@@ -868,11 +870,21 @@ describe('Opportunity detail — what an eligible verdict shows', () => {
   /**
    * THE WHOLE POINT OF THE PANEL, AND WHY IT IS NOT A CHECKLIST OF TICKS.
    *
-   * For 26 records the eligible verdict was produced with a `hard: true` constraint reading
-   * "4-year college or university" recorded and NOT satisfied — the axis passed leniently rather
-   * than refusing. A list that said "you meet this" beside each line would restate that error once
-   * per requirement. The list makes no claim about the reader at all; the software's single claim
-   * — that nothing here refused this profile — is one marked line at the top.
+   * THE ORIGINAL REASON HAS BEEN FIXED, AND THE DECISION STANDS ON THE REST. This comment used to
+   * read "for 26 records the eligible verdict was produced with a `hard: true` constraint reading
+   * '4-year college or university' recorded and NOT satisfied". That class is closed: the extractor
+   * now publishes a floor, `sentence-vs-spec.test.ts` measures the class at ZERO, and its allowlist
+   * is empty. An argument left resting on evidence that no longer exists is how a good design
+   * decision gets reverted by the next person who checks the evidence, so here is the standing one:
+   *
+   * A TICK WOULD CLAIM MORE THAN THIS SOFTWARE CHECKS, on every record and not just on a broken
+   * class. `matcher.ts` records `tradeSchoolOK` as informational because CONTRACT §3 has no profile
+   * field for it; a sentence naming where the SCHOOL must be ("…college or university in NC, VA,
+   * WV, MD or TN") is read against where the APPLICANT lives; an `orUnrepresented` route is a
+   * question the schema declined; an opened list answers `unknown` by design. Beside any of those,
+   * "you meet this" is a sentence GrantSpotter cannot support. The list makes no claim about the
+   * reader at all; the software's single claim — that nothing here refused this profile — is one
+   * marked line at the top, and that claim is exactly what `matchProgram` computed.
    */
   it('claims nothing about the reader beside any individual requirement', async () => {
     stubFetch(ELIGIBLE);
