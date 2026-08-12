@@ -79,9 +79,26 @@ export function createVerifyRouter(deps: RouterDeps, runner: VerifyRunner): Rout
         // Retry-After is a transport header, so it is set on the response
         // directly; the body is still Plan 1's single error envelope.
         res.set('Retry-After', String(retryAfterSec));
+        /*
+         * TWO REASONS, TWO SENTENCES (2026-08-12). One sentence answered both, and it was
+         * "You have verified this recently" — which names THIS programme, and is false of the
+         * whole of `hourly_cap`. `checkVerifyRateLimit` returns that reason when a member has
+         * spent ten verifications across the corpus in the last hour, and it fires on a record
+         * they have never once checked. The browser never saw it (`components/VerifyButton.tsx`
+         * writes its own sentence per reason), so the falsity was reserved for whoever reads the
+         * API directly — and a sentence being hard to reach is not a reason for it to be untrue.
+         *
+         * Neither says when. `retryAfterSec` travels with both and is the one statement of it;
+         * see the docblock in `api/auth.ts` and `packages/server/test/userFacingCopyContract.
+         * test.ts`, which fails when a refusal starts promising a duration again.
+         */
         next(new AppError(
           'rate_limited',
-          'You have verified this recently. Small nonprofits host these pages; we poll them politely.',
+          limit.reason === 'hourly_cap'
+            ? 'You have used every verification in your hourly allowance. Small nonprofits host ' +
+                'these pages; we poll them politely.'
+            : 'You have verified this programme recently. Small nonprofits host these pages; we ' +
+                'poll them politely.',
           { reason: limit.reason, retryAfterSec },
         ));
         return;

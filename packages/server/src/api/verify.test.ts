@@ -477,6 +477,42 @@ describe('POST /api/programs/:id/verify', () => {
     expect(second.body.error.details.reason).toBe('program_cooldown');
     expect(second.body.error.details.retryAfterSec).toBeGreaterThan(0);
     expect(second.headers['retry-after']).toBeDefined();
+
+    /*
+      AND THE SENTENCE, WHICH NOTHING READ UNTIL 2026-08-12. One message answered both reasons —
+      "You have verified this recently." — and `hourly_cap` fires on a programme the member has
+      never once checked, so that sentence was false for the whole of it. The browser never saw
+      either (`components/VerifyButton.tsx` writes its own per reason), which is exactly why
+      neither had an assertion; a sentence being hard to reach is not a reason for it to be untrue.
+    */
+    const said = String(second.body.error.message);
+    expect(said).toMatch(/you have verified this programme recently/i);
+    expect(said).toMatch(/small nonprofits host these pages/i);
+    // The wait is `retryAfterSec` and nothing else — see userFacingCopyContract.test.ts.
+    expect(said).not.toMatch(/shortly|in a moment|an hour|\d+\s*(second|minute|hour)/i);
+  });
+
+  /**
+   * The other reason, and the one the shared sentence was false about. Ten verifications spread
+   * across other programmes close the hourly cap; this record has never been checked, so nothing
+   * may tell the member they checked it.
+   */
+  it('names a spent allowance as a spent allowance, not as a repeat of this programme', async () => {
+    const app = buildApp(MEMBER, [fakeSource([BEFORE])]);
+    for (let i = 0; i < 10; i += 1) {
+      db.prepare(
+        'INSERT INTO verify_attempts (user_id, program_id, attempted_at) VALUES (?, ?, ?)',
+      ).run('u-member', `p-other-${String(i)}`, NOW);
+    }
+
+    const refused = await request(app).post('/api/programs/arrl-foundation-scholarship/verify');
+    expect(refused.status).toBe(429);
+    expect(refused.body.error.details.reason).toBe('hourly_cap');
+
+    const said = String(refused.body.error.message);
+    expect(said).toMatch(/every verification in your hourly allowance/i);
+    expect(said).not.toMatch(/verified this programme recently|verified this recently/i);
+    expect(said).not.toMatch(/shortly|in a moment|an hour|\d+\s*(second|minute|hour)/i);
   });
 
   it('does not rate-limit an admin', async () => {
