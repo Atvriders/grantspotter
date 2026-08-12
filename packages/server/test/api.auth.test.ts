@@ -119,6 +119,44 @@ describe('rate limiter', () => {
   });
 
   /**
+   * WHAT THE MAP DOES OVER A PROCESS LIFETIME, WHICH IS NOT WHAT IT DOES OVER A WINDOW.
+   *
+   * `recent` prunes the key it is asked about and nothing else, so a caller who never repeats a key
+   * never causes one to be read a second time and every key they ever touched stayed for good.
+   * MEASURED by a reviewer at 342 bytes retained per distinct forged `X-Forwarded-For` — bounded
+   * per window, unbounded over a lifetime, about 3.9 MB a day that only a restart returned.
+   *
+   * `keysRetained` exists because this is otherwise unassertable: `count` on a stale key answers 0
+   * whether the key was swept or is sitting there. See `RateLimiterMemory`.
+   */
+  describe('what it keeps when nobody ever asks about the same key twice', () => {
+    it('sweeps the keys whose window has passed instead of holding them for the process lifetime', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 100 });
+      for (let i = 0; i < 2000; i += 1) limiter.recordFailure(`forged-${String(i)}`, 0);
+      expect(limiter.keysRetained()).toBe(2000);
+
+      // A second window, and a caller who has moved on to fresh keys — which is the whole point:
+      // nothing will ever read the first two thousand again.
+      for (let i = 0; i < 200; i += 1) limiter.recordFailure(`later-${String(i)}`, 5000);
+
+      // Under 2,200. The old map only ever grew.
+      expect(limiter.keysRetained()).toBeLessThanOrEqual(200);
+      // And the sweep took nothing live with it: every one of the 200 is still counted.
+      expect(limiter.count('later-0', 5000)).toBe(1);
+      expect(limiter.count('later-199', 5000)).toBe(1);
+    });
+
+    it('does not sweep a small map at all, so an honest deployment pays nothing for this', () => {
+      const limiter = createRateLimiter({ windowMs: 1000, maxFailures: 100 });
+      for (let i = 0; i < 50; i += 1) limiter.recordFailure(`net-${String(i)}`, 0);
+      // Stale, and still there: the scan is not worth its own cost below the threshold, and these
+      // keys cost nothing until something asks about them (which prunes them) or the map grows.
+      for (let i = 0; i < 5; i += 1) limiter.recordFailure(`net-${String(i)}`, 9000);
+      expect(limiter.keysRetained()).toBe(50);
+    });
+  });
+
+  /**
    * THE HALF THAT `check` + `recordFailure` CANNOT EXPRESS.
    *
    * Both auth routes do tens of milliseconds of argon2id between deciding that an attempt is
@@ -189,11 +227,23 @@ describe('rate limiter', () => {
  * the one above: a budget refuses, a gate waits. Confusing the two is what answered twenty of
  * thirty students with a valid enrollment code "Too many enrollment attempts. Try again later."
  */
-const ONE_LANE = { peer: '203.0.113.7', origin: '203.0.113.7' };
+const ONE_LANE = { peer: '203.0.113.7', route: 'sign-in', origin: '203.0.113.7' } as const;
+
+/**
+ * A wait ceiling far longer than anything these tests take, so that the deadline is inert unless a
+ * test is deliberately about it. Every other assertion here is about the ROUND and about the DEPTH,
+ * and a deadline firing inside one of them would be measuring the machine rather than the code.
+ */
+const NO_DEADLINE = 60_000;
+
+/** A lane, spelled once. `route` defaults to sign-in because most of these tests predate it. */
+function lane(peer: string, origin = peer, route: 'sign-in' | 'sign-up' = 'sign-in') {
+  return { peer, route, origin } as const;
+}
 
 describe('concurrency gate', () => {
   it('never runs more than the ceiling at once, and still runs everything', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 3, maxQueued: 100 });
+    const gate = createConcurrencyGate({ maxConcurrent: 3, maxQueued: 100, maxWaitMs: NO_DEADLINE });
     let live = 0;
     let peak = 0;
     const done: number[] = [];
@@ -219,7 +269,7 @@ describe('concurrency gate', () => {
   });
 
   it('gives the slot back when the work throws, so one failure is not a permanent hole', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10, maxWaitMs: NO_DEADLINE });
     await expect(
       gate.run(ONE_LANE, () => Promise.reject(new Error('argon2 fell over'))),
     ).rejects.toThrow('argon2 fell over');
@@ -228,7 +278,7 @@ describe('concurrency gate', () => {
   });
 
   it('serves one lane in the order it arrived, so nobody starves', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10, maxWaitMs: NO_DEADLINE });
     const order: number[] = [];
     await Promise.all(
       Array.from({ length: 5 }, (_unused, i) =>
@@ -252,14 +302,14 @@ describe('concurrency gate', () => {
    * requests they send, so the arithmetic below holds for any N.
    */
   it('gives a caller with one request the next turn, not the last one', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100, maxWaitMs: NO_DEADLINE });
     const served: string[] = [];
     const work = (tag: string) => async () => {
       served.push(tag);
       await new Promise((resolve) => setTimeout(resolve, 1));
     };
-    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
-    const student = { peer: '198.51.100.4', origin: '198.51.100.4' };
+    const flood = lane('203.0.113.7');
+    const student = lane('198.51.100.4');
 
     const all = [gate.run(flood, work('flood-0'))];
     for (let i = 1; i < 20; i += 1) all.push(gate.run(flood, work(`flood-${String(i)}`)));
@@ -280,7 +330,7 @@ describe('concurrency gate', () => {
    * reported origin INSIDE each peer is what tells two users of one tunnel apart.
    */
   it('takes turns inside one peer, so a tunnel is not one lane', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100, maxWaitMs: NO_DEADLINE });
     const served: string[] = [];
     const work = (tag: string) => async () => {
       served.push(tag);
@@ -288,11 +338,11 @@ describe('concurrency gate', () => {
     };
     const tunnel = '10.0.0.1';
 
-    const all = [gate.run({ peer: tunnel, origin: '203.0.113.7' }, work('flood-0'))];
+    const all = [gate.run(lane(tunnel, '203.0.113.7'), work('flood-0'))];
     for (let i = 1; i < 20; i += 1) {
-      all.push(gate.run({ peer: tunnel, origin: '203.0.113.7' }, work(`flood-${String(i)}`)));
+      all.push(gate.run(lane(tunnel, '203.0.113.7'), work(`flood-${String(i)}`)));
     }
-    all.push(gate.run({ peer: tunnel, origin: '198.51.100.4' }, work('student')));
+    all.push(gate.run(lane(tunnel, '198.51.100.4'), work('student')));
     await Promise.all(all);
 
     expect(served[2]).toBe('student');
@@ -304,24 +354,113 @@ describe('concurrency gate', () => {
    * request; the peer it arrives on is still one value, and one peer is still one share.
    */
   it('gives a caller minting a fresh reported origin per request no more than one peer share', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100, maxWaitMs: NO_DEADLINE });
     const served: string[] = [];
     const work = (tag: string) => async () => {
       served.push(tag);
       await new Promise((resolve) => setTimeout(resolve, 1));
     };
 
-    const all = [gate.run({ peer: '203.0.113.7', origin: 'forged-0' }, work('flood-0'))];
+    const all = [gate.run(lane('203.0.113.7', 'forged-0'), work('flood-0'))];
     for (let i = 1; i < 20; i += 1) {
-      all.push(
-        gate.run({ peer: '203.0.113.7', origin: `forged-${String(i)}` }, work(`flood-${String(i)}`)),
-      );
+      all.push(gate.run(lane('203.0.113.7', `forged-${String(i)}`), work(`flood-${String(i)}`)));
     }
-    all.push(gate.run({ peer: '198.51.100.4', origin: '198.51.100.4' }, work('student')));
+    all.push(gate.run(lane('198.51.100.4'), work('student')));
     await Promise.all(all);
 
     // Nineteen forged lanes bought one turn between them, because they are all one peer.
     expect(served[2]).toBe('student');
+  });
+
+  /**
+   * THE LEVEL ADDED ON 2026-08-12, AND THE FINDING IT IS FOR.
+   *
+   * MEASURED against the built server: a 1,642 req/s flood on `/api/auth/login` while 130 students
+   * registered from 130 distinct addresses — 37 accounts, 83 students SHED, 10 refused. The round
+   * took turns between callers and knew nothing about routes, so a caller flooding sign-in was
+   * competing for places that sign-up needed, and every shed sign-up had already spent a place in
+   * the registration budget getting there.
+   *
+   * The two lanes here differ in NOTHING BUT THE ROUTE — same peer, same reported origin — so this
+   * cannot pass by accident on either of the other two levels. Under the round this replaced they
+   * were one lane and the sign-up was 21st of 21.
+   */
+  it('gives the other route its turn even when the flood is the same caller', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 100, maxWaitMs: NO_DEADLINE });
+    const served: string[] = [];
+    const work = (tag: string) => async () => {
+      served.push(tag);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    };
+    const signIn = lane('203.0.113.7', '203.0.113.7', 'sign-in');
+    const signUp = lane('203.0.113.7', '203.0.113.7', 'sign-up');
+
+    const all = [gate.run(signIn, work('flood-0'))];
+    for (let i = 1; i < 20; i += 1) all.push(gate.run(signIn, work(`flood-${String(i)}`)));
+    all.push(gate.run(signUp, work('student')));
+    await Promise.all(all);
+
+    expect(served.slice(0, 3)).toEqual(['flood-0', 'flood-1', 'student']);
+    expect(served).toHaveLength(21);
+  });
+
+  /**
+   * THE PROMISE ABOUT THE WAIT, ENFORCED RATHER THAN DERIVED.
+   *
+   * `MAX_QUEUED_HASHES` used to carry it as arithmetic — depth over concurrency times a slot cost
+   * measured on an idle machine — and MEASURED under load on the same host that produced the
+   * constant, the slot cost was 168 ms rather than 42 and a member's sign-in took 10,680 ms against
+   * a promised worst case of 2,700. A promise that only holds when nothing else is happening is not
+   * a promise about a queue.
+   *
+   * So a waiter that reaches the front having already waited too long is refused instead of
+   * started. `expired` and `shed` are counted apart because they tell an operator different things.
+   */
+  it('drops a waiter that has waited longer than the promise instead of starting its work', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10, maxWaitMs: 20 });
+    let ran = 0;
+    const slow = async (): Promise<void> => {
+      ran += 1;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    };
+
+    const running = gate.run(ONE_LANE, slow);
+    await Promise.resolve();
+    const waiting = gate.run(lane('198.51.100.4'), slow);
+
+    await expect(waiting).rejects.toThrow(QueueFullError);
+    await running;
+    // One body ever started: the one that was already running. The 120 ms holder made the waiter
+    // exceed a 20 ms promise, so its slot went nowhere rather than into a hash nobody is waiting
+    // on any more.
+    expect(ran).toBe(1);
+    expect(gate.expired).toBe(1);
+    // Not counted as a shed: the queue had nine places free the whole time.
+    expect(gate.shed).toBe(0);
+    expect(gate.inFlight).toBe(0);
+    expect(gate.waiting).toBe(0);
+  });
+
+  it('says which of the two refusals it was, so an operator can tell load from slowness', async () => {
+    const full = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 1, maxWaitMs: NO_DEADLINE });
+    let open = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const running = full.run(ONE_LANE, () => held);
+    const queued = full.run(ONE_LANE, () => held).catch(() => undefined);
+    await Promise.resolve();
+    await expect(full.run(ONE_LANE, () => held)).rejects.toMatchObject({ reason: 'full' });
+    open();
+    await Promise.all([running, queued]);
+
+    const slow = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 10, maxWaitMs: 20 });
+    const busy = slow.run(ONE_LANE, () => new Promise((resolve) => setTimeout(resolve, 120)));
+    await Promise.resolve();
+    await expect(slow.run(lane('198.51.100.4'), () => Promise.resolve())).rejects.toMatchObject({
+      reason: 'waited-too-long',
+    });
+    await busy;
   });
 });
 
@@ -333,19 +472,23 @@ describe('concurrency gate', () => {
  */
 describe('what the gate sheds when it is full', () => {
   /** Hold every slot and every queue place, and hand back a lever to let them all finish. */
-  function saturate(gate: ReturnType<typeof createConcurrencyGate>, lane: { peer: string; origin: string }, n: number) {
+  function saturate(
+    gate: ReturnType<typeof createConcurrencyGate>,
+    where: ReturnType<typeof lane>,
+    n: number,
+  ) {
     let open = (): void => undefined;
     const held = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const runs = Array.from({ length: n }, () => gate.run(lane, () => held).catch(() => 'shed'));
+    const runs = Array.from({ length: n }, () => gate.run(where, () => held).catch(() => 'shed'));
     return { runs, open };
   }
 
   it('sheds the flood rather than the caller who arrived into it', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 4 });
-    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
-    const student = { peer: '198.51.100.4', origin: '198.51.100.4' };
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 4, maxWaitMs: NO_DEADLINE });
+    const flood = lane('203.0.113.7');
+    const student = lane('198.51.100.4');
 
     // One running plus four queued is the whole gate.
     const { runs, open } = saturate(gate, flood, 5);
@@ -369,25 +512,52 @@ describe('what the gate sheds when it is full', () => {
   });
 
   /**
+   * AND THE SAME LEVEL AT THE CEILING. Places in a full queue are the scarcer thing: taking turns
+   * only helps somebody who is IN the queue, and the student measured above was not — they were
+   * shed on arrival. The heaviest ROUTE is compared before the heaviest caller inside it, so a
+   * sign-in flood cannot displace a sign-up however many connections it holds.
+   */
+  it('sheds the flooding route rather than the one request from the other one', async () => {
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 4, maxWaitMs: NO_DEADLINE });
+    const signIn = lane('203.0.113.7', '203.0.113.7', 'sign-in');
+    const signUp = lane('203.0.113.7', '203.0.113.7', 'sign-up');
+
+    const { runs, open } = saturate(gate, signIn, 5);
+    await Promise.resolve();
+    expect(gate.waiting).toBe(4);
+
+    let studentRan = false;
+    const studentRun = gate.run(signUp, async () => {
+      studentRan = true;
+    });
+    expect(gate.shed).toBe(1);
+
+    open();
+    await Promise.all([...runs, studentRun]);
+    expect(studentRan).toBe(true);
+    expect((await Promise.all(runs)).filter((r) => r === 'shed')).toHaveLength(1);
+  });
+
+  /**
    * THE OTHER SIDE OF THE SAME RULE, and the reason it is a rule about SHARE rather than about
    * arrival order: when every lane is the same size there is no flood to shed, only genuine load,
    * and the honest answer is to turn away the newest rather than to drop somebody who has already
    * been waiting. That case is the only one in which a caller with one request is refused.
    */
   it('turns away the arrival when no lane is larger than any other', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 2 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 2, maxWaitMs: NO_DEADLINE });
     let open = (): void => undefined;
     const held = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const lane = (n: number) => ({ peer: `198.51.100.${String(n)}`, origin: `198.51.100.${String(n)}` });
+    const nth = (n: number) => lane(`198.51.100.${String(n)}`);
 
-    const running = gate.run(lane(1), () => held);
-    const queued = [gate.run(lane(2), () => held), gate.run(lane(3), () => held)];
+    const running = gate.run(nth(1), () => held);
+    const queued = [gate.run(nth(2), () => held), gate.run(nth(3), () => held)];
     await Promise.resolve();
     expect(gate.waiting).toBe(2);
 
-    await expect(gate.run(lane(4), () => held)).rejects.toThrow(QueueFullError);
+    await expect(gate.run(nth(4), () => held)).rejects.toThrow(QueueFullError);
     // Nobody who was already waiting was disturbed to make room for somebody who was not.
     expect(gate.waiting).toBe(2);
 
@@ -396,13 +566,13 @@ describe('what the gate sheds when it is full', () => {
   });
 
   it('runs nothing for a shed request, so being turned away costs the caller nothing', async () => {
-    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 1 });
+    const gate = createConcurrencyGate({ maxConcurrent: 1, maxQueued: 1, maxWaitMs: NO_DEADLINE });
     let started = 0;
     let open = (): void => undefined;
     const held = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const flood = { peer: '203.0.113.7', origin: '203.0.113.7' };
+    const flood = lane('203.0.113.7');
     const count = async (): Promise<void> => {
       started += 1;
       await held;

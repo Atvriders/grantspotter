@@ -14,6 +14,7 @@ import { hashPassword, MIN_PASSWORD_LENGTH, verifyPassword } from '../auth/passw
 import { createRateLimiter } from '../auth/rateLimit.js';
 import { SESSION_COOKIE } from '../auth/session.js';
 import { loadConfig } from '../config.js';
+import { createSessionRepo } from '../db/repositories/sessions.js';
 import { createUserRepo } from '../db/repositories/users.js';
 import { createTestDb, type TestDb } from '../../test/helpers/tempDb.js';
 
@@ -264,10 +265,17 @@ describe('a body that costs the caller nothing', () => {
  * (`X-Forwarded-For`, the address itself) or shared by everybody behind the tunnel, and a budget
  * whose key the caller writes is not a budget.
  *
- * SO THE ANSWER IS NO LONGER RATIONED AND THE ROUTE IS. A probe is a registration attempt, charged
- * to all three rungs before the address is looked at, so classifying addresses costs exactly what
- * creating accounts costs and stops at the same ceiling. `authCost.test.ts` measures that ceiling
- * against a real burst; these tests are about what a person is TOLD.
+ * FOR ONE DAY THIS BLOCK SAID "THE ANSWER IS NO LONGER RATIONED AND THE ROUTE IS" — a probe was a
+ * registration attempt, charged to all three rungs, so classifying addresses stopped at the same
+ * ceiling as creating accounts. That is deleted rather than adapted, because it was measured doing
+ * the opposite of its purpose: 120 questions about one existing address closed sign-up for a whole
+ * tunnel in 147 ms, having created nothing, and the next honest student was refused. It also never
+ * hid anything — 409 for an address that exists and 201 for one that does not is the same oracle in
+ * the status line, whatever the sentence says.
+ *
+ * SO NOTHING RATIONS THE QUESTION, and the test below that used to assert a ceiling on it now
+ * asserts that there is none, and that asking costs everybody else nothing. What is still bounded
+ * is the part that lasts: a question about a FREE address creates an account, and that is charged.
  *
  * AND THE ANSWER STAYS THE USEFUL ONE, which is the part worth defending: the person who meets it
  * most often is not an attacker, it is somebody who signed up last term and has forgotten. Making
@@ -332,6 +340,46 @@ describe('an address that already has an account', () => {
     expect(JSON.stringify(rows)).not.toContain('known-0@example.org');
     expect(JSON.parse(rows[0]?.detail ?? '{}')).toMatchObject({ answers: 20 });
   }, 60_000);
+
+  /**
+   * THE FINDING THIS FILE EXISTED TO CATCH AND DID NOT, MEASURED AGAINST THE BUILT SERVER ON
+   * 2026-08-12: 120 POSTs naming an address that already had an account — 147 ms, 120 ms of CPU,
+   * zero argon2id, zero rows — closed the network rung, and the next honest student from a
+   * different connection was answered "Too many accounts have been created from your network in the
+   * last few minutes" with `SELECT COUNT(*) FROM users` returning 1.
+   *
+   * Two separate defects in one measurement, and this test pins both: denying the whole deployment
+   * cost a thousandth of what using it costs, and the sentence the victim was shown was false.
+   *
+   * A HUNDRED AND TWENTY IS NOT AN ARBITRARY NUMBER. It is what the network rung was before this
+   * change, so a regression that starts charging probes again fails here on the first rung it
+   * reaches rather than at some larger number this test would have to guess.
+   */
+  it('does not let questions about other people close sign-up for everybody', async () => {
+    createUserRepo(db).create({
+      email: 'known@example.org',
+      passwordHash: await seededPasswordHash(),
+      role: 'member',
+    });
+    const app = build();
+
+    for (let i = 0; i < 120; i += 1) {
+      const res = await request(app)
+        .post('/api/auth/enroll')
+        .set('X-Forwarded-For', `203.0.113.${String((i % 100) + 20)}`)
+        .send({ email: 'known@example.org', password: GOOD_PASSWORD });
+      expect(res.status).toBe(409);
+    }
+
+    const honest = await request(app)
+      .post('/api/auth/enroll')
+      .set('X-Forwarded-For', '198.51.100.77')
+      .send({ email: 'honest-student@example.org', password: GOOD_PASSWORD });
+    expect(honest.status).toBe(201);
+    // Not one of those 120 questions left a mark on any rung, so the connection they came from can
+    // still make its own sixty accounts as well.
+    expect(memberCount()).toBe(2);
+  }, 120_000);
 });
 
 /**
@@ -440,6 +488,17 @@ describe('the ceiling on how many accounts one caller can make', () => {
         expect(res.body.error.message).toMatch(/nothing is wrong with your details/i);
         expect(res.body.error.message).toMatch(/wait a few minutes/i);
         expect(res.body.error.message).toMatch(/signing in is not affected/i);
+        /**
+         * AND THE FOURTH THING, WHICH IS THAT IT IS TRUE.
+         *
+         * MEASURED on 2026-08-12, before this round: this sentence was shown to somebody after 120
+         * requests that created NOTHING, on a deployment whose users table held one row. It counted
+         * attempts and spoke about accounts. The number it quotes is now read back out of the
+         * limiter, so this assertion compares the sentence against the database — which is the only
+         * assertion that can catch the two drifting apart again.
+         */
+        expect(res.body.error.message).toContain(`${String(memberCount())} accounts have been`);
+        expect(res.body.error.message).not.toMatch(/nothing has been used up/i);
       }
     }
 
@@ -454,9 +513,16 @@ describe('the ceiling on how many accounts one caller can make', () => {
    * least two networks acting together.
    *
    * Asserted here on the connection rung against the network rung, because that is the pair a
-   * single caller can actually exercise — sixty-one requests, of which the sixty-first is refused
-   * and must not appear anywhere. If a refusal charged, this caller would be able to spend the
-   * network's 120 by knocking, and the ratio would be decorative.
+   * single caller can actually exercise: a connection that has been cut off knocks twenty more
+   * times, and none of those twenty may appear in the network's total. If a refusal charged, a
+   * caller could spend the whole network rung by knocking at a door that was already shut.
+   *
+   * IT TAKES FOUR CONNECTIONS TO SPEND THE NETWORK RUNG NOW, and that is the 2026-08-12 change
+   * showing through rather than a complication. The rung moved from 120 to 240 because behind the
+   * operator's tunnel it IS the deployment ceiling and 120 was exactly the design load; the
+   * connection rung stayed at 60, so the arithmetic that used to need two connections needs four.
+   * The loop below walks them, which is also the closest a test gets to the measured shape — four
+   * connections, sixty each, one peer.
    */
   it('does not charge a refused request to the rungs below it', async () => {
     const server = build();
@@ -466,27 +532,33 @@ describe('the ceiling on how many accounts one caller can make', () => {
         .send({ email: `charge-${String(i)}@example.org`, password: GOOD_PASSWORD });
     }
     // Twenty requests past the connection ceiling, all refused. If any of them had been charged to
-    // the network rung, a SECOND connection in the same network would now have fewer than
-    // (120 - 60) registrations left; it has exactly that many, so it can make sixty more.
-    const second: number[] = [];
-    for (let i = 0; i < REGISTRATION_MAX_PER_NETWORK - REGISTRATION_MAX_PER_CONNECTION; i += 1) {
+    // the network rung, the connections below would run out early.
+    const rest = REGISTRATION_MAX_PER_NETWORK - REGISTRATION_MAX_PER_CONNECTION;
+    const later: number[] = [];
+    for (let i = 0; i < rest; i += 1) {
       const res = await request(server)
         .post('/api/auth/enroll')
-        .set('X-Forwarded-For', '198.51.100.4')
-        .send({ email: `second-${String(i)}@example.org`, password: GOOD_PASSWORD });
-      second.push(res.status);
+        // A fresh connection every sixty, because the connection rung is sixty and this test is
+        // about the rung underneath it.
+        .set('X-Forwarded-For', `198.51.100.${String(Math.floor(i / 60) + 1)}`)
+        .send({ email: `later-${String(i)}@example.org`, password: GOOD_PASSWORD });
+      later.push(res.status);
     }
-    expect(second.filter((s) => s === 201)).toHaveLength(
-      REGISTRATION_MAX_PER_NETWORK - REGISTRATION_MAX_PER_CONNECTION,
-    );
-    // …and the network rung is now exactly spent, so a third connection in it is refused with the
+    expect(later.filter((s) => s === 201)).toHaveLength(rest);
+    // …and the network rung is now exactly spent, so one more connection in it is refused with the
     // sentence that says so rather than the connection one.
-    const third = await request(server)
+    const beyond = await request(server)
       .post('/api/auth/enroll')
       .set('X-Forwarded-For', '198.51.100.9')
-      .send({ email: 'third@example.org', password: GOOD_PASSWORD });
-    expect(third.status).toBe(429);
-    expect(third.body.error.message).toMatch(/from your network/i);
+      .send({ email: 'beyond@example.org', password: GOOD_PASSWORD });
+    expect(beyond.status).toBe(429);
+    expect(beyond.body.error.message).toMatch(/from your network/i);
+    // The sentence names the accounts that exist, which is the whole of `registrationRefusal`'s
+    // 2026-08-12 rewrite: 240 were created, 240 is what it says, and the database agrees.
+    expect(beyond.body.error.message).toContain(
+      `${String(REGISTRATION_MAX_PER_NETWORK)} accounts have been`,
+    );
+    expect(memberCount()).toBe(REGISTRATION_MAX_PER_NETWORK);
   }, 600_000);
 
   /**
@@ -511,11 +583,60 @@ describe('the ceiling on how many accounts one caller can make', () => {
     expect(rows[0]?.entity_id).toBe('127.0.0.0/24');
     expect(JSON.parse(rows[0]?.detail ?? '{}')).toMatchObject({
       rung: 'connection',
-      registrations: REGISTRATION_MAX_PER_CONNECTION,
+      // THE COUNT THAT WAS RECORDED, AND SEPARATELY THE CEILING. `registrations` used to be the
+      // ceiling under a name that promised a count, and on 2026-08-12 it was measured telling an
+      // operator `"registrations":120` while the users table held one row. The two are equal here
+      // because sixty accounts really were created; `memberCount()` is what makes that an assertion
+      // about the database rather than about a constant.
+      registrations: memberCount(),
+      ceiling: REGISTRATION_MAX_PER_CONNECTION,
       windowSec: REGISTRATION_WINDOW_MS / 1000,
     });
     expect(JSON.stringify(rows)).not.toContain('noticed-0@example.org');
   }, 300_000);
+});
+
+/**
+ * THE THIRD ROW EVERY REGISTRATION WRITES, AND THE ONE NOTHING WAS EVER GOING TO REMOVE.
+ *
+ * MEASURED, 2026-08-12: a hundred registrations against the built server produced 100 `users` rows,
+ * 100 `audit_log` rows and 101 `sessions` rows — signing up signs you in — at 1,024 bytes of
+ * checkpointed SQLite each. `sessions.removeExpired` existed, was tested in `test/accounts.test.ts`
+ * and HAD NO CALLER anywhere in the server, so every one of those rows would have sat in the table
+ * for its full thirty days and then for good.
+ *
+ * The sweep hangs off creating a session, which is the only thing that grows the table, and runs at
+ * most hourly. This test drives it through registration because registration is the path that can
+ * grow it fastest and by strangers.
+ */
+describe('the session rows a registration leaves behind', () => {
+  it('clears expired sessions the first time it creates one', async () => {
+    const sessions = createSessionRepo(db);
+    // Two rows belonging to the seeded administrator: one long dead, one still live. Inserted
+    // before the app has created any session of its own, so the registration below is the first
+    // call to `startSession` in this router's life and therefore the first sweep.
+    sessions.create({
+      id: 'dead-session',
+      userId: ADMIN_ID,
+      expiresAt: '2020-01-01T00:00:00.000Z',
+    });
+    sessions.create({
+      id: 'live-session',
+      userId: ADMIN_ID,
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    expect(sessions.count()).toBe(2);
+
+    const res = await request(build())
+      .post('/api/auth/enroll')
+      .send({ email: 'sweeper@example.org', password: GOOD_PASSWORD });
+    expect(res.status).toBe(201);
+
+    // The dead one is gone; the live one and the new member's are not.
+    expect(sessions.find('dead-session')).toBeUndefined();
+    expect(sessions.find('live-session')).toBeDefined();
+    expect(sessions.count()).toBe(2);
+  }, 30_000);
 });
 
 /**

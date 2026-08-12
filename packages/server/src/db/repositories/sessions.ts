@@ -24,6 +24,20 @@ export interface SessionRepo {
   touch(id: string, atISO: string): void;
   remove(id: string): void;
   removeAllForUser(userId: string): void;
+  /**
+   * Delete every session whose `expires_at` has passed, and answer how many that was.
+   *
+   * THIS HAD NO CALLER IN THE SERVER UNTIL 2026-08-12 — it was written, covered by
+   * `test/accounts.test.ts`, and invoked by nothing, so an expired row lived out its thirty days
+   * and then stayed for good. MEASURED against the built server: 100 registrations leave 101 rows
+   * in this table, because signing up signs the new member in, and a mass registration's sessions
+   * are the rows an administrator does not know to look for. `api/auth.ts` now calls it from
+   * `startSession`, at most hourly; the argument for hanging it there rather than on a timer is
+   * written beside the caller, because that is the decision and this is only the statement.
+   *
+   * `idx_sessions_expires` (migration 001) is what keeps it one indexed range delete rather than a
+   * scan of every session in the deployment.
+   */
   removeExpired(nowISO: string): number;
   count(): number;
 }

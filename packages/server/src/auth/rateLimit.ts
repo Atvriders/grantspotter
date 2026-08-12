@@ -59,13 +59,43 @@ export interface RateLimitDecision {
  * full of somebody else's is never the one dropped. That is what makes it safe to key on a value
  * the caller partly controls — the worst a forged key achieves is that the queue behaves the way
  * it did before, first-come-first-served with a bound, rather than becoming an off switch.
+ *
+ * THE ROUND GAINED A MIDDLE LEVEL ON 2026-08-12, AND IT IS THE ROUTE. MEASURED against the built
+ * server on this host: a sign-in flood of 400 connections rotating `X-Forwarded-For` (1,642 req/s)
+ * while 130 students registered from 130 distinct addresses — 37 accounts created, 83 students SHED
+ * BY THIS GATE, 10 refused by the registration ladder afterwards. "A caller can only displace
+ * themselves" was true WITHIN a route and false across two: every place in this queue that the
+ * sign-in flood held was a place the sign-up route could not have, and the shed sign-ups had
+ * already charged the registration budget on their way in (`api/auth.ts` no longer lets them; that
+ * is the other half of the fix). One queue for one CPU is still right — see `hashGate` — but "one
+ * queue" must not mean "whoever shouts loudest gets all of it", and the two routes serve different
+ * populations: members signing in, and strangers signing up. So they take turns, and the heaviest
+ * ROUTE is shed before the heaviest caller inside it, which is what keeps either from spending the
+ * other's share.
+ *
+ * WHY THE ROUTE SITS BETWEEN THE PEER AND THE ORIGIN rather than above or below both. The nesting
+ * is ordered by how much the caller controls: the peer is theirs only by having a machine, the
+ * route is chosen by which URL they POST to but the VALUE is written by this server and comes from
+ * a closed set of two, and the origin is a header they may write outright. Ordering it that way is
+ * what makes each level's guarantee survive the level below it being forged. Putting the route
+ * outermost was the other candidate and is worse in one measurable shape: a caller who floods BOTH
+ * routes from one peer would then hold half of each round, where under this nesting they hold one
+ * peer's share of everything.
  */
+export type HashRoute = 'sign-in' | 'sign-up';
+
 export interface QueueLane {
   /**
    * The TCP peer. No header changes it and no client chooses it — and behind a reverse proxy it is
    * one value for every user in the deployment, which is why it is not enough on its own.
    */
   readonly peer: string;
+  /**
+   * Which of the two unauthenticated routes that hash a password this is. Not a caller-supplied
+   * value at all: the route itself passes its own constant, so there is nothing here to rotate and
+   * a caller cannot mint a third class to get a third share.
+   */
+  readonly route: HashRoute;
   /**
    * The address the deployment's own proxy reported (`req.ip`). Behind the documented single hop
    * that is the real client and it is what tells two users of one tunnel apart; with nothing in
@@ -79,15 +109,27 @@ export interface QueueLane {
   readonly origin: string;
 }
 
+/** Why the gate turned a request away. Both are 429s; only the arithmetic behind them differs. */
+export type QueueRefusal =
+  /** The queue was at its ceiling and this caller was holding the largest part of it. */
+  | 'full'
+  /**
+   * The queue had room, and this request reached the front of it having already waited longer than
+   * the gate promises anybody will wait. See `ConcurrencyGateOptions.maxWaitMs`.
+   */
+  | 'waited-too-long';
+
 /**
- * The gate is full and this caller was holding the largest part of it. Distinct from anything
- * `work` can throw so a route can answer it differently — and thrown BEFORE `work` starts, so a
- * shed request costs this process no argon2id and the caller no credential.
+ * The gate refused to run this work. Distinct from anything `work` can throw so a route can answer
+ * it differently — and thrown BEFORE `work` starts, so a refused request costs this process no
+ * argon2id and the caller no credential.
  */
 export class QueueFullError extends Error {
-  constructor() {
-    super('the hash queue is full');
+  readonly reason: QueueRefusal;
+  constructor(reason: QueueRefusal = 'full') {
+    super(reason === 'full' ? 'the hash queue is full' : 'the hash queue took too long to reach');
     this.name = 'QueueFullError';
+    this.reason = reason;
   }
 }
 
@@ -103,6 +145,12 @@ export interface ConcurrencyGate {
   readonly waiting: number;
   /** Requests shed since this process started, so an operator-facing counter has a number. */
   readonly shed: number;
+  /**
+   * Requests dropped at the front of the queue for having waited longer than `maxWaitMs`, counted
+   * apart from `shed` because they mean a different thing to an operator: `shed` says more people
+   * arrived than this queue holds, and this says this machine is slower than the queue assumed.
+   */
+  readonly expired: number;
 }
 
 export interface ConcurrencyGateOptions {
@@ -110,126 +158,188 @@ export interface ConcurrencyGateOptions {
   maxConcurrent: number;
   /** How many may be waiting at once, across every lane, before the gate starts shedding. */
   maxQueued: number;
+  /**
+   * THE LONGEST THIS GATE WILL MAKE ANYBODY WAIT BEFORE IT STARTS THEIR WORK, enforced rather than
+   * derived.
+   *
+   * WHY IT EXISTS. `maxQueued` alone was sold as a promise about the wait — "256/4 x 42 ms = 2.7 s,
+   * the worst wait this gate will impose on anybody" — and that arithmetic multiplies a depth this
+   * file chooses by a slot cost measured on an IDLE machine. MEASURED on this host against the
+   * built server: a four-way argon2id slot costs 43 ms when a single lane is flooding and 168 ms
+   * under 1,642 req/s across 250 lanes, and a member's sign-in in the second case took 10,680 ms
+   * against a 41 ms baseline — four times the promised worst case, on the hardware the promise was
+   * derived from. A promise whose truth depends on a constant measured elsewhere is a hope.
+   *
+   * So the depth is now only the MEMORY bound, and this is the promise. A waiter that reaches the
+   * front having already waited longer than this is refused instead of started: the work is being
+   * done for somebody who has very likely closed the tab, and the slot is worth more to whoever is
+   * still there. It only ever fires when the machine is slower than `maxQueued` assumed, which is
+   * exactly the case the old arithmetic got wrong.
+   */
+  maxWaitMs: number;
 }
 
 interface Waiter {
   /** Arrival order, monotonic. Used only to break ties toward the most recent arrival. */
   readonly seq: number;
-  readonly lane: QueueLane;
+  /** The lane's keys, outermost first: peer, route, origin. */
+  readonly keys: readonly string[];
+  readonly queuedAtMs: number;
   readonly admit: () => void;
   readonly refuse: (err: Error) => void;
+}
+
+/**
+ * One level of the round, or the requests at the bottom of one.
+ *
+ * `children` is empty exactly at the leaves: an interior group is created only in order to be
+ * given a child immediately, and any group that empties is deleted by whoever emptied it.
+ * Insertion order IS the round at every level — the group that was just served is deleted and
+ * re-inserted, which puts it at the back — so an idle lane costs nothing, because it does not
+ * exist while it is idle.
+ */
+interface Group {
+  readonly children: Map<string, Group>;
+  readonly queue: Waiter[];
+  /** Waiters in this subtree. Maintained on every insert and removal, so shedding is not a scan. */
+  count: number;
+  /**
+   * The highest `seq` inserted into this subtree. Only ever a tie-break between groups of equal
+   * size, and never decremented: a group is deleted the moment it empties, so a value left behind
+   * by a waiter who has gone cannot outlive the group's own occupancy.
+   */
+  newest: number;
+}
+
+/** peer, route, origin. Named as a length so the walk below cannot silently disagree with it. */
+const LANE_DEPTH = 3;
+
+function emptyGroup(): Group {
+  return { children: new Map<string, Group>(), queue: [], count: 0, newest: -1 };
 }
 
 export function createConcurrencyGate(options: ConcurrencyGateOptions): ConcurrencyGate {
   if (options.maxConcurrent < 1) throw new RangeError('maxConcurrent must be at least 1');
   if (options.maxQueued < 1) throw new RangeError('maxQueued must be at least 1');
+  if (options.maxWaitMs < 1) throw new RangeError('maxWaitMs must be at least 1');
 
-  /**
-   * peer -> origin -> the requests waiting in that lane, oldest first.
-   *
-   * Insertion order IS the round: the group that was just served is deleted and re-inserted, which
-   * puts it at the back. That is the whole round-robin implementation, and it means an idle lane
-   * costs nothing — a lane exists only while it has somebody in it.
-   */
-  const lanes = new Map<string, Map<string, Waiter[]>>();
-  let queued = 0;
+  /** peer -> route -> origin -> the requests waiting in that lane, oldest first. */
+  const root = emptyGroup();
   let running = 0;
   let shedCount = 0;
+  let expiredCount = 0;
   let nextSeq = 0;
 
-  /** Move a group to the back of its round, or drop it when it is empty. */
-  function rotate<V>(round: Map<string, V>, key: string, group: V, empty: boolean): void {
-    round.delete(key);
-    if (!empty) round.set(key, group);
+  function insert(waiter: Waiter): void {
+    let group = root;
+    group.count += 1;
+    group.newest = waiter.seq;
+    for (const key of waiter.keys) {
+      let child = group.children.get(key);
+      if (child === undefined) {
+        child = emptyGroup();
+        // A lane that did not exist joins at the BACK of the round, so arriving cannot jump the
+        // queue — and a caller cannot rotate a key to keep arriving at the front, because the
+        // front is wherever the round has got to and never where a new lane appears.
+        group.children.set(key, child);
+      }
+      child.count += 1;
+      child.newest = waiter.seq;
+      group = child;
+    }
+    group.queue.push(waiter);
   }
 
-  function takeNext(): Waiter | undefined {
-    for (const [peerKey, origins] of lanes) {
-      for (const [originKey, queue] of origins) {
-        const waiter = queue.shift();
-        if (waiter === undefined) {
-          // Unreachable while the invariant below holds (an empty group is always deleted, both
-          // here and in `remove`). Deleting rather than skipping keeps it unreachable for good.
-          origins.delete(originKey);
-          continue;
-        }
-        queued -= 1;
-        rotate(origins, originKey, queue, queue.length === 0);
-        rotate(lanes, peerKey, origins, origins.size === 0);
-        return waiter;
+  function takeFrom(group: Group, level: number): Waiter | undefined {
+    if (level === LANE_DEPTH) {
+      const waiter = group.queue.shift();
+      if (waiter !== undefined) group.count -= 1;
+      return waiter;
+    }
+    for (const [key, child] of group.children) {
+      const waiter = takeFrom(child, level + 1);
+      if (waiter === undefined) {
+        // Unreachable while the invariant holds (an empty group is always deleted, here and in
+        // `remove`). Deleting rather than skipping keeps it unreachable for good.
+        group.children.delete(key);
+        continue;
       }
+      group.count -= 1;
+      group.children.delete(key);
+      if (child.count > 0) group.children.set(key, child);
+      return waiter;
     }
     return undefined;
   }
 
   /**
-   * The newest request of the largest origin-group of the largest peer-group — the one whose
+   * The newest request of the largest lane of the largest route of the largest peer — the one whose
    * caller has the most to lose and whose absence frees the most room for everyone else.
    *
-   * Ties go to the most recent arrival at both levels, which is what makes the arriving request
-   * the one refused when every lane is the same size. That case is genuine load rather than a
-   * flood, and turning away the newest is the only answer that does not punish somebody who has
-   * already been waiting.
+   * Ties go to the most recent arrival at every level, which is what makes the arriving request the
+   * one refused when every lane is the same size. That case is genuine load rather than a flood,
+   * and turning away the newest is the only answer that does not punish somebody who has already
+   * been waiting.
    */
-  function heaviest(): Waiter | undefined {
-    let chosen: Map<string, Waiter[]> | undefined;
-    let peerSize = -1;
-    let peerNewest = -1;
-    for (const origins of lanes.values()) {
-      let size = 0;
-      let newest = -1;
-      for (const queue of origins.values()) {
-        size += queue.length;
-        const last = queue[queue.length - 1];
-        if (last !== undefined && last.seq > newest) newest = last.seq;
-      }
-      if (size > peerSize || (size === peerSize && newest > peerNewest)) {
-        chosen = origins;
-        peerSize = size;
-        peerNewest = newest;
-      }
-    }
-    if (chosen === undefined) return undefined;
-
-    let victim: Waiter | undefined;
-    let groupSize = -1;
-    for (const queue of chosen.values()) {
-      const last = queue[queue.length - 1];
-      if (last === undefined) continue;
+  function heaviestIn(group: Group, level: number): Waiter | undefined {
+    if (level === LANE_DEPTH) return group.queue[group.queue.length - 1];
+    let chosen: Group | undefined;
+    for (const child of group.children.values()) {
       if (
-        queue.length > groupSize ||
-        (queue.length === groupSize && victim !== undefined && last.seq > victim.seq)
+        chosen === undefined ||
+        child.count > chosen.count ||
+        (child.count === chosen.count && child.newest > chosen.newest)
       ) {
-        victim = last;
-        groupSize = queue.length;
+        chosen = child;
       }
     }
-    return victim;
+    return chosen === undefined ? undefined : heaviestIn(chosen, level + 1);
   }
 
   function remove(waiter: Waiter): void {
-    const origins = lanes.get(waiter.lane.peer);
-    if (origins === undefined) return;
-    const queue = origins.get(waiter.lane.origin);
-    if (queue === undefined) return;
-    const at = queue.indexOf(waiter);
+    const path: Group[] = [root];
+    let group = root;
+    for (const key of waiter.keys) {
+      const child = group.children.get(key);
+      if (child === undefined) return;
+      path.push(child);
+      group = child;
+    }
+    const at = group.queue.indexOf(waiter);
     if (at < 0) return;
-    queue.splice(at, 1);
-    queued -= 1;
-    // NOT rotated, unlike `takeNext`: being shed is not being served, and a caller must not be
-    // able to move their own lane up the round by filling the queue until they are shed out of it.
-    if (queue.length === 0) origins.delete(waiter.lane.origin);
-    if (origins.size === 0) lanes.delete(waiter.lane.peer);
+    group.queue.splice(at, 1);
+    for (const each of path) each.count -= 1;
+    // NOT rotated, unlike `takeFrom`: being shed is not being served, and a caller must not be able
+    // to move their own lane up the round by filling the queue until they are shed out of it.
+    for (let level = path.length - 1; level >= 1; level -= 1) {
+      const child = path[level];
+      if (child !== undefined && child.count === 0) {
+        path[level - 1]?.children.delete(waiter.keys[level - 1] ?? '');
+      }
+    }
   }
 
   function release(): void {
-    const next = takeNext();
-    // The slot is handed STRAIGHT to the next waiter rather than decremented and re-claimed by
-    // whoever wakes first: dropping to `running - 1` in between is the window in which a request
-    // arriving at that instant walks past a full gate, which is the same check-then-act defect
-    // this whole module exists to close, one level down.
-    if (next === undefined) running -= 1;
-    else next.admit();
+    for (;;) {
+      const next = takeFrom(root, 0);
+      // The slot is handed STRAIGHT to the next waiter rather than decremented and re-claimed by
+      // whoever wakes first: dropping to `running - 1` in between is the window in which a request
+      // arriving at that instant walks past a full gate, which is the same check-then-act defect
+      // this whole module exists to close, one level down.
+      if (next === undefined) {
+        running -= 1;
+        return;
+      }
+      if (Date.now() - next.queuedAtMs <= options.maxWaitMs) {
+        next.admit();
+        return;
+      }
+      // They have been waiting longer than this gate promises anybody will, so the slot goes to
+      // whoever is behind them instead of to a hash whose caller has probably gone. The loop is
+      // what makes that true of a whole run of stale waiters rather than only of the first.
+      expiredCount += 1;
+      next.refuse(new QueueFullError('waited-too-long'));
+    }
   }
 
   return {
@@ -237,44 +347,39 @@ export function createConcurrencyGate(options: ConcurrencyGateOptions): Concurre
       return running;
     },
     get waiting() {
-      return queued;
+      return root.count;
     },
     get shed() {
       return shedCount;
+    },
+    get expired() {
+      return expiredCount;
     },
     async run<T>(lane: QueueLane, work: () => Promise<T>): Promise<T> {
       if (running < options.maxConcurrent) running += 1;
       else {
         await new Promise<void>((resolve, reject) => {
-          const waiter: Waiter = { seq: nextSeq, lane, admit: resolve, refuse: reject };
+          const waiter: Waiter = {
+            seq: nextSeq,
+            keys: [lane.peer, lane.route, lane.origin],
+            queuedAtMs: Date.now(),
+            admit: resolve,
+            refuse: reject,
+          };
           nextSeq += 1;
-          let origins = lanes.get(lane.peer);
-          if (origins === undefined) {
-            origins = new Map<string, Waiter[]>();
-            // A lane that did not exist joins at the BACK of the round, so arriving cannot jump
-            // the queue — and a caller cannot rotate a key to keep arriving at the front, because
-            // the front is wherever the round has got to and never where a new lane appears.
-            lanes.set(lane.peer, origins);
-          }
-          let queue = origins.get(lane.origin);
-          if (queue === undefined) {
-            queue = [];
-            origins.set(lane.origin, queue);
-          }
-          queue.push(waiter);
-          queued += 1;
+          insert(waiter);
 
           // Enqueue FIRST and then shed the worst, rather than deciding on arrival: it is one code
           // path whether the newcomer or somebody already waiting turns out to be the biggest
           // contributor, so there is no branch that refuses a request for being late. The newcomer
           // loses this comparison only when no lane is bigger than theirs, which is the tie
-          // `heaviest` explains — genuine load, where somebody has to be turned away.
-          if (queued > options.maxQueued) {
-            const victim = heaviest();
+          // `heaviestIn` explains — genuine load, where somebody has to be turned away.
+          if (root.count > options.maxQueued) {
+            const victim = heaviestIn(root, 0);
             if (victim !== undefined) {
               remove(victim);
               shedCount += 1;
-              victim.refuse(new QueueFullError());
+              victim.refuse(new QueueFullError('full'));
             }
           }
         });
@@ -426,12 +531,13 @@ export interface RateLimiter {
    * one address, then a chosen code found on the eighth, produced an account and no row an
    * operator could see, because every one of those seven was inside a budget that never closed.
    *
-   * IT HAS NO PRODUCTION CALLER SINCE 2026-08-11, and that is stated rather than left for somebody
-   * to discover with a search. Registration is open, so there are no wrong codes and no such row
-   * to write. It is kept because it is part of this interface's contract and is depended on by a
-   * test double in `api/callsign.test.ts` — and because the thing it does, turning a limiter into
-   * something an audit row can quote, is the shape any future "say it, do not refuse it" control
-   * will want. If a second release goes by with nothing calling it, delete it.
+   * IT HAD NO PRODUCTION CALLER FOR ONE DAY — the note here said so, and said that if a second
+   * release went by with nothing calling it, it should be deleted. It has two callers again as of
+   * 2026-08-12, both in `api/auth.ts` and both for exactly the purpose this docblock describes:
+   * the sentence a refused registrant is shown, and the `registrations` field of the audit row
+   * that says a rung closed. Both used to quote `rung.max`, a constant, and a constant cannot be
+   * wrong out loud — which is how the row came to say `"registrations":120` on a deployment with
+   * one user in it. A number that is READ from the limiter can only ever be what the limiter holds.
    *
    * IN-FLIGHT ATTEMPTS ARE NOT COUNTED, unlike `check`'s reading of the same key. This number goes
    * into a sentence about what has already happened; an attempt whose outcome is still unknown is
@@ -452,17 +558,75 @@ export interface RateLimiter {
   reset(key: string): void;
 }
 
+/**
+ * WHAT THE REAL LIMITER CAN BE ASKED THAT THE CONTRACT DOES NOT REQUIRE, and why it is a second
+ * interface rather than a member of the one above.
+ *
+ * `RateLimiter` is implemented by test doubles elsewhere in this server, and a member added to it
+ * is a member every one of them has to grow. This is not part of what a route depends on — no
+ * handler reads it, and no behaviour changes with it — so it belongs to the concrete map that has
+ * the memory, not to the contract that describes the budget.
+ */
+export interface RateLimiterMemory {
+  /**
+   * HOW MANY KEYS THIS LIMITER IS STILL HOLDING MEMORY FOR, which is a different question from any
+   * of the ones on `RateLimiter` and the only one that can be asked about the map as a whole.
+   *
+   * It exists because the sweep this map gained on 2026-08-12 was otherwise unassertable: every
+   * other method prunes the key it is asked about as it reads it, so a test that asks about a stale
+   * key gets 0 whether the key was swept or is still sitting there. A bound nobody can measure is a
+   * bound nobody can keep, and the defect being fixed — 342 bytes per distinct forged
+   * `X-Forwarded-For`, retained until the process restarted — was invisible for exactly that
+   * reason.
+   *
+   * IT DOES NOT PRUNE. Asking must not be what makes the answer true.
+   */
+  keysRetained(): number;
+}
+
 export interface RateLimiterOptions {
   windowMs: number;
   maxFailures: number;
 }
 
 /**
+ * Keys below which the sweep never runs, and the floor it can never drop under. Larger than any
+ * real deployment's count of distinct source networks in one window, so an honest instance sweeps
+ * nothing at all and pays nothing for the sweep existing.
+ */
+const LIMITER_SWEEP_ABOVE = 1024;
+
+/**
  * In-memory sliding-window failure counter. Single-process by design: this app
  * runs as one Node process (spec §3), so a shared store would be ceremony.
  */
-export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
+export function createRateLimiter(options: RateLimiterOptions): RateLimiter & RateLimiterMemory {
   const failures = new Map<string, number[]>();
+  /**
+   * THIS MAP USED TO BE FREED ONLY BY BEING READ, AND A CALLER WHO NEVER REPEATS A KEY NEVER READS
+   * ONE TWICE. `recent` prunes the key it is asked about and nothing else, so every distinct key
+   * that ever recorded a failure stayed for the life of the process: MEASURED by the reviewer at
+   * 342 bytes retained per distinct forged `X-Forwarded-For`, about 3.9 MB a day that only a
+   * restart returned. Bounded per window, unbounded over a process lifetime — which is the same
+   * defect the `ThresholdNotice` comment above warns about, in the primitive that comment was
+   * written next to.
+   *
+   * SWEPT ON THE COLD PATH ONLY, when a key that does not exist yet is about to be added, and only
+   * once the map is bigger than this. AMORTISED O(1) BY DOUBLING: after a sweep the next one is not
+   * due until the map has grown to twice what the sweep left behind, so a flood of fresh keys pays
+   * a linear scan every n arrivals rather than on every arrival. Scanning on every insert once the
+   * map is large would be the quadratic mistake this file already refuses once.
+   */
+  let sweepAbove = LIMITER_SWEEP_ABOVE;
+
+  function sweep(nowMs: number): void {
+    if (failures.size < sweepAbove) return;
+    for (const [key, at] of failures) {
+      const last = at[at.length - 1];
+      if (last === undefined || nowMs - last >= options.windowMs) failures.delete(key);
+    }
+    sweepAbove = Math.max(LIMITER_SWEEP_ABOVE, failures.size * 2);
+  }
   /**
    * Attempts that have started and not yet settled, per key. They occupy the SAME budget as
    * recorded failures because they are the same thing seen earlier: an attempt that is still
@@ -482,6 +646,19 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
     const held = inFlight.get(key) ?? 0;
     if (held <= 1) inFlight.delete(key);
     else inFlight.set(key, held - 1);
+  }
+
+  /**
+   * Write one failure down against `key`. The sweep goes here and only here, because `recent` has
+   * just deleted the key if everything it held was stale — so `failures.has(key)` after it is
+   * exactly the question "is this a key the map does not have yet?", which is the only moment the
+   * map can grow.
+   */
+  function record(key: string, at: number): void {
+    const hits = recent(key, at);
+    if (!failures.has(key)) sweep(at);
+    hits.push(at);
+    failures.set(key, hits);
   }
 
   function decide(key: string, nowMs: number): RateLimitDecision {
@@ -508,6 +685,10 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
       return recent(key, nowMs).length;
     },
 
+    keysRetained() {
+      return failures.size;
+    },
+
     begin(key, nowMs = Date.now()) {
       const decision = decide(key, nowMs);
       if (!decision.allowed) return { started: false, retryAfterSec: decision.retryAfterSec };
@@ -520,9 +701,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
           if (settled) return;
           settled = true;
           release(key);
-          const hits = recent(key, at);
-          hits.push(at);
-          failures.set(key, hits);
+          record(key, at);
         },
         release() {
           if (settled) return;
@@ -533,9 +712,7 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
     },
 
     recordFailure(key, nowMs = Date.now()) {
-      const hits = recent(key, nowMs);
-      hits.push(nowMs);
-      failures.set(key, hits);
+      record(key, nowMs);
     },
 
     /**

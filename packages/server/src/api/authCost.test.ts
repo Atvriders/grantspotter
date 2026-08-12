@@ -283,9 +283,18 @@ describe('the same shape on the other unauthenticated route that hashes', () => 
  * returning member's time to buy it. A hit is now the CHEAPEST answer this route gives (no hash),
  * and that is a deliberate reversal rather than a regression that slipped through.
  *
- * WHAT BOUNDS THE ORACLE INSTEAD IS THE LADDER, and that is what these tests measure: a probe is a
- * registration attempt and is charged like one, so the number of addresses a caller can classify in
- * a window is the number of accounts they could have created instead.
+ * AND FOR ONE DAY THE ANSWER TO "WHAT BOUNDS IT INSTEAD" WAS "THE LADDER" — a probe was a
+ * registration attempt and was charged like one, so a caller could classify exactly as many
+ * addresses as they could have created accounts. These two tests asserted that ceiling. THEY NOW
+ * ASSERT ITS ABSENCE, and the reason is measured rather than argued: 120 probes at one existing
+ * address closed sign-up for a whole tunnel in 147 ms of CPU-cheap work, and the honest student who
+ * arrived next was refused with a sentence about accounts that did not exist. The charge did not
+ * even buy secrecy — 409 against 201 is the same oracle, in the status line, whatever the sentence
+ * says — so what it bought was the denial and nothing else.
+ *
+ * WHAT THESE TESTS MEASURE NOW is the trade that replaced it: the question is free and unlimited,
+ * and it costs everybody else nothing. What stays bounded is the SQUATTING, because a question
+ * about an address that is free creates a real account and is charged as one.
  */
 describe('what a stranger can find out about other people', () => {
   const PROBES = 200;
@@ -307,7 +316,7 @@ describe('what a stranger can find out about other people', () => {
     return res.status === 409 && String(res.body?.error?.message ?? '').includes(email);
   }
 
-  it('answers about sixty of two hundred addresses and then refuses to answer at all', async () => {
+  it('answers all two hundred of them, and takes nothing from anybody else to do it', async () => {
     const app = build();
     await seedKnownMembers();
 
@@ -331,16 +340,30 @@ describe('what a stranger can find out about other people', () => {
         `hashes=${String(argon2Calls.hash)}`,
     );
 
-    // The ladder is the whole bound, and it is the same bound as on creating accounts: a caller
-    // classifies exactly as many addresses as they could have made accounts.
-    expect(named).toHaveLength(REGISTRATION_MAX_PER_CONNECTION);
-    expect(named.length + refused.length).toBe(PROBES);
+    // ALL OF THEM. This assertion is the inverse of the one it replaces, deliberately: the oracle
+    // is open, it was open before under a ceiling that hid nothing, and the ceiling's real effect
+    // was to let these 200 questions shut sign-up for every student in the deployment.
+    expect(named).toHaveLength(PROBES);
+    expect(refused).toEqual([]);
     expect(other).toEqual([]);
     // NOT ONE argon2id FOR THE WHOLE RUN. Every one of these was a hit, and a hit is answered
     // before the hash. The number is here so that a change which starts hashing on this path — or
     // one which stops hashing on the miss path — shows up as a change in cost rather than silently.
     expect(argon2Calls.hash).toBe(0);
-    // And the operator has exactly one row about it, written by the twentieth answer.
+    // THE PROPERTY THAT MATTERS, and the one the old ceiling destroyed: 200 questions cost the
+    // people who are not asking them exactly nothing. A whole club intake can still sign up.
+    const intake = await Promise.all(
+      Array.from({ length: 10 }, (_unused, i) =>
+        request(app)
+          .post('/api/auth/enroll')
+          .set('X-Forwarded-For', '198.51.100.4')
+          .send({ email: `after-probes-${String(i)}@example.org`, password: GOOD_PASSWORD }),
+      ),
+    );
+    expect(intake.filter((r) => r.status === 201)).toHaveLength(10);
+    // And the operator has exactly one row about it, written by the twentieth answer. It is now the
+    // ONLY thing standing between an attacker and a club roster, which is why it is asserted here
+    // as well as in `enroll.test.ts`.
     expect(
       db
         .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.addresses_probed'")
@@ -349,15 +372,18 @@ describe('what a stranger can find out about other people', () => {
   }, 300_000);
 
   /**
-   * THE SAME PROBES, ALL AT ONCE — the shape of the defect this whole file is about, applied to the
-   * fix for it.
+   * THE SAME PROBES, ALL AT ONCE, and the number is the same one — which is the point of running it
+   * twice.
    *
-   * A ladder read at the top of the handler and charged after the hash would be exactly as leaky as
-   * the wrong-code budget was: every probe that arrived before the first one finished would read a
-   * budget at zero and be answered. It is charged in the same synchronous stretch as it is read
-   * instead, which is why concurrency makes no difference to this number.
+   * WHAT THIS TEST IS FOR HAS SURVIVED THE CHANGE IN WHAT IT EXPECTS. Concurrency must make no
+   * difference to what this route does, because every defect this file exists for is a defect that
+   * only appears when two requests overlap. It used to check that 200 simultaneous probes could not
+   * walk past a ladder none of them had paid into yet; it now checks that 200 simultaneous probes
+   * still leave the ladder alone, which is the same question asked of the opposite answer. A
+   * regression that starts charging probes again fails the sequential test above at 60 and this one
+   * at 60 as well, whichever order the requests happen to interleave in.
    */
-  it('answers no more of them when the two hundred probes arrive at once', async () => {
+  it('answers all of them when the two hundred probes arrive at once, and still charges nothing', async () => {
     const app = build();
     await seedKnownMembers();
 
@@ -375,8 +401,13 @@ describe('what a stranger can find out about other people', () => {
       `[probe-burst] probes=${String(PROBES)} named=${String(named.length)} ` +
         `429=${String(refused.length)}`,
     );
-    expect(named).toHaveLength(REGISTRATION_MAX_PER_CONNECTION);
-    expect(named.length + refused.length).toBe(PROBES);
+    expect(named).toHaveLength(PROBES);
+    expect(refused).toHaveLength(0);
+
+    const student = await request(app)
+      .post('/api/auth/enroll')
+      .send({ email: 'after-the-burst@example.org', password: GOOD_PASSWORD });
+    expect(student.status).toBe(201);
   }, 300_000);
 });
 
@@ -467,10 +498,26 @@ describe('what a flood does to somebody who is not in it', () => {
   const ATTACKER = '203.0.113.9';
   const STUDENT = '198.51.100.4';
 
+  /**
+   * WHAT IS COUNTED HERE IS THE FLOOD'S COMPLETED VERIFIES, AND IT USED TO BE ITS RESPONSES.
+   *
+   * That is a correction to the MEASUREMENT rather than a relaxation of the claim, and the sibling
+   * test three blocks down was already written the corrected way for the same reason: "counting
+   * responses says '253 went first' about a member who waited 144 ms — the number would be
+   * measuring the ladder working and calling it starvation."
+   *
+   * It became wrong here on 2026-08-12, when `MAX_QUEUED_HASHES` moved from 256 to 192. A
+   * 300-request flood now overflows the queue by about a hundred, and an overflowing request is
+   * REFUSED IN MICROSECONDS — it settles before the student has finished being parsed. Counting
+   * those as "served ahead of the student" produced 110 against a threshold of 75 and would have
+   * failed a change that made the student's position better rather than worse. A 401 is the only
+   * status on this route that means an argon2id verify actually ran, so it is the only status that
+   * means somebody took a turn the student was waiting for.
+   */
   it('serves the student in a couple of turns instead of behind three hundred strangers', async () => {
     const app = build();
 
-    let settled = 0;
+    let verified = 0;
     const flood = Array.from({ length: FLOOD }, (_unused, i) =>
       request(app)
         .post('/api/auth/login')
@@ -478,19 +525,19 @@ describe('what a flood does to somebody who is not in it', () => {
         // A FRESH ADDRESS EVERY TIME, which is what makes the `(peer, email)` budget blind to it.
         .send({ email: `flood-${String(i)}@example.net`, password: 'not-the-password' })
         .then((res) => {
-          settled += 1;
+          if (res.status === 401) verified += 1;
           return res.status;
         }),
     );
 
     // Let the flood reach the gate before the student presses submit.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const aheadAtStart = settled;
+    const aheadAtStart = verified;
     const student = await request(app)
       .post('/api/auth/enroll')
       .set('X-Forwarded-For', STUDENT)
       .send({ email: 'student@example.org', password: GOOD_PASSWORD });
-    const servedAhead = settled - aheadAtStart;
+    const servedAhead = verified - aheadAtStart;
 
     const statuses = await Promise.all(flood);
     const shed = statuses.filter((s) => s === 429).length;
@@ -512,10 +559,25 @@ describe('what a flood does to somebody who is not in it', () => {
   }, 180_000);
 
   /**
-   * THE CONTROL THAT MAKES THE ONE ABOVE MEAN SOMETHING. If a student in the flood's own lane were
+   * THE CONTROL THAT MAKES THE ONE ABOVE MEAN SOMETHING. If a caller in the flood's own lane were
    * also served early, the number above would be measuring luck rather than the round.
+   *
+   * THE REQUEST IT SENDS CHANGED ON 2026-08-12 AND SO DID ITS CLAIM, because a lane is now
+   * (peer, route, origin) and the old version's "same lane" was no longer one. It POSTed
+   * `/auth/enroll` from the flood's `X-Forwarded-For` and required that request to be slow or shed;
+   * with the route in the round, a sign-up from that address is in the SIGN-UP round and is served
+   * in a couple of turns. That is the reservation working exactly as intended rather than a leak —
+   * the whole point of the level is that sign-up's share belongs to sign-ups whoever sends them,
+   * and it must, because behind one campus NAT the flooder and a student share an origin. The
+   * attacker gains nothing by it: their sign-up is served exactly as fast as it would have been if
+   * they had never sent the flood, so flooding buys no priority.
+   *
+   * What the control was really protecting is the caller level, and this asserts it where it still
+   * lives: a second SIGN-IN from the flood's own address, which is the same lane in every one of
+   * the three keys. Both assertions are in one test because either alone can be satisfied by the
+   * wrong mechanism.
    */
-  it('does not give the flood a shortcut by joining its own lane', async () => {
+  it('gives the flood no shortcut in its own lane, and its other route no more than a turn', async () => {
     const app = build();
 
     let settled = 0;
@@ -532,22 +594,32 @@ describe('what a flood does to somebody who is not in it', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     const aheadAtStart = settled;
-    // Same X-Forwarded-For as the flood: this caller IS the flood as far as the server can tell.
+    // Same address AND same route as the flood: this request is the flood, as far as every key the
+    // gate has can tell.
     const inLane = await request(app)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', ATTACKER)
+      .send({ email: 'in-lane@example.net', password: 'not-the-password' });
+    const servedAhead = settled - aheadAtStart;
+
+    // Same address, the other route.
+    const otherRoute = await request(app)
       .post('/api/auth/enroll')
       .set('X-Forwarded-For', ATTACKER)
       .send({ email: 'in-lane@example.org', password: GOOD_PASSWORD });
-    const servedAhead = settled - aheadAtStart;
     await Promise.all(flood);
 
     console.log(
       `[starve-control] sameLaneStatus=${String(inLane.status)} ` +
-        `floodServedBeforeIt=${String(servedAhead)}`,
+        `floodServedBeforeIt=${String(servedAhead)} otherRouteStatus=${String(otherRoute.status)}`,
     );
     // Either they queued behind their own lane's backlog, or the gate shed them for being the
     // largest contributor to it. Both are the rule working; being served in two turns is not.
-    if (inLane.status === 201) expect(servedAhead).toBeGreaterThan(FLOOD / 4);
+    if (inLane.status === 401) expect(servedAhead).toBeGreaterThan(FLOOD / 4);
     else expect(inLane.status).toBe(429);
+    // And the other route is served, which is the level added for the students and applies to
+    // everybody who uses it — including the person flooding the route next door.
+    expect(otherRoute.status).toBe(201);
   }, 180_000);
 
   /**
@@ -620,6 +692,81 @@ describe('what a flood does to somebody who is not in it', () => {
     expect(created).toBe(REGISTRATION_MAX_PER_CONNECTION);
     expect(created + refused).toBe(FLOOD);
   }, 180_000);
+
+  /**
+   * THE FINDING OF 2026-08-12, WHICH IS THE SAME STARVATION SEEN FROM THE OTHER SIDE OF THE WALLET.
+   *
+   * MEASURED against the built server, a 1,642 req/s sign-in flood across rotated origins while 130
+   * students registered from 130 distinct addresses: 37 accounts created, 83 students SHED BY THE
+   * GATE, 10 refused by the ladder. 37 + 83 = 120 = the network rung to the last unit — every
+   * student the gate threw away had already charged the budget the remaining students needed, so a
+   * flood on a route with no ladder of its own converted the whole registration budget into
+   * refusals, and left it converted for fifteen minutes after the flood stopped.
+   *
+   * TWO FIXES MEET HERE AND THE TEST IS DELIBERATELY BLIND TO WHICH ONE CARRIED IT, because both
+   * must hold: the gate's round now takes turns between the two ROUTES, so a sign-in flood cannot
+   * take sign-up's share of the queue; and a registration the gate sheds releases its budget slots
+   * instead of recording them, so a shed can no longer be spent on anybody's behalf.
+   *
+   * THE FLOOD IS ONE `X-Forwarded-For` because that is the owner's deployment: behind a Cloudflare
+   * Tunnel `req.ip` is what the tunnel wrote and a caller cannot rotate it. The shape where they
+   * can is the residual `hashGate` documents, and it is a configuration answer rather than a code
+   * one.
+   */
+  it('lets a class register while a sign-in flood is filling the gate, and leaves their budget alone', async () => {
+    const app = build();
+    const STUDENTS = 30;
+
+    let floodSettled = 0;
+    const flood = Array.from({ length: FLOOD }, (_unused, i) =>
+      request(app)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', ATTACKER)
+        .send({ email: `gate-flood-${String(i)}@example.net`, password: 'not-the-password' })
+        .then((res) => {
+          floodSettled += 1;
+          return res.status;
+        }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const students = await Promise.all(
+      Array.from({ length: STUDENTS }, (_unused, i) =>
+        request(app)
+          .post('/api/auth/enroll')
+          // One address each, as thirty students behind one tunnel would arrive.
+          .set('X-Forwarded-For', `198.51.100.${String(i + 1)}`)
+          .send({ email: `class-${String(i)}@example.org`, password: GOOD_PASSWORD }),
+      ),
+    );
+    const statuses = await Promise.all(flood);
+
+    const created = students.filter((r) => r.status === 201).length;
+    const shed = students.filter((r) => r.status === 429).length;
+    console.log(
+      `[cross-route] flood=${String(FLOOD)} floodShed=${String(statuses.filter((s) => s === 429).length)} ` +
+        `studentsCreated=${String(created)} studentsRefused=${String(shed)} ` +
+        `floodSettledDuring=${String(floodSettled)}`,
+    );
+
+    // EVERY STUDENT. Not most of them, and not "more than before": the flood is one caller on one
+    // route and there is nothing about thirty registrations that this server cannot serve.
+    expect(created).toBe(STUDENTS);
+    expect(memberCount()).toBe(STUDENTS);
+
+    // AND THE BUDGET IS WHERE THE ACCOUNTS ARE. Whatever the gate did to the flood, the deployment
+    // rung has been charged thirty times and not once more, so the students who come afterwards —
+    // a second club, the following lecture — are served.
+    const later = await Promise.all(
+      Array.from({ length: 10 }, (_unused, i) =>
+        request(app)
+          .post('/api/auth/enroll')
+          .set('X-Forwarded-For', '203.0.113.200')
+          .send({ email: `later-${String(i)}@example.org`, password: GOOD_PASSWORD }),
+      ),
+    );
+    expect(later.filter((r) => r.status === 201)).toHaveLength(10);
+  }, 300_000);
 
   /**
    * THE SECOND HALF OF THE FINDING, and the one that had nothing to do with latency: it was

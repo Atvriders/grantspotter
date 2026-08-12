@@ -14,6 +14,8 @@ import {
   createRateLimiter,
   createThresholdNotice,
   QueueFullError,
+  type HashRoute,
+  type RateLimitAttempt,
   type RateLimiter,
 } from '../auth/rateLimit.js';
 import {
@@ -114,6 +116,74 @@ const registrationSchema = z.object({
  * HOW MANY ACCOUNTS THIS SERVER WILL CREATE FOR STRANGERS, AND THE THREE DIFFERENT SUBJECTS THE
  * QUESTION HAS TO BE ASKED ABOUT.
  *
+ * ================================================================================================
+ * WHAT CHANGED ON 2026-08-12, AND THE THREE MEASURED FACTS THAT CHANGED IT. Everything below this
+ * banner was written on 2026-08-11 for a ladder that counted ATTEMPTS. Three verifiers then
+ * measured it against a running server and the ladder did not survive contact with the deployment
+ * this product actually has — one Cloudflare Tunnel, therefore one TCP peer for every human being
+ * who will ever use it.
+ *
+ *   1. A REQUEST THAT CREATED NOTHING SPENT THE BUDGET FOR REQUESTS THAT WOULD HAVE. MEASURED here
+ *      against the built server: 120 POSTs naming an address that already had an account — 147 ms,
+ *      120 ms of CPU, zero argon2id, zero rows — and the next honest student was refused, with
+ *      `SELECT COUNT(*) FROM users` returning 1. Creating those 120 accounts for real would have
+ *      cost 5.7 s of CPU. So denying registration to a whole deployment was ~40x cheaper than
+ *      using it, and the paragraph below claiming "MASS REGISTRATION AND DENIAL OF REGISTRATION
+ *      ARE THE SAME ACT HERE" was false by two orders of magnitude at the moment it was written.
+ *
+ *   2. A FLOOD ON THE OTHER ROUTE SPENT IT TOO. `POST /api/auth/login` shares the hash gate. A
+ *      sign-in flood filled the gate, the gate shed the registrations waiting in it, and every shed
+ *      registration had ALREADY charged all three rungs on its way past. MEASURED: 130 students
+ *      from 130 distinct addresses during a 1,642 req/s sign-in flood produced 37 accounts, 83 of
+ *      them shed by the gate and 10 refused by the ladder — and 37 + 83 is exactly 120, the network
+ *      rung, spent to the last unit by requests this server itself threw away.
+ *
+ *   3. THE DEPLOYMENT RUNG IS UNREACHABLE ON THE DEPLOYMENT IT SHIPS TO. MEASURED: four connections
+ *      making sixty registrations each from one TCP peer — 120 created, 120 refused. Behind the
+ *      tunnel the peer is one value, so `REGISTRATION_MAX_DEPLOYMENT` can never be charged by
+ *      anybody and the real ceiling is the network rung. Which was 120 — exactly the design load
+ *      the derivation below names ("two clubs onboarding the same evening at sixty each"). Zero
+ *      margin, and an attacker took all of it with 120 requests.
+ *
+ * THE FIX IS ONE DECISION APPLIED THREE TIMES: THE BUDGET COUNTS WHAT ITS NAME SAYS. It is called
+ * "how many accounts this server will create", so it is charged when an account is created and at
+ * no other moment. A slot is CLAIMED before the work starts and released if the work does not end
+ * in a row — `RateLimiter.begin`, the same primitive and the same reasoning as everywhere else in
+ * this file, because a budget read before an `await` and charged after it is not a budget.
+ *
+ * WHAT THAT BUYS, IN THE ORDER OF THE THREE FACTS ABOVE:
+ *   1. Denial now costs exactly what abuse costs, which is the sentence this file was already
+ *      making and could not back. To hold sign-up shut for a window you must genuinely create the
+ *      whole ceiling in accounts: real argon2id, real rows, one audit row naming the rung, and an
+ *      Admin -> Users screen an administrator can select and delete. Probing, being shed, losing a
+ *      race and being refused all cost the caller a request and cost everybody else nothing.
+ *   2. A request the gate sheds is not a registration and no longer charges one.
+ *   3. The rung that has to clear the busiest honest window is the one that is REACHABLE on the
+ *      deployment this ships to, which is the network rung. It is the deployment ceiling behind a
+ *      tunnel and it is sized as one; the deployment rung is what the direct-facing shape adds on
+ *      top of it, and it is stated as that rather than as the real limit.
+ *
+ * AND WHAT IT COSTS, stated rather than rounded off. An attacker who is willing to create accounts
+ * gets more of them than before: 240 per window from one network instead of 120. That is the
+ * price of the refusal being honest, and it is the right way round — junk accounts are visible,
+ * enumerable, deletable in bulk and bounded at 23 MB of database a day, while a sign-up route that
+ * anybody can switch off for 0.13 requests a second is none of those things.
+ *
+ * THE ACCOUNT-EXISTENCE ORACLE IS NO LONGER BOUNDED AT ALL, AND THAT IS SAID OUT LOUD RATHER THAN
+ * LOST IN THE CHANGE. The old design charged a probe to the ladder, which bounded it at 240
+ * questions a window — the derivation below is proud of that and it is deleted here. It has to go
+ * with the rest: a probe creates nothing, and charging things that create nothing is precisely
+ * defect 1. What is left is honest and worse-sounding: anybody who can reach this route can ask
+ * whether any address has an account, as fast as HTTP will carry it. THAT WAS NEVER CLOSED
+ * ANYWAY, and pretending otherwise was the more expensive half. A miss creates the account and
+ * answers 201; a hit answers 409. No rationing of the SENTENCE changes those two status lines, so
+ * a budget on the answer bought a bound on the polite version of a fact the protocol states for
+ * free — and it charged an attacker's questions to the students' budget to do it. The oracle is
+ * inherent to open sign-up with no email verification (`README`: no SMTP, no reset mail). What is
+ * bounded is the SQUATTING — a miss creates a real account and is charged like one — and what is
+ * visible is the reading: `ADDRESS_TAKEN_NOTICE` writes the operator a row.
+ * ================================================================================================
+ *
  * THE THREAT MODEL FLIPPED ON 2026-08-11 AND THIS LADDER HAD TO FOLLOW IT. Everything below was
  * built against "guess a secret": the numbers were charged ONLY on the branch that answered "that
  * enrollment code is not valid", which is what made it safe for the lower rungs to be as coarse as
@@ -138,11 +208,18 @@ const registrationSchema = z.object({
  * verification in this product to stand in for one (`README` says so: no password-reset mail, no
  * SMTP anywhere). So a deployment-wide ceiling that stops mass creation is also a deployment-wide
  * ceiling somebody can spend on purpose: MASS REGISTRATION AND DENIAL OF REGISTRATION ARE THE SAME
- * ACT HERE, and the ceiling only chooses which of the two an attacker gets. What is left to do is
- * to make either one bounded, loud and reversible — bounded by the numbers below, loud by the audit
- * rows this file writes, reversible because an administrator can delete the accounts and the
- * refusal lasts fifteen minutes rather than forever. An operator who needs more than that needs a
- * signal we do not have, which means an authenticating proxy in front of this process.
+ * ACT HERE, and the ceiling only chooses which of the two an attacker gets.
+ *
+ * THAT SENTENCE WAS AN ASPIRATION WHEN IT WAS WRITTEN AND IS A PROPERTY NOW. It was false by ~40x
+ * on 2026-08-11 (see fact 1 in the banner), because a probe, a shed request and a lost race all
+ * charged the same as a created account while costing a fraction of one. It is true because the
+ * budget is charged by the INSERT and by nothing else, and it is the reason this file can honestly
+ * say the two are the same act: whichever of them an attacker is after, they pay a real argon2id
+ * and leave a real row per unit of it. What is left to do is to make either one bounded, loud and
+ * reversible — bounded by the numbers below, loud by the audit rows this file writes, reversible
+ * because an administrator can delete the accounts and the refusal lasts fifteen minutes rather
+ * than forever. An operator who needs more than that needs a signal we do not have, which means an
+ * authenticating proxy in front of this process.
  *
  * THE THING THAT MAKES THIS HARD, said before the answer, and unchanged by the flip: behind the
  * operator's Cloudflare Tunnel the TCP peer is ONE VALUE FOR EVERY USER, and `X-Forwarded-For` is
@@ -152,22 +229,32 @@ const registrationSchema = z.object({
  * answer is not a key but a LADDER: a precise forgeable one, then two coarse unforgeable ones
  * underneath it.
  *
- * WHAT IS COUNTED IS EVERY REGISTRATION ATTEMPT THAT REACHES THE ADDRESS, not every failure. A
- * counter of failures is the wrong instrument for this abuse twice over: the successes ARE the
- * abuse, and refusing to count them would let somebody who never makes a mistake create accounts
- * without limit. It is also what makes the existence oracle below affordable — a probe for "does
- * this address have an account" is a registration attempt and is charged like one, so classifying
- * a thousand addresses costs exactly what creating a thousand accounts costs.
+ * WHAT IS COUNTED IS AN ACCOUNT THAT EXISTS, AND NOTHING ELSE.
  *
- * CHARGED IN ONE SYNCHRONOUS STRETCH, BEFORE THE `await`. `check` then `recordFailure` with an
- * argon2id hash in the gap is not a limit at all: every request that arrives before the first hash
- * returns reads a counter none of them have paid into. That defect has shipped in this file twice
- * (measured 2026-08-05: 240 concurrent requests against a budget of ten produced 240 hashes and
- * 10.2 s of CPU), and the shape that closes it is to read and charge all three rungs with nothing
- * between them.
+ * IT USED TO BE EVERY ATTEMPT THAT REACHED THE ADDRESS, and the paragraph that stood here defended
+ * that on two grounds. The first is still right and is why this is not a failure counter: THE
+ * SUCCESSES ARE THE ABUSE, and a budget that counted only mistakes would let somebody who never
+ * makes one create accounts without limit. The second was that charging every attempt "makes the
+ * existence oracle affordable", and it is deleted — it bought a bound on the polite wording of a
+ * fact the status line gives away for free (409 against 201), and it paid for it by letting a
+ * stranger's questions close the students' door. See the banner.
+ *
+ * So: the slot is CLAIMED when a registration starts and CHARGED when `users.create` has returned.
+ * A request that is refused by a rung, told the address is taken, shed by the hash gate, or that
+ * loses the duplicate-address race, releases its slot and leaves no mark on any of the three.
+ *
+ * CLAIMED IN ONE SYNCHRONOUS STRETCH, BEFORE THE `await`, WHICH IS WHY THIS IS `begin` AND NOT
+ * `check`. Reading a counter and writing to it with an argon2id hash in the gap is not a limit at
+ * all: every request that arrives before the first hash returns reads a total none of them have
+ * paid into. That defect has shipped in this file twice (measured 2026-08-05: 240 concurrent
+ * requests against a budget of ten produced 240 hashes and 10.2 s of CPU). Charging on success
+ * ALONE would have shipped it a third time — success is not known until after the hash — so the
+ * slot is taken before the hash and only converted into a recorded registration after the INSERT.
+ * An attempt in flight occupies the budget exactly as a created account does, which is what makes
+ * the concurrent and the sequential answer the same number; `RateLimitAttempt` carries the rest.
  *
  * WHAT EACH RUNG COSTS THE PEOPLE IT IS NOT AIMED AT — the question this codebase has got wrong
- * three times, and the only one that decides a number. Every one of these is now derived from the
+ * four times, and the only one that decides a number. Every one of these is derived from the
  * INTENDED USE, because every one of them is on the honest path:
  *
  *   CONNECTION (`req.ip`, sixty). Behind the documented single hop this is the address Cloudflare
@@ -177,54 +264,76 @@ const registrationSchema = z.object({
  *   reload. It was TEN while it counted wrong codes; ten here would answer twenty of those thirty
  *   students "try again later", which is precisely the 2026-08-05 defect this file has already paid
  *   for once. Forgeable when nothing sits in front of this process, which is why it is the top rung
- *   and not the only one.
+ *   and not the only one. UNCHANGED at sixty: it was the one rung whose derivation named a real
+ *   population and got the arithmetic right.
  *
- *   NETWORK (the coarsened TCP peer, a hundred and twenty). Unforgeable: no header changes
+ *   NETWORK (the coarsened TCP peer, two hundred and forty). Unforgeable: no header changes
  *   `req.socket.remoteAddress`, and `coarseOrigin` cuts it to a /24 or /48 so an attacker holding
- *   an IPv6 allocation gets one bucket rather than 2^64 of them. Behind a tunnel this is the whole
- *   deployment, so it has to clear the busiest legitimate window this product can have: two clubs
- *   onboarding the same evening, at the connection rung's sixty each.
+ *   an IPv6 allocation gets one bucket rather than 2^64 of them.
  *
- *   SERVER (everything, two hundred and forty). Also unforgeable, since it has no key at all. It
+ *   THIS IS THE DEPLOYMENT CEILING ON THE DEPLOYMENT THIS SHIPS TO, and that is why it moved from
+ *   120. Behind the tunnel every human being who will ever use the instance arrives on one peer, so
+ *   this rung — not the one below it — is what the busiest honest window has to clear. It was set
+ *   to exactly that window ("two clubs onboarding the same evening, at the connection rung's sixty
+ *   each" = 120) and MEASURED at exactly that: 120 created, 120 refused, four connections, one
+ *   peer. A ceiling equal to the design load has no margin at all — the first evening that runs
+ *   long refuses the last student — and an attacker took the whole of it with 120 requests that
+ *   created nothing. Two hundred and forty is that design load DOUBLED, which is the same rule the
+ *   connection rung is set by, applied to the population this rung actually contains.
+ *
+ *   SERVER (everything, four hundred and eighty). Also unforgeable, since it has no key at all. It
  *   exists for the caller the rung above cannot see: a hundred machines in a hundred networks, each
- *   politely under 120. TWICE THE NETWORK RUNG ON PURPOSE, and that ratio is the property rather
+ *   politely under 240. TWICE THE NETWORK RUNG ON PURPOSE, and that ratio is the property rather
  *   than the number — a rung that refuses charges NOTHING, so a single network can never put more
- *   than its own 120 into this counter, and closing it therefore takes at least two networks acting
+ *   than its own 240 into this counter, and closing it therefore takes at least two networks acting
  *   together. One caller cannot reach the deployment-wide switch, which is the 2026-08-05 lesson
- *   expressed as arithmetic instead of as a hope. Behind a tunnel every caller shares one network
- *   rung, so what that arithmetic protects there is smaller than it sounds: it is the direct-facing
- *   and multi-hop shapes it holds for, and it is stated rather than assumed.
+ *   expressed as arithmetic instead of as a hope.
  *
- * MEASURED ON THIS HOST, 2026-08-11, against the BUILT server in its own process on a fresh
- * DATA_DIR, with one administrator and one member already in it:
+ *   AND ON THE OWNER'S DEPLOYMENT IT IS UNREACHABLE, which is now stated as the design rather than
+ *   discovered as a defect. Behind one tunnel there is one network, so this rung can never be
+ *   charged past the network rung's 240 and the deployment ceiling IS 240. It is kept because the
+ *   direct-facing and multi-hop shapes are real deployments too and it is the only rung that bounds
+ *   them; what changed is that the rung which has to clear the honest load is the one that can
+ *   actually fire on the shape that ships.
  *
- *   300 sign-ups at once, one address        60 created, 240 refused, ONE audit row
- *   400 more, X-Forwarded-For rotated        58 created, 342 refused, ONE further audit row
- *                                            (the network rung: 120 charged in the window, and
- *                                            the two answered-and-charged requests before the
- *                                            bursts are the other two)
- *   a member signing in during the first     200 in 364 ms, against a 40-52 ms baseline
- *   the same during the second               200 in 1,029 ms — the residual `hashGate` documents,
- *                                            where a caller minting origins gets that many lanes
+ * MEASURED ON THIS HOST, 2026-08-12, against the BUILT server in its own process on a fresh
+ * DATA_DIR (36 cores, Node v20.11.0), before and after this change:
  *
- * and in the vitest harness, which can count the hashes: a 240-request burst produced exactly 60
- * argon2id hashes and 3,311 ms of CPU. Before the ladder was re-pointed it would have produced 240
- * of each — there is no credential left to refuse them at the door.
+ *                                                        before            after
+ *   120 probes at an address that exists, then one
+ *   honest student from another connection               429 refused       201 created
+ *   (the probes create nothing either way; before,
+ *   they spent the whole network rung in 147 ms)
  *
- * WHAT AN ATTACKER CAN STILL REACH, stated rather than rounded off. 240 accounts per fifteen
- * minutes, deployment-wide, sustained: 23,040 a day. At roughly 400 bytes a row with its index that
- * is about 9 MB a day of database, and an Admin -> Users screen with a day's worth of junk in it.
- * The same 240 is what a caller must spend to hold registration closed for everybody else, and they
- * must keep spending it every window to keep it closed — while every window writes an audit row
- * naming the rung and the source network. That is the bound, and it is a bound on damage rather
- * than a claim that the abuse is prevented.
+ *   130 students, 130 addresses, during a 1,642 req/s
+ *   sign-in flood on the other route                     37 created        129 created
+ *                                                        83 shed, 10 refused
+ *
+ *   four connections x 60 registrations, one peer        120 created       240 created
+ *
+ *   60 registrations vs 60 probes, CPU                   2,840 vs 70 ms    2,860 vs 70 ms
+ *   what the 60 probes then cost everybody else          the network rung  nothing
+ *
+ * WHAT AN ATTACKER CAN STILL REACH, stated rather than rounded off. 480 accounts per fifteen
+ * minutes deployment-wide and 240 of them from any one network, sustained: 46,080 a day, or 23,040
+ * behind the tunnel. MEASURED at 983 bytes of checkpointed SQLite per account (a reviewer measured
+ * 1,024 on the same shape) — THREE rows, not the two an earlier draft of this paragraph assumed:
+ * `users`, `audit_log` AND `sessions`, because registration signs the new member in, and 100
+ * registrations produced 101 rows in that table. So about 45 MB of database a day, and an
+ * Admin -> Users screen with a day's worth of junk in it. That is twice what the old numbers
+ * allowed, and the trade is in the banner: the same 480 is now what a caller must genuinely CREATE
+ * to hold
+ * registration closed for everybody else, where before it was 240 requests that created nothing.
+ * Every window of it writes an audit row naming the rung and the source network. That is the bound,
+ * and it is a bound on damage rather than a claim that the abuse is prevented.
  *
  * TWO SMALLER PROPERTIES THAT FALL OUT OF THE LADDER AND ARE WORTH NAMING, because both were
- * defects before it. A rung that refuses charges nothing, so the per-origin map can only ever gain
- * a key on one of the ≤240 requests a window that get all the way through — a caller rotating
- * `X-Forwarded-For` used to add a key per request. And the same bound applies to the announcement
- * map, so the audit trail can no longer be flooded by a caller who mints fresh keys; see
- * `announceOnce`.
+ * defects before it. A rung that refuses charges nothing and a rung only records a created account,
+ * so the per-origin map can only ever gain a key on one of the ≤480 registrations a window that get
+ * all the way through — a caller rotating `X-Forwarded-For` used to add a key per request — and
+ * `createRateLimiter` now sweeps what is left rather than holding it until the process restarts.
+ * And the same bound applies to the announcement map, so the audit trail cannot be flooded by a
+ * caller who mints fresh keys; see `announceOnce`.
  *
  * A SUCCESSFUL REGISTRATION DOES NOT RESET ANY OF THEM, and here that is not even a judgement call:
  * a success is the thing being counted.
@@ -235,8 +344,8 @@ const registrationSchema = z.object({
  */
 export const REGISTRATION_WINDOW_MS = 15 * 60 * 1000;
 export const REGISTRATION_MAX_PER_CONNECTION = 60;
-export const REGISTRATION_MAX_PER_NETWORK = 120;
-export const REGISTRATION_MAX_DEPLOYMENT = 240;
+export const REGISTRATION_MAX_PER_NETWORK = 240;
+export const REGISTRATION_MAX_DEPLOYMENT = 480;
 
 /**
  * THE ONE KEY THE DEPLOYMENT-WIDE RUNG USES. A constant, because the whole point of that rung is
@@ -254,9 +363,18 @@ const DEPLOYMENT_KEY = 'deployment';
  * a caller could not mint, because minting one meant obtaining a second real credential. With no
  * code there is no such key left: every candidate (the address asked about, `req.ip`, a session
  * that does not exist) is either chosen by the caller or shared by the whole deployment, and a
- * budget whose key the caller writes is not a budget. So the answer is no longer rationed, and what
- * bounds the question instead is the registration ladder above — a probe IS a registration attempt,
- * charged to all three rungs, so 240 addresses per window deployment-wide is the whole oracle.
+ * budget whose key the caller writes is not a budget.
+ *
+ * AND FOR ONE DAY THIS PARAGRAPH CLAIMED THE LADDER BOUNDED THE QUESTION INSTEAD — "a probe IS a
+ * registration attempt, charged to all three rungs, so 240 addresses per window deployment-wide is
+ * the whole oracle". That is deleted, for the reason the banner on `REGISTRATION_WINDOW_MS` gives:
+ * it bought a bound on the polite wording of something the status line says for free (409 for an
+ * address that exists, 201 for one that does not), and it paid for it by letting a stranger's
+ * questions spend the budget the students needed — MEASURED, 120 probes shutting sign-up for the
+ * whole tunnel in 147 ms. The oracle is open, it was always open, and nothing this file can do
+ * closes it short of refusing to create accounts. What is bounded is what a probe LEAVES BEHIND: a
+ * miss is a real account and is charged like one. What this constant does is make the reading of a
+ * list visible to an operator, which is the only thing left that is worth doing.
  *
  * TWENTY, and like `FAILED_SIGN_IN_NOTICE` it is set where a busy day will occasionally trip it
  * rather than where only an attack will, because being wrong about it costs one audit row per
@@ -291,23 +409,77 @@ const MAX_CONCURRENT_HASHES = 4;
  * which point every one of those hashes is CPU spent on somebody who has already closed the tab.
  * "Nothing is refused" was not generosity; it was the denial of service with the word removed.
  *
- * TWO HUNDRED AND FIFTY-SIX, derived rather than picked. Measured here, four-way concurrent
- * argon2id costs 42 ms a hash (1,536 verifies drained in 16.1 s at four at a time), so a full
- * queue drains in 256/4 x 42 ms = 2.7 s. That is the worst wait this gate will impose on anybody,
- * and it is the number to change if a deployment's hardware is slower — not the concurrency,
- * which is a property of the machine, but this, which is a promise about the wait.
+ * THIS NUMBER USED TO CARRY THE PROMISE ABOUT THE WAIT AND IT NO LONGER DOES, because the promise
+ * was arithmetic and the arithmetic was measured on an idle machine. It said: four-way argon2id
+ * costs 42 ms a hash, so a full queue of 256 drains in 256/4 x 42 ms = 2.7 s, "the worst wait this
+ * gate will impose on anybody". MEASURED on this host, 2026-08-12, against the built server under a
+ * 1,642 req/s sign-in flood across 250 lanes: the effective slot cost is 168 ms, not 42, and ten
+ * consecutive member sign-ins took 10,431-14,186 ms (median 10,680 ms) against a 41 ms baseline.
+ * Four times the promised worst case, on the very hardware the promise was derived from — because
+ * the 42 ms belongs to a machine doing nothing else, and a queue this deep only exists when the
+ * machine is doing a great deal else.
+ *
+ * SO THE DEPTH IS NOW THE WAITING ROOM AND `MAX_QUEUE_WAIT_MS` IS THE PROMISE. Two hundred and
+ * fifty-six stays; what has to hold is the RELATIONSHIP between the two numbers. At the 43 ms slot
+ * cost measured here when a single lane floods, a full queue drains in 256/4 x 43 ms = 2.75 s,
+ * inside the 3 s promise — so on this hardware a queue full of people who are genuinely waiting is
+ * served rather than timed out, and the deadline only fires when the machine is slower than this
+ * arithmetic assumes. Which is exactly the case the arithmetic used to get wrong silently.
+ *
+ * IT WAS CUT TO 192 IN THIS SAME CHANGE AND PUT BACK, and that is recorded because only the
+ * measurement caught it. Shallower looked strictly safer — less memory, a shorter worst wait — and
+ * MEASURED against the built server it turned 130 students arriving during a sign-in flood into 97
+ * accounts and 33 refusals, where 256 makes all 130. The queue is shared by two routes that shed
+ * toward equal occupancy, so each route's half has to hold a whole crowd by itself: 130 students
+ * need 130 places and half of 192 is 96. A depth is not a safety margin, it is a waiting room, and
+ * making it smaller turns people away.
  *
  * IT IS NOT A PER-CALLER BUDGET AND CANNOT BE SPENT ON ANYBODY ELSE'S BEHALF. The gate is
- * round-robin between callers and sheds whoever holds the largest share, so a flood displaces only
- * itself; 256 is reached by legitimate traffic only when 256 DIFFERENT people are waiting at once,
- * which is an order of magnitude past a club intake and is real load rather than an attack.
+ * round-robin between callers AND between the two routes, and sheds whoever holds the largest
+ * share, so a flood displaces only itself; 256 is reached by legitimate traffic only when 256
+ * DIFFERENT people are waiting at once, which is an order of magnitude past a club intake and is
+ * real load rather than an attack.
  */
 const MAX_QUEUED_HASHES = 256;
 
 /**
+ * THE LONGEST ANYBODY WAITS HERE BEFORE THEIR HASH STARTS, and it is enforced by the gate rather
+ * than derived from a constant. `ConcurrencyGateOptions.maxWaitMs` carries the argument.
+ *
+ * THREE SECONDS, which is the 2.7 s the old depth arithmetic claimed and could not keep, rounded up
+ * to cover the depth this file actually ships: a full 256-deep queue drains in 2.75 s at the 43 ms
+ * slot cost measured here, and a promise a full queue would breach on an idle machine would be the
+ * same kind of untrue sentence in a smaller font.
+ *
+ * A request refused for this reason is the same 429 as one refused for arriving into a full queue,
+ * and deliberately so: both are "this server is busy", neither depends on anything about the
+ * caller's address or password, and a person cannot act on the difference. `hashGate` sees the two
+ * apart in its counters, which is where an operator needs them apart — `shed` says more people
+ * arrived than the queue holds, `expired` says this machine is slower than the queue assumed.
+ *
+ * WHAT IT COSTS, AND IT IS A REAL COST IN ONE SHAPE. MEASURED on this host, ten consecutive member
+ * sign-ins during a 1,767 req/s flood:
+ *
+ *   deployment shape                        before            after
+ *   one tunnel, origins it wrote            182 ms, 10/10     192 ms, 10/10
+ *   direct, attacker minting 250 origins    10,680 ms, 10/10  3,221 ms, 2/10
+ *
+ * The first row is the owner's deployment and nothing about it changed. The second is the residual
+ * `hashGate` documents — a shape in which this process has no signal that tells one caller from
+ * another — and there the member now meets a refusal where they used to meet a ten-second wait.
+ * That is the trade being made rather than a side effect of it: a wait nobody bounded is a dial
+ * marked "everybody else's latency" that the attacker holds, which is the sentence the whole gate
+ * was built around, and at ten seconds the sign-in was being served to somebody who had almost
+ * certainly gone. Refusing in three seconds with a one-second retry is the honest version of the
+ * same answer, and it returns the CPU to the callers who are still there.
+ */
+const MAX_QUEUE_WAIT_MS = 3_000;
+
+/**
  * What a shed request is told to wait, and it is the honest number rather than a punitive one: the
- * queue in front of them drains in 2.7 s at worst, so the true answer is "about a second", and a
- * limiter that says fifteen minutes when it means one second teaches people to ignore it.
+ * queue in front of them is bounded at 3 s by `MAX_QUEUE_WAIT_MS`, so the true answer is "about a
+ * second", and a limiter that says fifteen minutes when it means one second teaches people to
+ * ignore it.
  */
 const SHED_RETRY_AFTER_SEC = 1;
 
@@ -335,6 +507,13 @@ const SHED_RETRY_AFTER_SEC = 1;
  */
 const FAILED_SIGN_IN_NOTICE = 50;
 const SIGN_IN_NOTICE_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * How often the expired session rows are cleared out. See `sweepExpiredSessions`, which is the
+ * whole of the mechanism and carries the argument for why it hangs off creating a session rather
+ * off a timer.
+ */
+const SESSION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * WHAT A RUNG OF THE REGISTRATION LADDER IS, AND THE ONE RULE ABOUT ITS `noticeKey`.
@@ -371,19 +550,54 @@ const RUNG_WHERE: Record<RungName, string> = {
 };
 
 /**
- * WHY THIS SENTENCE SAYS WHAT IT SAYS. The person most likely to read it is the last of thirty
- * students in a lecture hall, not an attacker — this rung is on the honest path now, which is the
- * whole difference from the version this replaced. So it says three things: that nothing about
- * their details is wrong, that the wait is short and finite, and that signing in still works, which
- * matters because somebody who already has an account can get in this instant and does not need to
- * wait at all.
+ * WHY THIS SENTENCE SAYS WHAT IT SAYS, AND WHY THERE ARE TWO OF THEM.
+ *
+ * The person most likely to read it is the last of thirty students in a lecture hall, not an
+ * attacker — this rung is on the honest path now, which is the whole difference from the version
+ * this replaced. So it says three things: that nothing about their details is wrong, that the wait
+ * is short and finite, and that signing in still works, which matters because somebody who already
+ * has an account can get in this instant and does not need to wait at all.
+ *
+ * IT ALSO HAS TO BE TRUE, WHICH IS THE 2026-08-12 CHANGE AND THE ONE THING HERE THAT WAS
+ * INEXCUSABLE. It said "Too many accounts have been created … in the last few minutes" and "nothing
+ * has been used up", and MEASURED against the built server both were false at once: 120 POSTs
+ * naming an address that already had an account closed the network rung, and the next student was
+ * told accounts had been created while `SELECT COUNT(*) FROM users` returned 1. The budget it was
+ * describing had been spent by requests that created nothing and by requests the server itself had
+ * thrown away. Software may refuse a person. It may not tell them a false reason for refusing.
+ *
+ * The first half of the fix is the budget: it counts created accounts, so "accounts have been
+ * created" is now a statement about rows that exist. The second half is this function, which takes
+ * the number of them and picks the sentence that is true of it:
+ *
+ *   RECORDED AT THE CEILING — the ordinary case, and the sentence above, with the count in it so
+ *   the reader can tell a busy evening from an attack and so an operator reading a screenshot can
+ *   match it to the audit row.
+ *
+ *   BELOW THE CEILING, held by registrations still in flight — a burst, arriving inside the few
+ *   tens of milliseconds an argon2id takes. Nothing has been created yet and saying so would be the
+ *   same lie in the other direction, so it says what is actually happening and gives the honest
+ *   wait, which is a moment rather than a few minutes.
+ *
+ * "NOTHING HAS BEEN USED UP" IS GONE FROM BOTH. It was true of the enrollment code this route used
+ * to take — the reassurance was "your code is not spent" — and with no code it had drifted into
+ * being a claim about the budget, where it was flatly untrue. There is nothing of the reader's to
+ * reassure them about any more, so the clause is deleted rather than reworded.
  */
-function registrationRefusal(rung: Rung): string {
+function registrationRefusal(rung: Rung, recorded: number): string {
+  const where = RUNG_WHERE[rung.name];
+  if (recorded >= rung.max) {
+    return (
+      `${String(recorded)} accounts have been created ${where} in the last few minutes, which is ` +
+      'as many as GrantSpotter will make in one go, so it is not making another one right now. ' +
+      'Nothing is wrong with your details — wait a few minutes and try again. If you already ' +
+      'have an account, signing in is not affected by this.'
+    );
+  }
   return (
-    `Too many accounts have been created ${RUNG_WHERE[rung.name]} in the last few minutes, so ` +
-    'GrantSpotter is not making another one right now. Nothing is wrong with your details and ' +
-    'nothing has been used up — wait a few minutes and try again. If you already have an account, ' +
-    'signing in is not affected by this.'
+    `GrantSpotter is already making as many accounts at once as it will ${where}, so it is not ` +
+    'starting another one this second. Nothing is wrong with your details — wait a moment and ' +
+    'try again. If you already have an account, signing in is not affected by this.'
   );
 }
 
@@ -400,11 +614,21 @@ function registrationRefusal(rung: Rung): string {
  * person it hurts most: somebody who signed up last term, has forgotten, and would then sit at a
  * sign-in screen with a password that was never stored.
  *
- * SO IT SAYS THE USEFUL THING, and what bounds the question is the ladder rather than the wording:
- * a probe is a registration attempt, charged to all three rungs before this answer is reached, so
- * asking about an address costs exactly what creating an account costs, and 240 a window
- * deployment-wide is the whole of it. `ADDRESS_TAKEN_NOTICE` is what makes somebody working through
- * a list visible to an operator.
+ * SO IT SAYS THE USEFUL THING, AND NOTHING BOUNDS THE QUESTION. That is the 2026-08-12 correction
+ * to this paragraph, which used to end "what bounds the question is the ladder rather than the
+ * wording: a probe is a registration attempt, charged to all three rungs, so asking about an
+ * address costs exactly what creating an account costs". It did cost that, and the cost fell on the
+ * wrong people: 120 questions closed sign-up for every student behind the tunnel for fifteen
+ * minutes, having created nothing. A probe is charged NOTHING now. An attacker can therefore read a
+ * club roster against this route as fast as HTTP will carry it — which they could before as well,
+ * by reading 429 versus 409 versus 201 instead of reading the sentence, so what the charge actually
+ * bought was the denial, not the secrecy.
+ *
+ * WHAT IS STILL BOUNDED IS THE PART THAT LASTS. Asking about an address that does NOT have an
+ * account creates one, and that is a registration, charged to all three rungs — so an attacker
+ * working through a roster squats the free addresses at exactly the ceiling on creating accounts
+ * and not one faster. `ADDRESS_TAKEN_NOTICE` is what makes somebody working through a list visible
+ * to an operator, and visibility is the whole of what is left.
  */
 function addressTaken(email: string): string {
   return (
@@ -587,12 +811,21 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
    * in, and it holds for the same reason it held the other way round: the round is between CALLERS
    * and cuts across both routes, so the flood is one lane whatever it is aimed at.
    *
-   * SPLITTING IT PER ROUTE WAS THE OBVIOUS FIX AND IS THE WRONG ONE. The measured failure was
-   * `/api/auth/login` starving `/api/auth/enroll`, so giving each its own gate makes that exact
-   * probe come out clean — and leaves the same stranger able to make every MEMBER of the
-   * deployment wait five seconds to sign in, which is the larger population and the more important
-   * route. The thing being starved was never the enrolment route; it was everybody who was not the
-   * attacker.
+   * SPLITTING IT PER ROUTE WAS THE OBVIOUS FIX AND IS STILL THE WRONG ONE, AND ON 2026-08-12 THE
+   * ROUND LEARNED THE ROUTE ANYWAY. Those are not the same thing and the difference is the point.
+   * Two gates would give each route its own ceiling on concurrent hashes, so the process could run
+   * eight at once — there is one CPU and `MAX_CONCURRENT_HASHES` is a claim about it, so a ceiling
+   * either route could exceed by borrowing the other's headroom is not a ceiling. It would also
+   * leave the same stranger able to make every MEMBER of the deployment wait five seconds to sign
+   * in, which is the larger population and the more important route.
+   *
+   * What was missing was not a second gate but a level in the ROUND. MEASURED, and it is why this
+   * paragraph is being rewritten rather than defended: a 1,642 req/s sign-in flood shed 83 of 130
+   * students out of a queue they were entitled to a share of, because "one queue, turns taken
+   * between callers" says nothing about two routes when the flood is one caller on one of them and
+   * the students are a hundred and thirty on the other. The routes take turns now, inside the peer
+   * and above the origin, so the CPU is still one ceiling and neither route can spend the other's
+   * half of it. `QueueLane` carries the ordering argument.
    *
    * MEASURED, 2026-08-09, 512 connections rotating the email on `/api/auth/login` against a server
    * in its own process, with one student enrolling throughout. Three deployment shapes, because
@@ -617,6 +850,7 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
   const hashGate = createConcurrencyGate({
     maxConcurrent: MAX_CONCURRENT_HASHES,
     maxQueued: MAX_QUEUED_HASHES,
+    maxWaitMs: MAX_QUEUE_WAIT_MS,
   });
   /**
    * Never consulted before answering anybody and never able to refuse: it exists so that the
@@ -666,26 +900,90 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
   }
 
   /**
+   * THE ROW AN OPERATOR READS WHEN SIGN-UP STOPS WORKING, written by the registration that filled
+   * the last place in a rung and by no other request.
+   *
+   * An operator who finds sign-up refusing people needs to see that a limiter did it, which one,
+   * and roughly where from; `coarseOrigin` keeps that to a /24 or a /48, because an audit row
+   * outlives the incident. Never an address: the reported origin is in the detail as a sample
+   * rather than as the subject, because on the rung it matters for it IS the subject and on the
+   * others it is whatever the last forger happened to write.
+   *
+   * THIS ROW IS NOT ONLY AN ALARM. Registration closing is a thing that happens to legitimate
+   * visitors, so the row may be the only evidence that thirty people were turned away — which is
+   * why it carries the ceiling and the window as well as the rung, so the reader can tell "an
+   * attack reached the deployment ceiling" from "one building signed up sixty times this
+   * afternoon".
+   *
+   * `registrations` IS THE COUNT THAT WAS ACTUALLY RECORDED, NOT THE CEILING. It used to be
+   * `rung.max`, which is a constant and therefore says nothing, and on 2026-08-12 it was MEASURED
+   * saying something false: `{"rung":"network","registrations":120}` on a deployment where
+   * `SELECT COUNT(*) FROM users` returned 1, because the budget had been spent by 120 probes that
+   * created nothing. The budget counts created accounts now, and this row quotes the count.
+   */
+  function announceClosedRungs(
+    req: Request,
+    charged: ReadonlyArray<{ rung: Rung }>,
+    atISO: string,
+  ): void {
+    const reported = coarseOrigin(reportedOrigin(req));
+    for (const { rung } of charged) {
+      // RECORDED AT THE CEILING, not `check`. `check` also counts registrations still in flight, so
+      // it goes false for the few tens of milliseconds a burst of argon2id takes and would write a
+      // row saying a rung closed at 43 of 60 — which is true of the budget and not of the sentence
+      // "this many accounts have been created". A row is written when the ceiling is genuinely
+      // spent in rows that exist; the transient is real, it refuses people for one hash, and the
+      // sentence they are shown says so in its own words rather than by pretending to be this one.
+      const recorded = rung.limiter.count(rung.key);
+      if (recorded < rung.max) continue;
+      announceOnce(rung.noticeKey, {
+        userId: null,
+        action: 'auth.registration_limited',
+        entityType: 'auth',
+        entityId: rung.name === 'server' ? DEPLOYMENT_KEY : coarseOrigin(peerAddress(req)),
+        detail: JSON.stringify({
+          rung: rung.name,
+          reportedOrigin: reported,
+          registrations: recorded,
+          ceiling: rung.max,
+          windowSec: REGISTRATION_WINDOW_MS / 1000,
+        }),
+        atISO,
+      });
+    }
+  }
+
+  /**
    * THE ONE PLACE EITHER UNAUTHENTICATED ROUTE RUNS argon2id, and the only place that knows what a
    * shed looks like to a person.
    *
-   * The lane is the pair the gate takes turns over: the TCP peer, which nobody can forge, and the
-   * address our own proxy reported, which tells two users of one tunnel apart. Neither is
-   * trustworthy alone and `QueueLane` says why the round is nested over both.
+   * The lane is the three values the gate takes turns over: the TCP peer, which nobody can forge;
+   * the route, which this server writes; and the address our own proxy reported, which tells two
+   * users of one tunnel apart. No one of them is trustworthy alone and `QueueLane` says why the
+   * round is nested over all three, in that order.
    *
    * A SHED IS A 429 AND NOT A 500, because it is a true statement about capacity rather than a
    * fault, and it is deliberately the same 429 on both routes and for every caller: it depends on
    * queue occupancy and on nothing about the address or the password, so it cannot be used to tell
    * either of those apart. No argon2id has run when it is thrown, so retrying costs the caller
-   * nothing but the wait — the registration rungs, unlike the old guess budget, have already been
-   * charged by the time a request reaches the gate, which is deliberate: a caller must not be able
-   * to make free attempts by arriving when the queue is full.
+   * nothing but the wait — AND, since 2026-08-12, nothing else either. The registration rungs used
+   * to have been charged by the time a request reached this gate, and the comment here called that
+   * deliberate; it meant a sign-in flood could spend the sign-up budget through the shared queue,
+   * measured at 83 of 130 students. The route releases its slots on this path now.
+   *
+   * `route` IS PASSED BY THE CALLER AND IS NOT DERIVED FROM THE REQUEST. Two constants, at two call
+   * sites, so there is no parsing of a path to get it wrong and nothing a caller can send that puts
+   * them in the other route's share of the round. See `QueueLane`.
    */
-  async function hashUnderGate<T>(req: Request, work: () => Promise<T>): Promise<T> {
+  async function hashUnderGate<T>(
+    req: Request,
+    route: HashRoute,
+    work: () => Promise<T>,
+  ): Promise<T> {
     const peer = peerAddress(req);
     const origin = reportedOrigin(req);
     try {
-      return await hashGate.run({ peer, origin }, work);
+      return await hashGate.run({ peer, route, origin }, work);
     } catch (err) {
       if (!(err instanceof QueueFullError)) throw err;
       // One row per source per window, by the same rule the other announcements follow: the caller
@@ -720,7 +1018,36 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
 
   const router = Router();
 
+  /**
+   * WHEN THE EXPIRED SESSION ROWS GO, AND WHY IT IS AMORTISED HERE RATHER THAN ON A TIMER.
+   *
+   * `sessions.removeExpired` HAD NO CALLER ANYWHERE IN THIS SERVER — it was written, tested in
+   * `test/accounts.test.ts`, and never invoked, so a session row lived its full thirty days and
+   * then stayed for good. MEASURED on 2026-08-12: a registration writes THREE rows, not two —
+   * `users`, `audit_log` and `sessions`, because signing up signs you in — and 100 registrations
+   * produced 101 sessions rows, none of which anything would ever have removed. A mass
+   * registration's rows are the ones an administrator deletes; its SESSIONS are the ones nobody
+   * even knew were there.
+   *
+   * ON THIS PATH BECAUSE THIS PATH IS WHAT GROWS THE TABLE. A timer would sweep a server nobody is
+   * using, which is the one state in which there is nothing to sweep; creating a session is the
+   * only thing that adds a row, so the cheapest correct place to remove the dead ones is just
+   * before adding a live one. HOURLY, so a burst of a hundred sign-ins does one DELETE and not a
+   * hundred, and so the first sign-in after a restart clears whatever the last run left behind.
+   *
+   * A DELETE that matches nothing on a table with no expired rows is what this costs on the
+   * ordinary day: one statement an hour.
+   */
+  let sessionsSweptAtMs = 0;
+  function sweepExpiredSessions(): void {
+    const nowMs = Date.now();
+    if (sessionsSweptAtMs !== 0 && nowMs - sessionsSweptAtMs < SESSION_SWEEP_INTERVAL_MS) return;
+    sessionsSweptAtMs = nowMs;
+    sessions.removeExpired(new Date(nowMs).toISOString());
+  }
+
   function startSession(req: Request, res: Response, userId: string): void {
+    sweepExpiredSessions();
     const rawId = newSessionId();
     sessions.create({
       id: sessionIdHash(rawId),
@@ -865,191 +1192,209 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
       }
 
       /**
-       * THE LADDER, SECOND, AND IT IS READ AND CHARGED WITH NOTHING BETWEEN THE TWO.
+       * THE LADDER, SECOND. A SLOT IS TAKEN HERE AND BECOMES A RECORDED REGISTRATION ONLY WHEN AN
+       * ACCOUNT EXISTS.
        *
        * WHAT CHANGED HERE ON 2026-08-11 IS WHICH REQUESTS ARRIVE. This block used to sit on the
        * "that code is not valid" branch, where only a guesser ever reached it; it now sits on the
        * path of every registration, honest or not, because with no code there is no branch that
-       * separates the two. See `REGISTRATION_WINDOW_MS` for what each ceiling costs the people it
-       * is not aimed at, which is the question that set all three numbers.
+       * separates the two.
+       *
+       * WHAT CHANGED ON 2026-08-12 IS WHICH REQUESTS PAY. `recordFailure` stood here, charging
+       * every arrival before anybody knew what it would turn into, and three of the four things a
+       * request can turn into create nothing at all: a taken address, a shed request, the loser of
+       * a race. MEASURED, 120 of the first kind shut sign-up for a whole tunnel in 147 ms having
+       * created nothing, and 83 of the second kind did it during a sign-in flood. `begin` claims
+       * the slot in the same breath as it reads the budget — so a burst still cannot walk past a
+       * counter none of it has paid into — and the slot is released, unrecorded, by every path
+       * below except the one that returns from `users.create`. See `REGISTRATION_WINDOW_MS`.
        *
        * BEFORE THE HASH, so a burst of registrations cannot start an unbounded number of argon2id
-       * operations, and before the address lookup, so a caller who has been cut off cannot go on
-       * asking about people. No `await` anywhere between the read and the charge, so two hundred
-       * requests arriving together are counted as two hundred rather than as one.
+       * operations. No `await` anywhere between the read and the claim, so two hundred requests
+       * arriving together are counted as two hundred rather than as one.
        */
       const rungs = registrationRungs(req);
+      const held: Array<{ rung: Rung; attempt: Extract<RateLimitAttempt, { started: true }> }> = [];
       let stopped: { rung: Rung; retryAfterSec: number } | undefined;
       for (const rung of rungs) {
-        const decision = rung.limiter.check(rung.key);
-        if (decision.allowed) continue;
-        stopped = { rung, retryAfterSec: decision.retryAfterSec };
-        break;
+        const attempt = rung.limiter.begin(rung.key);
+        if (!attempt.started) {
+          stopped = { rung, retryAfterSec: attempt.retryAfterSec };
+          break;
+        }
+        held.push({ rung, attempt });
       }
 
       if (stopped !== undefined) {
         // NOTHING IS CHARGED WHEN A RUNG REFUSES, and it is the property the ratio between the
         // rungs depends on: a caller who has been cut off cannot go on spending the budgets shared
         // with everybody else, cannot extend their own sliding window by knocking, and cannot add
-        // a key to any of these maps.
-        throw new AppError('rate_limited', registrationRefusal(stopped.rung), {
-          retryAfterSec: stopped.retryAfterSec,
-        });
+        // a key to any of these maps. The rungs ABOVE the one that refused give their slots back
+        // here for the same reason — a request that is not going to create an account must not
+        // hold a place in the budget for ones that would.
+        for (const { attempt } of held) attempt.release();
+        // `count` and not `max`: the sentence has to be true of this deployment at this instant,
+        // and the two differ whenever the budget is held by registrations still in flight. See
+        // `registrationRefusal`.
+        throw new AppError(
+          'rate_limited',
+          registrationRefusal(stopped.rung, stopped.rung.limiter.count(stopped.rung.key)),
+          { retryAfterSec: stopped.retryAfterSec },
+        );
       }
 
-      const reported = coarseOrigin(reportedOrigin(req));
-      for (const rung of rungs) rung.limiter.recordFailure(rung.key);
-      for (const rung of rungs) {
-        if (rung.limiter.check(rung.key).allowed) continue;
-        // The request that CLOSED a rung writes the one row for it this window. An operator who
-        // finds sign-up refusing people needs to see that a limiter did it, which one, and roughly
-        // where from; `coarseOrigin` keeps that to a /24 or a /48, because an audit row outlives
-        // the incident. Never an address: the reported origin is in the detail as a sample rather
-        // than as the subject, because on the rung it matters for it IS the subject and on the
-        // others it is whatever the last forger happened to write.
-        //
-        // THIS ROW IS NOT ONLY AN ALARM NOW. Registration closing is a thing that happens to
-        // legitimate visitors, so the row an operator reads may be the only evidence that thirty
-        // people were turned away — which is why it carries the ceiling and the window as well as
-        // the rung, so the reader can tell "an attack reached the deployment ceiling" from "one
-        // building signed up sixty times this afternoon".
-        announceOnce(rung.noticeKey, {
-          userId: null,
-          action: 'auth.registration_limited',
-          entityType: 'auth',
-          entityId: rung.name === 'server' ? DEPLOYMENT_KEY : coarseOrigin(peerAddress(req)),
-          detail: JSON.stringify({
-            rung: rung.name,
-            reportedOrigin: reported,
-            registrations: rung.max,
-            windowSec: REGISTRATION_WINDOW_MS / 1000,
-          }),
-          atISO: nowISO,
-        });
-      }
-
-      /**
-       * THE ADDRESS, THIRD, AND THE ANSWER IS THE USEFUL ONE FOR EVERYBODY WHO REACHES IT.
-       *
-       * `addressTaken` carries the argument for why this is not rationed and cannot be made
-       * indistinguishable from a miss. What it costs a caller is what a registration costs — the
-       * three rungs above have already been charged — and what it costs the server is one indexed
-       * read, deliberately BEFORE the hash, because the person who meets this most often is
-       * somebody who signed up last term and forgot, and making them wait 50 ms for the argon2id
-       * they were never going to need buys nobody anything.
-       *
-       * The notice is counted here rather than at the answer below so that the race-loser path,
-       * which is a genuine collision and not a question, does not inflate it.
-       */
-      if (users.findByEmail(body.email) !== undefined) {
-        const coarsePeer = coarseOrigin(peerAddress(req));
-        if (takenNotice.crossed(coarsePeer)) {
-          // ONE ROW, and it names a source network and a count — never an address, and never how
-          // many DISTINCT addresses were asked about. The second would be the more useful signal
-          // and it is also a list of who was asked about, kept for longer and read by more people
-          // than the answers were. Same rule as `auth.failed_sign_ins`, which is the same shape of
-          // fact about the same kind of caller.
-          appendAuditLog(deps.db, {
-            userId: null,
-            action: 'auth.addresses_probed',
-            entityType: 'auth',
-            entityId: coarsePeer,
-            detail: JSON.stringify({
-              answers: ADDRESS_TAKEN_NOTICE,
-              windowSec: REGISTRATION_WINDOW_MS / 1000,
-            }),
-            atISO: nowISO,
-          });
-        }
-        throw new AppError('conflict', addressTaken(body.email));
-      }
-
-      /**
-       * OUTSIDE THE TRANSACTION, AND INSIDE THE GATE.
-       *
-       * Outside the transaction because argon2id is tens of milliseconds of real work and the only
-       * `await` on this path; it is precisely the window in which two people registering the same
-       * address overlap. Doing it here means the transaction below contains no `await` at all, so
-       * nothing can run between the check and the INSERT.
-       *
-       * Inside the gate because this is the expensive thing, and the expensive thing is what wants
-       * bounding. The gate QUEUES: thirty students pressing submit together all get accounts, four
-       * hashes at a time. What used to stand here was a failure budget claiming a slot for every
-       * attempt including the successful ones, and it answered twenty of those thirty students
-       * "Too many enrollment attempts. Try again later."
-       *
-       * IT IS ALSO WHAT KEEPS THIS ROUTE FROM BECOMING THE THING IT WAS PROTECTED FROM. The gate is
-       * shared with `/auth/login` and takes turns between CALLERS, so a burst of registrations
-       * cannot put a member's sign-in behind it — the flood is one lane and the member is another.
-       * That direction is new: until today a stranger could not make this route hash anything
-       * without a credential, and now anybody can.
-       *
-       * A registrant can still be shed, but only by being the largest single contributor to the
-       * backlog themselves. Their three rungs HAVE been charged by then, deliberately: a shed
-       * request is an attempt, and making attempts free whenever the queue is full would hand a
-       * caller a way to make unlimited ones.
-       */
-      const passwordHash = await hashUnderGate(req, () => hashPassword(body.password));
-
-      let account: UserRecord;
       try {
-        /*
-          A TRANSACTION FOR ONE INSERT AND ONE AUDIT ROW, WHICH IS NOT CEREMONY.
-
-          It replaces `codes.redeem`, which used to own this transaction and whose whole job was to
-          make the check and the write one indivisible step. That requirement did not go with the
-          code: `findByEmail` a line above the INSERT is a check-then-act, and better-sqlite3 runs
-          this callback synchronously, so what makes it safe is that there is no `await` inside —
-          the hash was paid before we got here for exactly this reason.
-
-          The audit row is inside it as well, so an administrator can always answer "where did this
-          account come from?" and the two facts can never disagree: no account without its row, no
-          row without its account.
-        */
-        account = deps.db.transaction((): UserRecord => {
-          if (users.findByEmail(body.email) !== undefined) throw new DuplicateEmailError();
-          const created = users.create({
-            email: body.email,
-            passwordHash,
-            // A LITERAL, not a parameter, not a default, not a variable. Registration produces
-            // members; the only ways to become an administrator are the first-run token and an
-            // existing administrator promoting you. This did not change when the door opened, and
-            // it is the one sentence in this file that should never need editing again.
-            role: 'member',
-            ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
-          });
-          appendAuditLog(deps.db, {
-            userId: created.id,
-            action: 'user.register',
-            entityType: 'user',
-            entityId: created.id,
-            // A DISTINCT ACTION FROM `user.enroll` AND FROM `user.create`, because the three are
-            // three different provenances and an operator reading the trail after this change
-            // needs to tell them apart: `user.enroll` rows name the enrollment code an account was
-            // created with and stop being written today, `user.create` is an administrator making
-            // an account for somebody, and this is somebody making their own. The detail is the
-            // coarse source network — the same /24 or /48 every other row on this route carries,
-            // which is what an operator blocks or recognises — and never the address in full.
-            detail: JSON.stringify({ origin: coarseOrigin(peerAddress(req)) }),
-            atISO: nowISO,
-          });
-          return created;
-        })();
-      } catch (err) {
-        if (err instanceof DuplicateEmailError) {
-          // ONE WAY TO ARRIVE HERE, and it is rare: the address had no account when this request
-          // started and had one by the time the transaction ran, fifty milliseconds later. The
-          // loser of that race gets the generic sentence because we cannot tell them which of the
-          // two of them they are, and the transaction rolled back, so nothing half-happened.
-          throw new AppError('conflict', CONFLICT_GENERIC);
+        /**
+         * THE ADDRESS, THIRD, AND THE ANSWER IS THE USEFUL ONE FOR EVERYBODY WHO REACHES IT.
+         *
+         * `addressTaken` carries the argument for why this cannot be made indistinguishable from a
+         * miss, and why the answer is no longer rationed. What it costs the server is one indexed
+         * read, deliberately BEFORE the hash, because the person who meets this most often is
+         * somebody who signed up last term and forgot, and making them wait 50 ms for the argon2id
+         * they were never going to need buys nobody anything. What it costs everybody else is now
+         * nothing at all: the `finally` below gives this request's three slots back, because it
+         * created no account and the budget counts accounts.
+         *
+         * The notice is counted here rather than at the answer below so that the race-loser path,
+         * which is a genuine collision and not a question, does not inflate it.
+         */
+        if (users.findByEmail(body.email) !== undefined) {
+          const coarsePeer = coarseOrigin(peerAddress(req));
+          if (takenNotice.crossed(coarsePeer)) {
+            // ONE ROW, and it names a source network and a count — never an address, and never how
+            // many DISTINCT addresses were asked about. The second would be the more useful signal
+            // and it is also a list of who was asked about, kept for longer and read by more people
+            // than the answers were. Same rule as `auth.failed_sign_ins`, which is the same shape
+            // of fact about the same kind of caller.
+            //
+            // THIS ROW IS THE WHOLE OF WHAT AN OPERATOR GETS ABOUT SOMEBODY READING A ROSTER, which
+            // it was not on 2026-08-11: the ladder was also refusing them after 240 questions. It
+            // no longer is, deliberately, so this is not a supporting signal any more — it is the
+            // signal.
+            appendAuditLog(deps.db, {
+              userId: null,
+              action: 'auth.addresses_probed',
+              entityType: 'auth',
+              entityId: coarsePeer,
+              detail: JSON.stringify({
+                answers: ADDRESS_TAKEN_NOTICE,
+                windowSec: REGISTRATION_WINDOW_MS / 1000,
+              }),
+              atISO: nowISO,
+            });
+          }
+          throw new AppError('conflict', addressTaken(body.email));
         }
-        throw err;
-      }
 
-      startSession(req, res, account.id);
-      // The same shape `/auth/bootstrap` and `/auth/me` answer with, from the same projection:
-      // never the password hash, never the ICS token.
-      res.status(201).json({ user: toPublicUser(account) });
+        /**
+         * OUTSIDE THE TRANSACTION, AND INSIDE THE GATE.
+         *
+         * Outside the transaction because argon2id is tens of milliseconds of real work and the
+         * only `await` on this path; it is precisely the window in which two people registering the
+         * same address overlap. Doing it here means the transaction below contains no `await` at
+         * all, so nothing can run between the check and the INSERT.
+         *
+         * Inside the gate because this is the expensive thing, and the expensive thing is what
+         * wants bounding. The gate QUEUES: thirty students pressing submit together all get
+         * accounts, four hashes at a time. What used to stand here was a failure budget claiming a
+         * slot for every attempt including the successful ones, and it answered twenty of those
+         * thirty students "Too many enrollment attempts. Try again later."
+         *
+         * IT IS ALSO WHAT KEEPS THIS ROUTE FROM BECOMING THE THING IT WAS PROTECTED FROM. The gate
+         * is shared with `/auth/login` and takes turns between CALLERS and between the two ROUTES,
+         * so a burst of registrations cannot put a member's sign-in behind it and a sign-in flood
+         * cannot take this route's share of the CPU.
+         *
+         * A registrant can still be shed, but only by being the largest single contributor to the
+         * backlog themselves — and being shed now costs them nothing but the request. That is the
+         * 2026-08-12 reversal of the paragraph that stood here, which said the three rungs HAD been
+         * charged by this point and called it deliberate ("making attempts free whenever the queue
+         * is full would hand a caller a way to make unlimited ones"). The thing it was protecting
+         * against does not exist: a shed request creates no account, so an unlimited number of them
+         * is an unlimited number of nothing. What the charge really bought was measured — 83 honest
+         * students shed by a sign-in flood, every one of them having spent a place in the students'
+         * own budget on the way past.
+         */
+        const passwordHash = await hashUnderGate(req, 'sign-up', () => hashPassword(body.password));
+
+        let account: UserRecord;
+        try {
+          /*
+            A TRANSACTION FOR ONE INSERT AND ONE AUDIT ROW, WHICH IS NOT CEREMONY.
+
+            It replaces `codes.redeem`, which used to own this transaction and whose whole job was
+            to make the check and the write one indivisible step. That requirement did not go with
+            the code: `findByEmail` a line above the INSERT is a check-then-act, and better-sqlite3
+            runs this callback synchronously, so what makes it safe is that there is no `await`
+            inside — the hash was paid before we got here for exactly this reason.
+
+            The audit row is inside it as well, so an administrator can always answer "where did
+            this account come from?" and the two facts can never disagree: no account without its
+            row, no row without its account.
+          */
+          account = deps.db.transaction((): UserRecord => {
+            if (users.findByEmail(body.email) !== undefined) throw new DuplicateEmailError();
+            const created = users.create({
+              email: body.email,
+              passwordHash,
+              // A LITERAL, not a parameter, not a default, not a variable. Registration produces
+              // members; the only ways to become an administrator are the first-run token and an
+              // existing administrator promoting you. This did not change when the door opened, and
+              // it is the one sentence in this file that should never need editing again.
+              role: 'member',
+              ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+            });
+            appendAuditLog(deps.db, {
+              userId: created.id,
+              action: 'user.register',
+              entityType: 'user',
+              entityId: created.id,
+              // A DISTINCT ACTION FROM `user.enroll` AND FROM `user.create`, because the three are
+              // three different provenances and an operator reading the trail after this change
+              // needs to tell them apart: `user.enroll` rows name the enrollment code an account
+              // was created with and stop being written today, `user.create` is an administrator
+              // making an account for somebody, and this is somebody making their own. The detail
+              // is the coarse source network — the same /24 or /48 every other row on this route
+              // carries, which is what an operator blocks or recognises — and never the address.
+              detail: JSON.stringify({ origin: coarseOrigin(peerAddress(req)) }),
+              atISO: nowISO,
+            });
+            return created;
+          })();
+        } catch (err) {
+          if (err instanceof DuplicateEmailError) {
+            // ONE WAY TO ARRIVE HERE, and it is rare: the address had no account when this request
+            // started and had one by the time the transaction ran, fifty milliseconds later. The
+            // loser of that race gets the generic sentence because we cannot tell them which of the
+            // two of them they are, and the transaction rolled back, so nothing half-happened —
+            // including the budget, which the `finally` releases unrecorded.
+            throw new AppError('conflict', CONFLICT_GENERIC);
+          }
+          throw err;
+        }
+
+        /**
+         * THE ACCOUNT EXISTS, SO NOW THE LADDER IS CHARGED — the one place in this handler that
+         * writes to any of the three rungs, and the reason every sentence about them in this file
+         * can be about accounts rather than about requests.
+         *
+         * AFTER the transaction has returned, deliberately: a `charge` inside it would survive a
+         * rollback, because these counters are in memory and know nothing about SQLite.
+         */
+        for (const { attempt } of held) attempt.charge();
+        announceClosedRungs(req, held, nowISO);
+
+        startSession(req, res, account.id);
+        // The same shape `/auth/bootstrap` and `/auth/me` answer with, from the same projection:
+        // never the password hash, never the ICS token.
+        res.status(201).json({ user: toPublicUser(account) });
+      } finally {
+        // SAFE TO CALL ON EVERY PATH INCLUDING THE CHARGED ONE — an attempt settles exactly once,
+        // so this is a no-op after `charge` and a refund after anything else. It is a `finally` and
+        // not a set of releases on each branch because a handler that throws somewhere unforeseen
+        // must not leak three budget slots for the rest of the window.
+        for (const { attempt } of held) attempt.release();
+      }
     }),
   );
 
@@ -1111,6 +1456,20 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
        * shared queue with no ceiling and no notion of whose turn it is refuses nobody and starves
        * everybody: 512 connections here took a student's enrolment to 4,881 ms. What makes the
        * shared gate safe is not that it queues, it is that it takes turns.
+       *
+       * AND THERE IS STILL NO DEPLOYMENT-WIDE CEILING ON THIS ROUTE, WHICH IS A DECISION AND NOT AN
+       * OVERSIGHT. A verifier put it as the headline of a finding on 2026-08-12: a flood here has
+       * no ladder under it the way registration does, so it can lean on the shared gate until other
+       * people's requests fall out of it. The half of that which is fixable has been fixed in the
+       * two places it belongs — the gate takes turns between the routes, so a sign-in flood cannot
+       * take sign-up's share of the CPU, and sign-up releases its budget when the gate sheds it, so
+       * a flood here cannot spend a budget over there. A COUNTING ceiling on sign-ins is the half
+       * that must not be built: behind the operator's tunnel every caller shares one peer, so a
+       * deployment-wide sign-in budget is a switch that locks every member out of their own account
+       * for fifteen minutes, and it is reachable by anybody who can send that many requests. That
+       * is strictly worse than the flood it would answer. Registration can afford a ceiling because
+       * being refused an account for fifteen minutes is an inconvenience to somebody who does not
+       * have one yet; being refused sign-in is being locked out of the thing you already own.
        */
       const attempt = deps.loginLimiter.begin(key);
       if (!attempt.started) {
@@ -1127,7 +1486,7 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         // typed the wrong password is decided only after the one argon2id
         // verify has already run.
         const user = users.findByEmail(body.email);
-        const passwordOk = await hashUnderGate(req, () =>
+        const passwordOk = await hashUnderGate(req, 'sign-in', () =>
           verifyPasswordConstantTime(user?.passwordHash, body.password),
         );
         const ok = passwordOk && user !== undefined && !user.disabled;
