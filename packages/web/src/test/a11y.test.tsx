@@ -520,9 +520,12 @@ const ROUTES: Array<[string, JSX.Element, string, () => Promise<HTMLElement>]> =
    *
    * `Login` and `Enroll` were both here from the start; `FirstRun` — the third form on the same
    * panel, the only one that runs before an account exists, and the one the owner photographed —
-   * appeared zero times. It is also the largest of the three: six fields, four explanations and
-   * the callsign lookup embedded in one of them, which is more markup than the other two
-   * together and every bit of it unaudited.
+   * appeared zero times. It is still the largest of the three: five fields and two explanations,
+   * more markup than the other two together and every bit of it unaudited until this entry.
+   *
+   * It was six fields, four explanations and an embedded callsign lookup until 2026-08-11, when
+   * account creation stopped asking for a callsign; the lookup and its panel now live on `Profile`
+   * and are audited there.
    *
    * Mounted at `/`, because that is the path a fresh install answers with it.
    */
@@ -558,22 +561,36 @@ describe('accessibility audit', () => {
   });
 
   /**
-   * THE CALLSIGN PANEL, ON THE SCREEN IT IS HARDEST ON.
+   * THE CALLSIGN PANEL, WHICH NO OTHER AUDIT OPENS.
    *
    * `CallsignLookup` is closed on arrival everywhere it appears, so every audit above renders the
    * BUTTON and none of them renders the panel — a `<section>` with its own heading, a live region
-   * and a fill-or-discard form. Opened here rather than on `Profile` because on first run there is
-   * no `AppShell` around it and no account behind it: this is the panel at its least supported.
+   * and a fill-or-discard form.
    *
    * The record it opens on is W5NEW for a typed K9OLD, the superseded-callsign case, which is the
    * branch that renders the extra "not the one you asked about" apparatus.
+   *
+   * MOVED FROM `FirstRun` TO `Profile` ON 2026-08-11, WITH THE PANEL ITSELF. This test used to
+   * mount the first-run screen and type into its callsign field, and it opened with a paragraph
+   * arguing that first run was where the panel was least supported: no `AppShell` around it and no
+   * account behind it. The field and the panel are gone from that screen — account creation stopped
+   * asking for a callsign, and the lookup moved to the profile editor, where the person filling it
+   * in is signed in and can see what it did. So the sentence about first run is deleted rather than
+   * re-aimed: it named a screen that no longer carries this component.
+   *
+   * WHAT IS LOST AND WHAT IS NOT. The "no shell around it" half of the old argument survives by
+   * accident and is worth stating: `mount` renders a bare route with no `AppShell`, so this is
+   * still the panel audited outside the chrome. What genuinely goes is "before an account exists" —
+   * the panel is now unreachable while signed out, which is a property `e2e/signedOut.spec.ts` and
+   * `packages/server/src/api/callsign.ts` hold rather than something an audit could assert.
    */
-  it('audits the callsign panel on the first-run screen, which no other audit opens', async () => {
-    const { container } = mount(
-      <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
-      '/',
-    );
-    await userEvent.type(screen.getByLabelText(/^callsign/i), 'K9OLD');
+  it('audits the callsign panel on the profile screen, which no other audit opens', async () => {
+    const { container } = mount(<Profile />, '/profile');
+    // The profile has to have LOADED before its callsign field exists; the routes table above
+    // waits on the completeness heading for the same reason.
+    await screen.findByRole('heading', { name: /completeness/i });
+    await userEvent.clear(screen.getByLabelText(/^callsign$/i));
+    await userEvent.type(screen.getByLabelText(/^callsign$/i), 'K9OLD');
     await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
     await screen.findByRole('heading', { name: /FCC record for/i });
     expect(auditA11y(container)).toEqual([]);
@@ -612,53 +629,31 @@ describe('accessibility audit', () => {
   });
 
   /**
-   * "ADMINISTRATOR CREATED" — the mode with no form on it at all.
+   * A TEST STOOD HERE AND IS DELETED RATHER THAN REWRITTEN, AND THIS ONE IS NOT A LOSS.
    *
-   * The account exists and this browser is signed in, but the starter profile write failed, so the
-   * screen replaces its own form with a `role="alert"` and one button onwards. It is unreachable
-   * without making the second of two calls fail, which is why `e2e/signedOut.spec.ts` names it in
-   * its NOT COVERED list — and why nothing had ever audited it.
+   * It was called "audits the stranded first-run screen, which replaces the form with an alert",
+   * and it drove the `Administrator created` mode: the account exists and this browser is signed
+   * in, but the starter profile write that followed it failed, so the screen replaced its own form
+   * with a `role="alert"` and one button onwards. It was the only audit of a signed-out screen with
+   * no form on it at all.
+   *
+   * THE MODE IS GONE FROM THE PRODUCT (2026-08-11), not merely unreachable from here. `FirstRun`
+   * stopped asking for a callsign, which means it stopped writing a starter profile, which means
+   * nothing runs between the account existing and the handover to the shell — there is no second
+   * call left to fail and therefore no state in which an administrator can be created and then
+   * stranded. `routes/FirstRun.tsx` says so at the line where `saveStarterProfile` used to be
+   * called. There is no way to point this test at anything: the alert, the heading it waited on and
+   * the button it audited are all deleted markup.
+   *
+   * The same deletion removes the one entry in `e2e/signedOut.spec.ts`'s WHAT IS NOT COVERED list
+   * that named this mode; that note is corrected in the same round rather than left describing a
+   * screen nobody can reach.
+   *
+   * WHAT IS STILL WORTH ASSERTING AND IS ASSERTED ELSEWHERE: the audit of a signed-out screen
+   * showing a refusal instead of a resting form survives directly above, in "audits the first-run
+   * form after the setup token is refused" — a live `role="alert"` on the same panel, from the one
+   * failure first-run setup still has.
    */
-  it('audits the stranded first-run screen, which replaces the form with an alert', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string) =>
-        Promise.resolve(
-          url === '/api/profiles/student'
-            ? {
-                ok: false,
-                status: 422,
-                json: async () => ({
-                  error: { code: 'validation_failed', message: 'Profile failed validation.' },
-                  requestId: 'req-a11y-3',
-                }),
-              }
-            : {
-                ok: true,
-                status: 201,
-                json: async () => ({
-                  user: { id: 'u-1', email: 'operator@example.edu', role: 'admin' },
-                }),
-              },
-        ),
-      ),
-    );
-    const { container } = mount(
-      <FirstRun onAuthenticated={() => undefined} onBootstrapClosed={() => undefined} />,
-      '/',
-    );
-    await userEvent.type(screen.getByLabelText(/setup token/i), 'a-setup-token');
-    await userEvent.type(screen.getByLabelText(/^email$/i), 'operator@example.edu');
-    // The callsign is what makes the profile write happen at all: with the field empty,
-    // `saveStarterProfile` returns before it calls anything and this mode is unreachable.
-    await userEvent.type(screen.getByLabelText(/^callsign/i), 'W1AW');
-    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
-    await userEvent.type(screen.getByLabelText(/confirm password/i), 'a-long-enough-password');
-    await userEvent.click(screen.getByRole('button', { name: /^create administrator$/i }));
-
-    await screen.findByRole('heading', { name: /administrator created/i });
-    expect(auditA11y(container)).toEqual([]);
-  });
 
   it('detects a genuinely broken fragment, so the audit is not vacuous', () => {
     const broken = document.createElement('div');

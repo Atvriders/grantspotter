@@ -621,20 +621,40 @@ nothing reads them.
 #### The registration budget, and what no setting of it can do
 
 Registration is rate-limited on three rungs, every one of them a **15-minute** sliding window: **60
-sign-ups per connection**, **120 per source network**, and **240 across the whole server**. The
+sign-ups per connection**, **240 per source network**, and **480 across the whole server**. The
 first is keyed on the address your proxy reports, which behind a single documented hop is a
 building's NAT rather than one person; the second on the TCP peer's own address coarsened to a /24
 or /48, which no header can change; the third on nothing at all.
 
-**Every attempt is counted, not every failure**, because here the successes *are* the abuse. And
-these numbers moved from bounding an attack to bounding an afternoon, which is the whole change:
+**Every account created is counted, not every attempt**, because here the successes *are* the
+abuse — a budget that counted only mistakes would let somebody who never makes one create accounts
+without limit. A request that a rung refuses, that is told the address already has an account, that
+the hash queue sheds, or that loses the duplicate-address race, leaves no mark on any of the three.
+It does hold its place while it is in flight: the slot is claimed *before* the password hash and
+only converted into a recorded registration once the row exists, because a counter read before an
+`await` and written after it is not a counter — measured on 2026-08-05, 240 concurrent requests
+against a budget of ten produced 240 hashes and 10.2 s of CPU.
+
+That sentence read **"every attempt is counted, not every failure"** until 2026-08-11, and it was
+true of the route that then shipped. What it bought was a bound on the polite wording of something
+the status line gives away for free — 409 for an address that has an account, 201 for one that does
+not — and what it cost was that a stranger's questions spent the students' budget: measured, 120
+probes that created nothing closed sign-up for the whole tunnel in 147 ms. What is bounded now is
+what a probe *leaves behind*, and a probe that lands on a free address is a real account and is
+charged like one.
+
+And these numbers moved from bounding an attack to bounding an afternoon, which is the whole change:
 they used to be charged only on the branch that answered "that enrollment code is not valid", so a
 person holding a real code never read them and could not be refused by them however hard a stranger
 had been knocking. That branch is gone. **This budget is now on the path of every legitimate
 registration**, so each rung is derived from the busiest honest window this product is for — a club
 signing thirty students up in one lecture, doubled for the retries a real form produces — rather
 than from a stranger. The connection rung was **10** while it counted wrong codes; ten here would
-answer twenty of those thirty students "try again later".
+answer twenty of those thirty students "try again later". The network rung was **120** — two such
+clubs onboarding the same evening, and measured at exactly that: 120 created, 120 refused. A ceiling
+set to precisely the design load has no margin at all, and behind a tunnel that rung *is* the
+deployment ceiling, so it is doubled to 240 by the same rule the connection rung uses. The
+server-wide rung follows it to 480 to keep the 2:1 the paragraph below rests on.
 
 **A public instance cannot separate a hundred people signing up from one person signing up a hundred
 times.** The only signals this process has are a header the caller writes and a TCP peer that is one
@@ -646,13 +666,17 @@ which rung and roughly where from, and reversible because an administrator can d
 and the refusal lasts fifteen minutes rather than forever. An operator who needs more than that needs
 a signal this process does not have, which means an authenticating proxy in front of it.
 
-**What an attacker can still reach, rather than a reassurance:** 240 accounts per fifteen minutes
-sustained is 23,040 a day, roughly 9 MB of database and an *Admin → Users* screen with a day of junk
-in it — and the same 240 is what somebody must spend, every window, to hold registration closed for
-everyone else. A rung that refuses charges nothing, so one network can only ever put its own 120
-into the server-wide 240: **closing that one takes at least two networks acting together.** Behind a
-tunnel, where every caller shares the network rung, that arithmetic protects less than it sounds,
-and it is stated rather than assumed.
+**What an attacker can still reach, rather than a reassurance:** 480 accounts per fifteen minutes
+sustained is 46,080 a day, or **23,040 a day behind the tunnel**, where the network rung is the real
+ceiling. At a measured 983 bytes of checkpointed SQLite per account — three rows, not two, because
+registration signs the new member in — that is roughly 45 MB of database a day and an *Admin →
+Users* screen with a day of junk in it. It is twice what the old numbers allowed, and the trade is
+the point: the same 480 is now what somebody must genuinely *create*, every window, to hold
+registration closed for everyone else, where before it was 240 requests that created nothing. A rung
+that refuses charges nothing, so one network can only ever put its own 240 into the server-wide 480:
+**closing that one takes at least two networks acting together.** Behind a tunnel, where every
+caller shares the network rung, that arithmetic protects less than it sounds, and it is stated
+rather than assumed.
 
 **Two people signing up with the same address at the same instant get one account, not two.** The
 uniqueness of `users.email_normalized` is enforced by the database rather than by a check the handler

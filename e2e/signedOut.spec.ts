@@ -36,10 +36,17 @@
  *
  * WHAT IS NOT COVERED, deliberately
  *   · Chromium only: this project defines no other browser project.
- *   · The stranded first-run mode (`Administrator created`, shown when the account is made but the
- *     starter profile write fails) and the gate's "could not check" notice. Both are reachable only
- *     by making a server call fail at a chosen moment, which is `FirstRun.test.tsx`'s job; both
- *     render inside the same panel with the same classes as the modes below.
+ *   · The gate's "could not check" notice, reachable only by making a server call fail at a chosen
+ *     moment, which is `FirstRun.test.tsx`'s job; it renders inside the same panel with the same
+ *     classes as the modes below.
+ *
+ *     THE STRANDED FIRST-RUN MODE WAS NAMED HERE TOO AND IS NOT ANY MORE (2026-08-11). It was
+ *     `Administrator created` — the account made, the starter profile write that followed it
+ *     failed, the form replaced by an alert. First-run setup stopped asking for a callsign, so it
+ *     stopped writing a starter profile, so there is no second call left to fail: the mode is
+ *     deleted from `routes/FirstRun.tsx` rather than merely hard to reach. Listing it would be
+ *     claiming coverage was owed for a screen that cannot be drawn. The a11y audit of it went in
+ *     the same round, with the same reasoning, in `packages/web/src/test/a11y.test.tsx`.
  *   · Zoom, and the user-font-size axis. A 320px page at 200% zoom is a 160px page.
  */
 import { rmSync } from 'node:fs';
@@ -48,8 +55,6 @@ import {
   bootShippedServer,
   bootstrapAdmin,
   bootstrapTokenFrom,
-  OPERATOR_EMAIL,
-  OPERATOR_PASSWORD,
   type BootedServer,
 } from './shippedSeed.js';
 
@@ -389,18 +394,28 @@ test.beforeAll(async ({ browser }) => {
 
   // ---- 2. SIGN IN, on the same deployment once an administrator exists. ----
   await bootstrapAdmin(BASE_URL, await bootstrapTokenFrom(server));
-  // A live enrollment code, because `GET /api/auth/enrollment-open` is what decides whether the
-  // sign-in screen offers the third form at all — and without one there is no way through to it.
-  const login = await context.request.post('/api/auth/login', {
-    data: { email: OPERATOR_EMAIL, password: OPERATOR_PASSWORD },
-  });
-  expect(login.status(), await login.text()).toBe(200);
-  const issued = await context.request.post('/api/admin/enrollment-codes', {
-    data: { label: 'signed-out measurement', code: null, maxUses: null, expiresInDays: 30 },
-  });
-  expect(issued.status(), await issued.text()).toBeLessThan(300);
-  // The admin session goes with it: these three screens are the SIGNED-OUT ones, and a page that
-  // still holds a cookie renders the shell instead.
+  /*
+   * FIFTEEN LINES STOOD HERE AND ARE DELETED (2026-08-11): a sign-in as the operator followed by
+   * `POST /api/admin/enrollment-codes` to issue a live code, because `GET /api/auth/enrollment-open`
+   * was what decided whether the sign-in screen offered the third form at all, and without a code
+   * there was no way through to it.
+   *
+   * All three of those are gone from the server — the admin route is unmounted, the question route
+   * is unmounted, and the whole enrollment-code subsystem was retired in migration 095. Registration
+   * is open on every deployment, so `Login.tsx` offers "Create an account" unconditionally and the
+   * third screen is one press away with no preparation at all. This file never ran this round
+   * because that POST answered 404 inside `beforeAll`, which failed the suite before any spec and
+   * stranded the eleven tests in the two files ordered after it.
+   *
+   * Nothing replaces it, and nothing is lost: there was no assertion in it. The two `expect`s it
+   * carried were checks that the setup steps had worked, and there are no setup steps left.
+   */
+  // These three screens are the SIGNED-OUT ones, and a page that still holds a cookie renders the
+  // shell instead. This is now belt-and-braces rather than load-bearing: the deleted sign-in above
+  // was what put a cookie on this context, and `bootstrapAdmin` uses the process's own `fetch`
+  // rather than `context.request`, so the browser never sees that session. Kept because the cost is
+  // one call and the failure it prevents — every measurement below taken against the shell — would
+  // be baffling.
   await context.clearCookies();
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -410,13 +425,16 @@ test.beforeAll(async ({ browser }) => {
     touchPage.getByRole('heading', { name: /sign in/i }).waitFor(),
   );
 
-  // ---- 3. ENROL, one press away from the sign-in form. ----
+  // ---- 3. SIGN UP, one press away from the sign-in form. ----
+  // The press was "I have an enrollment code" until 2026-08-11; the sign-in screen's aside now
+  // reads "No account yet? Create an account", and it is offered to everybody rather than only on
+  // deployments that had said yes to a second question.
   await page.setViewportSize({ width: 1440, height: VIEWPORT_HEIGHT });
-  await page.getByRole('button', { name: /i have an enrollment code/i }).click();
+  await page.getByRole('button', { name: /create an account/i }).click();
   await page.getByRole('heading', { name: /create your account/i }).waitFor();
   await sweep(page, 'enrol', false, WIDTHS);
   await touchSweep(browser, 'enrol', async (touchPage) => {
-    await touchPage.getByRole('button', { name: /i have an enrollment code/i }).tap();
+    await touchPage.getByRole('button', { name: /create an account/i }).tap();
     await touchPage.getByRole('heading', { name: /create your account/i }).waitFor();
   });
 
@@ -439,10 +457,25 @@ test('the sweep really ran, over all three screens and both pointers', () => {
   );
   expect(new Set(mouse.map((m) => m.width))).toEqual(new Set(WIDTHS));
   expect(new Set(measurements.map((m) => m.theme))).toEqual(new Set(THEMES));
-  // And it measured the screens it thinks it did: only the two prose forms carry explanations, and
-  // the sign-in box carries none, which is the whole reason their widths differ.
-  expect(measurements.filter((m) => m.screen === 'first-run').every((m) => m.hints.length === 3)).toBe(true);
-  expect(measurements.filter((m) => m.screen === 'enrol').every((m) => m.hints.length === 2)).toBe(true);
+  /*
+   * And it measured the screens it thinks it did: only the two prose forms carry explanations, and
+   * the sign-in box carries none, which is the whole reason their widths differ.
+   *
+   * BOTH COUNTS FELL BY ONE ON 2026-08-11, and they are re-derived rather than relaxed. First run
+   * was THREE: the setup-token hint, the callsign hint and the password hint — account creation
+   * stopped asking for a callsign, so the field and its paragraph are gone and it is two. Sign-up
+   * was TWO: the enrollment-code hint (what a code is, and that only its hash is stored) and the
+   * password hint — there are no codes, so it is one. Verified against the components rather than
+   * inferred from a red run: `grep -c signed-out-hint` reports 2 in `routes/FirstRun.tsx`, 1 in
+   * `routes/Enroll.tsx`, 0 in `routes/Login.tsx`.
+   *
+   * They stay EXACT counts, which is the point of them: this assertion is what catches a hint that
+   * silently stopped rendering, and `>= 1` would catch nothing. It is also what makes the measure
+   * and touching-hint assertions below non-vacuous — they iterate over `m.hints`, and every one of
+   * them passes trivially against an empty array.
+   */
+  expect(measurements.filter((m) => m.screen === 'first-run').every((m) => m.hints.length === 2)).toBe(true);
+  expect(measurements.filter((m) => m.screen === 'enrol').every((m) => m.hints.length === 1)).toBe(true);
   expect(measurements.filter((m) => m.screen === 'sign-in').every((m) => m.hints.length === 0)).toBe(true);
 });
 
@@ -584,7 +617,8 @@ test('the setup token is legible in the field an operator pastes it into', () =>
   expect(tokenScreens.length).toBeGreaterThan(0);
 
   // From 768px up the whole 48-character token is in view at once, which is what lets an operator
-  // check a pasted secret against the one in the log.
+  // check a pasted secret against the one they read out of `<DATA_DIR>/first-run-token.txt`. (This
+  // said "the one in the log" until 2026-08-11; the token is not printed there any more.)
   const clipped = tokenScreens
     .filter((m) => m.width >= 768 && m.tokenFits === false)
     .map((m) => `${m.screen} @ ${String(m.width)}px ${m.theme}`);

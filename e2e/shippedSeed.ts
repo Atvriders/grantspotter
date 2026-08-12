@@ -28,15 +28,29 @@
  * IT SPAWNS ITS OWN PROCESS INSTEAD OF ADDING A SECOND `webServer` ENTRY, for two reasons a
  * `webServer` entry cannot be talked into.
  *
- *   THE BOOT LOG IS EVIDENCE HERE, not noise. The one-time admin token exists nowhere but stdout —
- *   nothing can mint the FIRST account but that token, and `/api/auth/bootstrap-status` will tell
- *   you a token is needed but never what it is — and the `[seed] …` sentence the operator reads is
- *   asserted verbatim. (This said "there is no sign-up form" until enrollment codes shipped. There
- *   is one now, but it cannot help here: a code has to be issued by an administrator, and on a
- *   first boot there is no administrator to issue one. The token remains the only way in, which is
- *   what this harness depends on.)
- *   Playwright prefixes a `webServer`'s output with `[WebServer]` and prints it through the
- *   reporter; no fixture hands it to a spec.
+ *   THE BOOT LOG IS EVIDENCE HERE, not noise. The `[seed] …` sentence the operator reads is
+ *   asserted verbatim, the restart banner is asserted verbatim, and the ABSENCE of the token from
+ *   both is asserted too. Playwright prefixes a `webServer`'s output with `[WebServer]` and prints
+ *   it through the reporter; no fixture hands it to a spec.
+ *
+ *   BOTH SENTENCES THAT USED TO STAND HERE WERE REWRITTEN ON 2026-08-11, BECAUSE BOTH BECAME FALSE
+ *   IN THE SAME ROUND, AND THE CONCLUSION THEY SUPPORTED SURVIVES ONLY VIA A THIRD MECHANISM.
+ *
+ *     · "The one-time admin token exists nowhere but stdout." It is a FILE now —
+ *       `<DATA_DIR>/first-run-token.txt`, mode 0600, written before the listener and deleted the
+ *       moment it is spent. The log names the path and never the secret. So this harness reads the
+ *       file (see `bootstrapTokenFrom`) rather than scraping the banner, which is why
+ *       `bootShippedServer` now carries its `dataDir` on the object it returns.
+ *     · "A code has to be issued by an administrator, and on a first boot there is no administrator
+ *       to issue one." There are no codes. Registration is open: anybody who can reach a deployment
+ *       creates their own member account, no invitation involved.
+ *
+ *   THE CONCLUSION STILL HOLDS — nothing but the token can mint the first account, which is the
+ *   property every spec below depends on — but it now rests on the ENROLL ROUTE'S OWN REFUSAL
+ *   rather than on the scarcity of a credential. `POST /api/auth/enroll` answers 409 ("this
+ *   GrantSpotter has not been set up yet") for as long as `bootstrap.required()` is true, i.e. for
+ *   as long as the users table is empty, so the open sign-up form cannot create the first account
+ *   however open it is. First-run setup is the only door until it has been walked through once.
  *
  *   THE SECOND BOOT HAPPENS MID-RUN. `webServer` starts processes before the first spec and stops
  *   them after the last, so "restart the container and prove nothing was imported twice" is not
@@ -48,9 +62,17 @@
  * says so plainly if it is not.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import Database from 'better-sqlite3';
+// The server's own name for the file, imported rather than retyped: a rename there must break the
+// compile here, not the assertion. `e2e/**` is inside the root `tsconfig.json`'s `include`, and
+// `seed.ts` already reaches into `packages/server/src` this way.
+import { FIRST_RUN_TOKEN_FILE } from '../packages/server/src/auth/bootstrap.js';
+// Same rule: the product owns what "the same address" means, and a lookup that re-implemented it
+// would agree with the server right up until the day the rule changed.
+import { normalizeEmail } from '../packages/server/src/db/repositories/users.js';
 
 /**
  * Ports for the two boots, chosen next to `E2E_PORT` (3131) so the whole suite occupies one
@@ -96,8 +118,30 @@ const READY_TIMEOUT_MS = 60_000;
 export interface BootedServer {
   /** Everything the process has written to stdout and stderr since it started. */
   output(): string;
+  /**
+   * The DATA_DIR this process was booted against, as it was passed in.
+   *
+   * Carried on the object because the one-time setup token is a FILE inside it and the boot log
+   * deliberately does not contain the secret: `bootstrapTokenFrom` needs the directory, and every
+   * caller had it and dropped it. Kept as the caller's own string (relative, in every caller here)
+   * rather than resolved, so a failure message names the path the spec wrote.
+   */
+  dataDir: string;
   /** SIGTERM, then wait for the exit. Safe to call twice. */
   stop(): Promise<void>;
+}
+
+/**
+ * Where this server put its one-time setup token, as an absolute path.
+ *
+ * `firstRunTokenPath` in `auth/bootstrap.ts` anchors a relative `DATA_DIR` to the SERVER process's
+ * `process.cwd()`. That process is spawned from this one with no `cwd` option, so it inherits this
+ * one's — Playwright runs from the repository root either way — and resolving here against the same
+ * cwd names the same file. Absolute, because a caller comparing paths or printing one in a failure
+ * should not have to know that.
+ */
+export function firstRunTokenFile(server: BootedServer): string {
+  return resolve(server.dataDir, FIRST_RUN_TOKEN_FILE);
 }
 
 /**
@@ -190,6 +234,7 @@ export async function bootShippedServer(options: {
 
   const server: BootedServer = {
     output: () => output,
+    dataDir: options.dataDir,
     stop: async () => {
       if (exitLine !== undefined) return;
       child.kill('SIGTERM');
@@ -218,23 +263,40 @@ export async function bootShippedServer(options: {
 }
 
 /**
- * The one-time admin token out of a boot log, once the banner has actually been written.
+ * The one-time admin token, READ OUT OF THE FILE THE SERVER WROTE IT TO.
  *
- * It is printed before `app.listen`, so it is always in the buffer by the time `/api/health`
- * answers — but stdout is a pipe and the read is asynchronous, so this polls for a moment rather
- * than reading once and blaming the server for a chunk that had not arrived.
+ * IT USED TO BE SCRAPED OUT OF THE BOOT LOG with `/[0-9a-f]{40,}/`, and that stopped working on
+ * 2026-08-11 on purpose: the token was moved out of stdout into `<DATA_DIR>/first-run-token.txt`
+ * at mode 0600, because a container log is copied, shipped to an aggregator and read by people who
+ * are not the operator, and a log does not forget. The banner now prints the PATH. Scraping it back
+ * out of the banner is impossible and should be — there is nothing there to scrape.
+ *
+ * ONE BRANCH OF `bootstrap.ts` STILL PRINTS THE SECRET and this deliberately does not read it: the
+ * fallback banner, for a data directory that takes a database but not this file. That is a real
+ * branch and it is covered by `auth/bootstrap.test.ts`; here it is a HARNESS failure, because this
+ * harness owns its DATA_DIR and creates it empty. Falling back to the log would turn "the token
+ * file was not written" — which is the thing this round changed and the thing worth noticing —
+ * into a green run.
+ *
+ * Written before `app.listen`, so the file exists by the time `/api/health` answers; the short poll
+ * is for the ordinary filesystem race rather than for the server, and `.trim()` is because the file
+ * ends in a newline.
  */
 export async function bootstrapTokenFrom(server: BootedServer): Promise<string> {
+  const path = firstRunTokenFile(server);
   const deadline = Date.now() + 5_000;
   for (;;) {
-    const match = /GrantSpotter first-run setup[\s\S]*?\n\s+([0-9a-f]{40,})\s*\n/.exec(
-      server.output(),
-    );
-    if (match?.[1] !== undefined) return match[1];
+    try {
+      const token = readFileSync(path, 'utf8').trim();
+      if (token !== '') return token;
+    } catch {
+      // Not there yet, or not there at all: both are answered by the deadline below.
+    }
     if (Date.now() >= deadline) {
       throw new Error(
-        'no first-run bootstrap token in the boot log. The banner is printed only while the ' +
-          `users table is empty, so a DATA_DIR that was not wiped is the usual cause:\n${server.output()}`,
+        `no first-run setup token at ${path}. The file is written only while the users table is ` +
+          'empty and is deleted the moment the token is spent, so a DATA_DIR that was not wiped ' +
+          `is the usual cause. The boot log says:\n${server.output()}`,
       );
     }
     await sleep(100);
@@ -263,6 +325,33 @@ export async function bootstrapAdmin(baseUrl: string, token: string): Promise<vo
   }
 }
 
+/**
+ * Ask a deployment to create an ordinary member account, and report what it said.
+ *
+ * The signed-out sign-up form's own request, made without a browser. It exists so a spec can ask
+ * the question that only has an interesting answer for the few seconds before the first
+ * administrator exists — can a stranger who reaches an unclaimed container claim it? — which is not
+ * a moment a `page` can be pointed at from inside a test, because `beforeAll` has already spent it.
+ *
+ * IT LIVES IN THIS FILE RATHER THAN IN THE SPEC, and that is a rule rather than a preference:
+ * `packages/server/test/contactUrlEntryPointContract.test.ts` keeps a CLOSED list of files allowed
+ * to open a socket without going through `createFetcher`, this file is on it and the spec is not,
+ * and adding a fifth entry is a decision made in review. Writing the `fetch` here keeps every
+ * network call this harness makes in the one module that already owns `probeHealth` and
+ * `bootstrapAdmin` — which is what the list is for.
+ */
+export async function attemptSignUp(
+  baseUrl: string,
+  body: { email: string; password: string },
+): Promise<{ status: number; body: string }> {
+  const response = await fetch(`${baseUrl}/api/auth/enroll`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.text() };
+}
+
 function readShippedDb<T>(read: (db: Database.Database) => T): T {
   // Read-only, and opened per call: the server process owns this file and is still writing to it.
   const db = new Database(SHIPPED_DB_PATH, { readonly: true });
@@ -271,6 +360,30 @@ function readShippedDb<T>(read: (db: Database.Database) => T): T {
   } finally {
     db.close();
   }
+}
+
+/**
+ * The account row behind an email address, as the database holds it, or null if there is none.
+ *
+ * `role` is read here rather than inferred from what the browser was allowed to see, because those
+ * are two different claims and only this one is about the account. A screen can hide the admin
+ * navigation from somebody the database calls an administrator; a row that says `member` cannot.
+ * `password_hash` is deliberately NOT selected — nothing in a test needs it, and a helper that
+ * hands it back is a helper somebody will one day print in a failure message.
+ */
+export function shippedUserRowFor(
+  email: string,
+): { role: string; displayName: string | null; disabled: number } | null {
+  return readShippedDb((db) => {
+    const row = db
+      .prepare('SELECT role, display_name, disabled FROM users WHERE email_normalized = ?')
+      .get(normalizeEmail(email)) as
+      | { role: string; display_name: string | null; disabled: number }
+      | undefined;
+    return row === undefined
+      ? null
+      : { role: row.role, displayName: row.display_name, disabled: row.disabled };
+  });
 }
 
 /** What the fresh install actually stores. Counted in the database, never restated from a plan. */

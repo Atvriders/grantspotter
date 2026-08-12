@@ -294,18 +294,52 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
   expect(unknown).toHaveLength(8);
 
-  // Every unknown names the profile fields it is waiting on, and every one of those fields is a
-  // field this profile leaves unset. That is the matcher invariant the whole completeness report
-  // rests on: an unset profile field yields `unknown`, never `ineligible`.
+  /*
+   * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
+   * RED (2026-08-11) AGAINST A CHANGE THAT WAS AN IMPROVEMENT.
+   *
+   * The loop below used to require, of every unknown row, `missingProfileFields.length > 0` — that
+   * an unknown always names something the reader could go and answer. That was true of the corpus
+   * for as long as an unanswerable hard axis could not produce an unknown at all, and it is not any
+   * more: `packages/core/src/geo.ts` learned on 2026-08-11 that a radius rule with no centre cannot
+   * be measured by anybody, and `matchProgram`'s `unlistableUnknown` renders that as `unknown` with
+   * an EMPTY list — "something could not be worked out, and there is no input you could fill in to
+   * change that". `VerdictBadge` has the copy for exactly that case.
+   *
+   * WHAT IT REPLACED IS THE POINT. Before, a centreless circle went through `withinRadius`, which
+   * answers `false` when there is no centre, and came out FAIL — so an applicant who filled in a
+   * latitude and longitude turned that programme from a question into a hard NO, from anywhere on
+   * Earth, as a direct consequence of answering a question. So the assertion is SPLIT rather than
+   * relaxed: the old requirement still binds on every row that names a field, and the rows that
+   * name none are pinned by name and by count, because "an unknown that asks for nothing" is a
+   * shape that must never spread quietly.
+   */
   const filled = new Set(Object.keys(EE_UNDERGRAD));
-  for (const row of unknown) {
-    expect(row.verdict?.missingProfileFields?.length ?? 0).toBeGreaterThan(0);
+  const answerable = unknown.filter((r) => (r.verdict?.missingProfileFields?.length ?? 0) > 0);
+  const unanswerable = unknown.filter((r) => (r.verdict?.missingProfileFields?.length ?? 0) === 0);
+
+  // Every answerable unknown names profile fields, and every one of those fields is a field this
+  // profile leaves unset. That is the matcher invariant the whole completeness report rests on: an
+  // unset profile field yields `unknown`, never `ineligible`.
+  for (const row of answerable) {
     for (const field of row.verdict?.missingProfileFields ?? []) {
       expect(filled.has(field), `${row.program.name} is waiting on "${field}", which IS set`).toBe(
         false,
       );
     }
   }
+
+  // And exactly one record in this corpus is the other kind, named rather than counted. Measured
+  // 2026-08-12 against the built server on the fixture corpus: 8 unknown, 7 of them naming a field,
+  // this one naming none. It is the Yankee Clipper Contest Club Youth Scholarship, whose stored
+  // rule is `{ type: 'radius', radiusMiles: 175, centerLabel: 'YCCC center which is in Erving, MA.
+  // MA' }` with no `centerLat`/`centerLon`, because the label never resolved to a coordinate. A
+  // SECOND row joining it is a corpus regression — a funder's rule silently losing its centre — and
+  // must fail here rather than disappear into a count.
+  expect(unanswerable.map((r) => r.program.name)).toEqual([
+    'The Yankee Clipper Contest Club Youth Scholarship',
+  ]);
+  expect(answerable).toHaveLength(7);
   expect(browse.summary.unknownByField.map((f) => f.field).sort()).toEqual([
     'county',
     'cwWpm',
@@ -327,6 +361,97 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
       expect(reason.spec.axis.length).toBeGreaterThan(0);
     }
   }
+});
+
+/**
+ * ANSWERING A QUESTION MUST NOT BE ABLE TO MANUFACTURE A REFUSAL.
+ *
+ * WHY THIS TEST DID NOT EXIST AND IS BEING WRITTEN AFTER THE FACT. The suite above holds "an unset
+ * field yields `unknown`, never `ineligible`" — the direction that protects somebody who has filled
+ * nothing in. Nothing held the opposite direction: what happens to a verdict when a field IS filled
+ * in. That gap let a real defect ship and stay green. `data/seed/programs.arrl-catalog.json` stores
+ * the Yankee Clipper Contest Club Youth Scholarship as a 175-mile radius whose `centerLabel` ("YCCC
+ * center which is in Erving, MA. MA") never resolved to a coordinate, so the record has no
+ * `centerLat`/`centerLon`. `withinRadius` is a predicate and answers `false` when there is no
+ * centre, which is the right answer to "is this point inside" and the wrong answer to "does this
+ * applicant satisfy the rule" — and until 2026-08-11 the matcher used the first as the second. An
+ * applicant with no coordinate saw `unknown`; the moment they supplied one, from anywhere on Earth
+ * including Erving itself, that programme became a confident NO. The whole e2e suite passed
+ * throughout, because every profile in it leaves `lat` and `lon` unset.
+ *
+ * So this drives the axis with coordinates in the profile, which nothing here had ever done.
+ */
+test('a coordinate can decide a circle that has a centre, and can never close one that has none', async ({
+  request,
+}) => {
+  await signIn(request, MEMBER_EMAIL, MEMBER_PASSWORD);
+
+  const YCCC = 'The Yankee Clipper Contest Club Youth Scholarship';
+  const CHICK_ALLEN = 'The Chick Allen, NW3Y, Scholarship';
+  const BROUGHTON = 'The Henry Broughton, K2AE, Memorial Scholarship';
+
+  async function verdictsAt(
+    at: { lat: number; lon: number } | null,
+  ): Promise<Map<string, Verdict | null>> {
+    // PUT replaces the stored profile wholesale rather than merging — measured — so omitting the
+    // two keys is how a profile with no coordinate is expressed, and the last call in this test
+    // leaves the account exactly as `browseAsEeUndergrad` would.
+    const saved = await request.put('/api/profiles/student', {
+      data: at === null ? EE_UNDERGRAD : { ...EE_UNDERGRAD, ...at },
+    });
+    expect(saved.status(), await saved.text()).toBe(200);
+    const browse = (await (await request.get('/api/programs?pageSize=200')).json()) as BrowseBody;
+    return new Map(browse.rows.map((row) => [row.program.name, row.verdict]));
+  }
+
+  /*
+   * THE POSITIVE CONTROL, FIRST, because without it every assertion below would also pass against a
+   * matcher that had stopped evaluating radii altogether. Two of the three radius rules in this
+   * corpus DO carry a centre, and they are 300 miles apart: Seaford, Delaware (250 miles) and
+   * Schenectady, New York (70 miles). Standing at each centre in turn must include one and exclude
+   * the other, both ways round.
+   */
+  const seaford = await verdictsAt({ lat: 38.6412, lon: -75.6116 });
+  expect(seaford.get(CHICK_ALLEN)?.kind).toBe('eligible');
+  expect(seaford.get(BROUGHTON)?.kind).toBe('ineligible');
+  expect(
+    (seaford.get(BROUGHTON)?.reasons ?? []).map((r) => r.spec.axis),
+  ).toContain('geography');
+
+  const schenectady = await verdictsAt({ lat: 42.8142, lon: -73.9396 });
+  expect(schenectady.get(BROUGHTON)?.kind).toBe('eligible');
+  expect(schenectady.get(CHICK_ALLEN)?.kind).toBe('ineligible');
+
+  /*
+   * AND THE RULE WITH NO CENTRE, FROM FOUR PLACES INCLUDING ITS OWN. Erving, Massachusetts is
+   * inside the circle the funder described and the South Atlantic is 8,000 miles outside it;
+   * GrantSpotter cannot tell, and must say so identically from both rather than pick one. The
+   * verdict is compared to the no-coordinate verdict field by field, so this fails whether the
+   * answer becomes `ineligible` (the shipped defect) or quietly becomes `eligible` (the same
+   * over-assertion pointed the other way).
+   */
+  const withoutCoordinate = await verdictsAt(null);
+  expect(withoutCoordinate.get(YCCC)).toEqual({ kind: 'unknown', missingProfileFields: [] });
+
+  for (const at of [
+    { lat: 42.6034, lon: -72.4009 }, // Erving, MA — inside the circle the funder meant
+    { lat: 30.2672, lon: -97.7431 }, // Austin, TX — where this profile actually is
+    { lat: -54.4296, lon: -36.5879 }, // South Georgia, in the South Atlantic
+    { lat: 0, lon: 0 }, // Null Island: a real coordinate that a falsy test would drop
+  ]) {
+    const verdicts = await verdictsAt(at);
+    expect(
+      verdicts.get(YCCC),
+      `${YCCC} changed its answer at ${String(at.lat)},${String(at.lon)}, so a rule with no ` +
+        'centre was decided by a coordinate',
+    ).toEqual(withoutCoordinate.get(YCCC));
+  }
+
+  // Left as `browseAsEeUndergrad` leaves it: no coordinate, so the counts every other spec in this
+  // file asserts are the counts this one hands on.
+  const restored = await verdictsAt(null);
+  expect(restored.get(YCCC)?.kind).toBe('unknown');
+  expect(restored.get(CHICK_ALLEN)?.missingProfileFields).toEqual(['lat', 'lon']);
 });
 
 test("a deadline is the funder's own calendar day, not its UTC instant", async ({ request }) => {

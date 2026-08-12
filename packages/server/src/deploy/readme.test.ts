@@ -963,10 +963,40 @@ describe('README: sign-up is open, and says what that does and does not give awa
     expect(readme).toMatch(new RegExp(`\\b${String(perNetwork)}\\s+per\\s+source\\s+network\\b`));
     expect(readme).toMatch(new RegExp(`\\b${String(perServer)}\\s+across\\s+the\\s+whole\\s+server\\b`));
     expect(readme).toMatch(new RegExp(`\\b${String(windowMin)}-minute\\b`));
-    // Every attempt, not every failure, which is what makes the numbers what they are.
-    expect(readme).toMatch(/Every\s+attempt\s+is\s+counted,\s+not\s+every\s+failure/i);
+    /*
+     * INVERTED ON 2026-08-11, AND THE ASSERTION IT REPLACES IS NAMED RATHER THAN QUIETLY DROPPED.
+     *
+     * This line used to require `Every attempt is counted, not every failure`. That was a true
+     * description of the route as it then stood — the counters were charged on the address, before
+     * the hash, whatever happened afterwards. The route now CLAIMS a slot before the hash and
+     * RECORDS it only after `users.create` returns, so a refusal, a taken address, a shed request
+     * and a lost race all release their slot and leave no mark (see `REGISTRATION_WINDOW_MS` in
+     * `api/auth.ts`, "WHAT IS COUNTED IS AN ACCOUNT THAT EXISTS, AND NOTHING ELSE"). A README still
+     * saying "every attempt" would overstate the budget by the whole width of the probe traffic.
+     *
+     * So the old sentence is now FORBIDDEN, in the same shape the wrong-codes reassurance below is
+     * forbidden, and the sentence that is true is required beside it. Requiring the new one alone
+     * would let both stand in the file at once.
+     */
+    expect(readme).toMatch(/Every\s+account\s+created\s+is\s+counted,\s+not\s+every\s+attempt/i);
+    expect(
+      /\*\*Every\s+attempt\s+is\s+counted,\s+not\s+every\s+failure\*\*/i.test(readme),
+      'The README is asserting again that every registration ATTEMPT is charged to the budget. ' +
+        'It is not: a slot is claimed before the hash and recorded only once the account row ' +
+        'exists, so everything that fails releases it. Quoting the retired sentence as history is ' +
+        'fine — it appears unbolded a paragraph later — but it must not be the claim.',
+    ).toBe(false);
     expect(readme).toMatch(/closing\s+that\s+one\s+takes\s+at\s+least\s+two\s+networks\s+acting\s+together/i);
-    expect(readme).toMatch(/23,040 a day/);
+    /*
+     * BOTH DAILY FIGURES, BECAUSE ONE OF THEM IS THE OLD NUMBER. `23,040 a day` was the whole
+     * deployment's ceiling when the server-wide rung was 240; at 480 it is what the network rung
+     * allows, which is what an operator behind a tunnel actually faces. Asserting only `23,040`
+     * would therefore have gone on passing against a README that had never been updated — the
+     * precise failure mode this file exists to prevent — so the deployment-wide figure is required
+     * too, and the tunnel figure is required to say that is what it is.
+     */
+    expect(readme).toMatch(/46,080 a day/);
+    expect(readme).toMatch(/23,040 a day behind the tunnel/i);
     // The change of subject, said rather than left for a reader to infer from the absence of the
     // old promise.
     expect(readme).toMatch(/on\s+the\s+path\s+of\s+every\s+legitimate\s+registration/i);

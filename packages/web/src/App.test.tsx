@@ -166,7 +166,14 @@ function payloadFor(rawUrl: string): unknown {
     return { rows: [], summary: { total: 0, healthy: 0, unhealthy: 0 }, canConfigure: false };
   }
   if (path === '/api/admin/users') return { rows: [] };
-  if (path === '/api/admin/enrollment-codes') return { codes: [] };
+  /*
+   * `/api/admin/enrollment-codes` HAD A STUB HERE AND IT IS DELETED (2026-08-11), which is a
+   * deliberate removal of cover rather than tidying. The route was unmounted with the rest of the
+   * enrollment-code subsystem, so a stub for it can only do one thing now: silently absorb a call
+   * to a retired endpoint and let the admin screen go on passing while the real server answers
+   * 404. With the stub gone, `unstubbed` records any such call and the `afterEach` below turns it
+   * red, naming the path.
+   */
 
   // Recorded rather than thrown. A rejected fetch is indistinguishable from an outage to
   // `useApi`, so the route would render its perfectly correct "could not be reached" state and
@@ -298,20 +305,31 @@ describe('App', () => {
   /**
    * THE THIRD WAY IN, COMPOSED.
    *
-   * `routes/FirstRun.test.tsx` proves the gate swaps its forms and that enrolment calls back;
-   * only this file can prove what the callback is worth. Enrolment sets the session cookie, so
+   * `routes/FirstRun.test.tsx` proves the gate swaps its forms and that signing up calls back;
+   * only this file can prove what the callback is worth. Signing up sets the session cookie, so
    * the refresh it triggers must land the new member on the ordinary first screen INSIDE the
    * shell — the same place a sign-in lands them — rather than on a signed-out page that no
    * longer applies.
+   *
+   * REPAIRED, NOT DELETED, ON 2026-08-11. This test was red because it drove the retired
+   * enrollment-code door: it pressed "I have an enrollment code" and typed a code into a field.
+   * Neither exists — registration is open, `GET /api/auth/enrollment-open` is gone from the server
+   * and the gate no longer asks it, and `Login.tsx` now offers "Create an account" unconditionally.
+   * But the PROPERTY this test names — creating an account lands you inside the shell rather than
+   * on a signed-out page — is untouched by any of that and is still only provable here, so the
+   * route through the screens was re-pointed at the door that exists rather than the assertions
+   * being dropped. Two things follow from the change and are asserted below because they are the
+   * part a stale stub would hide: `/api/auth/enrollment-open` must NOT be requested (a gate still
+   * asking a retired question would answer 404 and could strand the form), and the sign-up press
+   * is reached without a code field being filled in at all.
    */
-  it('lands an enrolled member inside the shell, where a sign-in would have landed them', async () => {
+  it('lands a newly signed-up member inside the shell, where a sign-in would have landed them', async () => {
     let enrolled = false;
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
         const path = new URL(url, 'http://localhost').pathname;
         if (path === '/api/auth/bootstrap-status') return jsonResponse(200, { required: false });
-        if (path === '/api/auth/enrollment-open') return jsonResponse(200, { open: true });
         if (path === '/api/auth/enroll') {
           enrolled = true;
           return jsonResponse(201, {
@@ -331,10 +349,11 @@ describe('App', () => {
     );
     renderAt('/');
 
-    await userEvent.click(
-      await screen.findByRole('button', { name: /i have an enrollment code/i }),
-    );
-    await userEvent.type(screen.getByLabelText(/enrollment code/i), 'JOIN-W1MX-2026');
+    await userEvent.click(await screen.findByRole('button', { name: /create an account/i }));
+    // No code, because there is nothing to type one into: the form is email, an optional display
+    // name, and a password. `queryByLabelText` rather than a comment, so a code field creeping
+    // back onto this screen fails here.
+    expect(screen.queryByLabelText(/enrollment code/i)).not.toBeInTheDocument();
     await userEvent.type(screen.getByLabelText(/^email$/i), 'member@example.com');
     await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
     await userEvent.click(screen.getByRole('button', { name: /create my account/i }));
@@ -344,6 +363,9 @@ describe('App', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: /primary/i })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /create your account/i })).not.toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.map((call) => String(call[0]))).not.toContain(
+      '/api/auth/enrollment-open',
+    );
   });
 
   it('renders Browse inside the shell for a signed-in member', async () => {
