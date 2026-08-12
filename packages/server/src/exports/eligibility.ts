@@ -1,18 +1,28 @@
 /**
- * THE ELIGIBILITY REPORT — "you are ineligible for 74 of these, and here is the specific sentence
+ * THE ELIGIBILITY REPORT — "you are ineligible for 55 of these, and here is the specific sentence
  * for each".
  *
  * Spec §5 names that sentence as the feature that makes this a professional tool rather than a
  * list, and everything in this module exists to render it honestly:
  *
- *   - Every exclusion carries the FUNDER'S OWN `rawText`, not a paraphrase. The reason a verdict
- *     can be trusted is that the reader can check the sentence it came from.
+ *   - An exclusion the funder wrote carries the FUNDER'S OWN `rawText`, not a paraphrase. The
+ *     reason a verdict can be trusted is that the reader can check the sentence it came from.
+ *
+ *     AND AN EXCLUSION GRANTSPOTTER WROTE IS KEPT OUT OF THAT COLUMN ENTIRELY. One reason in this
+ *     product is composed at match time rather than read off a page — the applicant-entity gate —
+ *     and it used to arrive with a `rawText` in the funder's voice. Measured, before the fix: a
+ *     collegiate 501(c)(3) club's report carried 145 ineligible rows and 144 of them quoted a
+ *     sentence GrantSpotter had written, 125 of those reproducing raw enum identifiers ("This
+ *     program accepts applications from: ieee_student_branch_chapter.") under a column headed
+ *     "Why not, in the funder's words". `reasons` now holds only what a funder wrote and
+ *     `reasonsFromGrantSpotter` holds what this software wrote, in two columns that can never be
+ *     read as each other.
  *   - `unknown` is never rendered as a soft "no". It is a real and, for a half-filled profile, the
- *     overwhelmingly common state — an empty profile leaves 117 of 150 unknown and refuses zero of
- *     them — so its column says what the verdict is WAITING ON, and the two columns are never
- *     blurred: an exclusion is something the funder decided, a missing field is something the
- *     reader can do.
- *   - A geography exclusion (36 of the 74 for a licensed EE undergraduate) is CORRECT. Those
+ *     overwhelmingly common state — an empty profile leaves 136 of 150 unknown and refuses 9, every
+ *     one of those 9 on an audience somebody researched — so its column says what the verdict is
+ *     WAITING ON, and the two columns are never blurred: an exclusion is something the funder
+ *     decided, a missing field is something the reader can do.
+ *   - A geography exclusion (36 of the 55 for a licensed EE undergraduate) is CORRECT. Those
  *     scholarships genuinely are ARRL-Division, Section and state restricted. The page says so, so
  *     a correct exclusion is never presented as a fixable gap.
  *
@@ -34,8 +44,9 @@
  * to `new Date()`, which makes an age-gated verdict disagree with the `generatedAt` stamp printed
  * at the top of the same page, and makes the report irreproducible.
  */
-import { matchAll } from '@grantspotter/core';
+import { hasFunderWording, isApplicantEntityConstraint, matchAll } from '@grantspotter/core';
 import type {
+  Constraint,
   Cycle,
   Funder,
   OpportunityClass,
@@ -45,6 +56,43 @@ import type {
 } from '@grantspotter/core';
 import { toCsv } from './csv.js';
 import { buildExportRows } from './rows.js';
+
+/**
+ * One reason, kept apart into the two things it can be. The HTML report needs them structured
+ * (the flat `reasons` string was split back apart on ` | ` and paired with a DEDUPED axis list by
+ * index, which mislabels the moment one program is barred on two axes with three constraints);
+ * the CSV needs them flattened into two columns that cannot be mistaken for one another.
+ */
+export interface EligibilityReason {
+  /** `applicant_entity`, or the `ConstraintAxis` the product read the rule as. */
+  axis: string;
+  /** The funder's verbatim sentence. Empty when no funder wrote one. */
+  quoted: string;
+  /** GrantSpotter's own statement about the record. Empty when the funder's sentence stands. */
+  authored: string;
+}
+
+/**
+ * `spec.axis` is `'other'` for the applicant-entity constraint, because CONTRACT §3 has no axis
+ * for a gate the matcher invents. Filing it under the long-tail bucket made a club's whole report
+ * read `other`, which is the axis name for "a requirement no schema captures" — a different and
+ * untrue claim about where the exclusion came from.
+ */
+export const APPLICANT_ENTITY_AXIS_KEY = 'applicant_entity';
+
+function reasonAxisKey(constraint: Constraint): string {
+  return isApplicantEntityConstraint(constraint) ? APPLICANT_ENTITY_AXIS_KEY : constraint.spec.axis;
+}
+
+function reasonDetail(constraint: Constraint): EligibilityReason {
+  const authored =
+    constraint.spec.axis === 'other' && !hasFunderWording(constraint) ? constraint.spec.note : '';
+  return {
+    axis: reasonAxisKey(constraint),
+    quoted: hasFunderWording(constraint) ? constraint.rawText : '',
+    authored,
+  };
+}
 
 /** PLAN-LOCAL. */
 export interface EligibilityRow {
@@ -59,8 +107,23 @@ export interface EligibilityRow {
   metPreferences: string;
   /** The axis of each hard constraint that excluded this applicant, `; `-separated. */
   reasonAxes: string;
-  /** The funder's own sentence for each of those constraints, ` | `-separated. */
+  /**
+   * The funder's own sentence for each of those constraints, ` | `-separated. ONLY the funder's:
+   * a constraint GrantSpotter composed contributes nothing here, however plausible its wording.
+   */
   reasons: string;
+  /**
+   * What GRANTSPOTTER said, for the reasons no funder wrote — ` | `-separated. A separate column
+   * rather than a marker inside `reasons` because a spreadsheet reader sorts, filters and quotes
+   * one column at a time, and "the funder said this" is exactly the claim that must not survive
+   * being copied out of its context.
+   */
+  reasonsFromGrantSpotter: string;
+  /**
+   * The same reasons, structured, for `renderEligibilityReportHtml`. NOT a CSV column: `toCsv`
+   * takes only the names in {@link ELIGIBILITY_CSV_COLUMNS}, so this never reaches the file.
+   */
+  reasonDetails: EligibilityReason[];
   /** What an `unknown` is WAITING ON. Never a promise that filling it produces an answer. */
   missingFields: string;
   /** The funder's own calendar day, from the shared row model. */
@@ -93,6 +156,7 @@ export const ELIGIBILITY_CSV_COLUMNS = [
   'metPreferences',
   'reasonAxes',
   'reasons',
+  'reasonsFromGrantSpotter',
   'missingFields',
   'nextCloses',
   'deadlineBasis',
@@ -142,6 +206,7 @@ export function buildEligibilityReport(
     counts[verdict.kind] += 1;
 
     const metById = new Map(program.constraints.map((c) => [c.id, c]));
+    const details = verdict.kind === 'ineligible' ? verdict.reasons.map(reasonDetail) : [];
     return {
       programId: program.id,
       programName: program.name,
@@ -156,11 +221,16 @@ export function buildEligibilityReport(
               .filter((t) => t.length > 0)
               .join(' | ')
           : '',
-      reasonAxes:
-        verdict.kind === 'ineligible'
-          ? [...new Set(verdict.reasons.map((c) => c.spec.axis))].join('; ')
-          : '',
-      reasons: verdict.kind === 'ineligible' ? verdict.reasons.map((c) => c.rawText).join(' | ') : '',
+      reasonAxes: [...new Set(details.map((d) => d.axis))].join('; '),
+      reasons: details
+        .map((d) => d.quoted)
+        .filter((t) => t !== '')
+        .join(' | '),
+      reasonsFromGrantSpotter: details
+        .map((d) => d.authored)
+        .filter((t) => t !== '')
+        .join(' | '),
+      reasonDetails: details,
       missingFields: verdict.kind === 'unknown' ? verdict.missingProfileFields.join('; ') : '',
       nextCloses: cells.nextCloses,
       deadlineBasis: cells.deadlineBasis,

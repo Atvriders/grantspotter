@@ -105,7 +105,8 @@ export function withinRadius(lat: number, lon: number, geo: GeoSpec): boolean {
  * So an unmeasurable radius is `unknown`, and — see `evaluateGeo` — it is an unknown that names NO
  * missing profile field, because there is nothing the applicant could type that would decide it.
  * `matchProgram` already has that case (`unlistableUnknown`) and `VerdictBadge` already renders it:
- * "Something this program asks for could not be evaluated from your profile. It is not a 'no'."
+ * "This program's record is missing something GrantSpotter needs to decide it, and there is no
+ * field you could fill in that would change that. It is not a 'no'."
  * The gap in the DATA is a separate finding and belongs in the corpus; what belongs here is that a
  * gap in the data cannot come out as a judgement about a person.
  */

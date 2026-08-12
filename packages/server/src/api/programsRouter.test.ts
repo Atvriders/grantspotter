@@ -502,20 +502,43 @@ describe('GET /api/programs', () => {
     expect(res.body.summary.total).toBe(5);
   });
 
-  it('surfaces the raw constraint text for every ineligibility reason', async () => {
-    seedStudentProfile(db);
+  /**
+   * `rawText` IS THE FUNDER'S SENTENCE OR IT IS NOTHING, and this test used to require the
+   * opposite: that every reason carry a non-empty one. That requirement is what a synthesised
+   * quotation satisfies. The applicant-entity gate is composed by `matcher.ts` at match time out
+   * of a list GrantSpotter researched, so it has no funder sentence and now carries an EMPTY
+   * `rawText` with its own statement in `spec.note` — and the browser must be able to tell the
+   * two apart, which is the whole point of shipping `rawText` over the wire.
+   */
+  it('surfaces the funder’s own constraint text, and only the funder’s', async () => {
+    // `licenseClass: 'NONE'` so the census carries BOTH shapes: the ARRL Foundation scholarship
+    // now fails a real hard constraint whose `rawText` is the funder's own sentence, alongside the
+    // two grant programmes this student cannot apply to at all. Without it every ineligible row
+    // came from the entity gate and the funder-quote branch below was vacuous.
+    seedStudentProfile(db, { licenseClass: 'NONE' });
     const res = await request(buildApp(db)).get('/api/programs?verdict=ineligible');
-    let reasons = 0;
+    let quoted = 0;
+    let authored = 0;
     for (const row of res.body.rows) {
       for (const reason of row.verdict.reasons) {
-        reasons += 1;
         expect(typeof reason.rawText).toBe('string');
-        expect(reason.rawText.length).toBeGreaterThan(0);
         expect(typeof reason.spec.axis).toBe('string');
+        if (reason.id.endsWith(':applicant-entity')) {
+          authored += 1;
+          expect(reason.rawText).toBe('');
+          expect(reason.spec.note).toContain('GrantSpotter, not the funder');
+          // The fabrication this replaced, pinned by its text.
+          expect(reason.spec.note).not.toContain('accepts applications from');
+        } else {
+          quoted += 1;
+          expect(reason.rawText.length).toBeGreaterThan(0);
+        }
       }
     }
-    // Vacuity guard: a loop over zero rows would pass every assertion above.
-    expect(reasons).toBe(2);
+    // Vacuity guard: a loop over zero rows would pass every assertion above, and so would a
+    // corpus in which only one of the two shapes occurs.
+    expect(quoted).toBe(1);
+    expect(authored).toBe(2);
   });
 
   it('passes filters through to the indexed query', async () => {

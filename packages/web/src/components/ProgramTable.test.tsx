@@ -215,6 +215,59 @@ describe('ProgramTable constraint drawer', () => {
     expect(screen.queryByText('This program is discontinued.')).not.toBeInTheDocument();
   });
 
+  /**
+   * The applicant-entity reason is composed by `matcher.ts`, not read off a page, so it carries an
+   * empty `rawText`. This list used to print `reason.rawText` bare, which would now open an
+   * `aria-expanded="true"` onto a blank line — the same unkept promise the drawer exists to avoid
+   * — and before the matcher fix printed a fabricated funder sentence containing an enum
+   * identifier. It shows the software's own sentence, marked as the software's.
+   */
+  it('opens a composed reason as GrantSpotter’s own, never as a blank line', async () => {
+    function AuthoredHarness(): JSX.Element {
+      const [expandedId, setExpandedId] = useState<string | null>(null);
+      const row: ProgramRow = {
+        ...CHICAGO_FM_ROW,
+        verdict: {
+          kind: 'ineligible',
+          reasons: [
+            {
+              id: `${CHICAGO_FM_ROW.program.id}:applicant-entity`,
+              hard: true,
+              fallbackRank: 0,
+              rawText: '',
+              spec: {
+                axis: 'other',
+                note:
+                  'GrantSpotter, not the funder: this record lists who may apply as individuals, ' +
+                  'and your profile applies as a club that is its own 501(c)(3).',
+              },
+            },
+          ],
+        },
+      };
+      return (
+        <ProgramTable
+          rows={[row]}
+          now={NOW}
+          expandedId={expandedId}
+          onExplain={(id) => setExpandedId(id)}
+        />
+      );
+    }
+    const { container } = render(
+      <MemoryRouter>
+        <AuthoredHarness />
+      </MemoryRouter>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /ineligible/i }));
+    const item = container.querySelector('.reasons-list li')!;
+    expect(item.textContent).toContain('GrantSpotter, not the funder');
+    expect(item.textContent).toContain('applies as a club that is its own 501(c)(3)');
+    expect(within(item as HTMLElement).getByText('Who may apply')).toBeInTheDocument();
+    expect(item.textContent).not.toContain('accepts applications from');
+    expect(item.textContent).not.toMatch(/[a-z]+_[a-z]+_[a-z]/);
+  });
+
   it('renders no drawer for a verdict that has no reasons to give', async () => {
     function EligibleHarness(): JSX.Element {
       const [expandedId, setExpandedId] = useState<string | null>(null);

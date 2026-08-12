@@ -83,6 +83,27 @@
   padding: var(--s-2) var(--s-3);
 }
 
+/* Deliberately NOT `.explain-raw`. Text GrantSpotter composed must never wear the monospaced
+   quotation box, whose whole meaning is "this is what the funder published". It is prose, in the
+   body face, under a label naming its author. */
+.explain-authored {
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  border-left: 2px dashed var(--border);
+  padding-left: var(--s-3);
+  max-width: 68ch;
+}
+
+.explain-authored-tag {
+  display: block;
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
 .explain-detail {
   margin-top: var(--s-2);
   font-size: var(--fs-200);

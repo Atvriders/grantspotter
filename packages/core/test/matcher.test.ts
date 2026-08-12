@@ -1,14 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import {
   APPLICANT_ENTITY_CONSTRAINT_SUFFIX,
+  APPLICANT_ENTITY_WORDING,
+  applicantEntityListLabel,
   evaluateConstraint,
+  hasFunderWording,
+  isApplicantEntityConstraint,
   matchAll,
   matchProgram,
 } from '../src/matcher.js';
-import type { ConstraintSpec, DegreeLevel, Stage, StudentProfile } from '../src/types.js';
+import type {
+  ApplicantEntity,
+  Constraint,
+  ConstraintSpec,
+  DegreeLevel,
+  Stage,
+  StudentProfile,
+} from '../src/types.js';
 import { makeConstraint, makeOrg, makeProgram, makeStudent } from './fixtures.js';
 
 const NOW = '2027-03-01T00:00:00.000Z';
+
+/** CONTRACT §3's whole `ApplicantEntity` union, so a new member cannot skip these checks. */
+const ALL_APPLICANT_ENTITIES: ApplicantEntity[] = [
+  'individual',
+  'club_unincorporated',
+  'club_501c3',
+  'club_via_fiscal_sponsor',
+  'school_lea',
+  'university',
+  'university_dept',
+  'ieee_student_branch_chapter',
+  'teacher',
+  'nominated_by_institution',
+];
+
+/** The `note` off an `other`-axis constraint — GrantSpotter's own restatement, if it has one. */
+function describeOther(constraint: Constraint): string {
+  return constraint.spec.axis === 'other' ? constraint.spec.note : '';
+}
 
 describe('matchProgram — baseline', () => {
   it('is eligible when a program has no constraints', () => {
@@ -34,7 +64,6 @@ describe('matchProgram — the applicant-entity gate', () => {
     expect(verdict.reasons).toHaveLength(1);
     expect(verdict.reasons[0].id).toBe(`rca-scholarships${APPLICANT_ENTITY_CONSTRAINT_SUFFIX}`);
     expect(verdict.reasons[0].hard).toBe(true);
-    expect(verdict.reasons[0].rawText).toContain('nominated_by_institution');
   });
 
   it('refuses a 501(c)(3) club for a program that only funds via a fiscal sponsor', () => {
@@ -49,6 +78,164 @@ describe('matchProgram — the applicant-entity gate', () => {
 
   it('refuses an organisation for an individuals-only scholarship', () => {
     expect(matchProgram(makeOrg(), makeProgram(), NOW).kind).toBe('ineligible');
+  });
+});
+
+/**
+ * THE REASON THIS GATE GIVES IS THE ONE SENTENCE IN THIS PRODUCT NO FUNDER WROTE.
+ *
+ * Everything else in `Verdict.reasons` is a `Constraint` an extractor lifted off a funder's page,
+ * and `IneligibilityDrawer` renders `rawText` verbatim in a monospaced quotation block on the
+ * strength of that. The applicant-entity constraint is composed here, at match time, out of
+ * `program.applicantEntities` — which is not a quotation either: it is GrantSpotter's research on
+ * a source, assembled per source id in `normalize/index.ts`'s `ENTITIES_BY_SOURCE`.
+ *
+ * It used to be given a `rawText` all the same, reading `This program accepts applications from:
+ * ieee_student_branch_chapter.` — a plausible funder sentence, in the funder's voice, containing a
+ * machine token no human ever typed. `grep -rn` across `packages` and `e2e` found that wording in
+ * `matcher.ts` and NOWHERE else: no page, no fixture, no funder. Measured over the real corpus, a
+ * collegiate 501(c)(3) club's printed eligibility report carried 144 such rows, 125 of them
+ * quoting an enum identifier under a column headed "in the funder's words".
+ */
+describe('matchProgram — the entity reason quotes nobody, and says so', () => {
+  const ieee = makeProgram({
+    id: 'ieee-mtts',
+    applicantEntities: ['ieee_student_branch_chapter'],
+  });
+
+  it('carries an EMPTY rawText, because no funder sentence exists to quote', () => {
+    const verdict = matchProgram(makeOrg({ entity: 'club_501c3' }), ieee, NOW);
+    if (verdict.kind !== 'ineligible') throw new Error('unreachable');
+    expect(verdict.reasons[0].rawText).toBe('');
+    expect(hasFunderWording(verdict.reasons[0])).toBe(false);
+    expect(isApplicantEntityConstraint(verdict.reasons[0])).toBe(true);
+  });
+
+  it('never puts an enum identifier in front of a reader', () => {
+    for (const entity of ALL_APPLICANT_ENTITIES) {
+      const program = makeProgram({ id: 'p', applicantEntities: [entity] });
+      const verdict = matchProgram(makeOrg({ entity: 'club_via_fiscal_sponsor' }), program, NOW);
+      if (verdict.kind !== 'ineligible') continue;
+      const text = `${verdict.reasons[0].rawText} ${describeOther(verdict.reasons[0])}`;
+      // `individual` is also an English word, so the test is about the SHAPE of an identifier:
+      // nothing snake_cased may reach a reader. That is what "ieee_student_branch_chapter" was.
+      expect(text, `${entity} leaked its identifier`).not.toMatch(/[a-z]+_[a-z]/);
+      if (entity.includes('_')) expect(text, entity).not.toContain(entity);
+    }
+  });
+
+  it('attributes its own sentence to GrantSpotter, inside the sentence', () => {
+    const verdict = matchProgram(makeOrg({ entity: 'club_501c3' }), ieee, NOW);
+    if (verdict.kind !== 'ineligible') throw new Error('unreachable');
+    expect(describeOther(verdict.reasons[0])).toBe(
+      'GrantSpotter, not the funder: this record lists who may apply as IEEE student branches ' +
+        'and chapters, and your profile applies as a club that is its own 501(c)(3). That list ' +
+        "is GrantSpotter's reading of the funder's page, not a sentence the funder wrote — read " +
+        'the page before you rule yourself out.',
+    );
+  });
+
+  it('names every entity of a multi-entity list in English', () => {
+    expect(applicantEntityListLabel(['individual'])).toBe('individuals');
+    expect(applicantEntityListLabel(['individual', 'teacher'])).toBe(
+      'individuals or teachers applying in person',
+    );
+    expect(applicantEntityListLabel(['individual', 'teacher', 'school_lea'])).toBe(
+      'individuals, teachers applying in person or schools and school districts',
+    );
+    expect(applicantEntityListLabel([])).toBe('');
+  });
+
+  it('has English for every entity CONTRACT §3 models, on both sides of the sentence', () => {
+    for (const entity of ALL_APPLICANT_ENTITIES) {
+      const wording = APPLICANT_ENTITY_WORDING[entity];
+      expect(wording.listed, entity).not.toContain('_');
+      expect(wording.applying, entity).not.toContain('_');
+      expect(wording.listed.length, entity).toBeGreaterThan(entity.length / 2);
+    }
+    expect(Object.keys(APPLICANT_ENTITY_WORDING).sort()).toEqual([...ALL_APPLICANT_ENTITIES].sort());
+  });
+});
+
+/**
+ * SILENCE IS NOT A PROHIBITION.
+ *
+ * `[].includes(anything)` is `false`, so a record that stated NOTHING about who may apply was a
+ * hard `ineligible` for every possible user, decided before any other axis ran. Measured over the
+ * 150 publishable programs the committed fixtures produce: 19 of them carried
+ * `applicantEntities: []`, every one of the ten `ApplicantEntity` values was refused by all 19,
+ * and a collegiate 501(c)(3) club was refused 144 of 150 with all 144 on this gate. Eleven of the
+ * 19 are live routes to money — campus student-government funding and the NASA Space Grant
+ * consortia among them, the two the corpus itself annotates as the primary audience's real
+ * funding.
+ *
+ * The rule being applied is `geo.ts`'s, stated for the unmeasurable radius and equally true here:
+ * a gap in the data cannot come out as a judgement about a person.
+ */
+describe('matchProgram — an audience nobody recorded is not a refusal', () => {
+  const silent = makeProgram({ id: 'campus-sga', applicantEntities: [], constraints: [] });
+
+  it('is unknown, not ineligible, for every entity the contract models', () => {
+    for (const entity of ALL_APPLICANT_ENTITIES) {
+      const profile = makeOrg({ entity });
+      expect(matchProgram(profile, silent, NOW), entity).toEqual({
+        kind: 'unknown',
+        missingProfileFields: [],
+      });
+    }
+    expect(matchProgram(makeStudent(), silent, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
+  });
+
+  it('is unknown and not ELIGIBLE either — nobody said the applicant may apply', () => {
+    // The other direction of the same error. `eligible` is the claim an applicant acts on, and
+    // an unrecorded audience is not evidence for it.
+    expect(matchProgram(makeStudent(), silent, NOW).kind).not.toBe('eligible');
+    expect(matchProgram(makeStudent(), silent, NOW).kind).not.toBe('eligible_preferred');
+  });
+
+  it('asks for no profile field, because the gap is in the record and not in the reader', () => {
+    const verdict = matchProgram(makeStudent({ gpa: 3.9 }), silent, NOW);
+    if (verdict.kind !== 'unknown') throw new Error('unreachable');
+    expect(verdict.missingProfileFields).toEqual([]);
+  });
+
+  it('does not short-circuit: a provable hard failure still outranks it, with its own quote', () => {
+    const program = makeProgram({
+      applicantEntities: [],
+      constraints: [
+        makeConstraint({ axis: 'gpa', min: 3.5 }, { id: 'gpa', hard: true, rawText: 'Minimum 3.5 GPA.' }),
+      ],
+    });
+    const verdict = matchProgram(makeStudent({ gpa: 2.0 }), program, NOW);
+    expect(verdict.kind).toBe('ineligible');
+    if (verdict.kind !== 'ineligible') throw new Error('unreachable');
+    expect(verdict.reasons.map((c) => c.id)).toEqual(['gpa']);
+    // ...and that one IS a quotation, so the drawer may show it as one.
+    expect(hasFunderWording(verdict.reasons[0])).toBe(true);
+  });
+
+  it('still runs the other axes, so an unanswered one is named', () => {
+    const program = makeProgram({
+      applicantEntities: [],
+      constraints: [makeConstraint({ axis: 'gpa', min: 3.5 }, { id: 'gpa', hard: true })],
+    });
+    expect(matchProgram(makeStudent({ gpa: undefined }), program, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: ['gpa'],
+    });
+  });
+
+  it('never lets a met preference promote it to eligible_preferred', () => {
+    const program = makeProgram({
+      applicantEntities: [],
+      constraints: [
+        makeConstraint({ axis: 'gpa', min: 3.0 }, { id: 'pref', hard: false, fallbackRank: 1 }),
+      ],
+    });
+    expect(matchProgram(makeStudent({ gpa: 3.9 }), program, NOW).kind).toBe('unknown');
   });
 });
 

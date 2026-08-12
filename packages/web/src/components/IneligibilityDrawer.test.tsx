@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { constraintSpecSchema, type Constraint, type ConstraintAxis } from '@grantspotter/core';
-import { IneligibilityDrawer, axisLabel } from './IneligibilityDrawer.js';
+import { IneligibilityDrawer, axisLabel, reasonHeading } from './IneligibilityDrawer.js';
 
 const reasons: Constraint[] = [
   {
@@ -141,5 +141,109 @@ describe('IneligibilityDrawer', () => {
   it('says so plainly when the reason list is empty rather than rendering nothing', () => {
     wrap(<IneligibilityDrawer programName="Test Award" reasons={[]} />);
     expect(screen.getByText(/no constraint was recorded/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE ONE REASON IN THIS PRODUCT THAT NO FUNDER WROTE.
+ *
+ * `matchProgram` composes the applicant-entity constraint itself, out of a list GrantSpotter
+ * researched per source. It used to arrive carrying a `rawText` — "This program accepts
+ * applications from: ieee_student_branch_chapter." — which this component then rendered inside
+ * `.explain-raw`, the monospaced quotation block whose whole meaning, in rule 1 of this file's
+ * docblock, is that the reader is looking at the sentence the verdict was derived FROM and can
+ * judge it. There was no such sentence: 125 rows of a collegiate club's report quoted an enum
+ * identifier and 19 quoted "(none recorded)". The empty-list case is `unknown` now and never
+ * reaches this drawer at all; the researched-list case reaches it in GrantSpotter's own voice.
+ */
+const authoredEntityReason: Constraint = {
+  id: 'ieee-mtts:applicant-entity',
+  hard: true,
+  fallbackRank: 0,
+  rawText: '',
+  spec: {
+    axis: 'other',
+    note:
+      'GrantSpotter, not the funder: this record lists who may apply as IEEE student branches ' +
+      'and chapters, and your profile applies as a club that is its own 501(c)(3). That list is ' +
+      "GrantSpotter's reading of the funder's page, not a sentence the funder wrote — read the " +
+      'page before you rule yourself out.',
+  },
+};
+
+describe('IneligibilityDrawer — a reason GrantSpotter wrote is never dressed as a quotation', () => {
+  it('renders it outside the verbatim block, under a label naming its author', () => {
+    const { container } = wrap(
+      <IneligibilityDrawer programName="IEEE MTT-S" reasons={[authoredEntityReason]} />,
+    );
+    expect(container.querySelector('.explain-raw')).toBeNull();
+    const authored = container.querySelector('.explain-authored');
+    expect(authored).not.toBeNull();
+    expect(authored!.textContent).toContain('read the page before you rule yourself out');
+    expect(screen.getByText('GrantSpotter’s words, not the funder’s')).toBeInTheDocument();
+  });
+
+  it('drops the claim that the wording below is the funder’s', () => {
+    wrap(<IneligibilityDrawer programName="IEEE MTT-S" reasons={[authoredEntityReason]} />);
+    expect(
+      screen.getByText(
+        'Not a quotation. No funder sentence was recorded for this, so what follows is ' +
+          'GrantSpotter’s own statement about the record — read the funder’s page ' +
+          'before you take it as theirs.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says which lines are which when a verdict mixes the two', () => {
+    wrap(
+      <IneligibilityDrawer
+        programName="Mixed Award"
+        reasons={[reasons[0]!, authoredEntityReason]}
+      />,
+    );
+    expect(
+      screen.getByText(
+        'Quoted below in the funder’s own wording, except where a line is marked as ' +
+          'GrantSpotter’s. A marked line is our statement about the record, not a sentence the ' +
+          'funder wrote.',
+      ),
+    ).toBeInTheDocument();
+    // The funder's half is still quoted verbatim, in the block that means verbatim.
+    expect(screen.getByText(/General class or higher/)).toBeInTheDocument();
+  });
+
+  it('files it under "Who may apply" instead of the long-tail axis name', () => {
+    wrap(<IneligibilityDrawer programName="IEEE MTT-S" reasons={[authoredEntityReason]} />);
+    expect(reasonHeading(authoredEntityReason)).toBe('Who may apply');
+    expect(reasonHeading(reasons[0]!)).toBe('License');
+    expect(screen.getByText('Who may apply')).toBeInTheDocument();
+    expect(screen.queryByText('Other')).toBeNull();
+  });
+
+  it('never shows the sentence it replaced, nor an enum identifier', () => {
+    const { container } = wrap(
+      <IneligibilityDrawer programName="IEEE MTT-S" reasons={[authoredEntityReason]} />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).not.toContain('accepts applications from');
+    expect(text).not.toContain('(none recorded)');
+    expect(text).not.toContain('ieee_student_branch_chapter');
+    expect(text).not.toMatch(/[a-z]+_[a-z]+_[a-z]/);
+  });
+
+  it('says so rather than showing a blank box when a reason carries no wording at all', () => {
+    wrap(
+      <IneligibilityDrawer
+        programName="Silent Award"
+        reasons={[
+          { id: 'c-silent:applicant-entity', hard: true, fallbackRank: 0, rawText: '', spec: { axis: 'other', note: '' } },
+        ]}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /No wording was recorded for this requirement\. Open the record and check the source\./,
+      ),
+    ).toBeInTheDocument();
   });
 });

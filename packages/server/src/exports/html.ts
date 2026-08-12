@@ -80,19 +80,33 @@ function link(url: string): string {
 }
 
 /**
- * The funder's own sentences, each tagged with the axis it was read as. Both halves matter: the
- * axis is what the product decided, the quoted text is what the funder actually wrote, and a
- * reader who disagrees with the first can check it against the second.
+ * Each reason, tagged with the axis it was read as. Both halves matter: the axis is what the
+ * product decided, the text is the evidence, and a reader who disagrees with the first can check
+ * it against the second.
+ *
+ * A REASON GRANTSPOTTER WROTE IS NOT SET IN THE SAME TYPE AS ONE A FUNDER WROTE. The column is
+ * headed with the funder's words, and 144 of a collegiate club's 145 ineligible rows used to fill
+ * it with sentences this software composed — 125 of them reproducing enum identifiers. So an
+ * authored line carries a `GrantSpotter, not the funder` tag and the `.authored` class, and
+ * `.rawtext` — the class the reader has learned means "verbatim" — is reserved for text a funder
+ * published.
+ *
+ * Reads `row.reasonDetails`, not the flat strings: the old code split `reasons` on ` | ` and
+ * paired it by index with a DEDUPED axis list, which mislabels as soon as one program is barred by
+ * three constraints across two axes.
  */
 function reasonCell(row: EligibilityRow): string {
-  if (row.reasons === '') return '';
-  const axes = row.reasonAxes.split('; ').filter((a) => a.length > 0);
-  return row.reasons
-    .split(' | ')
-    .map((text, i) => {
-      const axis = axes[i] ?? axes[axes.length - 1] ?? '';
-      const tag = axis === '' ? '' : `<span class="axis">${escapeHtml(axis)}</span>`;
-      return `${tag}<span class="rawtext">${escapeHtml(text)}</span>`;
+  return row.reasonDetails
+    .map((detail) => {
+      const tag =
+        detail.axis === '' ? '' : `<span class="axis">${escapeHtml(detail.axis)}</span>`;
+      if (detail.quoted !== '') {
+        return `${tag}<span class="rawtext">${escapeHtml(detail.quoted)}</span>`;
+      }
+      return (
+        `${tag}<span class="authored-by">GrantSpotter, not the funder</span>` +
+        `<span class="authored">${escapeHtml(detail.authored)}</span>`
+      );
     })
     .join('<br>');
 }
@@ -147,7 +161,7 @@ export function renderEligibilityReportHtml(report: EligibilityReport): string {
 </ul>
 <table>
   <thead>
-    <tr><th>Verdict</th><th>Program</th><th>Award</th><th>Next close</th><th>Why not, in the funder&#39;s words</th><th>Waiting on</th><th>Where / last verified</th></tr>
+    <tr><th>Verdict</th><th>Program</th><th>Award</th><th>Next close</th><th>Why not &mdash; the funder&#39;s words where the record holds them</th><th>Waiting on</th><th>Where / last verified</th></tr>
   </thead>
   <tbody>
 ${rows}
@@ -156,7 +170,8 @@ ${rows}
 <footer class="report-foot">
   <p>An <em>unknown</em> verdict is not a rejection. One thing the funder&#39;s rule depends on is not in your profile yet, so the verdict is <strong>waiting on</strong> it. Each program stops at the first thing it cannot work out about you, so answering one field may simply reveal the next question rather than a final verdict.</p>
   <p>A <em>preferred</em> verdict means a soft preference matched. Soft preferences rank applicants; they never exclude them.</p>
-  <p>An <em>ineligible</em> verdict quotes the funder&#39;s own sentence. Many of these are geographic, and a geographic exclusion <strong>is not a gap in your profile</strong>: a large part of this catalogue is genuinely restricted by ARRL Division, ARRL Section or state of residence, and no answer you can give changes one.</p>
+  <p>An <em>ineligible</em> verdict quotes the funder&#39;s own sentence wherever the record holds one. Many of these are geographic, and a geographic exclusion <strong>is not a gap in your profile</strong>: a large part of this catalogue is genuinely restricted by ARRL Division, ARRL Section or state of residence, and no answer you can give changes one.</p>
+  <p>A line marked <span class="authored-by">GrantSpotter, not the funder</span> is <strong>not a quotation</strong>. No funder sentence was recorded for it; what you are reading is this software&#39;s own statement about what the record does and does not say. Read the funder&#39;s page before you act on one.</p>
   <p>Where a cost share or co-funder obligation reads <code>unstated</code>, no page this pipeline read addressed the question. That is silence from the funder, never a funder&#39;s denial &mdash; ask them.</p>
   <p>A deadline marked as projected was computed from a recurrence rule, not published by the funder. Almost every date in this catalogue is of that kind.</p>
   <p>GrantSpotter is a curated database with a change-detection layer, not a live feed from these funders. Confirm every deadline against the source URL before you rely on it.</p>

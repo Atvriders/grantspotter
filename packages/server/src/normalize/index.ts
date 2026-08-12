@@ -263,10 +263,21 @@ export const ENTITIES_BY_SOURCE: Readonly<Record<string, ApplicantEntity[]>> = O
  * `applicantEntities: ENTITIES_BY_SOURCE[ctx.sourceId] ?? []` treated two completely different
  * findings as the same value: "the funder accepts none of the entities we model" (rare, and a
  * real answer) and "nobody has established who may apply" (common, and not an answer at all).
- * `matcher.ts` hard-fails on the empty list either way — its own reason string even reads
+ * `matcher.ts` hard-failed on the empty list either way — its own reason string even read
  * "(none recorded)" — so the second one silently barred 76 of 197 candidates from every profile.
  * That is the same silence-as-prohibition shape as `licenseMin` defaulting to `'NONE'` and
  * `partTimeOK` defaulting to `false`.
+ *
+ * THIS FIX ONLY EVER ADDRESSED THE PROVENANCE OF THE SILENCE, AND THE OTHER HALF LANDED ON
+ * 2026-08-12. The paragraph above correctly named the reading as the defect and then went on to
+ * fix only where the empty list came FROM. `matchProgram` kept treating it as a refusal —
+ * `[].includes(anything)` is `false` — so the 19 publishable records that still legitimately
+ * reach it were a hard `ineligible` for all ten `ApplicantEntity` values, before any other axis
+ * ran, with a reason quoting a sentence GrantSpotter had written. It reads an unrecorded audience
+ * as `unknown` now, with no missing profile field named, which is what the rule in `geo.ts`'s
+ * `radiusIsMeasurable` has always required of this codebase: a gap in the data cannot come out as
+ * a judgement about a person. Nothing below changes — an unknown audience is still EMPTY and
+ * still has to be signed for here — but the empty list is no longer a refusal downstream.
  *
  * THE RULE, in precedence order — see `applicantEntitiesFor`:
  *   1. what the FUNDER published, per record (`rawFields.applicantTypes`), including its own

@@ -1,5 +1,10 @@
 import { Fragment, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  APPLICANT_ENTITY_AXIS_LABEL,
+  hasFunderWording,
+  isApplicantEntityConstraint,
+} from '@grantspotter/core';
 import type { Program, Verdict } from '@grantspotter/core';
 import { VerdictBadge } from './VerdictBadge.js';
 import { TrustBadge } from './TrustBadge.js';
@@ -185,6 +190,13 @@ function ProgramCell({ row }: { row: ProgramRow }): JSX.Element {
  * The constraint drawer. `VerdictBadge` sets `aria-expanded` when `onExplain` is supplied, and an
  * `aria-expanded="true"` that reveals nothing is a promise the interface does not keep — so the
  * funder's own wording for each unmet constraint is what opens.
+ *
+ * ...AND WHERE THERE IS NO FUNDER WORDING, WHOSE WORDING IT IS. One reason in this product is
+ * composed by `matcher.ts` rather than read off a page — the applicant-entity gate — and it
+ * carries an empty `rawText` because no funder sentence exists to quote. Printing that bare would
+ * put a blank line under an `aria-expanded="true"`, which is the same broken promise; printing it
+ * as though a funder wrote it is the fabrication `IneligibilityDrawer` was corrected for. So the
+ * software's own sentence is shown, marked as the software's.
  */
 function ReasonsList({ verdict }: { verdict: Verdict }): JSX.Element | null {
   if (verdict.kind !== 'ineligible') return null;
@@ -192,8 +204,17 @@ function ReasonsList({ verdict }: { verdict: Verdict }): JSX.Element | null {
     <ul className="reasons-list">
       {verdict.reasons.map((reason) => (
         <li key={reason.id}>
-          {reason.rawText}
-          <span className="reasons-axis">{reason.spec.axis}</span>
+          {hasFunderWording(reason) ? (
+            reason.rawText
+          ) : (
+            <>
+              <span className="reasons-authored-by">GrantSpotter, not the funder</span>
+              {reason.spec.axis === 'other' && reason.spec.note !== '' ? reason.spec.note : null}
+            </>
+          )}
+          <span className="reasons-axis">
+            {isApplicantEntityConstraint(reason) ? APPLICANT_ENTITY_AXIS_LABEL : reason.spec.axis}
+          </span>
         </li>
       ))}
     </ul>

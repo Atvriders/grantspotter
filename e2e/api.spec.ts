@@ -85,7 +85,10 @@ interface ErrorBody {
 interface Verdict {
   kind: 'eligible' | 'eligible_preferred' | 'ineligible' | 'unknown';
   missingProfileFields?: string[];
-  reasons?: Array<{ spec: { axis: string }; rawText: string }>;
+  // `id` and `spec.note` are read by the ineligibility assertions below: a reason GrantSpotter
+  // composed is identified by its id suffix and says what it is in its note, because it has no
+  // funder sentence to put in `rawText`.
+  reasons?: Array<{ id: string; spec: { axis: string; note?: string }; rawText: string }>;
 }
 
 interface BrowseRow {
@@ -197,14 +200,23 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   expect(browse.profileApplied).toBe('student');
 
   // THE CENSUS, as `npm run profile-corpus -- ee-undergrad` measures it: 68 of 150 are open to
-  // this applicant (55 plain + 13 preferred), 74 are not, and 8 cannot be decided at all.
+  // this applicant (55 plain + 13 preferred), 55 are not, and 27 cannot be decided at all.
+  //
+  // WAS 74 / 8 UNTIL 2026-08-12, and the 19 that moved are the whole point. `matchProgram`'s first
+  // act was `program.applicantEntities.includes(applyingAs)`, and `[].includes(anything)` is
+  // `false` — so 19 of these 150 records (12.7%), which state NOTHING about who may apply, were a
+  // hard `ineligible` for every possible user before any other axis ran. Among them: "Campus
+  // student government / student activity fee funding" and "NASA National Space Grant — 52 state
+  // consortia", the two the corpus itself annotates as this audience's real routes to money. None
+  // of them became `eligible` — nobody said the applicant may apply either — so eligible and
+  // preferred are unchanged at 55 and 13, and the 19 moved from a refusal to a question.
   expect(browse.summary.eligible + browse.summary.preferred).toBe(68);
   expect(browse.summary).toMatchObject({
     total: 150,
     eligible: 55,
     preferred: 13,
-    ineligible: 74,
-    unknown: 8,
+    ineligible: 55,
+    unknown: 27,
   });
   expect(browse.rows).toHaveLength(150);
 
@@ -292,7 +304,7 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   const browse = await browseAsEeUndergrad(request);
 
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
-  expect(unknown).toHaveLength(8);
+  expect(unknown).toHaveLength(27);
 
   /*
    * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
@@ -329,15 +341,44 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     }
   }
 
-  // And exactly one record in this corpus is the other kind, named rather than counted. Measured
-  // 2026-08-12 against the built server on the fixture corpus: 8 unknown, 7 of them naming a field,
-  // this one naming none. It is the Yankee Clipper Contest Club Youth Scholarship, whose stored
-  // rule is `{ type: 'radius', radiusMiles: 175, centerLabel: 'YCCC center which is in Erving, MA.
-  // MA' }` with no `centerLat`/`centerLon`, because the label never resolved to a coordinate. A
-  // SECOND row joining it is a corpus regression — a funder's rule silently losing its centre — and
-  // must fail here rather than disappear into a count.
-  expect(unanswerable.map((r) => r.program.name)).toEqual([
+  // The other kind is NAMED, never counted. Measured 2026-08-12 against the built server on the
+  // fixture corpus: 27 unknown, 7 naming a field, 20 naming none. There are now two reasons a row
+  // can name none, and both are a hole in GRANTSPOTTER'S DATA rather than in the reader:
+  //
+  //   1 record  the Yankee Clipper Contest Club Youth Scholarship, stored as `{ type: 'radius',
+  //             radiusMiles: 175, centerLabel: 'YCCC center which is in Erving, MA. MA' }` with no
+  //             `centerLat`/`centerLon`, because the label never resolved to a coordinate.
+  //  19 records the applicant-entity list is EMPTY: nobody ever recorded who may apply. Until
+  //             2026-08-12 every one of these was a hard `ineligible` for every possible user,
+  //             quoting a sentence GrantSpotter had written itself ("This program accepts
+  //             applications from: (none recorded)."). `geo.ts` states the governing rule — a gap
+  //             in the data cannot come out as a judgement about a person — and this is that rule
+  //             applied to the gate that runs first and short-circuits every axis after it.
+  //
+  // A TWENTY-FIRST row joining this list is a corpus regression — a funder's rule silently losing
+  // its centre, or a new source publishing no audience — and must fail here rather than disappear
+  // into a count.
+  expect(unanswerable.map((r) => r.program.name).sort()).toEqual([
+    'AMSAT — no grants program',
+    'ARRL Collegiate Amateur Radio Initiative (CARI) — not a funding program',
+    'ARRL Foundation Special Funds',
+    'Campus student government / student activity fee funding',
+    'Chicago FM Club Scholarship — discontinued',
+    'DARA / Hamvention — grantmaker only through the ARRL catalog',
+    'FlexRadio — no education or nonprofit purchasing tier',
+    'Foundation for Amateur Radio (FAR) — domain compromised, do not apply',
+    'Geospace Facilities',
+    'HamSCI — participate with a funded principal investigator',
+    'IEEE society funding pages (~39 societies)',
+    'Icom America, DX Engineering, Kenwood — relationship-driven, no application path',
+    'NASA National Space Grant — 52 state consortia',
+    'NCDXF Youth Grant',
+    'Public Wireless Supply Chain Innovation Fund',
+    'Radio Club of America Scholarship Program',
+    'Radio Club of America Youth Activities Program',
     'The Yankee Clipper Contest Club Youth Scholarship',
+    'Yasme Excellence Award',
+    'Yasme Foundation Supporting Grants',
   ]);
   expect(answerable).toHaveLength(7);
   expect(browse.summary.unknownByField.map((f) => f.field).sort()).toEqual([
@@ -347,20 +388,44 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'lon',
   ]);
 
-  // The census can therefore be read as a sentence: 8 of these are questions, not refusals.
-  expect(browse.summary.unknown).toBe(8);
+  // The census can therefore be read as a sentence: 27 of these are questions, not refusals.
+  expect(browse.summary.unknown).toBe(27);
   expect(browse.summary.unknown + browse.summary.ineligible).toBeLessThan(browse.summary.total);
 
-  // An ineligible verdict, by contrast, quotes the funder's own words for every reason it gives.
+  // AN INELIGIBLE VERDICT QUOTES THE FUNDER'S OWN WORDS — WHERE THERE ARE ANY, AND ONLY THERE.
+  //
+  // This loop used to require a non-empty `rawText` of every reason, which is exactly what a
+  // FABRICATED quotation satisfies. One reason in this product is composed by `matcher.ts` at
+  // match time rather than lifted off a page — the applicant-entity gate — and it used to arrive
+  // carrying "This program accepts applications from: ieee_student_branch_chapter.", a sentence
+  // in the funder's voice that `grep` finds in `matcher.ts` and nowhere else in the repo. It now
+  // carries an EMPTY `rawText`, which is the honest representation of "no funder said this", and
+  // its own statement in `spec.note` attributed to GrantSpotter inside the sentence. So the
+  // assertion is SPLIT: a funder-derived reason must still quote a real sentence, and a composed
+  // one must be unmistakable as composed.
   const ineligible = browse.rows.filter((r) => r.verdict?.kind === 'ineligible');
-  expect(ineligible).toHaveLength(74);
-  for (const row of ineligible.slice(0, 20)) {
+  expect(ineligible).toHaveLength(55);
+  let quotedReasons = 0;
+  let composedReasons = 0;
+  for (const row of ineligible) {
     expect(row.verdict?.reasons?.length ?? 0).toBeGreaterThan(0);
     for (const reason of row.verdict?.reasons ?? []) {
-      expect(reason.rawText.trim().length).toBeGreaterThan(0);
       expect(reason.spec.axis.length).toBeGreaterThan(0);
+      if (reason.id.endsWith(':applicant-entity')) {
+        composedReasons += 1;
+        expect(reason.rawText).toBe('');
+        expect(reason.spec.note).toContain('GrantSpotter, not the funder');
+        expect(reason.spec.note).not.toContain('accepts applications from');
+        expect(reason.spec.note).not.toMatch(/[a-z]+_[a-z]+_[a-z]/);
+      } else {
+        quotedReasons += 1;
+        expect(reason.rawText.trim().length).toBeGreaterThan(0);
+      }
     }
   }
+  // Vacuity guard on both halves.
+  expect(quotedReasons).toBe(48);
+  expect(composedReasons).toBe(9);
 });
 
 /**
@@ -860,7 +925,10 @@ test('the completeness meter speaks for the corpus the user can actually reach',
   // the one read surface that did not call `isDoNotPublish`, and past awards match trivially, so
   // every one of them inflated it. 150 is the number of programmes the user can open.
   expect(body.completeness.total).toBe(150);
-  expect(body.completeness.unknownCount).toBe(8);
+  // 8 until 2026-08-12, when `matcher.ts` stopped reading an unrecorded applicant-entity list as a
+  // refusal: 19 records that stated nothing about who may apply were a hard `ineligible` for every
+  // possible user, and are questions now. See the census assertions above for the whole ledger.
+  expect(body.completeness.unknownCount).toBe(27);
   expect(body.completenessFor).toBe('student');
 
   const me = (await (await request.get('/api/me')).json()) as {

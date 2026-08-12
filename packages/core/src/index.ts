@@ -41,8 +41,13 @@ export type { GeoDecision, GeoLocation } from './geo.js';
 // CONTRACT §4 — matcher.
 export {
   ageAt,
+  APPLICANT_ENTITY_AXIS_LABEL,
   APPLICANT_ENTITY_CONSTRAINT_SUFFIX,
+  APPLICANT_ENTITY_WORDING,
+  applicantEntityListLabel,
   evaluateConstraint,
+  hasFunderWording,
+  isApplicantEntityConstraint,
   matchAll,
   matchProgram,
   monthsBetween,

@@ -382,6 +382,17 @@
   margin-left: var(--s-2);
 }
 
+/* A reason with no funder sentence behind it. Every other line in this list is text a funder
+   published; this one is GrantSpotter's, and says so before it says anything else. */
+.reasons-authored-by {
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+  margin-right: var(--s-2);
+}
+
 /* ---------- records ----------
  *
  * Below `PROGRAMME_TABLE_MIN_PX` (924 px — see `components/ProgramTable.tsx`) a row stops being a

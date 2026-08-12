@@ -29,6 +29,11 @@ td.missing { color: var(--warn); }
 .axis { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 0 .3rem; margin-right: .35rem; }
 .rawtext { color: var(--ink); }
+/* Text this software composed, never a funder's. Visually unlike .rawtext on purpose: the reader
+   is being told, in the same cell, that one line is a quotation and the other is not. */
+.authored-by { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--warn); border: 1px dashed var(--warn); border-radius: 4px; padding: 0 .3rem; margin-right: .35rem; }
+.authored { color: var(--muted); font-style: italic; }
 .verdict { font-weight: 700; white-space: nowrap; }
 .verdict-eligible { color: #15803d; }
 .verdict-eligible_preferred { color: var(--accent); }

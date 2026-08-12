@@ -823,19 +823,109 @@ function isResolvableMissingField(profile: Profile, field: string): boolean {
   return true;
 }
 
+/**
+ * True when this constraint carries a sentence the FUNDER wrote.
+ *
+ * `Constraint.rawText` is the whole basis of the product's trust claim: `IneligibilityDrawer`
+ * shows it verbatim in a monospaced quote block, and the printed eligibility report heads a column
+ * with the funder's words. Both of those promises are only keepable for constraints that came out
+ * of a funder's page. A constraint GrantSpotter composed at match time has no such sentence, and
+ * the honest representation of "no funder said this" is an EMPTY `rawText` — not a plausible
+ * sentence written in the funder's voice.
+ *
+ * Every surface that renders a reason must branch on this. Rendering an empty string inside a
+ * quotation block is the same lie as filling it in.
+ */
+export function hasFunderWording(constraint: Constraint): boolean {
+  return constraint.rawText.trim() !== '';
+}
+
+/** True for the one constraint in this file that GrantSpotter composes rather than reads. */
+export function isApplicantEntityConstraint(constraint: Constraint): boolean {
+  return constraint.id.endsWith(APPLICANT_ENTITY_CONSTRAINT_SUFFIX);
+}
+
+/**
+ * The heading a reason is filed under. `spec.axis` is `'other'` for the applicant-entity
+ * constraint — which rendered as the word "OTHER" above a sentence about who may apply — so the
+ * one constraint this file invents names itself instead of borrowing the long-tail bucket.
+ */
+export const APPLICANT_ENTITY_AXIS_LABEL = 'Who may apply';
+
+/**
+ * English for an `ApplicantEntity`. The enum identifiers are machine tokens, and until this fix
+ * they were printed straight into a reason presented as a funder's own sentence — 125 rows of a
+ * collegiate club's eligibility report read "This program accepts applications from:
+ * ieee_student_branch_chapter." as though somebody had written it. A machine token shown as
+ * English somebody wrote is a fabrication of the same family as an invented quotation.
+ *
+ * Two forms because the sentence needs both sides: what the record lists, and what the reader is.
+ * `Record<ApplicantEntity, ...>` makes it total — a new entity in CONTRACT §3 fails the typecheck
+ * here rather than leaking its identifier to a reader.
+ */
+export const APPLICANT_ENTITY_WORDING: Record<
+  ApplicantEntity,
+  { readonly listed: string; readonly applying: string }
+> = {
+  individual: { listed: 'individuals', applying: 'an individual' },
+  club_unincorporated: { listed: 'unincorporated clubs', applying: 'an unincorporated club' },
+  club_501c3: {
+    listed: 'clubs that are their own 501(c)(3)',
+    applying: 'a club that is its own 501(c)(3)',
+  },
+  club_via_fiscal_sponsor: {
+    listed: 'clubs applying through a fiscal sponsor',
+    applying: 'a club applying through a fiscal sponsor',
+  },
+  school_lea: { listed: 'schools and school districts', applying: 'a school or school district' },
+  university: { listed: 'universities and colleges', applying: 'a university or college' },
+  university_dept: { listed: 'university departments', applying: 'a university department' },
+  ieee_student_branch_chapter: {
+    listed: 'IEEE student branches and chapters',
+    applying: 'an IEEE student branch or chapter',
+  },
+  teacher: { listed: 'teachers applying in person', applying: 'a teacher applying in person' },
+  nominated_by_institution: {
+    listed: 'candidates their institution nominates',
+    applying: 'a candidate nominated by their institution',
+  },
+};
+
+/** "individuals", "individuals or teachers", "individuals, teachers or universities". */
+export function applicantEntityListLabel(entities: readonly ApplicantEntity[]): string {
+  const parts = entities.map((e) => APPLICANT_ENTITY_WORDING[e].listed);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`;
+}
+
+/**
+ * The reason a recorded audience excludes this applicant.
+ *
+ * `rawText` IS EMPTY AND THAT IS THE FIX. It used to read
+ * `This program accepts applications from: ieee_student_branch_chapter.` — a sentence GrantSpotter
+ * composed, in the funder's grammatical voice, rendered inside the quotation block whose entire
+ * premise is that the reader is looking at what the funder published. `grep` across the repo found
+ * that wording in this file and nowhere else: no funder, no page, no fixture ever said it. An
+ * applicant-entity list is not a quotation in the first place — it is GrantSpotter's reading of a
+ * funder's page, assembled per source in `ENTITIES_BY_SOURCE` — so the reason says so in
+ * GrantSpotter's own voice, and the attribution is inside the sentence rather than left to each
+ * surface's styling, because a CSV cell has no styling.
+ */
 function applicantEntityConstraint(program: Program, applyingAs: ApplicantEntity): Constraint {
-  const accepted =
-    program.applicantEntities.length > 0
-      ? program.applicantEntities.join(', ')
-      : '(none recorded)';
   return {
     id: `${program.id}${APPLICANT_ENTITY_CONSTRAINT_SUFFIX}`,
     hard: true,
     fallbackRank: 0,
-    rawText: `This program accepts applications from: ${accepted}.`,
+    rawText: '',
     spec: {
       axis: 'other',
-      note: `Your profile applies as "${applyingAs}", which this program does not accept.`,
+      note:
+        `GrantSpotter, not the funder: this record lists who may apply as ` +
+        `${applicantEntityListLabel(program.applicantEntities)}, and your profile applies as ` +
+        `${APPLICANT_ENTITY_WORDING[applyingAs].applying}. That list is GrantSpotter's reading of ` +
+        `the funder's page, not a sentence the funder wrote — read the page before you rule ` +
+        `yourself out.`,
     },
   };
 }
@@ -844,10 +934,12 @@ function applicantEntityConstraint(program: Program, applyingAs: ApplicantEntity
  * Verdict precedence, most decisive first — deliberate, and each rule has a
  * dedicated test in `matcher.test.ts`:
  *
- * 1. The applicant-entity gate. Wrong entity type is definite and immediate:
+ * 1. The applicant-entity gate, BUT ONLY WHEN AN AUDIENCE WAS RECORDED. A wrong
+ *    entity type against a list somebody researched is definite and immediate:
  *    an RCA nominee-only program can never accept a direct student
  *    application no matter what else is true, so this is checked before any
- *    per-axis constraint and short-circuits everything below.
+ *    per-axis constraint and short-circuits everything below. An EMPTY list is
+ *    not that finding and never was — see `applicantEntitiesUnrecorded` below.
  * 2. Any hard `fail` -> `ineligible`. A hard fail is a definite, provable
  *    exclusion (e.g. GPA below the floor) and outranks mere uncertainty:
  *    filling in a missing field can never undo a fact already known to be
@@ -873,7 +965,46 @@ export function matchProgram(
   nowISO: string = new Date().toISOString(),
 ): Verdict {
   const applyingAs: ApplicantEntity = isStudent(profile) ? 'individual' : profile.entity;
-  if (!program.applicantEntities.includes(applyingAs)) {
+
+  /**
+   * SILENCE IS NOT A PROHIBITION — the rule `geo.ts`'s `radiusIsMeasurable` states as "a gap in
+   * the data cannot come out as a judgement about a person", applied to the gate that runs first
+   * and decides everything after it.
+   *
+   * `[].includes(anything)` is `false`, so until this fix a record that said NOTHING about who
+   * may apply was a hard `ineligible` for every possible user, before any other axis ran, and it
+   * said so by quoting a sentence GrantSpotter had written reading "(none recorded)". Measured
+   * over the 150 publishable programs the committed fixtures produce
+   * (`scripts/profile-corpus.ts` `loadCorpus`): 19 of them — 12.7% — carry
+   * `applicantEntities: []`, all 19 refused every one of the ten `ApplicantEntity` values, and a
+   * collegiate 501(c)(3) club was refused 144 of 150 with all 144 on this gate. Eleven of the 19
+   * are live routes to money, including the two the corpus itself annotates as the primary
+   * audience's real funding: "Campus student government / student activity fee funding" and
+   * "NASA National Space Grant — 52 state consortia".
+   *
+   * `normalize/index.ts`'s `ENTITIES_UNKNOWN_BY_SOURCE` already diagnosed this in its own words —
+   * "the same silence-as-prohibition shape as `licenseMin` defaulting to 'NONE'" — and fixed the
+   * PROVENANCE of the silence (an empty list is now a statement somebody signed) while leaving
+   * the reading of it here unchanged. This is the other half.
+   *
+   * WHAT AN UNRECORDED AUDIENCE PRODUCES, and why it is not any of the other three verdicts:
+   *   - not `ineligible`: nobody said the applicant may not apply.
+   *   - not `eligible`: nobody said they may, either. That claim is the one an applicant acts on,
+   *     and `ENTITIES_UNKNOWN_BY_SOURCE` measured what blanket permissiveness costs here.
+   *   - not an `unknown` naming a profile field: the gap is in the RECORD, not the profile, so
+   *     sending the reader to an editor would be asking them to fix a hole in our data by typing
+   *     something about themselves.
+   * So it is the `unknown` this file already has for exactly this shape: unresolved, with an
+   * EMPTY `missingProfileFields` — "something could not be worked out, and there is no input you
+   * could fill in to change that". Same state an unmeasurable radius produces, same
+   * `unlistableUnknown` flag, and `VerdictBadge` already renders the copy for it.
+   *
+   * IT DOES NOT SHORT-CIRCUIT. The remaining constraints still run, so a hard `fail` that IS
+   * provable still outranks it (rule 2) and still gets to quote the funder's real sentence: a GPA
+   * floor the applicant is under is a refusal the funder wrote, whoever may apply.
+   */
+  const applicantEntitiesUnrecorded = program.applicantEntities.length === 0;
+  if (!applicantEntitiesUnrecorded && !program.applicantEntities.includes(applyingAs)) {
     return { kind: 'ineligible', reasons: [applicantEntityConstraint(program, applyingAs)] };
   }
 
@@ -881,12 +1012,13 @@ export function matchProgram(
   const missingFields = new Set<string>();
   const metPreferences: Constraint[] = [];
   /**
-   * A hard axis that came back `unknown` and named nothing this profile could ever fill in.
+   * Something unresolved that named nothing this profile could ever fill in: a hard axis that
+   * came back `unknown` with no listable field, or — seeded here — an audience nobody recorded.
    * Tracked separately from `missingFields` because the two answer different questions — "is
    * anything unresolved?" and "what could the reader do about it?" — and collapsing them into one
    * set is what let an unanswerable axis read as `eligible`.
    */
-  let unlistableUnknown = false;
+  let unlistableUnknown = applicantEntitiesUnrecorded;
 
   for (const constraint of program.constraints) {
     // Financial need is always a weighting, never a bar (spec §4.5 rule 11),

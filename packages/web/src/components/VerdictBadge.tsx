@@ -131,7 +131,13 @@ export function VerdictBadge({
           // never-no would make the badge lie in exactly the way the rest of this
           // product refuses to. Flagged by Task 18 while writing the explorer copy.
           ? `Not an answer yet. This verdict is waiting on: ${names.join(', ')}. Answering one may reveal the next question rather than a final answer — while it stays unanswered, it is a question and not a "no".`
-          : 'Not an answer yet. Something this program asks for could not be evaluated from your profile. It is not a "no".';
+          : // NOT "could not be evaluated from your profile" — that was true of neither case and
+            // pointed the reader at the wrong place. Both causes are a hole in GRANTSPOTTER'S
+            // record: a radius rule whose centre never resolved to a coordinate (1 record), and a
+            // record that never said who may apply (19 records, which were a hard "no" for every
+            // possible user until 2026-08-12). Sending a reader to the profile editor to close a
+            // gap in our own data is the same misdirection as calling it a refusal, only quieter.
+            'Not an answer yet. This program’s record is missing something GrantSpotter needs to decide it, and there is no field you could fill in that would change that. It is not a "no".';
       return (
         <span className="badge verdict-unknown" role="img" aria-label={label} title={title}>
           {first === undefined ? (

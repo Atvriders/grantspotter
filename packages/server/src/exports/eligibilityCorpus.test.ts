@@ -63,13 +63,13 @@ describe('the census a licensed EE undergraduate actually gets', () => {
     expect(report.counts).toEqual({
       eligible: 55,
       eligible_preferred: 13,
-      unknown: 8,
-      ineligible: 74,
+      unknown: 27,
+      ineligible: 55,
     });
     expect(report.counts.eligible + report.counts.eligible_preferred).toBe(68);
   });
 
-  it('breaks the exclusions down by axis: geography 36, other 28, then the small ones', () => {
+  it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {
     const byAxis = new Map<string, number>();
     for (const row of report.rows) {
       if (row.verdict !== 'ineligible') continue;
@@ -79,7 +79,12 @@ describe('the census a licensed EE undergraduate actually gets', () => {
     }
     expect(Object.fromEntries([...byAxis].sort((a, b) => b[1] - a[1]))).toEqual({
       geography: 36,
-      other: 28,
+      // Was `other: 28` — the axis name for "a long-tail requirement no schema captures", which
+      // is a false description of where 28 exclusions came from AND buried 19 that were not
+      // exclusions at all. 19 of the 28 were records with `applicantEntities: []`, and an empty
+      // audience is now `unknown`; the remaining 9 are audiences somebody researched, filed under
+      // the name of the gate that produced them.
+      applicant_entity: 9,
       age_stage: 5,
       field_of_study: 5,
       ham_activity: 1,
@@ -87,11 +92,67 @@ describe('the census a licensed EE undergraduate actually gets', () => {
     });
   });
 
-  it('quotes the funder’s own sentence on every excluded record — nothing is refused silently', () => {
+  /**
+   * NOTHING IS REFUSED SILENTLY, AND NOTHING IS REFUSED IN A VOICE THAT IS NOT ITS OWN.
+   *
+   * The old form of this test — `every(r => r.reasons.trim().length > 0)` — was satisfied by the
+   * defect it was written to prevent: 28 of the 74 rows satisfied it with a sentence GrantSpotter
+   * had composed and written into `rawText` in the funder's voice, and for a collegiate 501(c)(3)
+   * club 144 of 145 did. "Every exclusion has text" is not the property that matters; "every
+   * exclusion has text AND the reader can tell who wrote it" is.
+   */
+  it('gives every excluded record a reason, attributed to whoever actually wrote it', () => {
     const excluded = report.rows.filter((r) => r.verdict === 'ineligible');
-    expect(excluded).toHaveLength(74);
-    expect(excluded.every((r) => r.reasons.trim().length > 0)).toBe(true);
+    expect(excluded).toHaveLength(55);
     expect(excluded.every((r) => r.reasonAxes.trim().length > 0)).toBe(true);
+    // Something is always said...
+    expect(
+      excluded.every((r) => r.reasons.trim().length > 0 || r.reasonsFromGrantSpotter.trim().length > 0),
+    ).toBe(true);
+    // ...and the funder's column carries only what a funder wrote. 46 of the 55 quote a page; the
+    // other 9 are the applicant-entity gate, whose text is this software's and is filed as such.
+    expect(excluded.filter((r) => r.reasons.trim().length > 0)).toHaveLength(46);
+    expect(excluded.filter((r) => r.reasonsFromGrantSpotter.trim().length > 0)).toHaveLength(9);
+    expect(
+      excluded.filter((r) => r.reasons.trim().length > 0 && r.reasonAxes.includes('applicant_entity')),
+    ).toEqual([]);
+  });
+
+  /**
+   * THE SENTENCE THE PRODUCT USED TO WRITE FOR A FUNDER, PINNED BY ITS TEXT.
+   *
+   * `grep -rn "accepts applications from|does not accept" packages e2e` found those two literals
+   * in `matcher.ts` and nowhere else: no funder page, no fixture, no seed record ever contained
+   * them. They were rendered inside `.explain-raw` in the browser and under a column headed "in
+   * the funder's words" on the printed page. A regression here means the fabrication came back.
+   */
+  it('never prints a funder sentence that no funder wrote', () => {
+    const html = renderEligibilityReportHtml(report);
+    for (const forbidden of ['accepts applications from', 'does not accept', '(none recorded)']) {
+      expect(html, forbidden).not.toContain(forbidden);
+    }
+    // …and no enum identifier reaches the reader in place of English.
+    for (const row of report.rows) {
+      expect(row.reasons, row.programId).not.toMatch(/[a-z]+_[a-z]+_[a-z]/);
+      expect(row.reasonsFromGrantSpotter, row.programId).not.toMatch(/[a-z]+_[a-z]+_[a-z]/);
+    }
+  });
+
+  it('marks a GrantSpotter-authored reason as such in the printed report', () => {
+    const authored = report.rows.find(
+      (r) => r.verdict === 'ineligible' && r.reasonsFromGrantSpotter !== '',
+    )!;
+    expect(authored.reasons).toBe('');
+    expect(authored.reasonsFromGrantSpotter).toContain('GrantSpotter, not the funder');
+    const html = renderEligibilityReportHtml(report);
+    expect(html).toContain(
+      `<span class="axis">applicant_entity</span><span class="authored-by">GrantSpotter, not the funder</span>` +
+        `<span class="authored">${escapeHtml(authored.reasonsFromGrantSpotter)}</span>`,
+    );
+    // The verbatim class is reserved for verbatim text and must not wrap this.
+    expect(html).not.toContain(
+      `<span class="rawtext">${escapeHtml(authored.reasonsFromGrantSpotter)}</span>`,
+    );
   });
 
   it('renders a geography exclusion as the funder’s own restriction, quoted', () => {
@@ -134,12 +195,12 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     verdicts = matchAll(blank as Profile, corpus.programs, corpus.now);
   });
 
-  it('leaves 117 of 150 unknown and refuses none of them', () => {
+  it('leaves 136 of 150 unknown and refuses only the 9 with a researched audience', () => {
     expect(empty.counts).toEqual({
       eligible: 5,
       eligible_preferred: 0,
-      unknown: 117,
-      ineligible: 28,
+      unknown: 136,
+      ineligible: 9,
     });
   });
 
@@ -149,7 +210,23 @@ describe('an unset profile field yields unknown, never ineligible', () => {
         .filter((r) => r.verdict === 'ineligible')
         .flatMap((r) => r.reasonAxes.split('; ')),
     );
-    expect([...axes]).toEqual(['other']);
+    expect([...axes]).toEqual(['applicant_entity']);
+  });
+
+  /**
+   * AND ONLY WHERE SOMEBODY RESEARCHED THAT AUDIENCE. The gate used to refuse 28; 19 of those 28
+   * were records that stated nothing at all about who may apply, which is a hole in GrantSpotter's
+   * data and cannot be an answer about a person. Those 19 are `unknown` now.
+   */
+  it('turns a record that named no audience into a question, never a refusal', () => {
+    const silent = corpus.programs.filter((p: Program) => p.applicantEntities.length === 0);
+    expect(silent).toHaveLength(19);
+    for (const program of silent) {
+      const row = empty.rows.find((r) => r.programId === program.id)!;
+      expect(row.verdict, program.name).not.toBe('ineligible');
+      expect(row.reasons, program.name).toBe('');
+      expect(row.reasonsFromGrantSpotter, program.name).toBe('');
+    }
   });
 
   it.each(HARD_BAR_AXES)(
@@ -173,10 +250,29 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     },
   );
 
+  /**
+   * SPLIT, NOT RELAXED — the same shape `e2e/api.spec.ts` had to take when an unmeasurable radius
+   * learned to say `unknown` with nothing to ask for. There are two kinds of unknown and they are
+   * counted separately, because "an unknown that asks for nothing" must never spread quietly:
+   *
+   *   119  waiting on a profile field this blank profile has not filled in.
+   *    17  waiting on nothing the reader can supply — 16 records whose audience nobody recorded,
+   *        plus the Yankee Clipper radius whose centre never resolved. For those 16 the missing
+   *        thing is in GrantSpotter's data, and sending the reader to the profile editor would be
+   *        asking them to fix our hole by typing something about themselves.
+   *
+   * (16 of the 19 silent-audience records, not 19: the other three also carry a hard axis that
+   * this blank profile CAN answer, so they name that field instead and are counted above.)
+   */
   it('names the field each unknown is waiting on wherever the profile could supply one', () => {
     const unknowns = empty.rows.filter((r) => r.verdict === 'unknown');
-    expect(unknowns).toHaveLength(117);
-    expect(unknowns.every((r) => r.missingFields.length > 0)).toBe(true);
+    expect(unknowns).toHaveLength(136);
+    const answerable = unknowns.filter((r) => r.missingFields.length > 0);
+    const unanswerable = unknowns.filter((r) => r.missingFields.length === 0);
+    expect(answerable).toHaveLength(119);
+    expect(unanswerable).toHaveLength(17);
+    // An unknown is never dressed as an exclusion, whichever kind it is.
+    expect(unknowns.every((r) => r.reasons === '' && r.reasonsFromGrantSpotter === '')).toBe(true);
   });
 });
 

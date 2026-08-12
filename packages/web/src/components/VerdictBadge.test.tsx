@@ -131,6 +131,25 @@ describe('VerdictBadge', () => {
     expect(screen.getByLabelText('Unknown')).toHaveTextContent('Unknown');
   });
 
+  /**
+   * AN UNKNOWN THAT ASKS FOR NOTHING IS A HOLE IN GRANTSPOTTER'S RECORD, AND MUST SAY SO.
+   *
+   * 20 of the 150 publishable records reach a licensed EE undergraduate in this state: one radius
+   * rule whose `centerLabel` never resolved to a coordinate, and 19 whose applicant-entity list is
+   * empty because nobody ever recorded who may apply (all 19 were a hard `ineligible` for every
+   * possible user until 2026-08-12). The old wording — "Something this program asks for could not
+   * be evaluated from your profile" — sent every one of those readers to the profile editor to
+   * close a gap in OUR data, which is the same misattribution as calling it a refusal.
+   */
+  it('says an unanswerable unknown is a gap in the record, not in the reader', () => {
+    wrap(<VerdictBadge verdict={{ kind: 'unknown', missingProfileFields: [] }} />);
+    expect(screen.getByLabelText('Unknown')).toHaveAttribute(
+      'title',
+      'Not an answer yet. This program’s record is missing something GrantSpotter needs to ' +
+        'decide it, and there is no field you could fill in that would change that. It is not a "no".',
+    );
+  });
+
   it('renders a "no profile" state rather than an empty cell when the verdict is null', () => {
     wrap(<VerdictBadge verdict={null} />);
     expect(screen.getByLabelText('No profile set')).toBeInTheDocument();

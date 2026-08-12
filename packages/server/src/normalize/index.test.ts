@@ -1170,10 +1170,15 @@ describe('applyUrl is what the funder’s page names, not the page we scraped', 
  *
  * `applicantEntities: ENTITIES_BY_SOURCE[ctx.sourceId] ?? []` collapsed "the funder accepts none
  * of the entities we model" and "nobody has established who may apply" into one value, and
- * `matchProgram` hard-fails on an empty list either way — its own reason string reads
+ * `matchProgram` hard-failed on an empty list either way — its own reason string read
  * "(none recorded)". 76 of 197 candidates were unreachable by every profile in the corpus, the
  * single genuinely-open federal call among them, while Grants.gov's real eligibility list sat
  * unread in `rawFields.applicantTypes`.
+ *
+ * The reading was fixed on 2026-08-12: `matchProgram` answers `unknown` for an unrecorded
+ * audience, so an empty list here is no longer a refusal. The tables below still bind — a source
+ * that says nothing must SAY that it says nothing — because "nobody established this" is a fact
+ * about our research that the corpus has to carry either way.
  * ========================================================================================== */
 
 describe('no source may accept nobody BY ACCIDENT', () => {
