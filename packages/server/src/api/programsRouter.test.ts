@@ -456,20 +456,27 @@ describe('GET /api/programs', () => {
    * axis". A student never reaches that axis. `matchProgram` checks the
    * APPLICANT-ENTITY gate first and short-circuits: `arrl-club-grant` accepts
    * `club_501c3` and `club_unincorporated`, a student applies as `individual`,
-   * so the verdict is a single synthesized reason whose `spec.axis` is `other`
-   * and whose rawText names the entities the program does accept. Run against
-   * the real matcher, the brief's assertion reads
-   * `["other"] toContain "arrl_membership"` and fails.
+   * so the verdict is a single synthesized reason. Run against the real matcher,
+   * the brief's assertion reads `[<the entity key>] toContain "arrl_membership"`
+   * and fails.
    *
    * Both halves of the intent are therefore asserted, in the profile each one
    * actually belongs to: the entity gate here, and `arrl_membership` in the
    * organization block below — which is the case the brief's own comment
    * describes.
+   *
+   * RE-PINNED 2026-08-12, same count, corrected name. This read `other`, because
+   * `buildSummary` bucketed by `spec.axis` and CONTRACT §3 has no axis for a gate
+   * the matcher invents — while `exports/eligibility.ts` filed the very same
+   * reason under `applicant_entity`, so one payload called it a long-tail
+   * requirement no schema captures and the other called it what it is. The count
+   * is unchanged (2): only the label the API publishes for it moved, onto the key
+   * the export side already owns. See `reasonAxisKey` in `programsRouter.ts`.
    */
   it('breaks the ineligible count down by constraint axis', async () => {
     seedStudentProfile(db);
     const res = await request(buildApp(db)).get('/api/programs');
-    expect(res.body.summary.ineligibleByAxis).toEqual([{ axis: 'other', count: 2 }]);
+    expect(res.body.summary.ineligibleByAxis).toEqual([{ axis: 'applicant_entity', count: 2 }]);
   });
 
   it('filters by verdict kind after the indexed query', async () => {
@@ -664,13 +671,19 @@ describe('GET /api/programs — an organization profile', () => {
    * entity gate lets it through and the `arrl_membership` constraint is what
    * excludes it. This is the axis breakdown doing the job spec §5 asks of it —
    * "here is the specific constraint for each".
+   *
+   * RE-PINNED 2026-08-12: the 4 that are the composed applicant-entity gate now
+   * say so, instead of borrowing `other`. Counts unchanged — see the student case
+   * above and `reasonAxisKey` in `programsRouter.ts`. This profile is the one the
+   * mislabel cost most: over the real 150-program corpus a collegiate 501(c)(3)
+   * club is excluded on that gate 125 times, and every one of them read `other`.
    */
   it('breaks the ineligible count down by a real constraint axis', async () => {
     seedClubProfile(db);
     const res = await request(buildApp(db)).get('/api/programs');
     expect(res.body.profileApplied).toBe('organization');
     expect(res.body.summary.ineligibleByAxis).toEqual([
-      { axis: 'other', count: 4 },
+      { axis: 'applicant_entity', count: 4 },
       { axis: 'arrl_membership', count: 1 },
     ]);
     const clubGrant = res.body.rows.find(

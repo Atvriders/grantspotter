@@ -3,11 +3,13 @@ import type { Constraint, Profile, Verdict } from '@grantspotter/core';
 import {
   applicantEntitySchema,
   instrumentSchema,
+  isApplicantEntityConstraint,
   matchAll,
   opportunityClassSchema,
   programStatusSchema,
 } from '@grantspotter/core';
 import type { RouterDeps } from './deps.js';
+import { APPLICANT_ENTITY_AXIS_KEY } from '../exports/eligibility.js';
 import { AppError } from './errors.js';
 import { hydratePrograms, queryProgramIds, type HydratedProgram } from './browseQuery.js';
 import { isProfileKind, loadActiveProfile, type ProfileKind } from './profileStore.js';
@@ -129,6 +131,32 @@ const EMPTY_SUMMARY: Omit<BrowseSummary, 'total'> = {
  * matched against would be a false exclude, and a false exclude hides an award
  * with no signal at all.
  */
+/**
+ * The heading one ineligible reason is counted under.
+ *
+ * `spec.axis` is `'other'` for the applicant-entity constraint — the one reason `matchProgram`
+ * COMPOSES rather than reads off a record — because CONTRACT §3 has no axis for a gate the matcher
+ * invents. Counting it as `other` filed it under the long-tail bucket, whose meaning is "a
+ * requirement no schema captures": a different and untrue claim about where the exclusion came
+ * from, and one the product already refuses to make on the export side, where
+ * `exports/eligibility.ts` gives the same reason its own key. Measured against the 150 publishable
+ * programs the committed fixtures produce, that mislabel was 9 of a student's exclusions and 125 of
+ * a collegiate 501(c)(3) club's — for the club, its ENTIRE report read `other`.
+ *
+ * The key is IMPORTED from `exports/eligibility.ts` rather than restated, so the browse payload and
+ * the CSV/HTML export cannot drift into naming the same reason two different things again — which
+ * is the defect being closed here, not a new invariant. No `ConstraintAxis` is or can be
+ * `'applicant_entity'`, so the value cannot collide with a real axis.
+ *
+ * Every `other` that remains in this breakdown is therefore a real `other` constraint... of which
+ * there are none, and cannot be: `evaluateConstraint` answers `not_evaluable` for that axis, which
+ * never blocks. An `other` row appearing here again would itself be the signal that a new composed
+ * reason had been added without a name.
+ */
+function reasonAxisKey(constraint: Constraint): string {
+  return isApplicantEntityConstraint(constraint) ? APPLICANT_ENTITY_AXIS_KEY : constraint.spec.axis;
+}
+
 function buildSummary(verdicts: Map<string, Verdict>, total: number): BrowseSummary {
   const axisCounts = new Map<string, number>();
   const fieldCounts = new Map<string, number>();
@@ -144,7 +172,7 @@ function buildSummary(verdicts: Map<string, Verdict>, total: number): BrowseSumm
         break;
       case 'ineligible': {
         summary.ineligible += 1;
-        const axes = new Set(verdict.reasons.map((c: Constraint) => c.spec.axis));
+        const axes = new Set(verdict.reasons.map(reasonAxisKey));
         for (const axis of axes) axisCounts.set(axis, (axisCounts.get(axis) ?? 0) + 1);
         break;
       }
