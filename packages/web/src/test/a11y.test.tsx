@@ -374,37 +374,6 @@ const ADMIN_USERS = {
   ],
 };
 
-/**
- * Two codes, not none: the state column is the thing an admin scans this table for, and a table
- * with no rows audits nothing about the row that carries a revoke button.
- */
-const ENROLLMENT_CODES = {
-  codes: [
-    {
-      id: 'code-1',
-      label: 'W1MX autumn 2026 intake',
-      maxUses: 5,
-      uses: 2,
-      expiresAt: '2026-12-31T00:00:00.000Z',
-      revokedAt: null,
-      createdAt: '2026-08-01T00:00:00.000Z',
-      createdByUserId: 'u-admin',
-      lastUsedAt: '2026-08-03T00:00:00.000Z',
-    },
-    {
-      id: 'code-2',
-      label: 'Field Day visitors',
-      maxUses: null,
-      uses: 9,
-      expiresAt: null,
-      revokedAt: '2026-08-02T00:00:00.000Z',
-      createdAt: '2026-07-01T00:00:00.000Z',
-      createdByUserId: 'u-admin',
-      lastUsedAt: '2026-07-04T00:00:00.000Z',
-    },
-  ],
-};
-
 const CHANNELS = {
   inApp: true,
   webhookUrl: null,
@@ -470,7 +439,6 @@ function stubApi(): void {
         if (url.startsWith('/api/profiles')) return PROFILES;
         if (url.startsWith('/api/sources')) return SOURCES;
         if (url.startsWith('/api/admin/users')) return ADMIN_USERS;
-        if (url.startsWith('/api/admin/enrollment-codes')) return ENROLLMENT_CODES;
         return {};
       })();
       return Promise.resolve({ ok: true, status: 200, json: async () => body });
@@ -917,68 +885,25 @@ describe('what the product says, said accessibly', () => {
     }
   });
   /**
-   * TWO SECRETS AND FOUR REFUSALS, ANNOUNCED.
+   * A TEST STOOD HERE AND IS DELETED RATHER THAN REWRITTEN, WHICH IS A LOSS AND IS SAID AS ONE.
    *
-   * Both halves of enrolment turn on something appearing that a sighted user's eye is drawn to and
-   * a screen reader is not told about unless the markup says so: the refusal that explains why a
-   * code did not work, and the code itself, which exists on screen for one render and never again.
+   * It was called "announces why a code was refused" and it drove the enrolment form to a 403
+   * carrying `reason: 'expired'`, then asserted the sentence landed in a live region rather than
+   * merely on screen. It was one of a pair — the other announced the one-time code the admin
+   * console showed after issuing one — and both are about the same hazard: something appears that a
+   * sighted user's eye is drawn to and a screen reader is told nothing about.
+   *
+   * Enrolment codes are retired (migration 095), so there is no expired code, no 403 carrying that
+   * reason, and no admin panel to show a plaintext. Neither test can be pointed at anything.
+   *
+   * WHAT IS STILL WORTH ASSERTING AND IS NOT ASSERTED HERE: the sign-up form still has refusals a
+   * person must be TOLD about rather than shown — a weak password, an address that already has an
+   * account, a rate-limited attempt — and every one of them should be announced. The screens list
+   * above still audits the form's resting state, which catches a missing label but not a missing
+   * live region. Whoever owns the signed-out screens after this change should put that pair back
+   * against the refusals the new form actually produces; writing it here, against labels and a
+   * component shape that are being edited in parallel, would have pinned a form that does not exist
+   * yet.
    */
-  it('announces why a code was refused, rather than only drawing the sentence', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 403,
-        json: async () => ({
-          error: {
-            code: 'forbidden',
-            message: 'This enrollment code expired on 2026-07-01.',
-            details: { reason: 'expired' },
-          },
-          requestId: 'req-a11y-1',
-        }),
-      }),
-    );
-    const { container } = mount(
-      <Enroll onAuthenticated={() => undefined} onCancel={() => undefined} />,
-      '/enrol',
-    );
-    await userEvent.type(screen.getByLabelText(/enrollment code/i), 'JOIN-W1MX-2026');
-    await userEvent.type(screen.getByLabelText(/^email$/i), 'student@example.edu');
-    await userEvent.type(screen.getByLabelText(/^password$/i), 'a-long-enough-password');
-    await userEvent.click(screen.getByRole('button', { name: /create my account/i }));
 
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/has expired/i);
-    expect(alert).toHaveTextContent(/ask whoever gave you the code/i);
-    expect(auditA11y(container)).toEqual([]);
-  });
-
-  it('announces the one-time enrollment code, and says it cannot be shown again', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-        const body = ((): unknown => {
-          if (url === '/api/admin/enrollment-codes' && init?.method === 'POST') {
-            return { code: ENROLLMENT_CODES.codes[0], plaintext: 'ENR-7fq2-kv91-tt40' };
-          }
-          if (url.startsWith('/api/admin/enrollment-codes')) return ENROLLMENT_CODES;
-          if (url.startsWith('/api/admin/users')) return ADMIN_USERS;
-          return {};
-        })();
-        return Promise.resolve({ ok: true, status: 200, json: async () => body });
-      }),
-    );
-    const { container } = mount(<Admin now={NOW} />, '/admin');
-    await userEvent.type(
-      await screen.findByLabelText(/what this code is for/i),
-      'W1MX autumn 2026 intake',
-    );
-    await userEvent.click(screen.getByRole('button', { name: /create enrollment code/i }));
-
-    const banner = await screen.findByRole('status');
-    expect(banner).toHaveTextContent('ENR-7fq2-kv91-tt40');
-    expect(banner).toHaveTextContent(/can never show it again/i);
-    expect(auditA11y(container)).toEqual([]);
-  });
 });

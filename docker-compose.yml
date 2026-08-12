@@ -106,78 +106,37 @@ services:
       CALLSIGN_LOOKUP_ENABLED: "true"
 
       # ---------------------------------------------------------------------------------------
-      # AN ENROLLMENT CODE YOU SET HERE INSTEAD OF IN THE APP. Optional. Leave it empty — as it
-      # ships — and nothing about this deployment changes.
+      # ENROLLMENT_CODE, ENROLLMENT_CODE_MAX_USES AND ENROLLMENT_CODE_DAYS WERE HERE. THEY ARE
+      # GONE, AND ANYONE WHO CAN REACH THIS INSTANCE CAN NOW CREATE A MEMBER ACCOUNT.
       #
-      # WHAT IT DOES. Type a code between the quotes and, from the next start, somebody who has
-      # that code can create their own member account without you signing in and issuing one. It
-      # is not a new kind of credential and gets no special treatment: at boot it becomes an
-      # ordinary row in the enrollment_codes table, listed in Admin → Enrollment codes as
-      # "Set in docker-compose.yml (ENROLLMENT_CODE)", with the same use count, the same expiry,
-      # the same revoke button and the same audit trail as one you type into that screen. It is
-      # held to the same rules, too, and the server will not start if it breaks one — a code you
-      # choose must be at least 12 characters after folding, may create at most 200 accounts and
-      # may live at most 365 days. If it refuses, the message says which rule and why.
+      # This block is a stub of about sixty lines of argument, and the argument is worth knowing
+      # was made. It ran: a self-hosted instance belongs to one club, so joining should need
+      # something the club hands out; a CODE is the one credential an officer can read out at a
+      # meeting; and a code set here rather than in the app spares the officer from signing in at
+      # all. Four database migrations, a keyed digest, three rate-limit rungs and a screenful of
+      # warnings about putting a live credential in a git-tracked file went into making that
+      # bounded rather than merely convenient.
       #
-      # >>> THIS FILE IS TRACKED BY GIT, AND THIS VALUE IS THE ONE THAT WILL NOT FEEL LIKE A
-      # >>> SECRET. The warning at the top of this file about SESSION_SECRET applies here word for
-      # word, and this line is worse in an odd way: a session secret is obviously a secret, so you
-      # think about it before you push. An enrollment code is MEANT to be shared — read out at a
-      # meeting, written on a whiteboard, put at the bottom of a flyer — so it does not feel like
-      # something to protect while you are typing it. It is still a credential: it makes accounts.
-      # A fork you push with a live code in it lets anybody who reads your repository create
-      # accounts on your instance until you notice and revoke it, and search engines index forks.
-      # If you keep this repository under git, do NOT put the code on this line. Change the line
-      # so the value is interpolated from the environment, written exactly the way the HOST_PORT
-      # line further up is written, and keep the code in a `.env` beside this file: compose reads
-      # that file and `.gitignore` already ignores it. Deploy from a download, or from a clone you
-      # never push, and none of this arises.
+      # It was answered by the person who runs the deployment: the locked door cost more than it
+      # bought. Every legitimate member waited on an officer, and the officer had to be taught
+      # what character folding was before they could choose a code. So sign-up is open, and there
+      # is nothing to set here.
       #
-      # THERE IS DELIBERATELY NO EXAMPLE CODE PRINTED HERE. A code written into a public
-      # repository is a code every deployment that copied it shares, which is the same accident
-      # the session-secret placeholder exists to prevent. Use something a person outside your
-      # group would have no reason to try — not your callsign with a season and a year, which is
-      # the first thing anybody guesses, and which was found on the seventh attempt in testing.
+      # AN OLD COPY OF THIS FILE THAT STILL HAS THE THREE LINES IN IT STARTS FINE. Nothing reads
+      # them; they are ignored, not refused. Delete them when convenient.
       #
-      # WHAT GETS FOLDED, BECAUSE NOTHING SHOWS YOU THE RESULT HERE. Capitals, dashes and spaces
-      # are ignored; O counts as 0; I and L count as 1; and U is DROPPED, so a code with three Us
-      # in it is three characters shorter than it looks. That only matters for the 12-character
-      # floor, and the refusal tells you the real length if you hit it. Anybody typing the code
-      # exactly as you gave it to them gets in either way.
+      # WHAT YOU CONTROL INSTEAD, since "anyone can sign up" is not the same as "anyone can do
+      # anything": a new account is always a MEMBER, and the only route to a second administrator
+      # is an existing administrator promoting one. Admin → Users lists every account and can
+      # disable or delete any of them. If you need the door shut again, put this instance behind
+      # whatever already fronts it — a VPN, an SSO proxy, an allow-list — which is the tool that
+      # can actually keep strangers out, as a shared code never could once it had been read out
+      # in a room.
       #
-      # WHAT HAPPENS WHEN YOU EDIT THIS LINE. Restart with the same value and nothing at all
-      # happens — the code keeps the uses it has spent and the expiry it was created with, because
-      # a restart must not be able to extend a credential. CHANGE the value and the old code is
-      # withdrawn and the new one issued. DELETE the value and the old code is withdrawn: the
-      # people holding it are told it was withdrawn, and the row stays with its history. Revoking
-      # it in the app also sticks — a restart will not bring back a code somebody switched off,
-      # and neither will putting an old code back on this line, because everyone who was given it
-      # then would be let in again. To open a new door, use a code you have not used here before.
-      #
-      # AND IT CANNOT GO FIRST. Nothing self-serve may exist before an administrator does — a code
-      # that worked on a brand-new database would let anybody who found the instance between
-      # `docker compose up` and your first-run screen create an account — so the code is created the
-      # moment you finish that setup rather than at the first boot. The container log says so. No
-      # restart needed.
-      #
-      # THE CODE ON THIS LINE BELONGS TO THIS FILE AND NOT TO ANY OF YOUR ADMINISTRATORS. It is
-      # listed with no issuer, and deleting an administrator account — including the first one you
-      # ever made — does not touch it: it keeps the uses it has spent and the expiry it was created
-      # with, because only an edit here can change either. Codes issued in the app are the other
-      # way round: deleting the administrator who issued one WITHDRAWS it, so the people holding it
-      # are told it was withdrawn, and the row stays in the table with its count and its history.
-      ENROLLMENT_CODE: ""
-
-      # The two bounds the code above gets. They are written out rather than left to a default so
-      # you can see what you are handing out; both are read only when the code is CREATED, so
-      # changing one of these alone does nothing until you change the code itself.
-      #
-      # 30 accounts, because that is a club intake and the ceiling for any code you choose is 200.
-      # 90 days, one academic term — not the 365 the ceiling allows, because a default that takes
-      # the maximum is a default nobody chose, and a code left in a file somebody forgot about
-      # should stop working before the next intake arrives.
-      ENROLLMENT_CODE_MAX_USES: 30
-      ENROLLMENT_CODE_DAYS: 90
+      # Your existing enrollment_codes rows are untouched by the upgrade. They are a closed record
+      # now: no screen shows them and nothing can redeem one. See
+      # packages/server/src/db/migrations/095-enrollment-codes-are-a-closed-record.sql.
+      # ---------------------------------------------------------------------------------------
 
       # Optional. Everything works with these empty: the deterministic parsers, the rule-based
       # scoring and the copy-prompt flow need no key. Paste one in to use it.

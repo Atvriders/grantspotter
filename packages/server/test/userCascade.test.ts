@@ -76,12 +76,13 @@ afterAll(() => {
  * not entitled to rewrite — and nothing here keeps working on a deleted user's behalf, which is the
  * distinction that matters and the one `ics_tokens` would fall on the wrong side of.
  *
- * THE FIFTH IS THE ONLY ONE WHOSE ROW COULD, and it is the reason to read the second half of each
- * reason rather than the first. `enrollment_codes` holds a live account-minting credential; it
- * qualifies for this list only because migration 094 made an account deletion WITHDRAW those codes
- * instead of erasing them. An entry here has never been a way to opt out of the rule — it is a
- * statement that the row is inert once its user is gone — and the last block in this file is what
- * proves that of the one entry where inertness had to be built rather than observed.
+ * THE FIFTH USED TO BE THE ONLY ONE WHOSE ROW COULD. `enrollment_codes` held a live account-minting
+ * credential, and it qualified for this list only because migration 094 made an account deletion
+ * WITHDRAW those codes instead of erasing them — a trigger, kept in the schema so it could not be
+ * routed around. Enrolment codes are retired (migration 095) and that trigger is dropped with them,
+ * so the fifth entry is now the same shape as the other four: a record nothing acts on. The last
+ * block in this file has moved with it, from proving the credential dies to proving the record does
+ * not.
  */
 const OUTLIVES_THE_USER: ReadonlyMap<string, string> = new Map([
   [
@@ -112,17 +113,16 @@ const OUTLIVES_THE_USER: ReadonlyMap<string, string> = new Map([
   ],
   [
     'enrollment_codes.created_by_user_id',
-    'WHO ISSUED A CODE, which is a record of a past act and not a capability — the fifth entry ' +
-      'here and the only one that had to EARN its place, because an enrollment code is the one ' +
-      'thing on this list that could keep working on a deleted account\'s behalf. It does not, and ' +
-      'the reason is not this sentence: migration 094 replaced 091\'s cascade with a trigger that ' +
-      'REVOKES an issuer\'s open codes when the account is deleted, so the credential dies exactly ' +
-      'as before and the row — its label, its use count, its expiry, and the subject of every ' +
-      'user.enroll audit row that names it — is what survives. Cascading it back would erase a ' +
-      'club\'s intake record on a personnel change, and would take the code set in ' +
-      'docker-compose.yml with it (it is attributed to NULL now for that reason), whereupon the ' +
-      'next boot would recreate that one with a fresh expiry and its uses at zero. The probes in ' +
-      'the last block are what hold all of it; this reason may stand only while they pass.',
+    'WHO ISSUED A CODE, which is a record of a past act and not a capability — the entry that had ' +
+      'to EARN its place, because an enrollment code was once the one thing on this list that ' +
+      'could keep working on a deleted account\'s behalf. It cannot now, and the reason is no ' +
+      'longer a mechanism: enrolment codes are retired (migration 095), there is no route that ' +
+      'redeems one, and the table is a closed record. What survives an account deletion is a ' +
+      'club\'s intake history — the label, the use count, the expiry, and the subject of every ' +
+      'user.enroll audit row that names the code an account came from. Cascading it back would ' +
+      'erase that on a personnel change, which is what migration 091 did and what 094 was written ' +
+      'to stop. The probes in the last block are what hold all of it; this reason may stand only ' +
+      'while they pass.',
   ],
 ]);
 
@@ -402,25 +402,38 @@ describe('deleting a user — no exemption may be vacuous', () => {
 });
 
 /**
- * THE ONE EXEMPTION THAT HAD TO EARN ITS PLACE, PROVEN AT THE ROW.
+ * THE ONE EXEMPTION THAT HAD TO EARN ITS PLACE, AND THE ASSERTION THAT REVERSED WHEN THE FEATURE
+ * WENT.
  *
- * Every other entry in `OUTLIVES_THE_USER` is a record nothing acts on. An enrollment code is a
- * live credential that mints accounts — it is the exact shape the second rule above calls "a key, a
- * token, a subscription" and refuses to let anybody write a reason for. It is exempt anyway,
- * because migration 094 separated the two jobs 091's single cascade was doing: the POLICY (an
- * account's removal must leave no live credential behind) is kept by a trigger that REVOKES, and
- * the HOUSEKEEPING (no row pointing at a missing parent) turned out to be the wrong thing to want
- * from a column that records who did something.
+ * WHAT THIS BLOCK USED TO PROVE. Every other entry in `OUTLIVES_THE_USER` is a record nothing acts
+ * on. An enrollment code was a live credential that minted accounts — the exact shape rule 2 above
+ * calls "a key, a token, a subscription" and refuses to let anybody write a reason for. It was
+ * exempt anyway, because migration 094 separated the two jobs 091's single cascade was doing: the
+ * POLICY (an account's removal must leave no live credential behind) was kept by a trigger that
+ * REVOKED, and the HOUSEKEEPING turned out to be the wrong thing to want from a column recording
+ * who did something. So the middle test here asserted that deleting an issuer stamped `revoked_at`
+ * on their open codes.
  *
- * So the reason written up there is only allowed to stand while these three pass. The first says
- * the schema really is what the exemption claims; the second says the credential really does stop
- * working; the third says the compose file's own code — the row this whole change is about — really
- * is out of reach of an account deletion, which is what stops a deletion from GRANTING access by
- * having the next boot reissue it with a fresh expiry and its uses back at zero.
+ * THAT ASSERTION IS NOW WRONG, AND IT IS WRONG BECAUSE THE DESIGN CHANGED RATHER THAN BECAUSE IT
+ * WAS FAILING. Enrolment codes are retired: no screen issues one, no route redeems one, and
+ * `migrations/095-enrollment-codes-are-a-closed-record.sql` drops the trigger. The policy it kept
+ * is now kept by something stronger — the absence of any mechanism that could spend a code — and
+ * leaving the trigger in place would have made it the ONLY writer to this table, stamping "an
+ * administrator withdrew this" on historical rows nobody withdrew, on the wall clock, with no audit
+ * row, because the audited half of 094's design lived in `adminUsersRouter.ts` and went with the
+ * repository module it called. 094 said of its own trigger that "revoking a corpse buys nothing and
+ * costs the reason it died"; every row here is a corpse now.
+ *
+ * SO THE PROBE IS INVERTED, NOT DELETED, and what it holds is strictly easier to state and harder
+ * to lose: deleting an issuer must leave the row COMPLETELY UNTOUCHED. That is the same rule this
+ * suite already applies to `audit_log` — a record of something that happened is not something an
+ * account deletion may rewrite — and it now applies to this table without an exception. The third
+ * test is unchanged: a row attributed to nobody was already out of reach of a deletion, and it
+ * still is.
  */
-describe('deleting a user withdraws the codes they issued rather than erasing them', () => {
+describe('deleting a user leaves the closed enrolment record exactly as it was', () => {
   const AT = '2026-08-11T00:00:00.000Z';
-  /** Far future, so the trigger's `expires_at > now` is answered by the calendar, not by luck. */
+  /** Far future, so "would once have been open" is answered by the calendar and not by luck. */
   const FAR = '2099-01-01T00:00:00.000Z';
 
   function insertCode(id: string, issuer: string | null, uses: number): void {
@@ -446,12 +459,29 @@ describe('deleting a user withdraws the codes they issued rather than erasing th
       db.pragma('table_info("enrollment_codes")') as Array<{ name: string; notnull: number }>
     ).find((c) => c.name === 'created_by_user_id');
     expect(column, 'the column the exemption is written about is gone').toBeDefined();
-    expect(column?.notnull, 'NOT NULL is back, so the compose code must name a person again').toBe(
-      0,
-    );
+    expect(column?.notnull, 'NOT NULL is back, so a code must name a person again').toBe(0);
   });
 
-  it('withdraws the credential and keeps the record, uses and expiry included', () => {
+  /**
+   * READ FROM `sqlite_master` RATHER THAN FROM THE MIGRATION TEXT, for the reason the rest of this
+   * file gives: what a database HAS is the claim, and a `DROP TRIGGER` in a file proves nothing
+   * about a database that ran it before the drop was written.
+   */
+  it('no longer carries 094’s revoke-on-delete trigger', () => {
+    const triggers = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        .all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    expect(
+      triggers,
+      'the revoke-on-delete trigger is back. It is the only thing that writes to enrollment_codes, ' +
+        'it writes on the wall clock with no audit row, and there is no credential left for it to ' +
+        'withdraw — see migration 095.',
+    ).not.toContain('revoke_enrollment_codes_when_issuer_deleted');
+  });
+
+  it('keeps the whole record, including the codes that were still open', () => {
     const id = 'u-code-issuer-probe';
     db.prepare(
       `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
@@ -463,15 +493,17 @@ describe('deleting a user withdraws the codes they issued rather than erasing th
 
     const after = codeRow('c-issued-by-probe');
     expect(after, 'the code was cascaded away with its issuer').toBeDefined();
-    // The credential is dead…
-    expect(after.revoked_at).not.toBeNull();
-    // …and everything an officer would ask about the intake survived it.
+    // NOT revoked, which is the reversal. Nothing can redeem this row, so stamping it would be
+    // recording a withdrawal that never happened.
+    expect(after.revoked_at).toBeNull();
     expect(after.uses).toBe(29);
     expect(after.expires_at).toBe(FAR);
     // The issuer is still named, which is the whole point of dropping the key: `user.enroll` audit
     // rows carry this code's id, and the trail needs its subject to still exist.
     expect(
-      db.prepare('SELECT created_by_user_id AS u FROM enrollment_codes WHERE id = ?').get('c-issued-by-probe'),
+      db
+        .prepare('SELECT created_by_user_id AS u FROM enrollment_codes WHERE id = ?')
+        .get('c-issued-by-probe'),
     ).toEqual({ u: id });
 
     db.prepare('DELETE FROM enrollment_codes WHERE id = ?').run('c-issued-by-probe');
@@ -487,10 +519,10 @@ describe('deleting a user withdraws the codes they issued rather than erasing th
 
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
 
-    // Unchanged in every field that decides what it can do. If this row were withdrawn — or, as it
-    // was before 094, deleted — the next boot would find the file naming a code this instance no
-    // longer has and issue it again: 90 fresh days and thirty fresh uses, handed out because
-    // somebody removed an account.
+    // Unchanged, as it was before this change and for a different reason: then because NULL never
+    // matched the trigger's `created_by_user_id = OLD.id`, now because there is no trigger. Kept
+    // because a row attributed to nobody is the one an operator is likeliest to still be looking
+    // at — `ENROLLMENT_CODE` set it, and the compose file that did is still on their disk.
     expect(codeRow('c-from-the-file')).toEqual({ uses: 29, expires_at: FAR, revoked_at: null });
 
     db.prepare('DELETE FROM enrollment_codes WHERE id = ?').run('c-from-the-file');

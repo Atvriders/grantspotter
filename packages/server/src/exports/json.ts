@@ -67,44 +67,30 @@ export const BACKUP_TABLES = [
   'template_instances',
   'audit_log',
   'ics_tokens',
-  // Migration 091. LAST, AND STILL AFTER `users` THOUGH IT NO LONGER HAS TO BE. It was placed here
-  // because `created_by_user_id` was a foreign key into `users`; migration 094 dropped that key, so
-  // the insert order no longer constrains this position. It is kept because the DELETE pass walks
-  // this list BACKWARDS, which empties `enrollment_codes` before `users` and is what stops 094's
-  // trigger — "revoke the codes of a deleted issuer" — from firing during a restore that is about
-  // to put both tables back exactly as they were.
+  // Migration 091, and a CLOSED RECORD since migration 095 retired enrolment codes. It is still
+  // here, and staying here is the decision rather than an oversight.
   //
-  // BACKED UP, DIGEST AND ALL — RE-DECIDED ON 2026-08-10, BECAUSE THE REASON GIVEN HERE HAD STOPPED
-  // BEING TRUE. What this comment used to say was that "the table holds a SHA-256 digest and no
-  // code, so a backup file is not a bundle of working credentials". That was an argument about the
-  // INPUT: a digest of twenty random characters is not worth attacking. Migration 092 let an
-  // administrator type the input, and MEASURED on this host, `W1MX-AUTUMN-2026` came back out of
-  // its stored digest in 32.4 s and 11,334,277 dictionary candidates. For those months this file
-  // was writing a set of live credentials into a downloadable JSON, with `chosen` beside each one
-  // saying which were worth the 32 seconds.
+  // THE TABLE WAS NOT DROPPED, so this list is not lying about the schema — 095 sets out why the
+  // rows stay. What it means for this file is the simpler half: `restoreBackup` below REFUSES any
+  // file naming a table that is not in this list ("Backup names unknown table"), so taking the name
+  // out would make every backup any shipped build has ever written unrestorable, and a
+  // no-longer-offered feature is not a reason to break a backup somebody is holding.
   //
-  // WHAT MAKES IT SAFE NOW IS NOT IN THE FILE, WHICH IS THE POINT. Migration 093 made `code_hash` an
-  // HMAC under a key derived from `SESSION_SECRET`, and `SESSION_SECRET` is an environment variable:
-  // it is not a column, not a table, and not in any backup this function can produce. A leaked
-  // backup is a list of MACs whose key the reader does not have. Two consequences worth an
-  // operator's attention rather than a discovery: keep the backup and the compose file that holds
-  // your secret apart, since together they are the pair — and any row still carrying
-  // `hash_scheme = 'sha256'` predates 093 and therefore, necessarily, is a generated 2^100 code, so
-  // it is the case the original argument really was true about.
+  // WHAT A BACKUP NOW CARRIES FROM IT: labels, use counts, expiries, issuers and digests of codes
+  // nothing can redeem. The paragraphs that used to be here weighed whether the digests were safe
+  // to ship — they argued that migration 093's HMAC, keyed from `SESSION_SECRET`, is what made a
+  // leaked backup a list of MACs rather than a bundle of credentials, after migration 092 had let
+  // an administrator type a guessable code. That whole argument is now moot in the only way an
+  // argument can safely become moot: there is no route that redeems a code, so the digest of one
+  // opens nothing whether the reader has the key or not. It is recorded here rather than deleted
+  // because the digests in an operator's OLD backup files were written under that reasoning and it
+  // is what makes them safe to still be holding.
   //
-  // THE ALTERNATIVE — SHIPPING THE ROW WITHOUT ITS DIGEST — WAS WEIGHED AND REFUSED. `code_hash` is
-  // NOT NULL and UNIQUE, so a redacted export would have to invent one, and a restore would then
-  // silently invalidate every code a club has already handed out: thirty students each answered
-  // "that enrollment code is not valid", with nothing on either side of the screen to explain it,
-  // and the officer unable to reproduce it because the code they are holding is the one that
-  // stopped existing. Revocation and expiry are what end a code; a restore is not. Trading a
-  // certain harm for a hypothetical one is a bad trade even before the hypothetical was keyed.
-  //
-  // WHAT A RESTORE ONTO A DIFFERENT HOST DOES, said here because this is the only file that knows a
-  // restore is happening: the digests were keyed to the OLD deployment's `SESSION_SECRET`, so unless
-  // the operator carried that secret across with the data, the codes come back as records and not as
-  // codes — labels, uses, expiry, issuer and audit trail intact, and nothing redeemable.
-  // `json.test.ts` holds that as an executable fact rather than as a warning nobody reads.
+  // LAST, AND STILL AFTER `users`, THOUGH NOTHING NOW REQUIRES IT. It was placed here for 091's
+  // foreign key, kept after 094 dropped that key because the reverse-order DELETE pass emptied this
+  // table before `users` and so kept 094's revoke-on-delete trigger from firing mid-restore, and
+  // 095 has now dropped that trigger too. Moving it would change the order rows are written in for
+  // no reason anybody asked for.
   'enrollment_codes',
 ] as const;
 

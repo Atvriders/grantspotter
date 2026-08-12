@@ -1,0 +1,88 @@
+-- ENROLMENT CODES ARE RETIRED. THE TABLE STAYS, THE ROWS STAY, AND THE ONE THING THAT STILL ACTED
+-- ON THEM GOES.
+--
+-- Numbered 095 for the reason 090 through 094 give: Plans 1-4 number their migrations from 001
+-- upward and stop at 037, so a 09x file always applies last regardless of what they add later.
+-- This file CREATEs nothing, which is why it needs no name check against 001-init.sql — it drops
+-- one trigger and is otherwise the written record of a decision.
+--
+-- ---------------------------------------------------------------------- what was retired, and why
+--
+-- Until 2026-08-11 an account could only come into existence three ways: the first-run bootstrap
+-- token, an administrator minting one in Admin -> Users, or somebody redeeming an ENROLMENT CODE.
+-- The third is gone. The owner asked for open account creation — anybody who can reach the instance
+-- may make a member account — so the code, the admin screen that issued and revoked codes, the
+-- `ENROLLMENT_CODE` / `ENROLLMENT_CODE_MAX_USES` / `ENROLLMENT_CODE_DAYS` lines in
+-- `docker-compose.yml`, the redemption route and the whole apparatus around them were deleted.
+--
+-- THE ARGUMENT FOR THE FEATURE WAS MADE AT LENGTH AND IT IS WORTH KNOWING IT WAS MADE. It ran:
+-- a self-hosted instance for one club should not be open to the internet, so joining needs a
+-- credential the club controls; a code is the one credential an officer can read out at a meeting;
+-- and the risk it carries can be bounded by a use count, an expiry and a revoke button. Four
+-- migrations, a keyed digest, three rate-limit rungs and several thousand words of reasoning were
+-- spent making that bounded rather than merely convenient — see 091, 092, 093 and 094, which are
+-- left exactly as written. The answer, from the person who runs the deployment, was that the door
+-- being locked was costing more than it was buying: every legitimate member had to wait on an
+-- officer, and the officer had to be taught what a fold was. That is a product decision and not a
+-- discovery that any of the reasoning was wrong.
+--
+-- --------------------------------------------------------------- why this table is not dropped
+--
+-- DROPPING IT WAS THE OTHER OPTION AND IT LOSES THREE THINGS, EACH OF WHICH SOMEBODY WOULD MISS.
+--
+--   1. THE RECORD 094 EXISTS TO PROTECT. That migration exists for one reason: 091's cascade
+--      DELETED an issuer's codes when their account went, and 094 replaced it with a revoke
+--      precisely so that "the label, the use count, the expiry, the issue date and — this is the
+--      part that matters — THE SUBJECT OF THE AUDIT TRAIL" survived. Every `user.enroll` row in
+--      `audit_log` carries `detail.enrollmentCodeId`, and `audit_log` is not going anywhere.
+--      Dropping the table now would do, in one statement and to every row at once, exactly the
+--      harm 094 was written to prevent for one row at a time. Retiring the feature does not make
+--      the argument wrong; it removes the credential, not the history of who joined through which
+--      intake.
+--   2. THE RESTORE PATH. `exports/json.ts` refuses outright — `Backup names unknown table "…";
+--      refusing to restore` — any backup file naming a table that is not in `BACKUP_TABLES`. So
+--      dropping the table forces a choice between two bad ends: take `enrollment_codes` out of
+--      that list and every backup written by every shipped build becomes unrestorable, or leave
+--      the name in a list whose schema no longer has it, which is the same kind of lie in the
+--      opposite direction. Keeping the table keeps `BACKUP_TABLES` true, keeps the census in
+--      `json.test.ts` passing on its own terms, and keeps every existing backup restorable.
+--   3. THE ONE-WAY DOOR. These migrations are forward-only. A dropped table is data that cannot
+--      come back, and the operator who upgrades gets no chance to think about it first.
+--
+-- WHAT AN OPERATOR SEES ON UPGRADE: nothing. Their rows are untouched, `sqlite3 grantspotter.sqlite
+-- 'SELECT count(*) FROM enrollment_codes'` answers what it answered yesterday, no screen shows the
+-- table any more, and no code path reads it. If they want the rows gone, `DELETE FROM
+-- enrollment_codes` is theirs to run and is not this software's decision to make for them.
+--
+-- WHAT THE ROWS NOW MEAN, said plainly so the next reader does not have to infer it: they are a
+-- CLOSED RECORD. An "open" row — one with no `revoked_at`, an `expires_at` in the future and uses
+-- left — is not a live credential and has not been one since this migration ran, because there is
+-- no route that redeems a code. `revoked_at`, `expires_at` and `uses` decided what a code could do
+-- while something asked them; nothing asks them now.
+--
+-- ------------------------------------------------------------------- and so the trigger has to go
+--
+-- 094 CREATED `revoke_enrollment_codes_when_issuer_deleted` TO KEEP ONE POLICY: "an account's
+-- removal must leave no live credential behind." There are no credentials in this table, so the
+-- policy is kept by something stronger than a trigger — the absence of any mechanism that could
+-- spend one — and the trigger has stopped being a guarantee and become the only thing in the
+-- product that still writes to this table.
+--
+-- THAT IS THE ACTUAL HARM, AND 094 NAMED IT ITSELF: "Revoking a corpse buys nothing and costs the
+-- reason it died." Every row here is a corpse now. Left in place, this trigger would stamp
+-- `revoked_at` on a historical row on an unrelated act — an administrator's account being
+-- deleted — with the wall clock rather than the request's injected clock, and with no audit row,
+-- because the audited, correctly-clocked half of 094's design lived in `api/adminUsersRouter.ts`
+-- and went with the repository module it called. 094 said in as many words that the router
+-- revoking first is "one more reason" the trigger's wall clock was acceptable: it was meant to find
+-- nothing to do. Keeping only the half that was never meant to fire would invert that design
+-- silently and would put a "an administrator withdrew this" stamp on rows nobody withdrew.
+--
+-- `test/userCascade.test.ts` HELD THE OTHER END OF THIS AND HAS BEEN REWRITTEN RATHER THAN
+-- RELAXED. Its exemption for `enrollment_codes.created_by_user_id` was granted on the strength of
+-- this trigger, and the probe under it asserted that deleting an issuer WITHDREW their open codes.
+-- That assertion is now wrong because the design changed: what the probe asserts instead is that
+-- deleting an issuer leaves the historical row completely untouched, and that the trigger is gone
+-- from `sqlite_master`. The rule it is an exemption to — a row that keeps working on a deleted
+-- user's behalf must cascade — is unchanged and still applies to every other table.
+DROP TRIGGER IF EXISTS revoke_enrollment_codes_when_issuer_deleted;

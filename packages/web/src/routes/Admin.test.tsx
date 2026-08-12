@@ -512,65 +512,29 @@ describe('Admin console — backup, restore and ICS tokens', () => {
 });
 
 /**
- * ENROLLMENT CODES ON THE ADMIN SCREEN.
+ * ENROLLMENT CODES WERE A PANEL ON THIS SCREEN AND ARE NOT (2026-08-11).
  *
- * The section itself is exercised in `components/EnrollmentCodes.test.tsx`. What is asserted here
- * is that the console mounts it, and that the instant it judges expiry against comes from this
- * screen rather than from the clock the suite happens to run on.
+ * The two tests here asserted that the console MOUNTED the codes panel, and that the instant it
+ * judged expiry against came from this screen's `now` prop rather than from the clock the suite
+ * happened to run on. Both were right; the panel is deleted, and `AdminProps.now` went with it
+ * because no other panel on this screen renders anything time-dependent.
+ *
+ * What is asserted instead is the absence, at the two places it would show: no codes table, and no
+ * form that could issue one. That is worth a test rather than nothing, because the failure mode of
+ * a half-removed feature is a screen that still offers a control which 404s.
  */
-const ENROLLMENT_CODE = {
-  id: 'code-1',
-  label: 'W1MX autumn 2026 intake',
-  maxUses: 5,
-  uses: 2,
-  expiresAt: '2026-08-03T00:00:00.000Z',
-  revokedAt: null,
-  createdAt: '2026-08-01T00:00:00.000Z',
-  createdByUserId: 'u-admin',
-  lastUsedAt: null,
-};
+describe('Admin console — the enrollment codes panel is gone', () => {
+  it('renders the accounts panel and nothing about codes', async () => {
+    renderAdmin();
 
-function stubWithCodes(codes: unknown[] = [ENROLLMENT_CODE]) {
-  return stubFetch((url, init) =>
-    url === '/api/admin/enrollment-codes' && init?.method === 'GET'
-      ? { ok: true, status: 200, json: async () => ({ codes }) }
-      : undefined,
-  );
-}
-
-function renderAdminAt(now: string) {
-  return render(
-    <MemoryRouter>
-      <SessionContext.Provider
-        value={makeSessionValue({
-          user: { id: 'u-admin', email: 'admin@example.com', role: 'admin' },
-        })}
-      >
-        <Admin now={now} />
-      </SessionContext.Provider>
-    </MemoryRouter>,
-  );
-}
-
-describe('Admin console — enrollment codes', () => {
-  it('offers code management beside the accounts it is an alternative to', async () => {
-    stubWithCodes();
-    renderAdminAt('2026-08-02T12:00:00.000Z');
-
-    const table = await screen.findByRole('table', { name: /enrollment codes/i });
-    expect(within(table).getByText('W1MX autumn 2026 intake')).toBeInTheDocument();
-    // Both ways of creating an account are on one screen, and neither replaced the other.
-    expect(screen.getByRole('table', { name: /user accounts/i })).toBeInTheDocument();
+    // The panel that stayed, so this is not passing because the screen failed to render at all.
+    expect(await screen.findByRole('table', { name: /user accounts/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/new account email/i)).toBeInTheDocument();
-  });
 
-  it('judges an expiry against the instant it is given, not the clock the suite runs on', async () => {
-    stubWithCodes();
-    renderAdminAt('2026-08-04T12:00:00.000Z');
-
-    const table = await screen.findByRole('table', { name: /enrollment codes/i });
-    const row = within(table).getByText('W1MX autumn 2026 intake').closest('tr') as HTMLElement;
-    expect(within(row).getByText('Expired')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /enrollment codes/i })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /enrollment codes/i })).toBeNull();
+    expect(screen.queryByLabelText(/what this code is for/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /create enrollment code/i })).toBeNull();
   });
 });
 

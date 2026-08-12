@@ -231,7 +231,9 @@ const TABLES: ReadonlyArray<{ file: string; container: string }> = [
   { file: 'components/ProgramTable.tsx', container: 'table-wrap' },
   { file: 'components/ProvenanceTable.tsx', container: 'table-wrap' },
   { file: 'components/VerifyButton.tsx', container: 'table-wrap' },
-  { file: 'components/EnrollmentCodes.tsx', container: 'admin-table-wrap' },
+  // `components/EnrollmentCodes.tsx` was here until enrolment codes were retired (2026-08-11).
+  // The count assertion under this list is what makes deleting the entry safe: it fails if the
+  // file is still shipping a table this list has stopped naming.
   // The one table with no wrapper element of its own, so the panel around it is the container.
   { file: 'components/ProseCheckPanel.tsx', container: 'prose-check' },
   { file: 'components/MonthGrid.tsx', container: 'month-frame' },

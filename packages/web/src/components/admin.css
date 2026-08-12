@@ -57,35 +57,6 @@
   max-width: 100%;
 }
 
-/*
- * A sentence that belongs to the field above it rather than to the form as a whole. It carries the
- * enrollment-code trade-off, which has to be read where the decision is made, so it gets its own
- * row under its own control instead of being squeezed into a column beside two number inputs.
- *
- * `min-width: 100%` AND NOT `flex-basis: 100%` ALONE, and the difference was measured rather than
- * reasoned about. A flex container breaks lines on an item's HYPOTHETICAL main size, which is the
- * flex base size clamped by max-width — and the first version of this rule wore `.admin-prose` too,
- * whose `max-width: 70ch` clamped the declared 100% back down to 506 px. Measured on this host at
- * five widths: the note sat in a third column beside the two labels at 1280 px (left 733, width
- * 506) and took its own row at 900 px and below. A layout that changes shape at one width and not
- * another reads as an accident, because it was one. `min-width` is not clamped by `max-width` —
- * it wins — so the break now happens at every width.
- *
- * The readable measure moves to the child, which is not a flex item and can be bounded freely.
- */
-.admin-form-note {
-  flex: 1 1 100%;
-  min-width: 100%;
-  margin: 0;
-}
-
-.admin-form-note > span {
-  display: block;
-  max-width: 70ch;
-  font-size: var(--fs-200);
-  color: var(--text-muted);
-}
-
 /* The generated password is shown once. It reads as data, not as prose. */
 .secret-banner {
   display: block;

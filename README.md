@@ -496,24 +496,20 @@ a second supervised process, and its arm64 build under emulation is a recurring 
 ## Accounts
 
 Local accounts, argon2id password hashing, httpOnly session cookies. First-run admin bootstrap
-prints a one-time token to the container log, and sign-in is rate-limited.
+writes a one-time token to a file in `DATA_DIR`, and sign-in is rate-limited.
 
-**Three things can bring an account into existence, and not one of them is open registration.**
+**Three things can bring an account into existence, and the third is open to anyone who can reach
+the instance.**
 
 | Path | Who starts it | What it produces |
 |---|---|---|
-| The first-run token, printed to the container log | the operator, once, against a database with no accounts | the first **administrator** |
+| The first-run token, written to a file in `DATA_DIR` | the operator, once, against a database with no accounts | the first **administrator** |
 | **Admin → User accounts**, which generates a password shown once | an administrator | a member or an administrator, whichever is chosen |
-| An [enrollment code](#enrollment-codes), redeemed by whoever holds it | the person joining, using a code an administrator issued — from the admin screen, or from the `ENROLLMENT_CODE` line in `docker-compose.yml` | a **member**, always |
+| [Sign up](#signing-up), at the form on the sign-in screen | the person joining, unaided | a **member**, always |
 
-Only the third lets a person create their own account, and the distinction it turns on is the
-entire design: **there is no open sign-up.** The form exists and it is inert without a code that an
-administrator issued, bounded with whatever limits they set, and revocable the moment they change
-their mind. Registration for whoever finds the URL was never available here and still is not.
-
-Setting the code in the compose file is the *same* third path and not a fourth: it produces the
-same row, with the same limits and the same revoke button, and it cannot produce one at all until
-an administrator exists — see [Enrollment codes](#enrollment-codes).
+Only the third lets a person create their own account, and it needs nothing from you: **anybody who
+can reach this deployment can create a member account.** That is a change — see
+[Signing up](#signing-up) for what it replaced and what it does not give away.
 
 | Capability | admin | member |
 |---|---|---|
@@ -527,207 +523,125 @@ Members see the review queue read-only on purpose: knowing that a deadline chang
 review* is useful, and hiding it invites the "why is this list wrong" complaint the trust surfaces
 exist to prevent.
 
-### Enrollment codes
+### Signing up
 
-A club officer bringing fifteen new members onto an instance does not want to type fifteen
-passwords and hand them over one at a time, and the fifteen do not want to be handed one. An
-enrollment code is the third path: an administrator issues one, gives it to the people it is for,
-and each of them creates their own account with it.
+**Anybody who can reach this deployment can create a member account.** The sign-in screen carries a
+sign-up form; it asks for an email address, a password and an optional display name; it makes the
+account and signs the person in. There is nothing for an administrator to issue first.
 
-An administrator issues a code under **Admin → Enrollment codes** with a label saying what it is for —
-"W1MX autumn 2026 intake" — and two bounds, both optional and both worth setting:
+#### What this replaced, because the argument is worth knowing was made
 
-- **A use limit.** How many accounts this code may create. Leave it empty for no limit; even then
-  the code is still bounded by its expiry and by your ability to revoke it. (For a code you *type*,
-  both bounds stop being optional — see below.)
-- **An expiry**, given as a number of days. A code with no limit and no expiry is a permanent
-  password to your instance held by everyone you ever gave it to, so set at least one of the two.
+Until 2026-08-11 there was a third credential here called an **enrollment code**. An administrator
+issued one under *Admin → Enrollment codes* with a label, a use limit and an expiry, gave it to the
+people it was for, and each of them created their own account with it; an operator could also set
+one on an `ENROLLMENT_CODE` line in `docker-compose.yml`. The argument for it was that a club's
+instance should not be joinable by whoever finds the URL, and that a code an officer can read out at
+a meeting is the one credential a club can actually distribute. Four database migrations, a digest
+keyed from `SESSION_SECRET`, three rate-limit rungs and a long section of this README went into
+making that bounded rather than merely convenient.
 
-Leave the code box empty and GrantSpotter generates one — twenty characters, 2^100, unguessable.
+It was answered by the person who runs the deployment: the locked door cost more than it bought.
+Every legitimate member waited on an officer to be available, and the officer had to be taught what
+character folding was before they could choose a code that would work. So the whole apparatus is
+deleted — the screen, the routes, the compose variables, the redemption path.
 
-**You can also type your own**, so that an officer can read `W1MX-FALL-2026` out at a meeting
-instead of spelling twenty random characters down a phone. That is a real trade and the console
-says so at the moment you make it, not here:
+Two things survive it. The `enrollment_codes` table is still in the schema, as a **closed record**:
+your existing rows keep their labels, use counts and expiries, nothing can redeem one, and no screen
+shows them. And the `user.enroll` rows in the audit log still say which intake each of your existing
+members arrived through. `packages/server/src/db/migrations/095-enrollment-codes-are-a-closed-record.sql`
+sets out why the table was not dropped. **If you are upgrading, you have nothing to do**: an old
+`docker-compose.yml` that still carries the three `ENROLLMENT_CODE*` lines starts fine, because
+nothing reads them.
 
-- **A code you choose can be guessed, and the product is built around that rather than around a
-  rule about length.** Nothing stops somebody who has heard of your club trying your callsign with
-  a season and a year: in testing, `W1MX-SPRING-2027` was found on the seventh attempt. So three
-  other things do the work. GrantSpotter answers **at most 240 wrong codes every fifteen minutes
-  across the whole server** — 23,040 a day, however many addresses a caller claims, and a code your
-  students really hold is never held up by it. It writes a line to the audit log when somebody is
-  working through codes, and another when an account is created from somewhere that has just been
-  getting them wrong. And the two bounds below cap what a guessed code is worth.
-- **A code you choose must be at least 12 characters** once capitals, dashes, spaces and `U` are
-  taken out. All that buys is ruling out somebody working through every possible code: at the
-  ceiling above, a year of guessing gets through eight characters with about one chance in 130,745
-  and twelve with about one in 137 billion. **Clearing the floor does not make a code hard to
-  guess** — `W1MX-SPRING-2027` clears it by two characters — so treat a chosen code as a
-  convenience with a deadline, not as a secret.
-- **A code you choose must say how many accounts it may create, up to 200.** This is the bound on
-  the day one of these is guessed: before it existed, a guessed code went on making member accounts
-  until somebody noticed. Thirty is the usual answer for a club intake, and issuing another code
-  takes ten seconds. A generated code keeps its 10,000, or no limit at all.
-- **A code you choose must expire, within 365 days.** Not because of guessing — no expiry short
-  enough to matter would help there — but because a code worth reading out is a code that gets read
-  out, photographed and forwarded, and an expiry is the only bound on that which does not depend on
-  somebody remembering to revoke it. A generated code may still live for ten years, or forever.
-- **Codes are compared after they are folded.** Capitals, dashes and spaces are ignored, `O` counts
-  as `0`, `I` and `L` count as `1`, and **`U` is dropped entirely** — that is what lets a student
-  type a code off a whiteboard and still get in, and it is why `W1MX-AUTUMN-2026` is stored as
-  `W1MXATMN2026`, twelve characters rather than the fourteen you typed. The console shows you the
-  stored form before you save. It also means `W1MX-FALL-2026` and `WIMX-FA11-2O26` are *the same code*, so the
-  console shows you the folded form before you save, and a second code that folds onto an existing
-  one is refused and tells you which one it clashed with. Revoking the old one does not free the
-  text: the two would still be the same code, and anyone still holding the old one could use the
-  new one.
-- The list marks every code **Chosen** or **Generated**, because after the fact only a hash is
-  stored and the two are not equally strong.
-- **Deleting an administrator withdraws the codes they issued — it does not erase them.** The
-  credential stops working at that instant and cannot be brought back, so a departing officer's
-  intake code cannot go on making accounts; the rows stay on this screen with their labels, their
-  use counts and their expiry, and anybody still holding one is told it was withdrawn rather than
-  told it is not valid. The delete confirmation says how many were withdrawn, and each one gets its
-  own line in the audit log.
+#### What open sign-up does not give away
 
-**You can set one in `docker-compose.yml` instead, on the `ENROLLMENT_CODE` line**, if you would
-rather edit one file than sign in and fill in a form. It is not a different kind of credential and
-it gets no shortcuts: at boot it becomes an ordinary row in the same table, listed in
-**Admin → Enrollment codes** as `Set in docker-compose.yml (ENROLLMENT_CODE)`, marked **Chosen**,
-with the same use count, the same expiry, the same revoke button and the same audit trail. Every
-rule above applies to it, and the server refuses to start rather than issue a code that breaks one.
+- **A new account is always a member. The role is not a parameter of the request**, so there is
+  nothing to tamper with: the handler passes the literal `member`, and the only way to a second
+  administrator is an existing administrator promoting one. A body carrying `"role":"admin"` reaches
+  the handler with that key already stripped.
+- **A member can read and cannot decide.** The capability table above is the whole of it: browse,
+  match, watch, apply, export, and the review queue read-only. Source configuration, the crawl
+  trigger, user management and backup/restore are admin-only.
+- **The first administrator still comes from the first-run token, and sign-up cannot stand in for
+  it.** Until that account exists, nothing here creates an account at all — the sign-up form is not
+  offered and the route refuses — so a fresh container left running on a public address cannot be
+  claimed by whoever finds it first. See [Deploying](#deploying).
+- **The password is the person's own choice and is held to the same 12-character floor** as every
+  other password here, checked by the same policy. There is no password-reset email, because there
+  is no SMTP anywhere in this product; a member who forgets theirs needs an administrator to reset
+  it from *Admin → User accounts*.
 
-- **It has to state its bounds, and the compose file states them for you.** `ENROLLMENT_CODE_MAX_USES`
-  defaults to **30** — a club intake, and what this product already calls the usual answer — and
-  `ENROLLMENT_CODE_DAYS` to **90**, one academic term rather than the 365 the ceiling allows,
-  because a default that takes the maximum is a default nobody chose. Both are written out in the
-  file next to the code, so you can see what you are handing out. Both are read *only when the code
-  is created*: changing one of them alone does nothing until you change the code itself, and the
-  container log prints the limits the row actually carries.
-- **Restarting changes nothing.** The row keeps the uses it has spent and the expiry it was created
-  with, because a container that restarts every week must not hold a code that never expires.
-- **Changing the value withdraws the old code** and issues the new one; **deleting the value
-  withdraws it** and issues nothing. In both cases the old row stays, with its label, its count and
-  its history, and anyone still holding that code is told it was withdrawn rather than that it is
-  not valid.
-- **A withdrawn code never comes back.** Revoke it in the app and a restart leaves it revoked — a
-  restart must not undo somebody's deliberate act. Putting an old code back on the line does not
-  reopen it either, and that one is doing real work rather than being consistent: everyone who was
-  read that code out while it was live still has it. To open a new door, use a code this instance
-  has not used before. The log says so on every boot that finds one.
-- **A code an administrator already issued is left alone.** If the value names a code that exists on
-  the instance, GrantSpotter does not take it over: its limits, its expiry and its issuer stay as
-  they were, and removing the line will not withdraw it. The log says all three, because the natural
-  assumption is the opposite.
-- **It cannot go first.** Nothing self-serve may exist before an administrator does — a code that
-  worked on a brand-new database would let anybody who found the instance between `docker compose
-  up` and your first-run screen make an account — so the code is created the moment you finish that
-  setup rather than at the first boot. No restart needed; the log says which of the two happened.
-- **It belongs to the file, not to any of your administrators.** It is listed with no issuer,
-  because none of them typed it and none of them can reissue it, and **deleting an administrator
-  account — including the first one you ever made — does not touch it.** It keeps the uses it has
-  spent and the expiry it was created with; only an edit to the line changes either.
-- **Rotating `SESSION_SECRET` fixes this one for you.** Every other outstanding code stops redeeming
-  when that secret changes (see below) and has to be reissued by hand. The compose-set code is
-  reissued on the next boot, because the file still says what it is.
+#### What it does give away, said plainly
 
-> **`docker-compose.yml` is tracked by git, and this is the value that will not feel like a secret.**
-> A session secret looks like one, so you think before you push. An enrollment code is *meant* to be
-> shared — read out at a meeting, chalked on a whiteboard, printed on a flyer — so it does not feel
-> like something to protect while you are typing it, and it still makes accounts. Push a fork with a
-> live code on that line and anybody reading your repository can create accounts on your instance
-> until you notice and revoke it. If you keep this repository under git, do not put the code on that
-> line: change it so the value is interpolated from the environment, written exactly the way the
-> `HOST_PORT` line is written, and keep the code in the `.env` beside the compose file, which
-> `.gitignore` already ignores. Deploying from a download, or from a clone you never push, and it
-> does not arise. For the same reason there is **no example code printed in the compose file or
-> here**: a code published in a public repository is a code every deployment that copied it shares.
+- **There is no email verification.** Nothing in this product sends mail, so an address on an
+  account is a string somebody typed. It is the login identifier and nothing else rests on it.
+- **Signing up with an address that already has an account is told so.** That is a disclosure — it
+  answers "does this instance have an account for this address?" — and it is deliberate, because the
+  alternative is somebody who signed up last term unable to work out why the form will not take
+  them. On an instance anybody may join, that trade is a smaller one than it was when a code was
+  needed to ask the question at all, and it is not a leak worth pretending about.
+- **Anybody may join means anybody may join.** If you need the door shut, put this instance behind
+  something that can actually shut it — a VPN, an SSO proxy, an IP allow-list. A shared code could
+  not, once it had been read out in a room; a proxy can. This software has no setting that
+  substitutes for one.
 
-**The code is shown exactly once, on the screen that issues it.** After that only a hash of it is
-stored, so a copy of `grantspotter.sqlite`, a backup or the JSON export does not hand out working
-credentials. For a code *you* typed, a plain hash would not have been enough — a dictionary of
-callsigns, seasons and years recovered `W1MX-AUTUMN-2026` from its stored digest in 32 seconds on
-one CPU core — so the stored value is an HMAC keyed with a secret derived from your
-`SESSION_SECRET`, which lives in your environment and is in no backup this software writes. **Two
-consequences worth knowing before they surprise you:** if you rotate or lose `SESSION_SECRET`, every
-outstanding enrolment code stops working (the rows stay, with their labels and counts — issue a new
-code for each open intake), and restoring a backup onto a host with a *different* `SESSION_SECRET`
-brings the records back but not the codes. Codes issued by a build older than migration 093 keep
-their original digest and go on working; they are all generated 20-character codes, which no
-dictionary reaches. The list
-of codes shows you the label, the use count, the expiry, when it was created and when it was last
-redeemed, and it cannot show you the code itself, because the instance no longer has it. If you
-lose it, revoke it and issue another; that is cheaper than any recovery path and it is the one that
-leaves a record. Revocation stamps the row rather than deleting it, so what remains is the evidence
-that this code existed and when it was switched off.
+#### The registration budget, and what no setting of it can do
 
-**Enrolment produces a member. The role is not a parameter of the request**, so there is nothing to
-tamper with: an enrolled account gets `member`, and the only way to a second administrator is an
-existing administrator promoting one. The account's password is the enroller's own choice and is
-held to the same 12-character floor as every other password here, checked by the same policy.
+Registration is rate-limited on three rungs, every one of them a **15-minute** sliding window: **60
+sign-ups per connection**, **120 per source network**, and **240 across the whole server**. The
+first is keyed on the address your proxy reports, which behind a single documented hop is a
+building's NAT rather than one person; the second on the TCP peer's own address coarsened to a /24
+or /48, which no header can change; the third on nothing at all.
 
-**A wrong code and a code that was never issued get the same answer.** Enrolment tells you nothing
-about codes you do not hold: not whether one exists, not how many there are, not who has one.
-Expired, revoked and used-up codes *do* say which they are, because those are the three states a
-legitimate holder needs explained before they give up and email somebody. Guessing is rationed by
-three counters rather than one: **10 wrong codes per address, 120 per source network, and 240
-across the whole server**, each per 15 minutes. Only a wrong code is charged to any of them, and
-only a wrong code ever reads one: redeeming a code this instance really issued does not consult
-them at all, so nothing a stranger does with wrong codes can stop your students enrolling. A code
-that has expired, been revoked or run out is a holder failing, not an attacker probing, and locking
-them out for it teaches nobody anything.
+**Every attempt is counted, not every failure**, because here the successes *are* the abuse. And
+these numbers moved from bounding an attack to bounding an afternoon, which is the whole change:
+they used to be charged only on the branch that answered "that enrollment code is not valid", so a
+person holding a real code never read them and could not be refused by them however hard a stranger
+had been knocking. That branch is gone. **This budget is now on the path of every legitimate
+registration**, so each rung is derived from the busiest honest window this product is for — a club
+signing thirty students up in one lecture, doubled for the retries a real form produces — rather
+than from a stranger. The connection rung was **10** while it counted wrong codes; ten here would
+answer twenty of those thirty students "try again later".
 
-**That promise is about codes, and not about email addresses.** Enrolling with an address that
-already has an account is told so, plainly, because the alternative is someone who signed up last
-term being unable to work out why the form will not take them. On an instance where every account
-needs a code you issued, that is a trade worth making and not a leak worth pretending about.
+**A public instance cannot separate a hundred people signing up from one person signing up a hundred
+times.** The only signals this process has are a header the caller writes and a TCP peer that is one
+value for everybody behind your tunnel, and there is no email verification to stand in for an
+identity. So mass registration and denial of registration are the same act here, and a ceiling only
+chooses which of the two an attacker gets. What is left is to make either one **bounded, loud and
+reversible**: bounded by the three numbers, loud because closing a rung writes an audit row naming
+which rung and roughly where from, and reversible because an administrator can delete the accounts
+and the refusal lasts fifteen minutes rather than forever. An operator who needs more than that needs
+a signal this process does not have, which means an authenticating proxy in front of it.
 
-**Why three counters and not one.** The first knows callers apart only by the address your proxy
-reports, which behind a tunnel is the real client and is the precise signal — a club whose students
-all leave through one campus NAT shares one budget, so after 10 mistyped codes from that building
-the next mistype from it is answered "wait" rather than "that code is not valid", and typing the
-code correctly still enrols them. But a caller who can reach the instance directly writes that
-address themselves, and until 2026-08-10 that was the only counter: measured on the shipped build,
-one machine rotating the header was answered **20,008 wrong codes in 10.12 seconds** and left
-nothing in the audit log. That was an accepted trade while every code was 2^100 and it stopped
-being one the day an administrator could type `W1MX-FALL-2026`. The two counters underneath it are
-keyed on the TCP connection's own address, coarsened to a /24 or /48, and on nothing at all — there
-is no header that changes either. Behind your tunnel they are one value for the whole deployment,
-which is exactly the deployment-wide switch that ten wrong codes from a stranger used to flip on
-2026-08-05; it is affordable now only because a correct code never touches these counters. And a
-refused request charges nothing, so one source can only ever contribute its own 120 to the
-server-wide 240: **closing that one takes at least two networks acting together**, and the worst it
-does even then is answer a wrong code with "wait" instead of "not valid" for fifteen minutes.
+**What an attacker can still reach, rather than a reassurance:** 240 accounts per fifteen minutes
+sustained is 23,040 a day, roughly 9 MB of database and an *Admin → Users* screen with a day of junk
+in it — and the same 240 is what somebody must spend, every window, to hold registration closed for
+everyone else. A rung that refuses charges nothing, so one network can only ever put its own 120
+into the server-wide 240: **closing that one takes at least two networks acting together.** Behind a
+tunnel, where every caller shares the network rung, that arithmetic protects less than it sounds,
+and it is stated rather than assumed.
 
-**What an attacker can still reach, stated rather than rounded off.** 240 wrong codes per fifteen
-minutes, deployment-wide, sustained: 23,040 a day. That is 1/8,000th of what was measured before,
-and it is still enormous next to a phrase somebody can think of, which is why the audit trail and
-the use limit above matter as much as the ceiling does.
-
-**Two people redeeming a single-use code at the same instant get one account, not two.** The use
-count and the new account are written in one transaction, so the limit holds under concurrency
-rather than only in a demo. That is stated because the opposite has shipped here before, one floor
-down: the [callsign lookup](#the-callsign-lookup)'s guard against two simultaneous requests to one
-host could not see a request that had not answered yet, and eight simultaneous presses produced
-eight requests where one was intended — measured on 2026-08-04, with the guard present and every
-one of its own tests green. A limit checked before an `await` and written after it is not a limit.
+**Two people signing up with the same address at the same instant get one account, not two.** The
+uniqueness of `users.email_normalized` is enforced by the database rather than by a check the handler
+does first, so the limit holds under concurrency rather than only in a demo. That is stated because
+the opposite has shipped here before, one floor down: the [callsign lookup](#the-callsign-lookup)'s
+guard against two simultaneous requests to one host could not see a request that had not answered
+yet, and eight simultaneous presses produced eight requests where one was intended — measured on
+2026-08-04, with the guard present and every one of its own tests green. A limit checked before an
+`await` and written after it is not a limit.
 
 | Route | Who | What it does |
 |---|---|---|
-| `GET /api/admin/enrollment-codes` | admin | lists codes; carries no plaintext, ever |
-| `POST /api/admin/enrollment-codes` | admin | issues one from `{ label, code, maxUses, expiresInDays }`; `code: null` generates one, a string is the code you chose; the only response in the product that carries `plaintext`, and it carries `normalized` beside it — what was actually hashed |
-| `POST /api/admin/enrollment-codes/:id/revoke` | admin | stamps `revokedAt`; the row stays |
-| `GET /api/auth/enrollment-open` | public | `{ open: boolean }` — whether *some* usable code exists, and nothing else |
-| `POST /api/auth/enroll` | public | redeems a code, creates the member, signs them in |
+| `POST /api/auth/enroll` | public | creates the member account and signs them in |
+| `GET /api/auth/bootstrap-status` | public | `{ needsSetup: boolean }` — whether this instance still has no accounts |
+| `POST /api/auth/bootstrap` | public, once | spends the first-run token and makes the first administrator |
+| `POST /api/admin/users` | admin | creates an account with a chosen role and a generated password shown once |
+| `DELETE /api/admin/users/:id` | admin | deletes the account and everything keyed to it; the audit trail stays |
 
-`maxUses: null` means no limit, `expiresAt: null` means no expiry, and a code is usable only while
-it is unrevoked, unexpired and under its limit. The sign-in screen offers the enrolment path only
-when `GET /api/auth/enrollment-open` says yes, which is a single boolean about the instance and not
-a fact about any particular code — an instance with no usable codes looks exactly like an instance
-that has never issued one.
-
-**Enrolment does not replace the first-run token and cannot stand in for it.** Issuing a code takes
-an administrator, and on a fresh database there is no administrator to take it, so the first one
-still comes out of the container log exactly as [below](#deploying).
+The sign-up route keeps its old path. Renaming it would have broken a browser tab left open across
+the upgrade for no gain, and the same reasoning is why a body that still carries a `code` field is
+not refused: zod strips the key, so the old form posts successfully instead of meeting a validation
+error it has no wording for.
 
 ---
 
@@ -766,31 +680,38 @@ actually switch that instance off. It does not have to be elaborate, and it does
 instance itself — a club page, a department page or a personal page that says who runs this and how
 to reach you is enough. [Environment](#environment) has the rules it must pass.
 
-Then read the container log for the one-time admin bootstrap token. The **first administrator always
-comes from the log**: a fresh database has no accounts, so it has nobody who could issue an
-[enrollment code](#enrollment-codes), and enrolment therefore cannot bootstrap an instance. What you
-get is a first-run screen: open the app and, because no accounts exist yet, it offers **Set up
-GrantSpotter** instead of a sign-in box, asking for that token, an email address and a password of
-at least 12 characters. On success you are signed in as an administrator. There is no password reset
-for the first administrator, so store it somewhere you can find it again.
+Then read the one-time admin bootstrap token out of the file the container wrote it to. The
+**first administrator always comes from that token**: until it is spent this instance has no
+accounts, the sign-up form is not offered and the route refuses, so [signing up](#signing-up)
+cannot bootstrap an instance. What you get is a first-run screen: open the app and, because no
+accounts exist yet, it offers **Set up GrantSpotter** instead of a sign-in box, asking for that
+token, an email address and a password of at least 12 characters. On success you are signed in as
+an administrator. There is no password reset for the first administrator, so store it somewhere you
+can find it again.
 
-If you would rather do it over the API:
+**The token is not in `docker compose logs`.** It is written to `first-run-token.txt` in your
+`DATA_DIR`, readable only by the user this server runs as, and deleted the moment it is spent. A
+log is the wrong place for a live credential: `docker logs` keeps the line for the life of the
+container, and it gets pasted into issues and shipped to aggregators by people who were never given
+the database. The container log carries a banner telling you the path instead — and if the file
+could not be written (a read-only volume, a full disk), the banner shouts that and prints the token,
+because a deployment nobody can set up is worse.
 
 ```bash
-# Brackets the banner by its own `====` delimiters rather than counting lines: this printed
+# The banner, bracketed by its own `====` delimiters rather than by counting lines: this printed
 # nothing useful for a while, because it was `grep -A4` and the banner had grown past four.
 docker compose logs grantspotter | awk '/GrantSpotter first-run setup/,/====$/'
+docker compose exec grantspotter cat /data/first-run-token.txt
 curl -X POST http://127.0.0.1:3030/api/auth/bootstrap \
   -H 'content-type: application/json' \
-  -d '{"token":"<the token from the log>","email":"you@example.org","password":"<a long passphrase>"}'
+  -d '{"token":"<the token from that file>","email":"you@example.org","password":"<a long passphrase>"}'
 ```
 
-A fresh token is printed on every restart until an account exists. Now open
+A fresh token is written on every restart until an account exists. Now open
 `http://127.0.0.1:3030` (or whatever you set `HOST_PORT` to) and sign in with those credentials.
 From here an account is made one of two ways: you create it from **Admin → User accounts**, with the
-role you choose and a generated password you hand over, or somebody creates their own by redeeming
-an [enrollment code](#enrollment-codes) you issued, which always makes a member. Nobody arrives
-without an administrator having done something first.
+role you choose and a generated password you hand over, or somebody creates their own at the
+[sign-up form](#signing-up), which always makes a member.
 
 `HOST_PORT` is the one setting still interpolated rather than written out, because **3030** is a
 popular default and is frequently already claimed on a busy host. Change the left-hand number of the
@@ -814,12 +735,6 @@ interpolated from the environment — written exactly the way the `HOST_PORT` li
 written — and keep the secret in `.env` beside the compose file. That is the two-file arrangement
 this layout was meant to be rid of, so it is the answer for a tracked fork rather than the default.
 
-**The same applies to `ENROLLMENT_CODE`, and it is the line likelier to catch you out.** A session
-secret announces itself as a secret; an [enrollment code](#enrollment-codes) is *meant* to be shared,
-so it does not feel like one while you are typing it — and it still creates accounts. A fork pushed
-with a live code on that line lets strangers enrol on your instance until you revoke it. Same escape
-hatch, same `.env`, and it is empty as it ships so it costs you nothing to leave alone.
-
 **CI note:** a freshly created or forked repository sometimes will not run its first push-triggered
 workflow. The build workflow includes `workflow_dispatch` for exactly that case — trigger it once by
 hand from the Actions tab, and subsequent pushes behave normally.
@@ -836,9 +751,6 @@ hand from the Actions tab, and subsequent pushes behave normally.
 | `CRAWL_ENABLED` | no | `true` | |
 | `CRAWL_CRON` | no | `17 3 * * *` | nightly, jittered in code |
 | `CALLSIGN_LOOKUP_ENABLED` | no | `true` | the one user-initiated request this product makes. `false` and the route is not registered, so this deployment never contacts `callook.info` — see [The callsign lookup](#the-callsign-lookup) |
-| `ENROLLMENT_CODE` | no | empty, and the feature is off | an [enrollment code](#enrollment-codes) you set in the file instead of in the app. At boot it becomes an ordinary code row with the same limits, revoke button and audit trail. Held to the same rules as one you type into the console, and the server refuses to start if it breaks one. **The value is a credential in a tracked file — read the warning below** |
-| `ENROLLMENT_CODE_MAX_USES` | no | `30` | how many accounts that code may create, up to the 200 any chosen code may have. Read only when the code is created |
-| `ENROLLMENT_CODE_DAYS` | no | `90` | how long it lives, up to the 365 any chosen code may have. Read only when the code is created, so a restart never extends it |
 | `ANTHROPIC_API_KEY` | no | none | optional parse assist only |
 | `SIMPLER_GRANTS_API_KEY` | no | none | optional federal ranking |
 
@@ -933,17 +845,12 @@ a default:
   change `example.org` to your own host and `CHANGE_ME` still catches it; delete `CHANGE_ME` and
   `example.org` still does. Only replacing the whole value gets past both.
 
-**A third variable can stop the boot, and only if you asked it to.** `ENROLLMENT_CODE` is optional
-and empty as it ships, so this paragraph is about nobody until you type something between the
-quotes. Once you do, a value that breaks one of the rules for a code you choose — under 12
-characters folded, more than 200 uses, longer than 365 days — stops the server instead of starting
-one that quietly has no door behind the code you just read out at a meeting. Every one of those
-messages names the rule, says why the rule exists, and ends with the way out: **delete the
-`ENROLLMENT_CODE` line and the server starts again**, because the feature is optional and "off" is
-always one keystroke away. Nothing that depends on the *database* — a code that is already here, or
-one that has been withdrawn — ever stops a boot, because that can become true on a Sunday reboot
-nobody asked for; those are reported in the container log and the server starts. See
-[Enrollment codes](#enrollment-codes) for what a boot then does with the value.
+**A third variable used to be able to stop the boot and no longer exists.** `ENROLLMENT_CODE` — with
+`ENROLLMENT_CODE_MAX_USES` and `ENROLLMENT_CODE_DAYS` beside it — carried a code an operator could
+set in the file instead of issuing one in the app, and `loadConfig` refused to start rather than
+issue a code that broke one of the rules for a chosen code. All three are gone with the feature
+([Signing up](#signing-up)). An old `docker-compose.yml` that still names them starts normally:
+nothing reads them, so they are ignored rather than refused, and only the two above can stop a boot.
 
 ---
 

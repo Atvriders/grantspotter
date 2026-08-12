@@ -52,27 +52,6 @@ export type { AxisResult, AxisStatus } from './matcher.js';
 // CONTRACT §4 — content hashing. sha256.ts stays internal on purpose.
 export { hashProgram } from './hash.js';
 
-// Enrolment codes: the normalisation and the policy on a code an administrator TYPES. Shared
-// because the admin console has to show what a chosen code will be stored as before it is saved,
-// and `web -> server` is not a direction this repository allows. The generator and the digest are
-// not here — they need node:crypto and stay in `server/db/repositories/enrollmentCodes.ts`.
-export {
-  CHOSEN_CODE_MAX_DAYS,
-  CHOSEN_CODE_MAX_INPUT,
-  CHOSEN_CODE_MAX_USES,
-  CHOSEN_CODE_MIN_LENGTH,
-  describeEnrollmentCodeFold,
-  describeEnrollmentCodeStripped,
-  ENROLLMENT_CODE_ALPHABET,
-  ENROLLMENT_CODE_DROPPED_LETTERS,
-  ENROLLMENT_CODE_FOLD,
-  exhaustionChance,
-  groupThousands,
-  labelRepeatsChosenCode,
-  MEASURED_GUESSES_PER_DAY,
-  normalizeEnrollmentCode,
-} from './enrollmentCode.js';
-
 // Maidenhead locators. Deliberately NOT folded into the geography block above: `geo.ts` answers
 // "does this location satisfy this rule", while a locator is a BOX and the three questions asked
 // of it (centre, bounds, contains) have to stay distinguishable at the call site.

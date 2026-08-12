@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiSend, ApiError } from '../api/client.js';
-import { EnrollmentCodes } from '../components/EnrollmentCodes.js';
 import { useSession } from '../store/session.js';
 import { useApi } from '../store/useApi.js';
 import { formatDate } from '../lib/trust.js';
@@ -83,16 +82,13 @@ function readFileText(file: File): Promise<string> {
   });
 }
 
-export interface AdminProps {
-  /**
-   * The instant the enrollment-code table judges expiry against, passed straight through. Optional
-   * and normally absent — `Browse` and `Calendar` take the same prop for the same reason, which is
-   * that a test cannot assert "expired" about a row whose state depends on when the suite runs.
-   */
-  now?: string;
-}
-
-export function Admin({ now }: AdminProps): JSX.Element {
+/**
+ * `AdminProps` HELD ONE FIELD, `now`, AND IS GONE (2026-08-11). It existed so a test could pin the
+ * instant the enrollment-code table judged expiry against; that table is retired, and no other
+ * panel on this screen renders anything time-dependent. `Browse` and `Calendar` still take a `now`
+ * for the same reason and are untouched.
+ */
+export function Admin(): JSX.Element {
   const { user } = useSession();
   const users = useApi<UsersResponse>('/api/admin/users');
   const stacked = useNarrowerThan(ACCOUNTS_TABLE_MIN_PX);
@@ -227,7 +223,7 @@ export function Admin({ now }: AdminProps): JSX.Element {
     begin();
     setConfirmingDeleteId(null);
     try {
-      const result = await apiSend<{ removed: RemovedCounts; revokedEnrollmentCodes: number }>(
+      const result = await apiSend<{ removed: RemovedCounts }>(
         'DELETE',
         `/api/admin/users/${row.id}`,
       );
@@ -239,14 +235,6 @@ export function Admin({ now }: AdminProps): JSX.Element {
           `${plural(removed.watches, 'watchlist entry', 'watchlist entries')}, ` +
           `${plural(removed.sessions, 'session', 'sessions')} and ` +
           `${plural(removed.applications, 'application', 'applications')}. ` +
-          // Said only when it happened, and said as a WITHDRAWAL rather than as a removal: the rows
-          // are still on the Enrollment codes screen with their use counts. An administrator who is
-          // not told this finds out from a student who cannot enrol.
-          (result.revokedEnrollmentCodes > 0
-            ? `${plural(result.revokedEnrollmentCodes, 'enrollment code', 'enrollment codes')} ` +
-              `they issued ${result.revokedEnrollmentCodes === 1 ? 'was' : 'were'} withdrawn and ` +
-              'can no longer create accounts; the rows stay on the Enrollment codes screen. '
-            : '') +
           'The audit trail of what this account did is kept.',
       });
       users.reload();
@@ -605,8 +593,6 @@ export function Admin({ now }: AdminProps): JSX.Element {
           </div>
         )}
       </section>
-
-      <EnrollmentCodes now={now} />
 
       <section className="admin-section card" aria-label="Calendar feed">
         <h2>Calendar feed link</h2>

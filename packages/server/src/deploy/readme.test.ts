@@ -4,11 +4,6 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { firstRunBanner } from '../auth/bootstrap.js';
-import {
-  ENV_CODE_DEFAULT_DAYS,
-  ENV_CODE_DEFAULT_MAX_USES,
-  ENV_CODE_LABEL,
-} from '../auth/chosenCode.js';
 import { PLACEHOLDER_MARKER } from '../config.js';
 
 /**
@@ -139,12 +134,22 @@ describe('README honesty surfaces', () => {
       'CRAWL_CRON',
       'ANTHROPIC_API_KEY',
       'SIMPLER_GRANTS_API_KEY',
-      'ENROLLMENT_CODE',
-      'ENROLLMENT_CODE_MAX_USES',
-      'ENROLLMENT_CODE_DAYS',
     ]) {
       expect(readme).toContain(key);
     }
+    /**
+     * `ENROLLMENT_CODE`, `ENROLLMENT_CODE_MAX_USES` and `ENROLLMENT_CODE_DAYS` WERE IN THAT LIST
+     * AND ARE NOT ANY MORE, BECAUSE THEY ARE NOT VARIABLES ANY MORE (2026-08-11). The README still
+     * names all three — an operator upgrading has them in their file and needs to be told they are
+     * ignored — so this asserts the opposite of what it used to: they must appear as a retirement
+     * and must NOT appear as a row in the table of variables this build reads.
+     */
+    for (const gone of ['ENROLLMENT_CODE', 'ENROLLMENT_CODE_MAX_USES', 'ENROLLMENT_CODE_DAYS']) {
+      expect(readme, `${gone} is documented as a live variable again`).not.toMatch(
+        new RegExp(`^\\| \`${gone}\` \\|`, 'm'),
+      );
+    }
+    expect(readme).toMatch(/no longer exists/i);
     // Both of them, in the table and in the prose beneath it.
     expect(readme).toMatch(/\*\*no default\*\*[\s\S]*\*\*no default\*\*/);
     expect(readme).toMatch(/Two variables fail loudly on startup/);
@@ -357,24 +362,25 @@ describe('README honesty surfaces', () => {
   });
 
   /**
-   * THE ASSERTION THAT USED TO BE HERE WAS NOT WRONG. THE PRODUCT CHANGED UNDER IT.
+   * THE ASSERTION THAT USED TO BE HERE WAS NOT WRONG, TWICE OVER. THE PRODUCT CHANGED UNDER IT
+   * TWICE.
    *
-   * It required the README to say `no sign-up form`, and for the life of this project that was an
-   * accurate description of a deliberate design: `createBootstrapState` printed a one-time token to
-   * the log, `POST /api/auth/bootstrap` was the only thing that could spend it, and every later
-   * account came from an administrator typing it into **Admin → User accounts**. The comment above
-   * it said the claim was "unchanged and still meaningful", and it was.
+   * It first required the README to say `no sign-up form`, which described a deliberate design for
+   * the life of this project: a one-time token, `POST /api/auth/bootstrap` as the only thing that
+   * could spend it, and every later account made by an administrator. Enrollment codes made that
+   * false and the sentence was replaced with a narrower one. Open sign-up (2026-08-11) has now made
+   * the replacement false too, and the codes are gone; the block near the bottom of this file holds
+   * what is true instead.
    *
-   * Enrollment codes make it false. A person holding a code an administrator issued now creates
-   * their own account, at a form, without an administrator present. So the sentence goes — but the
-   * property it was protecting does not, and losing it in the edit would be the actual regression:
-   * "GrantSpotter has sign-up now" is exactly the wrong summary of this change. What is true is
-   * narrower and harder, and it is what the `enrolment is a third door` block below holds:
-   * registration is impossible without a secret an administrator issued, limited, and can revoke.
+   * What this test keeps is the part neither change touched: the bootstrap token has a documented
+   * way to SPEND it, not merely a place to find it, and the first administrator comes from that
+   * token and can come from nowhere else. That claim matters more after the change than before it,
+   * because it is now the only thing standing between an unattended fresh container and whoever
+   * reaches it first.
    *
-   * So this test keeps the two claims about the bootstrap path that are still true — the token has
-   * a documented way to spend it, and the first administrator comes from the log and cannot come
-   * from anywhere else — and hands the sign-up question to gates written for the new design.
+   * `comes from the log` became `comes from that token` on the same day, and for a different
+   * reason: `bootstrap.ts` stopped printing the token and started writing it to a 0600 file, so a
+   * gate demanding the phrase would have kept the README pointing at a log the token is not in.
    */
   it('says how to spend the bootstrap token, not just where to find it', () => {
     expect(readme).toContain('/api/auth/bootstrap');
@@ -383,10 +389,10 @@ describe('README honesty surfaces', () => {
     expect(readme).toMatch(/first-run screen/i);
     // `\s+` and not a space throughout: these sentences wrap mid-phrase in the source, and a regex
     // that assumes one line would fail on a reflow that changed nothing a reader can see.
-    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+the\s+log/i);
-    // …and why it cannot be otherwise, which is the sentence that stops enrolment being mistaken
+    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+that\s+token/i);
+    // …and why it cannot be otherwise, which is the sentence that stops open sign-up being mistaken
     // for a way to stand an instance up.
-    expect(readme).toMatch(/enrolment\s+(therefore\s+)?cannot\s+bootstrap/i);
+    expect(readme).toMatch(/cannot\s+bootstrap\s+an\s+instance/i);
   });
 
   /**
@@ -697,320 +703,196 @@ describe('README: nine means nine, wherever the chain goes', () => {
  * mechanism — an issuer, a limit, an expiry, a revocation, a hash, a rate limit, a transaction —
  * because "we take security seriously" is satisfiable by wording and none of these are.
  */
-describe('README: enrolment is a third door, not an open one', () => {
-  it('no longer claims there is no way for a user to create an account', () => {
-    // Every form of the retired claim, starting with the exact one this file asserted for the
-    // whole life of the project up to this change.
+/**
+ * SIGN-UP IS OPEN, AND EVERY ASSERTION IN THIS BLOCK IS THE REVERSE OF THE ONE IT REPLACES.
+ *
+ * WHAT WAS HERE, AND WHY IT IS NOT BEING RELAXED. This block was called "enrolment is a third door,
+ * not an open one" and it required the README to say `no open sign-up`, to say `three things can
+ * bring an account into existence` and `not one of them is open registration`, and to REFUSE the
+ * sentences `anyone can create`, `sign-up is now open` and `open to the public` by name. Every one
+ * of those was accurate about the design of the day and every one of them is now FALSE of the
+ * product: the owner asked for open account creation, so anybody who can reach a deployment makes
+ * their own member account. A gate that still demanded `no open sign-up` would be requiring the
+ * README to lie — which is the exact failure the block's own comments record twice, once for a
+ * corpus statistic and once for the enrolment budget.
+ *
+ * SO THE REFUSALS ARE INVERTED RATHER THAN DELETED, and they are the same instrument pointed the
+ * other way: a README that quietly grows the retired claims back — a code, an administrator issuing
+ * one, a screen to revoke them on — fails by name. That matters more than usual here, because the
+ * old sentences were good sentences and a future editor reaching for "there is no open sign-up" is
+ * reaching for something this README said for the whole life of the project.
+ *
+ * WHAT IS KEPT UNCHANGED, because retirement did not touch it: the first-run token is still the
+ * only way to the first administrator and still cannot be replaced by signing up; the role is still
+ * not a parameter of the request; the password floor is still one policy; and the honest limits of
+ * what the product promises about an email address are still stated rather than rounded off.
+ */
+describe('README: sign-up is open, and says what that does and does not give away', () => {
+  it('no longer claims an administrator has to act before an account can exist', () => {
+    // The retired claims, refused by name. Each was asserted as REQUIRED by this file until
+    // 2026-08-11; the product changed under them.
+    expect(readme).not.toMatch(/no\s+open\s+sign-?up/i);
+    expect(readme).not.toMatch(/no\s+public\s+sign-?up/i);
     expect(readme).not.toMatch(/no\s+sign-?up\s+form/i);
-    expect(readme).not.toMatch(/there\s+is\s+no\s+public\s+sign-?up/i);
-    expect(readme).not.toMatch(/no\s+public\s+sign-?up\s+by\s+default/i);
-    expect(readme).not.toMatch(/only\s+an?\s+admin\w*\s+can\s+(create|make)\s+an?\s+account/i);
+    expect(readme).not.toMatch(/not\s+one\s+of\s+them\s+is\s+open\s+registration/i);
+    expect(readme).not.toMatch(/code\s+(that\s+)?an\s+administrator\s+issued/i);
     expect(readme).not.toMatch(/cannot\s+(create|make)\s+(their|your)\s+own\s+account/i);
-    // And the capability that replaced them, said plainly enough to find.
-    expect(readme).toMatch(/creates?\s+their\s+own\s+account/i);
-    expect(readme).toMatch(/\benrol/i);
-  });
-
-  it('does not claim sign-up is open', () => {
-    expect(readme).not.toMatch(/any(one|body)\s+can\s+(create|register|sign\s?-?\s?up|make)/i);
-    expect(readme).not.toMatch(/(sign-?up|registration)\s+is\s+(now\s+)?(open|public|enabled)/i);
-    expect(readme).not.toMatch(/now\s+has\s+(public\s+)?sign-?up/i);
-    expect(readme).not.toMatch(/open\s+to\s+(the\s+public|anyone)/i);
-    // The qualifier that carries the design, in the words that mean it rather than an adjective.
-    expect(readme).toMatch(/no\s+open\s+sign-?up/i);
-    expect(readme).toMatch(/code\s+(that\s+)?an\s+administrator\s+issued/i);
-    // The three paths, counted, so a fourth cannot appear in the product without appearing here.
-    expect(readme).toMatch(/three things can bring an account into existence/i);
-    expect(readme).toMatch(/not one of them is open registration/i);
-  });
-
-  it('keeps the first-run token as the only way to the first administrator', () => {
-    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+the\s+log/i);
-    expect(readme).toMatch(/nobody\s+who\s+could\s+issue\s+an?\s*\n?\s*\[?enrollment code/i);
-    // The in-page link the Deploying section leans on. A dangling anchor is how the qualifier gets
-    // lost from the one section an operator actually reads.
-    expect(readme).toContain('(#enrollment-codes)');
-    expect(readme).toMatch(/^### Enrollment codes$/m);
+    // And the capability that replaced them, in the words that mean it.
+    expect(readme).toMatch(/anybody\s+who\s*\n?\s*can\s+reach\s+this\s+deployment\s+can\s+create\s+a\s+member\s+account/i);
+    expect(readme).toMatch(/^### Signing up$/m);
+    expect(readme).toContain('(#signing-up)');
   });
 
   /**
-   * The README tells an administrator where to go, so it is bound to the heading that screen
-   * actually carries — the same arrangement as `names exactly the fields the lookup actually
-   * fills`, which reads `callsignFill.ts` rather than trusting a sentence. A renamed panel and an
-   * unrenamed instruction is a small lie that costs somebody a real search.
+   * The feature went; the record of it must not. A reader who finds `enrollment_codes` in their
+   * database, or the three variables in their compose file, has to be able to find out here what
+   * they were and what happened to them — and an operator upgrading has to be told that the rows
+   * and the stale variables are both harmless.
    */
-  it('names the admin screen by the heading that screen actually carries', () => {
-    const panel = readFileSync(
-      resolve(REPO_ROOT, 'packages/web/src/components/EnrollmentCodes.tsx'),
-      'utf8',
-    );
-    const heading = /<h2>([^<]+)<\/h2>/.exec(panel)?.[1];
-    expect(heading, 'no <h2> found in the enrollment codes panel').toBeTruthy();
-    expect(readme).toContain(`**Admin → ${heading}**`);
+  it('keeps the record of what enrolment codes were and why they went', () => {
+    expect(readme).toMatch(/enrollment code/i);
+    expect(readme).toMatch(/cost more than it bought/i);
+    // The three retired variables are named as retired, so somebody grepping their own file finds
+    // the answer here rather than concluding the README is out of date.
+    for (const gone of ['ENROLLMENT_CODE', 'ENROLLMENT_CODE_MAX_USES', 'ENROLLMENT_CODE_DAYS']) {
+      expect(readme, gone).toContain(gone);
+    }
+    expect(readme).toMatch(/starts fine/i);
+    // The database decision, pointed at the file that argues it, because "why is this table still
+    // here" is the first question an operator with a `sqlite3` shell will have.
+    expect(readme).toMatch(/closed record/i);
+    expect(readme).toContain('095-enrollment-codes-are-a-closed-record.sql');
   });
 
-  it('says the code is shown once and is then unreadable, like every other secret here', () => {
-    expect(readme).toMatch(/shown\s+exactly\s+once/i);
-    expect(readme).toMatch(/only\s+a\s+hash\s+of\s+it\s+is\s*\n?\s*stored/i);
-    expect(readme).toMatch(/cannot\s+show\s+you\s+the\s+code/i);
-    // The precedent, named: `POST /api/admin/users` has done this since it shipped, and a reader
-    // meeting the second instance of a rule should be told it is the same rule.
-    expect(readme).toMatch(/password\s+shown\s+once/i);
-    // No recovery path may be implied, because none exists.
-    expect(readme).not.toMatch(/(view|read|retrieve|recover)\s+the\s+code\s+(again|later)/i);
-    expect(readme).toMatch(/revoke it and issue another/i);
-    // Revocation is stamped rather than deleted — the same shape as `ics_tokens.revoked_at`.
-    expect(readme).toMatch(/stamps? the row rather than deleting it/i);
+  it('keeps the first-run token as the only way to the first administrator', () => {
+    expect(readme).toMatch(/first\s+administrator\s+always\s*\n?\s*comes\s+from\s+that\s+token/i);
+    // The property that stops open sign-up from being a way to claim an unattended container. It
+    // is the one security claim the retirement had to keep, and it is now the ONLY thing standing
+    // between a fresh public deployment and whoever finds it first.
+    expect(readme).toMatch(/cannot\s+bootstrap\s+an\s+instance/i);
+    expect(readme).toMatch(/nothing\s+here\s+creates\s+an\s+account\s+at\s+all/i);
+  });
+
+  /**
+   * THE TOKEN MOVED OUT OF THE LOG (2026-08-11) AND THE README HAD TO MOVE WITH IT. `bootstrap.ts`
+   * now writes it to a 0600 file in `DATA_DIR` and prints only the path, because `docker logs`
+   * keeps a line for the life of the container. A README still telling an operator to read the
+   * token out of the log would strand them at step one of a first install — the worst place a doc
+   * can be wrong.
+   */
+  it('sends the operator to the token file, not to the log', () => {
+    expect(readme).toMatch(/not\s+in\s+`docker compose logs`/i);
+    expect(readme).toContain('first-run-token.txt');
+    expect(readme).toMatch(/deleted the moment it is spent/i);
+    // The fallback is a real branch of `bootstrap.ts` and an operator who meets it needs to have
+    // been told it exists, because the remedy is theirs (fix the volume) and the cost is a secret
+    // in a log that does not forget.
+    expect(readme).toMatch(/could not be written/i);
   });
 
   it('says enrolment produces a member and that the request cannot ask for more', () => {
     expect(readme).toMatch(/role\s+is\s+not\s+a\s+parameter\s+of\s+the\s+request/i);
-    expect(readme).toMatch(/gets\s+`member`/);
+    expect(readme).toMatch(/passes\s+the\s+literal\s+`member`/i);
     expect(readme).toMatch(/only\s+way\s+to\s+a\s+second\s+administrator/i);
     // The password floor is one policy in this codebase, and the README must not read as if
-    // enrolment brought its own.
+    // signing up brought its own.
     expect(readme).toMatch(/same\s+12-character\s+floor/i);
   });
 
   /**
-   * TWO ASSERTIONS IN THIS BLOCK CHANGED ON 2026-08-10 BECAUSE THE CLAIM THEY PINNED WAS FALSE,
-   * not because they were failing. They were green, and what they held green was a README sentence
-   * the product contradicts.
+   * THE BUDGET CHANGED SUBJECT, WHICH IS A HARDER CHANGE THAN CHANGING ITS NUMBERS.
    *
-   * They required the README to say that enrolment counts failures "against enrolment as a whole
-   * rather than against the caller", and that the price of that is "a burst of wrong guesses makes
-   * the next honest person wait". Neither is what `POST /api/auth/enroll` does:
+   * These three ceilings used to be charged only on the branch that answered "that enrollment code
+   * is not valid". A person holding a real code never read them, which is what made it safe for the
+   * lower two rungs to be as coarse as they are, and the README said so. There is no wrong code any
+   * more, so the same counters now sit on the path of EVERY legitimate registration — and a README
+   * that repeated the old reassurance would be promising something the shipped route cannot keep.
    *
-   *   · the budget is keyed on `reportedOrigin(req)` — the caller — in `api/auth.ts`, and has been
-   *     since 2026-08-05, when counting against enrolment as a whole was removed for closing every
-   *     club's intake on ten requests from one stranger who held no code at all;
-   *   · nothing but the "that code is not valid" branch consults it, so a holder of a code this
-   *     instance issued never reads it and cannot be made to wait by anybody. `enroll.test.ts`
-   *     pins both halves — `does not let a stranger's wrong codes close enrolment for somebody
-   *     with a real one`, and `spends one connection's guesses without spending another's`;
-   *   · and the refusal the product prints says so to the user's face: "Too many enrollment codes
-   *     have been tried from this connection recently."
-   *
-   * The accurate wording already existed one directory away, in the note over
-   * `ENROLLMENT_MAX_FAILURES`; only the README and this file had missed the change. So the README
-   * was rewritten to the measured behaviour, these assertions were re-pointed at it, and two of
-   * them now REFUSE the retired sentences by name — a claim that survived one green suite can
-   * survive another.
-   *
-   * THIS IS THE SECOND DOC GATE IN THIS FILE TO HAVE REQUIRED A FALSE STATEMENT. The first was the
-   * corpus statistic above (`marks the projected calendar dates as projected…`), which demanded
-   * "4 of the 243" and thereby kept a wrong figure on the project's front page with a green suite
-   * pointing at it. Same failure twice: an assertion written from the prose instead of from the
-   * thing the prose is about. A doc gate should pin the honesty, never the arithmetic — and where
-   * it must pin a number, it should read that number out of the source, as the budget does below.
+   * So the numbers are still read out of `api/auth.ts` rather than transcribed, for the reason this
+   * file has recorded twice: a doc gate should pin the honesty and, where it must pin a number,
+   * read that number out of the source. What changed is the sentence they are required to appear
+   * in, and the reassurance that is now refused by name.
    */
-  /**
-   * A THIRD TIME, AND THIS ONE IS NOT THE README BEING BEHIND THE CODE — IT IS THE CLAIM ITSELF
-   * BEING WITHDRAWN.
-   *
-   * This test was named for "the two properties that make a typed-in secret worth anything" and
-   * demanded the sentence "a secret you can only attack by guessing is worth the number of guesses
-   * allowed". That is the reasoning the product has stopped making. It was sound while every code
-   * was 2^100 and it is not a defence of `W1MX-FALL-2026`: measured on 2026-08-10, one machine
-   * rotating `X-Forwarded-For` was answered 20,008 wrong codes in 10.12 s, because the budget the
-   * sentence was about was keyed on an address the caller writes.
-   *
-   * TWO ASSERTIONS ARE THEREFORE REPLACED RATHER THAN RELAXED, AND BOTH WERE TRUE WHEN WRITTEN.
-   * "Counted against the caller and not against enrolment as a whole" is now FALSE of the shipped
-   * server — there is a deployment-wide rung, deliberately, and a README that denied it would be
-   * this file's own subject. "Worth the number of guesses allowed" is withdrawn as an argument.
-   * What replaces them is stricter, not looser: all three ceilings are read out of `api/auth.ts`,
-   * the property that keeps the deployment-wide one out of one caller's reach is required in
-   * words, and the retired sentences are refused by name below.
-   */
-  it('states what actually bounds a code somebody typed, and what does not', () => {
-    // The three ceilings, read out of the route rather than transcribed here. A README that quotes
-    // ten guesses against a route that allows thirty is precisely this file's subject.
+  it('states what actually bounds registration, in numbers read out of the route', () => {
     const route = readFileSync(resolve(REPO_ROOT, 'packages/server/src/api/auth.ts'), 'utf8');
-    const perAddress = /ENROLLMENT_MAX_FAILURES = (\d+)/.exec(route)?.[1];
-    const perNetwork = /ENROLLMENT_MAX_FAILURES_PER_NETWORK = (\d+)/.exec(route)?.[1];
-    const perServer = /ENROLLMENT_MAX_FAILURES_DEPLOYMENT = (\d+)/.exec(route)?.[1];
-    const windowMin = /ENROLLMENT_WINDOW_MS = (\d+) \* 60 \* 1000/.exec(route)?.[1];
+    const perConnection = /REGISTRATION_MAX_PER_CONNECTION = (\d+)/.exec(route)?.[1];
+    const perNetwork = /REGISTRATION_MAX_PER_NETWORK = (\d+)/.exec(route)?.[1];
+    const perServer = /REGISTRATION_MAX_DEPLOYMENT = (\d+)/.exec(route)?.[1];
+    const windowMin = /REGISTRATION_WINDOW_MS = (\d+) \* 60 \* 1000/.exec(route)?.[1];
     for (const [name, value] of Object.entries({
-      ENROLLMENT_MAX_FAILURES: perAddress,
-      ENROLLMENT_MAX_FAILURES_PER_NETWORK: perNetwork,
-      ENROLLMENT_MAX_FAILURES_DEPLOYMENT: perServer,
-      ENROLLMENT_WINDOW_MS: windowMin,
+      REGISTRATION_MAX_PER_CONNECTION: perConnection,
+      REGISTRATION_MAX_PER_NETWORK: perNetwork,
+      REGISTRATION_MAX_DEPLOYMENT: perServer,
+      REGISTRATION_WINDOW_MS: windowMin,
     })) {
       expect(value, `${name} is no longer a literal in the shape this test reads`).toBeTruthy();
     }
-    expect(readme).toMatch(new RegExp(`\\b${String(perAddress)} wrong codes per address\\b`));
-    expect(readme).toMatch(new RegExp(`\\b${String(perNetwork)} per source network\\b`));
-    expect(readme).toMatch(new RegExp(`\\b${String(perServer)}\\s+across the whole server\\b`));
-    expect(readme).toMatch(new RegExp(`\\b${String(windowMin)} minutes\\b`));
-    // Who never touches any of them, which is the promise that makes a coarse ceiling affordable.
-    expect(readme).toMatch(
-      /nothing a stranger does with wrong\s+codes can stop your students enrolling/i,
-    );
-    // The property that keeps the deployment-wide rung out of any single caller's reach. Without
-    // it, that rung is the 2026-08-05 off switch again and the README would be overselling it.
-    expect(readme).toMatch(/closing that one takes at least two networks acting together/i);
-    // The cost that IS real, because a doc that states only the benefit is the half-sentence this
-    // file exists to stop: one campus NAT is one budget, and a mistype from it can be told to wait.
-    expect(readme).toMatch(/shares one budget/i);
-    // The honest ceiling an attacker still has, in a number rather than a reassurance.
+    // `\s+` between every word: these sentences wrap mid-phrase at the file's 100-column margin,
+    // and a gate that failed on a reflow would be a tax on editing prose rather than a guard on it.
+    expect(readme).toMatch(new RegExp(`\\b${String(perConnection)}\\s+sign-ups\\s+per\\s+connection\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(perNetwork)}\\s+per\\s+source\\s+network\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(perServer)}\\s+across\\s+the\\s+whole\\s+server\\b`));
+    expect(readme).toMatch(new RegExp(`\\b${String(windowMin)}-minute\\b`));
+    // Every attempt, not every failure, which is what makes the numbers what they are.
+    expect(readme).toMatch(/Every\s+attempt\s+is\s+counted,\s+not\s+every\s+failure/i);
+    expect(readme).toMatch(/closing\s+that\s+one\s+takes\s+at\s+least\s+two\s+networks\s+acting\s+together/i);
     expect(readme).toMatch(/23,040 a day/);
-    // And the sentence the whole change is for: the floor is not what makes a chosen code safe.
-    expect(readme).toMatch(/Clearing the floor does not make a code hard to\s+guess/i);
-    // …and the retired claims, refused by name rather than merely unasserted.
+    // The change of subject, said rather than left for a reader to infer from the absence of the
+    // old promise.
+    expect(readme).toMatch(/on\s+the\s+path\s+of\s+every\s+legitimate\s+registration/i);
+    // The retired reassurance, refused by name. It was true and is not.
     expect(
-      /worth the\s+number of guesses allowed/i.test(readme),
-      'The README is back to arguing that a chosen code is worth the number of guesses allowed. ' +
-        'That was the argument for a 2^100 code and it is not a defence of W1MX-FALL-2026, which ' +
-        'was found in seven guesses — see "the floor under a code an administrator chooses" in ' +
-        'core/test/enrollmentCode.test.ts.',
+      /nothing a stranger does with wrong\s+codes can stop your students enrolling/i.test(readme),
+      'The README is back to promising that a stranger cannot spend the registration budget on ' +
+        'behalf of a legitimate user. That was true only because the counters were charged on the ' +
+        'wrong-code branch, and there is no wrong-code branch — every sign-up charges them now.',
     ).toBe(false);
-    expect(
-      /counted against the caller and not against enrolment as a whole/i.test(readme),
-      'The README says the enrolment budget is only ever per-caller. Since 2026-08-10 there is a ' +
-        'deployment-wide rung under it, because a caller who reaches the process directly picks ' +
-        'their own per-caller key — see ENROLLMENT_MAX_FAILURES_DEPLOYMENT in api/auth.ts.',
-    ).toBe(false);
-    expect(
-      /against enrolment as a whole\s+rather than against the caller/i.test(readme),
-      'The README is back to calling the enrolment budget purely deployment-wide. The narrowest ' +
-        'rung is still keyed on the caller, and has been since 2026-08-05, when the ' +
-        'deployment-wide-only version was measured closing every club on the instance.',
-    ).toBe(false);
-    expect(
-      /makes the next honest person wait/i.test(readme),
-      'The README is back to saying a burst of wrong guesses makes the next honest person wait. ' +
-        'A holder of a real code never reads any of these counters — see the two tests named in ' +
-        'the note above this one in enroll.test.ts.',
-    ).toBe(false);
-    // Atomicity, as a claim a reader can check rather than a reassurance, and with the defect it
-    // is guarding against named — this project shipped exactly this bug in the callsign lookup.
-    expect(readme).toMatch(/at the same instant get one account, not two/i);
-    expect(readme).toMatch(/one transaction/i);
-    // The precedent, with the measurement rather than a paraphrase of it. `callsign.test.ts`
-    // measured eight simultaneous presses making eight requests on 2026-08-04, and the README must
-    // retell that as what it was — a guard that could not see an unanswered request — rather than
-    // as a per-user limit, which is a different mechanism that was not the defect.
-    expect(readme).toMatch(/eight simultaneous presses produced\s*\n?\s*eight requests/i);
-    expect(readme).toMatch(/checked before an `await` and written after it is not a limit/i);
+    // What no number can buy, which is the honest half and the reason the ceiling is not sold as a
+    // defence.
+    expect(readme).toMatch(/mass\s+registration\s+and\s+denial\s+of\s+registration\s+are\s+the\s+same\s+act/i);
+    expect(readme).toMatch(/bounded,\s+loud\s+and\s+\*?\*?\s*reversible/i);
+    expect(readme).toMatch(/authenticating proxy/i);
   });
 
-  it('describes the non-enumeration rule, including what it deliberately does say', () => {
-    expect(readme).toMatch(/wrong code and a code that was never issued get the same answer/i);
-    expect(readme).toMatch(/not whether one exists, not how many/i);
-    // The exception is not a leak and has to be documented as the deliberate thing it is: a
-    // legitimate holder of a dead code needs to know which kind of dead it is.
-    expect(readme).toMatch(/expired,?\s+revoked\s+and\s+used-up/i);
-    // …and the public boolean must not be oversold into a fact about a particular code.
-    expect(readme).toMatch(/single boolean about the instance/i);
-    expect(readme).toMatch(/never issued one/i);
-    // The limit of the promise, stated by the README rather than discovered by a reader who
-    // assumed "no enumeration" covered everything. Enrolling with an address that already has an
-    // account is told so, and a doc that implied otherwise would be overselling this.
-    expect(readme).toMatch(/about codes, and not about email addresses/i);
-    expect(readme).toMatch(/not a leak worth pretending about/i);
-    // The limiter's exemption, which is a promise to the honest holder of a dead code. "Any of
-    // them" and not "it": there are three counters now and the exemption has to cover all three,
-    // or the promise is only true of the one a caller can rotate past anyway.
-    expect(readme).toMatch(/only a wrong code is charged to any of them/i);
+  it('does not oversell what an open instance keeps private', () => {
+    // The two disclosures, stated rather than discovered.
+    expect(readme).toMatch(/no email verification/i);
+    expect(readme).toMatch(/already\s+has\s+an\s+account\s+is\s+told\s+so/i);
+    expect(readme).toMatch(/not\s+a\s+leak\s+worth\s+pretending\s+about/i);
+    // And the remedy for an operator who actually needs the door shut, which this software cannot
+    // be. A README that implied a setting existed would send somebody looking for one.
+    expect(readme).toMatch(/VPN,\s+an\s+SSO\s+proxy,\s+an\s+IP\s+allow-list/i);
+    // Atomicity, as a claim a reader can check, with the defect it guards against named — this
+    // project shipped exactly this bug in the callsign lookup.
+    expect(readme).toMatch(/at\s+the\s+same\s+instant\s+get\s+one\s+account,\s+not\s+two/i);
+    expect(readme).toMatch(/eight\s+simultaneous\s+presses\s+produced\s+eight\s+requests/i);
+    expect(readme).toMatch(/checked\s+before\s+an\s+`await`\s+and\s+written\s+after\s+it\s+is\s+not\s+a\s+limit/i);
   });
 
-  it('documents every route in the contract, with the one that returns the plaintext marked', () => {
+  /**
+   * THE ROUTE TABLE, AND THE THREE ROWS THAT MUST NOT COME BACK.
+   *
+   * The admin code routes are unmounted and the modules deleted, so a README naming them would send
+   * an operator to three 404s. `mount.test.ts` holds the server end of the same claim.
+   */
+  it('documents the account routes, and none of the retired ones', () => {
     for (const route of [
-      'GET /api/admin/enrollment-codes',
-      'POST /api/admin/enrollment-codes',
-      'POST /api/admin/enrollment-codes/:id/revoke',
-      'GET /api/auth/enrollment-open',
       'POST /api/auth/enroll',
+      'POST /api/auth/bootstrap',
+      'POST /api/admin/users',
     ]) {
       expect(readme, route).toContain(route);
     }
-    expect(readme).toMatch(/only response in the product that carries `plaintext`/i);
-    expect(readme).toMatch(/carries no plaintext, ever/i);
-    // The two nullable knobs, with the meaning of `null` spelled out. "maxUses?: number|null" is
-    // ambiguous to everyone who has not read the handler.
-    expect(readme).toContain('`maxUses: null` means no limit');
-    expect(readme).toContain('`expiresAt: null` means no expiry');
-    expect(readme).toMatch(/unrevoked, unexpired and under its limit/i);
-  });
-
-  /**
-   * THE COMPOSE-FILE ROUTE IS A DOOR THIS SECTION HAS TO ACCOUNT FOR, AND THE FIRST THING IT HAS TO
-   * GET RIGHT IS THAT IT IS NOT A NEW ONE.
-   *
-   * The `## Accounts` table above says three things can bring an account into existence and that
-   * not one of them is open registration, and that claim is asserted verbatim elsewhere in this
-   * file. `ENROLLMENT_CODE` produces an ordinary code row redeemed through the ordinary route, so
-   * it is the THIRD path arriving by a second hand — and a README that let a reader count it as a
-   * fourth would be describing a product with a self-serve door nobody issued.
-   */
-  /**
-   * The README with its line wrapping, blockquote markers and emphasis removed.
-   *
-   * A doc gate should fail when a CLAIM goes, never when somebody re-wraps a paragraph or bolds a
-   * word inside a sentence it was matching. Three of the assertions below quote whole sentences
-   * that are longer than the file's 100-column wrap, so matching the raw text would make this
-   * block a tax on editing prose rather than a guard on its content. The table rows are still
-   * matched against the raw README, because there the backticks and pipes ARE the claim.
-   */
-  const flatten = (text: string): string =>
-    text
-      .replace(/^\s*>\s?/gm, ' ')
-      .replace(/[*`]/g, '')
-      .replace(/\s+/g, ' ');
-
-  it('describes the compose-file route as the same third door, with the same bounds', () => {
-    expect(readme).toContain('ENROLLMENT_CODE');
-    expect(flatten(readme)).toMatch(/same third path and not a fourth/i);
-    // The label is the row's identity AND the only thing that tells an administrator where a code
-    // they did not issue came from, so the README must name it as the screen actually shows it.
-    expect(readme).toContain(ENV_CODE_LABEL);
-    // Read out of the code, never transcribed: a README quoting 30 uses against a file shipping 50
-    // is precisely this suite's subject. Both the table row and the prose, because an operator
-    // skimming for the number reads the first and an operator deciding reads the second.
-    expect(readme).toMatch(
-      new RegExp(`\`ENROLLMENT_CODE_MAX_USES\` \\| no \\| \`${String(ENV_CODE_DEFAULT_MAX_USES)}\``),
-    );
-    expect(readme).toMatch(
-      new RegExp(`\`ENROLLMENT_CODE_DAYS\` \\| no \\| \`${String(ENV_CODE_DEFAULT_DAYS)}\``),
-    );
-    expect(flatten(readme)).toMatch(
-      new RegExp(`ENROLLMENT_CODE_MAX_USES\\s*defaults to\\s*${String(ENV_CODE_DEFAULT_MAX_USES)}`),
-    );
-    expect(flatten(readme)).toMatch(
-      new RegExp(`ENROLLMENT_CODE_DAYS\\s*to\\s*${String(ENV_CODE_DEFAULT_DAYS)}`),
-    );
-  });
-
-  it('says what a restart, an edit and a deletion each do to the row', () => {
-    // The four questions an operator asks in the order they ask them. Each is a real decision made
-    // in `auth/envEnrollmentCode.ts`, and a README that skipped any of them would leave the
-    // operator to find it out by watching a code stop working.
-    const flat = flatten(readme);
-    expect(flat).toMatch(/Restarting changes nothing/i);
-    expect(flat).toMatch(/Changing the value withdraws the old code/i);
-    expect(flat).toMatch(/deleting the value withdraws it/i);
-    expect(flat).toMatch(/A withdrawn code never comes back/i);
-    // And the one that is a security property rather than a convenience: nothing self-serve exists
-    // before an administrator does, so the compose value cannot bootstrap an instance either.
-    expect(flat).toMatch(/It cannot go first/i);
-  });
-
-  it('warns that the code sits in a tracked file, and why that one does not feel like a secret', () => {
-    // NOT the session-secret paragraph. This is a second warning about a second value, and the
-    // reason it needs its own is the asymmetry: an enrollment code is MEANT to be shared, so the
-    // instinct that protects a secret does not fire. Nothing else in this suite gated a
-    // tracked-file warning at all before this change.
-    const section = flatten(
-      readme.slice(readme.indexOf('### Enrollment codes'), readme.indexOf('## Deploying')),
-    );
-    expect(section.length, 'the enrolment section moved or went').toBeGreaterThan(2000);
-    expect(section).toMatch(/tracked by git/i);
-    expect(section).toMatch(/meant to be shared/i);
-    expect(section).toMatch(/\.env/);
-    expect(section).toMatch(/HOST_PORT/);
-    // A worked example is the same accident in a smaller font, and the README says why it has none.
-    expect(section).toMatch(/no example code/i);
+    for (const gone of [
+      '/api/admin/enrollment-codes',
+      '/api/auth/enrollment-open',
+    ]) {
+      expect(readme, `${gone} is documented again and does not exist`).not.toContain(gone);
+    }
+    // The one response that used to carry a code's plaintext is gone with it; the generated
+    // password is the only shown-once secret left, and the table still has to say so.
+    expect(readme).toMatch(/password shown once/i);
+    expect(readme).not.toMatch(/carries `plaintext`/);
   });
 });
 
@@ -1019,28 +901,44 @@ describe('README: enrolment is a third door, not an open one', () => {
  * FOLLOW-UP QUESTION.
  *
  * It is printed once, into a container log, to an operator who has just started an image they did
- * not write. `There is no public signup.` was the last line they read, and after this change it
- * would be a lie told to the person least able to check it. `firstRunBanner` is exported precisely
- * so this file can hold it to the same standard as the README rather than trusting a code comment.
+ * not write. It said `There is no public signup.`, then it said an administrator issues an
+ * enrollment code somebody signs up with, and both sentences have now been outlived by the product.
+ * `firstRunBanner` is exported precisely so this file can hold it to the same standard as the
+ * README rather than trusting a code comment.
+ *
+ * WHAT THE PARAMETER IS NOW. It was the token and it is the PATH the token was written to:
+ * `bootstrap.ts` stopped printing a live credential into a log that keeps it for the life of the
+ * container. The type did not change, so nothing here failed to compile — which is why the
+ * assertions below had to be re-pointed by hand rather than by the compiler.
  *
  * The awk test at the bottom is the one that has failed for real. The README's command was
  * `grep -A4 'first-run setup'` when the banner was five lines, and printed everything except the
- * token by the time it was eight — the standard failure of a fixed-line-count reader. This change
- * grew the banner again, from 18 lines to 20, which is exactly the edit that used to break it. So
- * the command is not described here, it is extracted from the README and run.
+ * token by the time it was eight — the standard failure of a fixed-line-count reader. So the
+ * command is not described here, it is extracted from the README and run. What it must yield
+ * changed with the banner: the token is not in the log at all now, so the thing to find is the
+ * PATH, and finding a token here would mean the file write had silently stopped happening.
  */
 describe('the first-boot banner an operator reads in a container log', () => {
-  const token = 'a1b2c3d4'.repeat(6); // the shape `randomBytes(24).toString('hex')` produces
-  const banner = firstRunBanner(token);
+  const tokenPath = '/data/first-run-token.txt';
+  const banner = firstRunBanner(tokenPath);
   const lines = banner.split('\n');
 
-  it('no longer tells the operator there is no public signup', () => {
+  /**
+   * BOTH OF THIS TEST'S ORIGINAL ASSERTIONS ARE NOW REFUSALS, AND NEITHER WAS FAILING WHEN IT WAS
+   * CHANGED. It required `enrollment code` and `no open sign-up` to be in the banner, which was an
+   * accurate description of the product on 2026-08-10. Sign-up is open and codes are retired, so a
+   * banner still saying either would be a false statement made to the reader least able to check
+   * it — the same failure the sentence it replaced (`There is no public signup.`) had.
+   */
+  it('no longer tells the operator about a door that has been removed', () => {
     expect(banner).not.toMatch(/no public sign-?up/i);
-    // What replaced it: the second door is named, and it is still not an open one.
-    expect(banner).toMatch(/enrollment code/i);
-    expect(banner).toMatch(/no open sign-?up/i);
-    // It must stay a statement about who acts first, not a boast about security.
-    expect(banner).toMatch(/an admin/i);
+    expect(banner).not.toMatch(/no open sign-?up/i);
+    expect(banner).not.toMatch(/enrollment code/i);
+    // What must be there instead: where the token is, and the one fact that is still a security
+    // property rather than a boast — nothing can create an account until the administrator exists.
+    expect(banner).toContain(tokenPath);
+    expect(banner).toMatch(/not printed in this log/i);
+    expect(banner).toMatch(/until it does/i);
   });
 
   it('stays short and plain enough for a log', () => {
@@ -1052,7 +950,7 @@ describe('the first-boot banner an operator reads in a container log', () => {
     expect(banner).toMatch(/^[\x20-\x7e\n]+$/);
   });
 
-  it('still yields the token to the exact command the README prints', () => {
+  it('yields the banner — and not a token — to the exact command the README prints', () => {
     const program = /\| awk '([^']+)'/.exec(readme)?.[1];
     expect(
       program,
@@ -1071,8 +969,11 @@ describe('the first-boot banner an operator reads in a container log', () => {
     ].join('\n');
     const printed = execFileSync('awk', [program!], { input: log, encoding: 'utf8' });
 
-    expect(printed).toContain(token);
+    expect(printed).toContain(tokenPath);
     expect(printed).toContain('GrantSpotter first-run setup');
+    // A 48-hex-character run is what the token looks like. Finding one HERE would mean the token
+    // was back in the log, which is the whole thing this change was for.
+    expect(printed).not.toMatch(/\b[0-9a-f]{48}\b/);
     // It stops at the closing delimiter instead of running on.
     expect(printed).not.toContain('listening on');
     expect(printed.trimEnd().split('\n').at(-1)).toMatch(/^={20,}$/);

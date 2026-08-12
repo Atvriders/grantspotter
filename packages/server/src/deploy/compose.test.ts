@@ -2,8 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CHOSEN_CODE_MAX_DAYS, CHOSEN_CODE_MAX_USES } from '@grantspotter/core';
-import { ENV_CODE_DEFAULT_DAYS, ENV_CODE_DEFAULT_MAX_USES } from '../auth/chosenCode.js';
 import {
   ConfigError,
   loadConfig,
@@ -11,7 +9,6 @@ import {
   PLACEHOLDER_MARKER,
   PLACEHOLDER_SESSION_SECRET,
   reservedContactName,
-  resolveEnrollmentCode,
 } from '../config.js';
 
 /**
@@ -120,9 +117,6 @@ describe('docker-compose.yml is the only file an operator needs', () => {
       'CRAWL_ENABLED',
       'CRAWL_CRON',
       'CALLSIGN_LOOKUP_ENABLED',
-      'ENROLLMENT_CODE',
-      'ENROLLMENT_CODE_MAX_USES',
-      'ENROLLMENT_CODE_DAYS',
       'ANTHROPIC_API_KEY',
       'SIMPLER_GRANTS_API_KEY',
     ]) {
@@ -166,60 +160,52 @@ describe('docker-compose.yml is the only file an operator needs', () => {
   });
 
   /**
-   * THE ENROLLMENT CODE IS THE ONE VALUE IN THIS FILE THAT IS A CREDENTIAL AND WILL NOT FEEL LIKE
-   * ONE, and these three tests are the whole of what keeps that said where it is edited.
+   * THREE TESTS STOOD HERE AND ARE ONE. THEY WERE NOT FAILING; THE VALUE THEY GUARDED IS GONE.
    *
-   * The session secret is guarded by a placeholder the loader refuses, which works because nobody
-   * mistakes a session secret for something to share. An enrollment code is MEANT to be shared, so
-   * the operator's own instinct is the thing that fails here — they will type it the way they type
-   * a meeting-room number. There is no value-refusal available for that, because the whole point is
-   * that the operator's code is a real code. What is left is the sentence beside the line, and a
-   * sentence nothing tests is a sentence that quietly leaves.
+   * `ENROLLMENT_CODE` was the one value in this file that was a credential and did not feel like
+   * one — a session secret announces itself, an enrollment code is MEANT to be read out — so there
+   * was no value-refusal available for it and the sentence beside the line was the whole of the
+   * protection. Three tests held that sentence: that it warned the file is tracked by git, that it
+   * shipped no code-shaped example anybody could paste, and that the two bounds beside it were the
+   * same numbers the server would have defaulted to.
+   *
+   * All three are deleted rather than relaxed, because the line they were about is deleted. What
+   * replaces them is narrower and is the only claim still worth making: the retirement has to be
+   * SAID in the file, because the operator upgrading has those three lines in their own copy and
+   * needs to know they are ignored rather than broken. And no code-shaped example may appear here
+   * again — that rule outlives the feature, since it is really a rule about a public repository.
    */
-  it('warns beside the line that this file is tracked, and says what to do instead', () => {
+  it('records that the enrollment code went, and ships no code anybody could paste', () => {
+    for (const gone of ['ENROLLMENT_CODE', 'ENROLLMENT_CODE_MAX_USES', 'ENROLLMENT_CODE_DAYS']) {
+      // The KEY, not the word: the comment block names all three so an operator can grep their own
+      // file and find the answer, and what must not come back is a line that sets one.
+      expect(envKeys, `${gone} is being set again`).not.toContain(gone);
+      expect(compose, `${gone} is not explained anywhere in the file`).toContain(gone);
+    }
     const block = compose.slice(
-      compose.indexOf('AN ENROLLMENT CODE YOU SET HERE'),
-      compose.indexOf('ENROLLMENT_CODE: ""'),
+      compose.indexOf('ENROLLMENT_CODE, ENROLLMENT_CODE_MAX_USES AND ENROLLMENT_CODE_DAYS WERE'),
+      compose.indexOf('# Optional. Everything works with these empty'),
     );
-    expect(block.length, 'the ENROLLMENT_CODE comment block moved or went').toBeGreaterThan(800);
-    expect(block).toMatch(/TRACKED BY GIT/);
-    // The specific reason this one is worse than the secret it sits below, which is the whole
-    // argument: it does not feel like a secret while it is being typed.
-    expect(block).toMatch(/MEANT to be shared|meant to be shared/);
-    expect(block).toMatch(/credential/i);
-    // And the remedy, named as concretely as the SESSION_SECRET paragraph names it.
-    expect(block).toMatch(/\.env/);
-    expect(block).toMatch(/HOST_PORT/);
-    expect(block).toMatch(/gitignore|ignores it/i);
-  });
+    expect(block.length, 'the retirement note moved or went').toBeGreaterThan(800);
+    // The upgrade answer, in the file the operator is looking at rather than only in the README.
+    expect(block).toMatch(/starts fine/i);
+    // What is true instead, and the remedy for somebody who actually needs the door shut — because
+    // "sign-up is open" is the sentence an operator will want a setting for, and there is none.
+    expect(block).toMatch(/create a member account/i);
+    expect(block).toMatch(/VPN|SSO|allow-list/);
+    // And where the database rows went, since they are still in their file.
+    expect(block).toMatch(/095-enrollment-codes-are-a-closed-record\.sql/);
 
-  it('ships no code anybody could paste, and says that is deliberate', () => {
-    // THE SAME RULE THE CONTACT URL GETS ONE DESCRIBE DOWN, for the same reason: a worked example
-    // in a public repository is a value every deployment that copied it shares. There the rule is
-    // "no URL in this file may be one the loader would accept"; a code cannot be recognised by the
-    // loader from a comment, so the shape is what is banned — three dashed groups is what an
-    // example enrollment code looks like and is not something the rest of this file writes.
+    // THE SAME RULE THE CONTACT URL GETS ONE DESCRIBE DOWN, kept after the feature that prompted
+    // it: a worked example in a public repository is a value every deployment that copied it
+    // shares. Three dashed groups is what an example code looked like and is not something the rest
+    // of this file writes.
     const codeShaped = /\b[A-Z0-9]{2,}-[A-Z0-9]{2,}-[A-Z0-9]{2,}\b/g;
-    expect('W1MX-FALL-2026'.match(codeShaped), 'the shape this test looks for stopped matching a code')
-      .not.toBeNull();
+    expect(
+      'W1MX-FALL-2026'.match(codeShaped),
+      'the shape this test looks for stopped matching a code',
+    ).not.toBeNull();
     expect([...compose.matchAll(codeShaped)].map((m) => m[0])).toEqual([]);
-    expect(compose).toMatch(/NO EXAMPLE CODE/i);
-    // Empty as shipped, and therefore off. The feature costs an operator who ignores it nothing.
-    expect(envEntries.ENROLLMENT_CODE).toBe('');
-    expect(resolveEnrollmentCode(envEntries)).toBeUndefined();
-  });
-
-  it('writes the two bounds out, and writes the same numbers the server would default to', () => {
-    // Written out rather than left to the defaults so the operator SEES what they are handing out —
-    // and imported rather than retyped, because two files that must agree is where this project's
-    // defects have lived. If a default moves in code and not here, the file starts lying about the
-    // limits on a credential.
-    expect(envEntries.ENROLLMENT_CODE_MAX_USES).toBe(String(ENV_CODE_DEFAULT_MAX_USES));
-    expect(envEntries.ENROLLMENT_CODE_DAYS).toBe(String(ENV_CODE_DEFAULT_DAYS));
-    // Neither shipped number may be the ceiling: a default that takes the maximum is a default
-    // nobody chose, and both of these bound a code that gets read out loud.
-    expect(ENV_CODE_DEFAULT_MAX_USES).toBeLessThan(CHOSEN_CODE_MAX_USES);
-    expect(ENV_CODE_DEFAULT_DAYS).toBeLessThan(CHOSEN_CODE_MAX_DAYS);
   });
 
   it('parses the values it actually sets, and not a stale copy of them', () => {
@@ -287,23 +273,24 @@ describe('the shipped values are placeholders, and the server knows it', () => {
     expect(config.crawlCron).toBe('17 3 * * *');
     expect(config.anthropicApiKey).toBeUndefined();
     expect(config.simplerGrantsApiKey).toBeUndefined();
-    // Off as it ships, so an operator who edits the two required values and nothing else gets the
-    // deployment they had before this variable existed.
-    expect(config.enrollmentCode).toBeUndefined();
-    // And the two bounds beside it are read and honoured the moment a code IS typed in, rather
-    // than being decoration the loader ignores. `loadConfig` throwing here would mean the shipped
-    // literals cannot survive the one edit the line invites.
-    const withCode = loadConfig({
+    /**
+     * THIS BLOCK ASSERTED THAT `ENROLLMENT_CODE` WAS OFF AS SHIPPED AND THAT THE LOADER HONOURED IT
+     * WHEN SET. Both are meaningless now and the second is inverted into the claim that matters on
+     * upgrade day: an operator whose compose file still carries the three retired lines must get a
+     * server that STARTS. They are ignored, not refused — `loadConfig` never required any of them,
+     * and nothing looks for them — so the failure mode this guards against is somebody
+     * reintroducing a read of a variable that is documented as dead.
+     */
+    const stale = loadConfig({
       ...envEntries,
       SESSION_SECRET: 'f'.repeat(64),
       CONTACT_URL: mine,
       ENROLLMENT_CODE: 'W9XYZ-FIELDDAY-QRP-2027',
+      ENROLLMENT_CODE_MAX_USES: 'not a number',
+      ENROLLMENT_CODE_DAYS: '0',
     });
-    expect(withCode.enrollmentCode).toEqual({
-      code: 'W9XYZ-FIELDDAY-QRP-2027',
-      maxUses: ENV_CODE_DEFAULT_MAX_USES,
-      days: ENV_CODE_DEFAULT_DAYS,
-    });
+    expect(stale.port).toBe(3030);
+    expect(Object.keys(stale)).not.toContain('enrollmentCode');
   });
 
   it('ships the exact placeholder CONTACT_URL config.ts refuses, and refuses each half-edit', () => {

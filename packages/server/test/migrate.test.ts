@@ -355,18 +355,33 @@ describe('094, on a database that already has enrollment codes', () => {
   const ENV_LABEL = 'Set in docker-compose.yml (ENROLLMENT_CODE)';
   const FAR = '2099-01-01T00:00:00.000Z';
 
-  /** Every migration except the one under test, so `migrate()` can be asked to apply it alone. */
-  function dirWithout(exclude: string): string {
+  /**
+   * Every migration except the ones under test, so `migrate()` can be asked to apply them in the
+   * real order afterwards.
+   *
+   * IT TAKES A SET AND NOT ONE NAME, AND THAT IS A CORRECTION. It excluded 094 alone, which was
+   * right while 094 was the last file: `migrate(db, dirWithout(...))` then meant "a database at
+   * 093". The moment 095 was added, that same call produced a database at 095-without-094 — a state
+   * no deployment can ever be in — and the assertion `applied` equals exactly `['094-…']` went on
+   * passing while 095 ran FIRST and 094 then recreated the trigger 095 had dropped. A harness that
+   * builds an impossible database proves nothing about a real upgrade.
+   */
+  function dirWithout(exclude: readonly string[]): string {
     const dir = mkdtempSync(join(tmpdir(), 'grantspotter-pre094-'));
     for (const file of readdirSync(MIGRATIONS_DIR)) {
-      if (file === exclude) continue;
+      if (exclude.includes(file)) continue;
       copyFileSync(join(MIGRATIONS_DIR, file), join(dir, file));
     }
     return dir;
   }
 
   it('re-attributes the file’s code to nobody and leaves everything else exactly as it was', () => {
-    const migrations = dirWithout('094-enrollment-codes-outlive-their-issuer.sql');
+    const migrations = dirWithout([
+      '094-enrollment-codes-outlive-their-issuer.sql',
+      // Held back too, or the "database at 093" below is really a database at 095, and 094 would
+      // then be re-creating a trigger 095 had already dropped. Applied in its own test underneath.
+      '095-enrollment-codes-are-a-closed-record.sql',
+    ]);
     // A raw database rather than `createTestDb`, which migrates all the way to HEAD in its
     // constructor and would leave nothing for 094 to do.
     const home = mkdtempSync(join(tmpdir(), 'grantspotter-mig094-'));
@@ -404,8 +419,14 @@ describe('094, on a database that already has enrollment codes', () => {
         ).run(id, `digest-of-${id}`, label, FAR, AT, issuer, AT);
       }
 
-      const applied = migrate(db).applied;
-      expect(applied).toEqual(['094-enrollment-codes-outlive-their-issuer.sql']);
+      const onlyO94 = dirWithout(['095-enrollment-codes-are-a-closed-record.sql']);
+      try {
+        expect(migrate(db, onlyO94).applied).toEqual([
+          '094-enrollment-codes-outlive-their-issuer.sql',
+        ]);
+      } finally {
+        rmSync(onlyO94, { recursive: true, force: true });
+      }
 
       const rows = db
         .prepare(
@@ -440,6 +461,122 @@ describe('094, on a database that already has enrollment codes', () => {
         { id: 'c-env', uses: 29, revoked_at: null },
         { id: 'c-env-folded', uses: 29, revoked_at: null },
       ]);
+    } finally {
+      db.close();
+      rmSync(migrations, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * 095, ON THE ONLY DATABASE IT CHANGES ANYTHING ON: the owner's, which has enrollment codes in it.
+ *
+ * A fresh install runs 091 through 095 back to back against an empty table, so the DROP TRIGGER
+ * removes a trigger created four files earlier and nothing else happens. Every claim 095 makes is a
+ * claim about an UPGRADE — that the rows survive it, that the credential-withdrawal trigger goes,
+ * and that an account deletion consequently stops rewriting the record — and this is the only place
+ * those can be tested. Built the way the block above builds 094's: migrate with 095 held back,
+ * write the rows an older build wrote, then let it run.
+ *
+ * WHY THE ROWS ARE ASSERTED COLUMN BY COLUMN RATHER THAN COUNTED. "The table is still there" is not
+ * the claim 095 makes. The claim is that a club's record of an intake — the label, the uses spent,
+ * the expiry, and the issuer every `user.enroll` audit row's subject resolves through — comes
+ * through an upgrade that deletes the feature those columns described. A count would pass against a
+ * table that had been emptied and refilled with nulls.
+ */
+describe('095, on a database that already has enrollment codes', () => {
+  const AT = '2026-08-01T00:00:00.000Z';
+  const FAR = '2099-01-01T00:00:00.000Z';
+  const ONLY_095 = '095-enrollment-codes-are-a-closed-record.sql';
+
+  function dirWithout095(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'grantspotter-pre095-'));
+    for (const file of readdirSync(MIGRATIONS_DIR)) {
+      if (file === ONLY_095) continue;
+      copyFileSync(join(MIGRATIONS_DIR, file), join(dir, file));
+    }
+    return dir;
+  }
+
+  it('keeps every row, drops the trigger, and stops a deletion rewriting the record', () => {
+    const migrations = dirWithout095();
+    const home = mkdtempSync(join(tmpdir(), 'grantspotter-mig095-'));
+    const db = openDatabase(join(home, 'db.sqlite'));
+    try {
+      // A database at 094 — the shipped revision, with the withdraw-on-delete trigger in place.
+      expect(migrate(db, migrations).applied).toContain(
+        '094-enrollment-codes-outlive-their-issuer.sql',
+      );
+      expect(
+        (
+          db
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+            .all() as Array<{ name: string }>
+        ).map((row) => row.name),
+      ).toContain('revoke_enrollment_codes_when_issuer_deleted');
+
+      db.prepare(
+        `INSERT INTO users (id, email, email_normalized, password_hash, role, ics_token, created_at)
+         VALUES (?, ?, ?, 'x', 'admin', ?, ?)`,
+      ).run('u-officer', 'o@example.test', 'o@example.test', 'ics-o', AT);
+      // Three shapes an operator's table really holds: one still open, one the compose file set and
+      // therefore attributed to nobody, and one already revoked under the pre-093 digest scheme.
+      const insert = db.prepare(
+        `INSERT INTO enrollment_codes
+           (id, code_hash, hash_scheme, label, chosen, max_uses, uses, expires_at, revoked_at,
+            created_at, created_by_user_id, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run('c-open', 'digest-open', 'hmac-sha256', 'W1MX autumn 2026 intake', 1, 30, 7,
+        FAR, null, AT, 'u-officer', AT);
+      insert.run('c-file', 'digest-file', 'hmac-sha256', 'Set in docker-compose.yml (ENROLLMENT_CODE)',
+        1, 30, 3, FAR, null, AT, null, null);
+      insert.run('c-revoked', 'digest-rev', 'sha256', 'Field Day visitors', 0, null, 9,
+        null, '2026-08-02T00:00:00.000Z', AT, 'u-officer', null);
+
+      expect(migrate(db).applied).toEqual([ONLY_095]);
+
+      // NOTHING WAS LOST. Not a row, not a digest, not a use, not an expiry, not an issuer.
+      expect(
+        db
+          .prepare(
+            `SELECT id, code_hash, hash_scheme, label, chosen, max_uses, uses, expires_at,
+                    revoked_at, created_by_user_id AS issuer
+               FROM enrollment_codes ORDER BY id`,
+          )
+          .all(),
+      ).toEqual([
+        { id: 'c-file', code_hash: 'digest-file', hash_scheme: 'hmac-sha256',
+          label: 'Set in docker-compose.yml (ENROLLMENT_CODE)', chosen: 1, max_uses: 30, uses: 3,
+          expires_at: FAR, revoked_at: null, issuer: null },
+        { id: 'c-open', code_hash: 'digest-open', hash_scheme: 'hmac-sha256',
+          label: 'W1MX autumn 2026 intake', chosen: 1, max_uses: 30, uses: 7,
+          expires_at: FAR, revoked_at: null, issuer: 'u-officer' },
+        { id: 'c-revoked', code_hash: 'digest-rev', hash_scheme: 'sha256',
+          label: 'Field Day visitors', chosen: 0, max_uses: null, uses: 9,
+          expires_at: null, revoked_at: '2026-08-02T00:00:00.000Z', issuer: 'u-officer' },
+      ]);
+
+      // The trigger is gone from the live schema, not merely from the file that used to create it.
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all()).toEqual([]);
+
+      /**
+       * AND THE BEHAVIOUR THAT CHANGES BECAUSE OF IT, WHICH IS THE POINT OF THE DROP. Before 095,
+       * deleting the issuing administrator stamped `revoked_at` on `c-open`. Nothing can redeem a
+       * code any more, so that stamp would record a withdrawal nobody performed, on the wall clock,
+       * with no audit row — 094's own words: "revoking a corpse buys nothing and costs the reason it
+       * died". After 095 the deletion leaves the intake record exactly as it stands.
+       */
+      db.prepare('DELETE FROM users WHERE id = ?').run('u-officer');
+      expect(
+        db.prepare('SELECT id, uses, revoked_at FROM enrollment_codes ORDER BY id').all(),
+      ).toEqual([
+        { id: 'c-file', uses: 3, revoked_at: null },
+        { id: 'c-open', uses: 7, revoked_at: null },
+        { id: 'c-revoked', uses: 9, revoked_at: '2026-08-02T00:00:00.000Z' },
+      ]);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
     } finally {
       db.close();
       rmSync(migrations, { recursive: true, force: true });

@@ -10,7 +10,6 @@ import { migrate, openDatabase } from './db/migrate.js';
 import { createFetcher } from './fetcher/index.js';
 import { requireAdmin, requireAuth } from './auth/middleware.js';
 import { createBootstrapState } from './auth/bootstrap.js';
-import { syncEnvEnrollmentCode } from './auth/envEnrollmentCode.js';
 import { currentSessionUser, mountProductApi } from './api/mount.js';
 import { createCallsignRouter } from './api/callsign.js';
 import { CALLSIGN_LOOKUP_PURPOSE } from './callsign/callook.js';
@@ -212,23 +211,6 @@ function main(): void {
    * token. The first-run banner is printed as a side effect of this call, once, exactly as before.
    */
   const bootstrap = createBootstrapState(db);
-
-  /**
-   * `ENROLLMENT_CODE` FROM `docker-compose.yml`, RECONCILED AGAINST THE TABLE.
-   *
-   * IMMEDIATELY AFTER THE FIRST-RUN BANNER, ON PURPOSE. On a fresh database this call can only
-   * defer — there is no administrator to attribute a code to, and nothing self-serve may exist
-   * before one does — and its line has to be read directly under the banner that tells the operator
-   * to go and create that administrator, because that is the act which completes it.
-   *
-   * BEFORE `app.listen`, which is what makes the withdraw-then-create ordering inside it safe: no
-   * request can observe the moment when neither code is live.
-   *
-   * It never throws and never stops the boot. Everything about this value that CAN stop a boot was
-   * decided by `loadConfig` before the database was opened; see `resolveEnrollmentCode` for why the
-   * line is drawn exactly there.
-   */
-  syncEnvEnrollmentCode({ db, spec: config.enrollmentCode, nowISO: now() });
 
   // PLAN-LOCAL dependency bundle, satisfying the ExportDeps interface exported
   // by api/exports.ts. Built inline: there is deliberately no createExportDeps

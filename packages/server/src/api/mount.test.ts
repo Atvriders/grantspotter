@@ -254,15 +254,12 @@ describe('mountRoutes composition', () => {
       { method: 'patch', path: '/api/admin/users/no-such-user/disabled', body: { disabled: true } },
       { method: 'post', path: '/api/admin/users/no-such-user/reset-password', body: {} },
       { method: 'delete', path: '/api/admin/users/no-such-user' },
-      // Enrollment codes. These matter twice over: they are admin-only, and until this list named
-      // them the ROUTER WAS NOT MOUNTED AT ALL and nothing noticed. 122 tests passed against a
-      // feature no deployed instance could reach, because every other test file mounts its own
-      // express app — so a member probe returning 404-because-absent is indistinguishable from
-      // 403-because-refused unless something asserts the composed app. That is this file's whole
-      // job, and it only does it for routes somebody remembered to add here.
-      { method: 'get', path: '/api/admin/enrollment-codes' },
-      { method: 'post', path: '/api/admin/enrollment-codes', body: { label: 'probe' } },
-      { method: 'post', path: '/api/admin/enrollment-codes/no-such-code/revoke', body: {} },
+      // The three enrollment-code routes were here and are asserted GONE below instead — see
+      // `unmounts every enrollment-code route`. They earned this comment by being the reason this
+      // file exists: until the list named them the ROUTER WAS NOT MOUNTED AT ALL and nothing
+      // noticed, because every other test file mounts its own express app, so 122 tests passed
+      // against a feature no deployed instance could reach. Testing the composed app is this
+      // file's whole job, and it only does it for routes somebody remembered to add here.
       { method: 'patch', path: '/api/sources/no-such-source', body: { enabled: false } },
       { method: 'post', path: '/api/sources/crawl', body: {} },
       { method: 'post', path: '/api/inbox/no-such-item/decision', body: { decision: 'approved' } },
@@ -271,6 +268,31 @@ describe('mountRoutes composition', () => {
       const res = await request(memberApp)[probe.method](probe.path).send(probe.body ?? {});
       expect(res.status, `${probe.method} ${probe.path} for a member`).toBe(403);
       expect(res.body.error.code).toBe('forbidden');
+    }
+  });
+
+  /**
+   * THE SAME DEFECT THIS FILE WAS WRITTEN FOR, RUN BACKWARDS.
+   *
+   * A router that is deleted but still mounted does not exist to be caught by a type error, and a
+   * router that is unmounted but still imported is a compile failure that would be noticed at once.
+   * The dangerous middle is the one an admin meets: the screen is gone, the module is gone, and a
+   * bookmark, a script or a browser tab left open across the upgrade still POSTs to the old path.
+   * It has to be a 404 from the not-found envelope and not a 500, and it has to be a 404 for an
+   * ADMIN — a member would get 403 from a route that still existed, so probing with the admin app
+   * is what tells "unmounted" apart from "still there, refusing".
+   */
+  it('unmounts every enrollment-code route', async () => {
+    const retired: Probe[] = [
+      { method: 'get', path: '/api/admin/enrollment-codes' },
+      { method: 'post', path: '/api/admin/enrollment-codes', body: { label: 'probe' } },
+      { method: 'post', path: '/api/admin/enrollment-codes/no-such-code/revoke', body: {} },
+    ];
+    for (const probe of retired) {
+      const res = await request(adminApp)[probe.method](probe.path).send(probe.body ?? {});
+      expect(res.status, `${probe.method} ${probe.path} as an admin`).toBe(404);
+      expect(res.body.error.code).toBe('not_found');
+      expect(res.body.error.message).toBe(NOT_MOUNTED);
     }
   });
 

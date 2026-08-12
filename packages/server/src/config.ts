@@ -1,13 +1,3 @@
-import { CHOSEN_CODE_MAX_INPUT } from '@grantspotter/core';
-import {
-  ENV_CODE_DEFAULT_DAYS,
-  ENV_CODE_DEFAULT_MAX_USES,
-  ENV_CODE_LABEL,
-  ENV_LABEL_REPEATS_CODE_REFUSAL,
-  LABEL_REPEATS_CODE_REFUSAL,
-  refuseChosenCode,
-  type EnvEnrollmentCode,
-} from './auth/chosenCode.js';
 import { canonicalHostname, unreachableContactHost } from './net/hosts.js';
 
 export type NodeEnv = 'development' | 'test' | 'production';
@@ -31,19 +21,18 @@ export interface AppConfig {
    */
   callsignLookupEnabled: boolean;
   /**
-   * The enrollment code the operator wrote in `docker-compose.yml`, or absent for the deployments
-   * that set nothing — which is the shipped state and stays the shipped state.
+   * `ENROLLMENT_CODE`, `ENROLLMENT_CODE_MAX_USES` AND `ENROLLMENT_CODE_DAYS` WERE HERE AND ARE GONE
+   * (2026-08-11). They carried a code an operator set in `docker-compose.yml`, which became a row
+   * in `enrollment_codes` that somebody could redeem for a member account.
    *
-   * OPTIONAL IN A FILE WHERE THE OTHER TWO OPERATOR VALUES ARE NOT, and the asymmetry is the point:
-   * `SESSION_SECRET` and `CONTACT_URL` have no default because nothing safe can be done without
-   * them, and this one has "off" as a perfectly good answer. Every deployment that never touches it
-   * behaves exactly as it did before this field existed.
+   * Account creation is open now, so there is no code to set. The three variables are deleted
+   * rather than accepted-and-ignored: a value the loader reads and does nothing with is how an
+   * operator ends up believing a door is shut. An old compose file that still names them starts
+   * exactly as before, because `optional()` never required any of them and nothing looks for them.
    *
-   * WHAT IT IS NOT is a code. It is a REQUEST for one — checked here for everything a pure function
-   * can check, and turned into a row by `auth/envEnrollmentCode.ts`, which is the only thing that
-   * can answer the questions a database owns.
+   * Migration `095-enrollment-codes-are-a-closed-record.sql` carries the whole argument — what the
+   * feature was for, why it went, and why its table is still in the schema.
    */
-  enrollmentCode?: EnvEnrollmentCode;
   anthropicApiKey?: string;
   simplerGrantsApiKey?: string;
 }
@@ -237,107 +226,6 @@ function parsePort(env: Env, key: string, fallback: number): number {
     throw new ConfigError(`${key} must be an integer between 1 and 65535; got "${raw}".`);
   }
   return value;
-}
-
-/**
- * A whole number an operator typed in a YAML file, or a refusal naming the variable.
- *
- * `Number(raw)` and not `parseInt`, which is the difference between refusing `30 accounts` and
- * silently reading it as thirty. A bound that a typo can widen is not a bound, and both callers of
- * this are bounds on a credential.
- */
-function parseCount(env: Env, key: string, fallback: number, max: number): number {
-  const raw = optional(env, key);
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1 || value > max) {
-    throw new ConfigError(
-      `${key} must be a whole number between 1 and ${String(max)}; got "${raw}".`,
-    );
-  }
-  return value;
-}
-
-/**
- * THE ENROLLMENT CODE AN OPERATOR SET IN `docker-compose.yml`, CHECKED AS HARD AS A PURE FUNCTION
- * CAN CHECK IT — OR NOTHING AT ALL, WHICH IS WHAT NEARLY EVERY DEPLOYMENT WILL HAVE.
- *
- * WHY THE CHECKS ARE HERE, BESIDE THE OTHER TWO. This is where a value that came out of the compose
- * file is refused with a sentence the operator reads, and it is the only place in the process that
- * runs before anything is opened. `deploy/compose.test.ts` feeds this file's own shipped literals to
- * `loadConfig`, so putting the rules here is what puts the compose file itself under test.
- *
- * WHY IT REFUSES TO START, WHICH IS THE REAL DECISION AND IS NOT OBVIOUS. Two arguments were
- * weighed and they point opposite ways.
- *
- * AGAINST: this value is OPTIONAL and additive, and the two refusals it sits beside are not.
- * A bad `SESSION_SECRET` means no session can be trusted; a bad `CONTACT_URL` means ~25 third
- * parties are polled by somebody they cannot reach — each protects a person who has no other
- * remedy. A bad `ENROLLMENT_CODE` closes one convenient door on the operator's own deployment and
- * harms nobody outside it. Taking a working grant tracker offline to complain about an optional
- * convenience is not obviously proportionate.
- *
- * FOR, AND IT WINS ON TWO FACTS. The first is WHEN this can fire. Everything checked below is a
- * pure function of the file, so a value that started the server once starts it forever: no reboot,
- * no auto-update, no restart-on-crash can meet a refusal here that the operator did not create
- * seconds earlier by editing the file and running `docker compose up -d`. The refusal lands on the
- * person who caused it, at the only moment the fix is cheap. The second is WHAT THE ALTERNATIVE
- * LOOKS LIKE: a server that starts, reports healthy, and quietly does not have the door the
- * operator just opened — so the operator reads the code out at a meeting and thirty students are
- * told it is not valid, which is a failure that reaches the wrong people and takes days to trace.
- *
- * AND THE ESCAPE HATCH IS CHEAPER THAN THE FIX, which is what dissolves the objection. Every
- * message below says it: delete the line and the server starts, unchanged, because the feature is
- * optional and "off" is always one keystroke away. That is not true of the other two.
- *
- * WHAT IS DELIBERATELY NOT CHECKED HERE: whether this code already exists on this instance, and
- * whether it was withdrawn. Both need the database, neither is a configuration error, and
- * `auth/envEnrollmentCode.ts` answers both WITHOUT refusing to boot — for reasons set out there
- * that are the mirror image of the ones above.
- */
-export function resolveEnrollmentCode(env: Env = process.env): EnvEnrollmentCode | undefined {
-  const code = optional(env, 'ENROLLMENT_CODE');
-  // Unset, blank, or the empty string the compose file ships: the feature is off and nothing else
-  // is read. The two companion variables are NOT validated in this branch on purpose — with no code
-  // they bound nothing, and refusing to start over a typo in a value that has no effect would be
-  // the disproportion this function's docblock argues against.
-  if (code === undefined) return undefined;
-
-  if (code.length > CHOSEN_CODE_MAX_INPUT) {
-    // A paste guard, and it is answered as one. The floor below would also refuse a 4,000-character
-    // value, but it would refuse it by talking about how long a code has to be, which is the wrong
-    // half of the problem to hand somebody who has pasted a certificate into a YAML file.
-    throw new ConfigError(
-      `ENROLLMENT_CODE is ${String(code.length)} characters long, and a code somebody has to type ` +
-        `may be at most ${String(CHOSEN_CODE_MAX_INPUT)}. This is a code you read out at a ` +
-        'meeting, not a key. Delete the ENROLLMENT_CODE line if you did not mean to set one.',
-    );
-  }
-
-  const maxUses = parseCount(env, 'ENROLLMENT_CODE_MAX_USES', ENV_CODE_DEFAULT_MAX_USES, 1_000_000);
-  const days = parseCount(env, 'ENROLLMENT_CODE_DAYS', ENV_CODE_DEFAULT_DAYS, 1_000_000);
-
-  // The ceilings a chosen code is actually held to (200 uses, 365 days) are NOT the `max` passed
-  // above, and that is on purpose: `parseCount` refuses what is not a number, and
-  // `refuseChosenCode` refuses a number that is too big — with the paragraph that says why 200 and
-  // why 365, which is the sentence the operator needs. A caller told "must be between 1 and 200"
-  // learns the rule and not the reason.
-  const refusal = refuseChosenCode({ code, label: ENV_CODE_LABEL, maxUses, expiresInDays: days });
-  if (refusal !== null) {
-    // ONE OF THE SIX SENTENCES IS SWAPPED, AND ONLY BECAUSE ITS REMEDY DOES NOT TRANSFER. The
-    // label rule is the same rule and the same hazard from either direction, but the console's
-    // advice — "name the intake, not the code" — is advice an operator cannot take, because
-    // `ENV_CODE_LABEL` is GrantSpotter's and not theirs. Everything else is the shared sentence,
-    // unedited, so an operator and an administrator are told the same thing about the same rule.
-    const said = refusal === LABEL_REPEATS_CODE_REFUSAL ? ENV_LABEL_REPEATS_CODE_REFUSAL : refusal;
-    throw new ConfigError(
-      'ENROLLMENT_CODE in docker-compose.yml is not a code this server will issue. ' +
-        `${said} If you want the server back while you think about it, delete the ` +
-        'ENROLLMENT_CODE line: it is optional, and an empty value simply turns the feature off.',
-    );
-  }
-
-  return { code, maxUses, days };
 }
 
 /** Case-insensitive: an operator who lowercased the marker still shipped the placeholder. */
@@ -608,11 +496,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
 
   // AFTER the object literal rather than in it, because the field is absent — not undefined — on
   // the deployments that set nothing, and `exactOptionalPropertyTypes` is what makes "absent" and
-  // "present and undefined" two different things in this repository. Same shape as the two API keys
-  // below it, for the same reason.
-  const enrollmentCode = resolveEnrollmentCode(env);
-  if (enrollmentCode !== undefined) config.enrollmentCode = enrollmentCode;
-
+  // "present and undefined" two different things in this repository.
   const anthropicApiKey = optional(env, 'ANTHROPIC_API_KEY');
   if (anthropicApiKey !== undefined) config.anthropicApiKey = anthropicApiKey;
   const simplerGrantsApiKey = optional(env, 'SIMPLER_GRANTS_API_KEY');
