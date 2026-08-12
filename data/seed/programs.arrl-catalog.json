@@ -5647,6 +5647,17 @@
           }
         },
         {
+          "id": "arrl_membership-0-a21d1452",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Applicant must have been a member of the ARRL for a minimum of one year prior to the application date; Applicant must demonstrate that they are active in amateur radio for a minimum of one year prior to the application date by submitting a letter from an amateur radio club officer or from an official ini the ARRL Field Service organization verifying their activity.",
+          "spec": {
+            "axis": "arrl_membership",
+            "required": true,
+            "minYears": 1
+          }
+        },
+        {
           "id": "recommendation-0-c09c8a65",
           "hard": true,
           "fallbackRank": 0,
@@ -9798,6 +9809,17 @@
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
+          }
+        },
+        {
+          "id": "arrl_membership-0-05daf1e4",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Must be a member of ARRL",
+          "spec": {
+            "axis": "arrl_membership",
+            "required": true,
+            "minYears": 0
           }
         },
         {
@@ -14420,6 +14442,17 @@
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
+          }
+        },
+        {
+          "id": "arrl_membership-0-cc8073f3",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "An \"A\" or equivalent GPA including graded courses in math, science and languages and excluding grades in sports or physical education; must be a member of ARRL",
+          "spec": {
+            "axis": "arrl_membership",
+            "required": true,
+            "minYears": 0
           }
         },
         {

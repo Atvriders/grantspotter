@@ -2,8 +2,50 @@ import type { Constraint, RawOpportunity } from '@grantspotter/core';
 import { candidateTexts as sharedCandidateTexts, findClause } from './clauses.js';
 import { makeConstraint } from './preference.js';
 
-const ARRL_MEMBER = /\bARRL\s+member(?:s|ship)?\b/i;
-const AT_LEAST_YEARS = /(?:at least|for)\s+(one|two|three|\d+)\s+years?/i;
+/**
+ * THE SAME REQUIREMENT, WRITTEN EITHER WAY ROUND.
+ *
+ * English states this membership in two orders and the funders in this corpus use both:
+ *
+ *   COMPOUND — "Must be an ARRL Member" (Metzger, Pautz), "applicant must be an ARRL member"
+ *              (Bennett), "Grant applicants must be a current ARRL member" (ARRL ETP).
+ *   OF-PHRASE — "Must be a member of ARRL" (North Fulton), "must be a member of ARRL"
+ *              (You've Got a Friend in Pennsylvania), "Applicant must have been a member of the
+ *              ARRL for a minimum of one year prior to the application date" (Hesselbrock).
+ *
+ * The anchor knew only the first, so the three OF-PHRASE records produced NO `arrl_membership`
+ * constraint at all and their sentence survived only as the `other.ts` catch-all — which is
+ * hard-coded soft. Measured with `matchProgram` over `scripts/profile-corpus.ts`'s 150 publishable
+ * programmes: an applicant who is not an ARRL member was `eligible_preferred` from North Fulton
+ * and `eligible` from You've Got a Friend in Pennsylvania, on a sentence that says "must", while
+ * the product printed that same sentence under "A preference you do not match cannot make you
+ * ineligible".
+ *
+ * That is the whole difference between these records and the 27 soft `other` constraints that
+ * quote an imperative and cost nobody anything: those have a REAL AXIS that also recognised the
+ * sentence and published it hard beside the catch-all copy. The three above lacked one, and the
+ * reason they lacked one is this regex.
+ *
+ * WHAT THE SECOND BRANCH DELIBERATELY DOES NOT MATCH. It requires ARRL to be the object of
+ * "member of"/"membership in", not merely nearby: the CWops Scholarship's Other field reads
+ * "…a letter from a person responsible for membership (Examples include but are not limited to:
+ * ARRL Code Proficiency…)", where the membership belongs to some other organisation entirely and
+ * ARRL is named inside a parenthetical list of examples. A proximity match would have turned that
+ * into a hard ARRL-membership bar. Swept over the whole corpus, the widened anchor matches exactly
+ * three texts the old one missed — the three named above — and not one string it matched before
+ * has changed.
+ */
+const MEMBER_OF_ARRL = String.raw`(?:ARRL\s+member(?:s|ship)?|member(?:s|ship)?\s+(?:of|in)\s+(?:the\s+)?ARRL)`;
+const ARRL_MEMBER = new RegExp(String.raw`\b${MEMBER_OF_ARRL}\b`, 'i');
+/**
+ * "for at least one year", "for a minimum of one year" — the same floor, two wordings, and this
+ * corpus contains both. `license.ts`'s `heldMonthsFrom` already reads "minimum of one year" as
+ * twelve months off the Hesselbrock record's OWN licence field ("applicant must have held license
+ * for a minimum of one year prior to the application date"); leaving `minYears: 0` on the
+ * membership sentence beside it would publish a spec that says less than the funder's sentence,
+ * on the same record, in the same words.
+ */
+const AT_LEAST_YEARS = /(?:at\s+least|minimum\s+of|for)\s+(one|two|three|\d+)\s+years?/i;
 const WORD_YEARS: Record<string, number> = { one: 1, two: 2, three: 3 };
 
 // Text describing ARRL membership as the AWARD ITSELF — "$500 and 1 year ARRL membership for
@@ -14,8 +56,20 @@ const WORD_YEARS: Record<string, number> = { one: 1, two: 2, three: 3 };
 // member" bar: that would exclude exactly the people the award exists for, which is worse than
 // missing the constraint entirely (a missing constraint merely over-shows the award; a wrong hard
 // constraint hides it from its own intended recipient).
-const PRIZE_POLARITY =
-  /\bfor\s+non-?members?\b|\bnon-?members?\s+(?:only|welcome|eligible)\b|\b(?:award|scholarship|prize)\s+includes?\b|\bincludes?\s+(?:a\s+|an\s+|\d+[\s-]*(?:year|yr)s?\s+)*(?:of\s+)?ARRL\s+member|\brecipients?\s+receives?\b|\breceives?\s+(?:a\s+|an\s+|\d+[\s-]*(?:year|yr)s?\s+)*(?:of\s+)?ARRL\s+member/i;
+//
+// Both halves of this file read the SAME two orderings, deliberately. Widening the requirement
+// anchor above without widening the prize guard beside it would be the exact asymmetry that opens
+// a false exclude: "the award includes a one-year membership in the ARRL" would newly become a
+// hard "must be an ARRL member" bar on an award offered to non-members. No text in this corpus is
+// written that way today — this keeps it from mattering the day one is.
+const PRIZE_POLARITY = new RegExp(
+  String.raw`\bfor\s+non-?members?\b|\bnon-?members?\s+(?:only|welcome|eligible)\b` +
+    String.raw`|\b(?:award|scholarship|prize)\s+includes?\b` +
+    String.raw`|\bincludes?\s+(?:a\s+|an\s+|\d+[\s-]*(?:year|yr)s?\s+)*(?:of\s+)?${MEMBER_OF_ARRL}` +
+    String.raw`|\brecipients?\s+receives?\b` +
+    String.raw`|\breceives?\s+(?:a\s+|an\s+|\d+[\s-]*(?:year|yr)s?\s+)*(?:of\s+)?${MEMBER_OF_ARRL}`,
+  'i',
+);
 
 /**
  * `splitClauses`/`findClause` used to be private copies here — DOT safety plus the numbered-list

@@ -1220,7 +1220,7 @@ describe('W9 — a widened field list that used to admit every major there is', 
  *
  * Each is a census with a pinned count, not a silent skip, for the reason `KNOWN_GEO_OVERCLAIMS`
  * gives: an exemption is where the real offender walks through, and a counted one cannot grow by a
- * record without going red. The four buckets and the checked population add to all 649 constraints
+ * record without going red. The four buckets and the checked population add to all 652 constraints
  * in the corpus, which is the assertion that stops a record leaving the rule unseen.
  *
  * ======================= AND HOW WOULD YOU KNOW *THIS* GUARD IS BLIND? ====================
@@ -1518,8 +1518,8 @@ function gpaExcluded(rawText: string): Probe | undefined {
  * report one record twice and a fix cannot close one rule by hiding in the other.
  *
  * THIS FULL SET IS NOT WHAT W11 READS. It is the naive rule, kept because the measurement against it
- * is the evidence for reading one ladder instead of nine — see `CREDENTIAL_NAMED` and the 81-record
- * case below. `CROSS_AXIS_LADDERS` is the set that ships.
+ * is the evidence for reading one ladder instead of nine — see `CREDENTIAL_NAMED` and the
+ * all-nine-ladders case below. `CROSS_AXIS_LADDERS` is the set that ships.
  */
 const SENTENCE_LADDERS: Array<{ owner: ConstraintSpec['axis']; read: (rawText: string) => Probe | undefined }> = [
   { owner: 'geography', read: placeExcluded },
@@ -1801,7 +1801,7 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
   it('every closed sentence produces a spec that can refuse the applicant it excludes', async () => {
     const census = readEnforcementWidth(await everyConstraint());
     expect(census.admitsEverybody).toEqual(KNOWN_TOOTHLESS);
-    // Vacuity guard, and these six numbers add to all 649 constraints in the corpus — every one is
+    // Vacuity guard, and these six numbers add to all 652 constraints in the corpus — every one is
     // either checked or in a named bucket, and no constraint falls out of this rule unseen.
     //
     //   checked        238  the funder named values on an axis this schema holds, and closed them.
@@ -1817,9 +1817,17 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     //                       INTO it stops being checked at all.
     //   typeOnly         2  the sentence bounds the school and this rule builds no applicant from
     //                       it — Comstock and NEAR-Fest, both named above, for two reasons.
-    //   silent         329  the sentence names nothing on an axis a sentence can be read against —
+    //   silent         332  the sentence names nothing on an axis a sentence can be read against —
     //                       `recommendation`, `financial_need`, `other`, and the many records whose
     //                       rawText is "Any" or a bare place name on an axis about schooling.
+    //                       329 UNTIL `membership.ts` LEARNED THE SECOND WORD ORDER. "Must be a
+    //                       member of ARRL" (North Fulton), the same sentence in You've Got a
+    //                       Friend in Pennsylvania, and Hesselbrock's "must have been a member of
+    //                       the ARRL for a minimum of one year" now produce an `arrl_membership`
+    //                       constraint each instead of surviving only as the soft `other` catch-all.
+    //                       They land here because `theApplicantsTheSentenceExcludes` builds no
+    //                       applicant on that axis — the same bucket the four membership sentences
+    //                       this corpus already parsed have always been in.
     expect({
       checked: census.checked,
       probes: census.probes,
@@ -1827,7 +1835,7 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
       unrepresented: census.unrepresented,
       typeOnly: census.typeOnly,
       silent: census.silent,
-    }).toEqual({ checked: 238, probes: 260, opened: 36, unrepresented: 44, typeOnly: 2, silent: 329 });
+    }).toEqual({ checked: 238, probes: 260, opened: 36, unrepresented: 44, typeOnly: 2, silent: 332 });
     expect(
       census.checked + census.opened + census.unrepresented + census.typeOnly + census.silent,
     ).toBe((await everyConstraint()).length);
@@ -2357,28 +2365,37 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
    * THE 28, PINNED AS A MEASUREMENT RATHER THAN LEFT AS A CLAIM IN A COMMENT.
    *
    * The note on `CREDENTIAL_NAMED` says the nine-ladder version of this rule flags 81 records and
-   * that all 81 are cry-wolf. A sentence saying so decays; this asserts it. If somebody widens the
-   * cross-axis ladders, or loosens a vocabulary, this number moves and the diff names the records.
+   * that all of them are cry-wolf. A sentence saying so decays; this asserts it. If somebody widens
+   * the cross-axis ladders, or loosens a vocabulary, this number moves and the diff names the
+   * records. It is 83 today, and the two that arrived are the fix in this round proving itself:
+   * `membership.ts` now reads "Must be a member of ARRL" (North Fulton) and "must have been a
+   * member of the ARRL for a minimum of one year" (Hesselbrock) as the `arrl_membership` sentences
+   * they are, so they join the three IDENTICAL sentences — Metzger's and Pautz's "Must be an ARRL
+   * Member", Bennett's "applicant must be an ARRL member" — that were already in this bucket for
+   * exactly the same reason and are exactly as false.
    *
-   * The second assertion is the load-bearing one: NOT ONE of the 28 is reached by an anchored
+   * The second assertion is the load-bearing one: NOT ONE of them is reached by an anchored
    * reading. Every one comes from a ladder inverted outside its own axis — which is why exactly one
    * ladder is read cross-axis, and why "read the sentence with every vocabulary" is not the
    * generalisation it looks like.
    */
-  it('…and reading all nine ladders cross-axis flags 81 records, every one of them a false alarm', async () => {
+  it('…and reading all nine ladders cross-axis flags 83 records, every one of them a false alarm', async () => {
     const { programs } = await corpus();
     const naive = readCrossAxisReach(programs, SENTENCE_LADDERS);
-    expect(naive.enforcedNowhere).toHaveLength(81);
-    // THE PARTITION, WHICH IS THE CLAIM AND IS STRONGER THAN THE COUNT. Nobody adjudicated 81
+    expect(naive.enforcedNowhere).toHaveLength(83);
+    // THE PARTITION, WHICH IS THE CLAIM AND IS STRONGER THAN THE COUNT. Nobody adjudicated 83
     // records one at a time; they were read as six shapes, and the shape is what makes each one a
     // false alarm. Pinning the shapes means a genuinely new kind of hit cannot arrive disguised as
     // one of these — it lands in a bucket whose count is asserted and the diff names it.
     //
     //   29  a GEOGRAPHY sentence read as a citizenship bar. "RESIDENCE in ARRL New England
     //       Division" matches `CITIZENSHIP_SAYS_RESIDENT`. A state is not an immigration status.
-    //   20  a recommendation / membership / licence / field sentence read as an activity bar.
+    //   22  a recommendation / membership / licence / field sentence read as an activity bar.
     //       "a sitting officer of an ARRL-affiliated CLUB" names `club_member`, so every other
-    //       activity is "excluded" — by the sentence describing where a LETTER comes from.
+    //       activity is "excluded" — by the sentence describing where a LETTER comes from. 20 until
+    //       North Fulton's and Hesselbrock's membership sentences started being parsed on their own
+    //       axis; "member of ARRL" names `club_member` to this ladder for the same wrong reason
+    //       "an ARRL member" already did in the three records beside them.
     //   18  an INSTITUTION sentence read as an audience bar. `STAGE_SAYS.UNDERGRAD` matches
     //       "college", so "Recipient's college of choice." puts a high-school senior outside an
     //       award for students entering college.
@@ -2397,7 +2414,7 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
     const byShape: Record<string, number> = {};
     for (const o of naive.enforcedNowhere) byShape[shape(o)] = (byShape[shape(o)] ?? 0) + 1;
     expect(byShape).toEqual({
-      citizenship: 29, ham_activity: 20, age_stage: 18, institution: 7, geography: 6, license: 1,
+      citizenship: 29, ham_activity: 22, age_stage: 18, institution: 7, geography: 6, license: 1,
     });
     // The anchored rule shares this whole population and flags none of it.
     expect(readCrossAxisReach(programs).enforcedNowhere).toEqual([]);

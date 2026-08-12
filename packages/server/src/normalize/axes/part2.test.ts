@@ -86,6 +86,77 @@ describe('extractArrlMembership', () => {
     expect(cs[0].hard).toBe(true);
     expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
   });
+
+  // THE SAME REQUIREMENT IN THE OTHER WORD ORDER. Three real records write it this way and the
+  // anchor knew only the compound form, so none of the three produced an `arrl_membership`
+  // constraint: their sentence survived only as `other.ts`'s catch-all, which is hard-coded soft.
+  // Measured through `matchProgram` over the 150 publishable programmes, an applicant who has not
+  // said they are an ARRL member read `eligible_preferred` from North Fulton and `eligible` from
+  // You've Got a Friend in Pennsylvania, off a sentence that says "must".
+  it('reads the of-phrase order: "Must be a member of ARRL" (North Fulton, You’ve Got a Friend in PA)', () => {
+    const cs = extractArrlMembership(raw({ Other: 'Must be a member of ARRL' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
+  });
+
+  it('reads "a member of the ARRL for a minimum of one year" as a one-year floor (Hesselbrock)', () => {
+    const cs = extractArrlMembership(
+      raw({
+        Other:
+          'Applicant must have been a member of the ARRL for a minimum of one year prior to the ' +
+          'application date',
+      }),
+    );
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(true);
+    // The same record's licence field says "must have held license for a minimum of one year" and
+    // license.ts already reads twelve months out of it. `minYears: 0` here would publish a spec
+    // that says less than the funder's sentence, on the same record, in the same words.
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 1 });
+  });
+
+  // THE ANCHOR, NOT PROXIMITY — the CWops Scholarship's real Other field. The membership named
+  // there belongs to some other organisation entirely and ARRL appears inside a parenthetical list
+  // of example certificates. A "member … ARRL somewhere nearby" rule would publish a hard
+  // ARRL-membership bar on an award whose sentence states no such thing.
+  it('does not fire when ARRL is merely nearby and the membership is somebody else’s (CWops)', () => {
+    expect(
+      extractArrlMembership(
+        raw({
+          // The wrap after "responsible" is load-bearing and not cosmetic: `userFacingCopy.ts`
+          // treats a 16-character run shared with a rendered sentence as a test NAMING that
+          // sentence, and "responsible for " also appears in FactChecklist.tsx's "The funder holds
+          // you responsible for each one." Kept whole, this fixture would silently claim that
+          // sentence is asserted when nothing here reads it.
+          Other:
+            'Demonstrated CW operating ability within the last 24 months by providing a copy of a ' +
+            'certificate, listing in a magazine showing results or a letter from a person responsible ' +
+            'for membership (Examples include but are not limited to: ARRL Code Proficiency, CWops, ' +
+            'FISTS, SKCC).',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  // BOTH HALVES OF THE FILE READ BOTH ORDERS. Widening the requirement anchor without widening the
+  // prize guard beside it is how the fix would have opened a false exclude of its own: an award
+  // that GIVES a membership would have become an award that DEMANDS one.
+  it('keeps the prize polarity in the of-phrase order too (membership as the award, not the bar)', () => {
+    expect(
+      extractArrlMembership(raw({ Other: 'Winners receive membership in the ARRL.' })),
+    ).toEqual([]);
+    expect(
+      extractArrlMembership(raw({ Other: 'The award includes a one-year membership in the ARRL.' })),
+    ).toEqual([]);
+  });
+
+  it('keeps a preference soft in the of-phrase order as well', () => {
+    const cs = extractArrlMembership(raw({ Other: 'Preference is given to a member of the ARRL.' }));
+    expect(cs).toHaveLength(1);
+    expect(cs[0].hard).toBe(false);
+    expect(cs[0].spec).toMatchObject({ axis: 'arrl_membership', required: true, minYears: 0 });
+  });
 });
 
 describe('extractRecommendation', () => {
