@@ -783,6 +783,245 @@ describe('Opportunity detail — an unknown with nothing to fill in', () => {
 });
 
 /**
+ * WHAT AN `eligible` VERDICT SHOWS ITS READER.
+ *
+ * This page read `program.constraints` in exactly two places — the `orUnrepresented` panel and
+ * `IneligibilityDrawer` — and both are reachable only from a verdict that is not `eligible`.
+ * `ProgramTable` reads `reason.rawText`, which is ineligible-only too. So a reader told YES saw no
+ * funder requirement sentence anywhere: `rawOtherText` carried some of it on some records and
+ * nothing on the rest (of the 26 records in the class this round closes, 15 and 11 respectively),
+ * and the full hard-constraint list lived only in `requirementsChecklistMarkdown` inside the
+ * application-packet ZIP — downloadable after the decision to apply has already been made.
+ *
+ * That reader is about to spend an application fee, transcript fees and three recommendation
+ * letters. An `ineligible` verdict gets a drawer quoting every constraint that refused it; an
+ * `eligible` one got a badge.
+ *
+ * MEASURED, for the size of what this adds: over the 150 publishable records at
+ * `scripts/profile-corpus.ts`'s fixed 2026-08-02 clock, the licensed EE undergraduate's 43
+ * `eligible` and 9 `eligible_preferred` records carry a median of 4 hard constraints (max 7,
+ * median `rawText` 38 characters) and 0–3 preferences. It renders on a single programme's record
+ * page and never in the browse table, where a reader eligible for 43 programmes actually is.
+ */
+describe('Opportunity detail — what an eligible verdict shows', () => {
+  const GPA_RAW = 'GPA of 3.0 or better, on a 4.0 scale.';
+  const SCHOOL_RAW = '4-year college or university';
+  const MEMBER_RAW = 'Must be an ARRL Member';
+  const PREFERENCE_RAW = 'Preference to applicants demonstrating financial need.';
+
+  const ELIGIBLE = {
+    ...CLUB_GRANT_DETAIL,
+    program: {
+      ...CLUB_GRANT_DETAIL.program,
+      constraints: [
+        {
+          id: 'c-gpa',
+          hard: true,
+          fallbackRank: 0,
+          rawText: GPA_RAW,
+          spec: { axis: 'gpa', min: 3 },
+        },
+        {
+          id: 'c-institution',
+          hard: true,
+          fallbackRank: 0,
+          rawText: SCHOOL_RAW,
+          spec: {
+            axis: 'institution',
+            degreeLevels: ['BACH'],
+            accreditationRequired: true,
+            partTimeOK: false,
+          },
+        },
+        {
+          id: 'c-arrl',
+          hard: true,
+          fallbackRank: 0,
+          rawText: MEMBER_RAW,
+          spec: { axis: 'arrl_membership', minYears: 0 },
+        },
+        {
+          id: 'c-need',
+          hard: false,
+          fallbackRank: 3,
+          rawText: PREFERENCE_RAW,
+          spec: { axis: 'financial_need' },
+        },
+      ],
+    },
+    verdict: { kind: 'eligible' },
+  };
+
+  async function findPanel(): Promise<HTMLElement> {
+    return screen.findByRole('region', { name: /what this program requires/i });
+  }
+
+  it('shows every recorded requirement, in the funder’s own words', async () => {
+    stubFetch(ELIGIBLE);
+    renderDetail();
+    const panel = await findPanel();
+    for (const raw of [GPA_RAW, SCHOOL_RAW, MEMBER_RAW]) {
+      expect(within(panel).getByText(raw)).toBeInTheDocument();
+    }
+  });
+
+  /**
+   * THE WHOLE POINT OF THE PANEL, AND WHY IT IS NOT A CHECKLIST OF TICKS.
+   *
+   * For 26 records the eligible verdict was produced with a `hard: true` constraint reading
+   * "4-year college or university" recorded and NOT satisfied — the axis passed leniently rather
+   * than refusing. A list that said "you meet this" beside each line would restate that error once
+   * per requirement. The list makes no claim about the reader at all; the software's single claim
+   * — that nothing here refused this profile — is one marked line at the top.
+   */
+  it('claims nothing about the reader beside any individual requirement', async () => {
+    stubFetch(ELIGIBLE);
+    renderDetail();
+    const panel = await findPanel();
+    const items = within(panel).getAllByRole('listitem');
+    expect(items).toHaveLength(4);
+    for (const item of items) {
+      expect(item.textContent ?? '').not.toMatch(/you meet|you satisfy|met|✓|passed/i);
+    }
+  });
+
+  it('says what the verdict actually means, in GrantSpotter’s own voice', async () => {
+    stubFetch(ELIGIBLE);
+    renderDetail();
+    const panel = await findPanel();
+    const lede = panel.querySelector('.authored');
+    expect(lede?.textContent ?? '').toMatch(/nothing recorded here refused your profile/i);
+    expect(lede?.textContent ?? '').toMatch(/only the part of each sentence below that it can represent/i);
+    expect(lede?.querySelector('.authored-by')?.textContent ?? '').toMatch(/not the funder/i);
+  });
+
+  /** `.verbatim` means "a funder published this". Nothing this software wrote may wear it. */
+  it('keeps GrantSpotter’s own sentences out of the quotation blocks', async () => {
+    stubFetch(ELIGIBLE);
+    const { container } = renderDetail();
+    await findPanel();
+    const quotes = [...container.querySelectorAll('.verbatim')].map((el) => el.textContent ?? '');
+    expect(quotes).toContain(GPA_RAW);
+    for (const quote of quotes) expect(quote).not.toMatch(/GrantSpotter/);
+  });
+
+  /**
+   * A preference is not a requirement, and a panel that ran the two together would tell a reader
+   * that a funder's tie-breaker is a bar. Only `hard` constraints can reach `hardFailures` in
+   * `matchProgram`, so the claim under the sub-heading is the matcher's own.
+   */
+  it('separates preferences from requirements and says what a preference does', async () => {
+    stubFetch(ELIGIBLE);
+    renderDetail();
+    const panel = await findPanel();
+    expect(within(panel).getByRole('heading', { name: /preferences/i })).toBeInTheDocument();
+    expect(panel).toHaveTextContent(/cannot make you ineligible/i);
+    expect(within(panel).getByText(PREFERENCE_RAW)).toBeInTheDocument();
+  });
+
+  /**
+   * BUCKETED BY THE RECORD'S OWN `hard` FLAG. `matchProgram` forces `financial_need` soft whatever
+   * the record says (spec §4.5 rule 11); a funder who wrote financial need down as a requirement
+   * still gets their sentence rendered as one, because moving it under "these never exclude you"
+   * would be this software overruling the funder in the one place built to reproduce them.
+   */
+  it('leaves a funder’s stated requirement where the funder put it', async () => {
+    stubFetch({
+      ...ELIGIBLE,
+      program: {
+        ...ELIGIBLE.program,
+        constraints: [
+          { id: 'c-need-hard', hard: true, fallbackRank: 0, rawText: PREFERENCE_RAW, spec: { axis: 'financial_need' } },
+        ],
+      },
+    });
+    renderDetail();
+    const panel = await findPanel();
+    expect(within(panel).getByText(PREFERENCE_RAW)).toBeInTheDocument();
+    expect(within(panel).queryByRole('heading', { name: /preferences/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * AN ELIGIBLE VERDICT OVER AN EMPTY LIST IS A VERDICT ABOUT NOTHING. `matchProgram` withdrew
+   * `eligible` for a record with NO constraints at all — 28 of the 150 publishable records carry
+   * none — but a record with preferences and no requirement still reaches here, and the panel must
+   * not let a blank read as "you qualify". Nor as "the funder says there are none": this file's
+   * standing rule, from `costShareRequired` and the four silent obligation rows.
+   */
+  it('says a record with no requirement checked nothing, rather than showing an empty box', async () => {
+    stubFetch({
+      ...ELIGIBLE,
+      program: { ...ELIGIBLE.program, constraints: [] },
+    });
+    renderDetail();
+    const panel = await findPanel();
+    expect(panel).toHaveTextContent(/no requirement is recorded for this program/i);
+    expect(panel).toHaveTextContent(/rests on an empty list/i);
+    expect(panel).toHaveTextContent(/not the funder stating there are none/i);
+    expect(within(panel).queryByRole('listitem')).not.toBeInTheDocument();
+  });
+
+  /**
+   * A requirement with no funder sentence recorded is the one case `.verbatim` may not be used
+   * for. No constraint in the shipped corpus is in that state — all 522 hard and all 127 soft
+   * constraints across the 150 publishable records carry wording — which is why the branch is
+   * written before the first one arrives rather than after.
+   */
+  it('never renders an empty quotation block for a requirement with no recorded wording', async () => {
+    stubFetch({
+      ...ELIGIBLE,
+      program: {
+        ...ELIGIBLE.program,
+        constraints: [{ id: 'c-blank', hard: true, fallbackRank: 0, rawText: '', spec: { axis: 'other', note: '' } }],
+      },
+    });
+    const { container } = renderDetail();
+    const panel = await findPanel();
+    for (const quote of container.querySelectorAll('.verbatim')) {
+      expect((quote.textContent ?? '').trim()).not.toBe('');
+    }
+    expect(panel).toHaveTextContent(/no funder sentence was recorded for this one/i);
+    // The tag rides on the ROW, not only on the panel's lede: a reader scanning the list has to be
+    // told whose sentence this one is where the sentence is.
+    const row = within(panel).getByRole('listitem');
+    expect(row.querySelector('.authored-by')?.textContent ?? '').toMatch(/not the funder/i);
+    expect(row.querySelector('.verbatim')).toBeNull();
+  });
+
+  it('shows the same requirements for a preferred verdict, which is the same yes', async () => {
+    stubFetch({ ...ELIGIBLE, verdict: { kind: 'eligible_preferred', rank: 3, met: ['c-need'] } });
+    renderDetail();
+    const panel = await findPanel();
+    expect(within(panel).getByText(SCHOOL_RAW)).toBeInTheDocument();
+  });
+
+  /**
+   * NOT FOR THE OTHER TWO VERDICTS. An `ineligible` reader gets the drawer, which quotes the
+   * constraints that refused them; repeating every other constraint underneath it doubles the page
+   * for the one reader already told no. An `unknown` gets its own panel. Three panels, mutually
+   * exclusive, in one place.
+   */
+  it('does not add a second constraint list to an ineligible or unknown verdict', async () => {
+    const reasons = [ELIGIBLE.program.constraints[1]];
+    stubFetch({ ...ELIGIBLE, verdict: { kind: 'ineligible', reasons } });
+    const { unmount } = renderDetail();
+    await screen.findByRole('region', { name: /why you are ineligible/i });
+    expect(
+      screen.queryByRole('region', { name: /what this program requires/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText(SCHOOL_RAW)).toHaveLength(1);
+    unmount();
+
+    stubFetch({ ...ELIGIBLE, verdict: { kind: 'unknown', missingProfileFields: ['gpa'] } });
+    renderDetail();
+    await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    expect(
+      screen.queryByRole('region', { name: /what this program requires/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/**
  * CLOSE-OUT REVIEW I5 — THE LATENT `javascript:` HREF.
  *
  * `blockedHostFor` returned `null` whenever `new URL()` threw and never checked the scheme, and

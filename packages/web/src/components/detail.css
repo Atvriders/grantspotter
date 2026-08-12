@@ -161,6 +161,32 @@
   min-width: 0;
 }
 
+/*
+  What an eligible verdict shows: one requirement per row, the funder's sentence under the axis it
+  was filed against. Same shape as `.unrepresented-routes` above and deliberately its own selector —
+  that list carries GrantSpotter's account of a route it cannot check and this one carries nothing
+  but quotations, so a change to either must not silently travel to the other.
+
+  The row gap is `--s-3` rather than `--s-4`: the typical panel is four quotations (median over the
+  150 publishable records for the profiles that reach an eligible verdict), and this list sits on the
+  page a reader opens to decide whether to spend an application fee. Loose enough that four quoted
+  blocks read as four separate requirements, tight enough that seven — the measured maximum — still
+  scan as one list.
+*/
+.requirement-list {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.requirement-list > li { display: grid; gap: var(--s-2); min-width: 0; }
+
+/* A second bucket inside one panel, not a second panel: preferences belong with the requirements
+   they are read beside, and a heading is what stops the two lists reading as one. */
+.requirement-subhead { margin: var(--s-5) 0 var(--s-2); }
+
 /* An obligation nobody stated. Muted, and never dressed as an answer. */
 .unstated { color: var(--text-muted); }
 

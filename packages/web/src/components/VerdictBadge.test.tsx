@@ -25,6 +25,49 @@ describe('VerdictBadge', () => {
     expect(screen.getByLabelText('Eligible')).toBeInTheDocument();
   });
 
+  /**
+   * THE ONE SENTENCE ON THIS BADGE THAT WAS MEASURABLY FALSE.
+   *
+   * "Your profile satisfies every hard constraint recorded for this program" was untrue for 26
+   * records: a constraint with `hard: true` and rawText "4-year college or university" is recorded
+   * — 29 constraints across the 150 publishable records carry that phrase — and the profile does
+   * not satisfy it. The axis passed leniently instead of refusing, which is a decision the matcher
+   * is entitled to make; asserting satisfaction on the strength of it is not.
+   *
+   * `matchProgram` returns `eligible` exactly when `hardFailures` is empty, so "nothing recorded
+   * refused your profile" is what the verdict actually carries, and it is true of every eligible
+   * verdict however the specs underneath are corrected.
+   */
+  it('does not claim the profile satisfies every recorded requirement', () => {
+    wrap(<VerdictBadge verdict={{ kind: 'eligible' }} />);
+    const title = screen.getByLabelText('Eligible').getAttribute('title') ?? '';
+    expect(title).not.toMatch(/satisfies every|meets every|you satisfy/i);
+    expect(title).toMatch(/nothing recorded for this program refused your profile/i);
+  });
+
+  /**
+   * The old escape hatch was about FRESHNESS — "this record is only as fresh as its verification
+   * date" — which is the wrong risk for the failure this badge was corrected for: on those 26
+   * records the record was accurate and current, and the requirement simply was not enforced. A
+   * reader sent to re-check the publication date learns nothing about that. The requirements
+   * themselves are the thing to read, and `Opportunity.tsx` now puts them on the record page.
+   */
+  it('sends the reader to the requirements, not only to the verification date', () => {
+    wrap(<VerdictBadge verdict={{ kind: 'eligible' }} />);
+    const title = screen.getByLabelText('Eligible').getAttribute('title') ?? '';
+    expect(title).toMatch(/requirement/i);
+    expect(title).toMatch(/funder's own words/i);
+    expect(title).toMatch(/verification date/i);
+  });
+
+  it('does not claim satisfaction on the preferred badge either', () => {
+    wrap(<VerdictBadge verdict={{ kind: 'eligible_preferred', rank: 1, met: ['c1'] }} />);
+    const title = screen.getByLabelText('Preferred, rank 1').getAttribute('title') ?? '';
+    expect(title).not.toMatch(/satisfies every|you satisfy every/i);
+    expect(title).toMatch(/nothing recorded for this program refused your profile/i);
+    expect(title).toMatch(/rank 1/);
+  });
+
   it('renders the preference rank, because a preference is not a guarantee', () => {
     wrap(<VerdictBadge verdict={{ kind: 'eligible_preferred', rank: 1, met: ['c1'] }} />);
     expect(screen.getByLabelText('Preferred, rank 1')).toHaveTextContent('Preferred · 1');

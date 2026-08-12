@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { Cycle, Funder, ObligationState, Program, Verdict } from '@grantspotter/core';
+import type { Constraint, Cycle, Funder, ObligationState, Program, Verdict } from '@grantspotter/core';
 import { hasFunderWording, obligationState } from '@grantspotter/core';
 import { useApi } from '../store/useApi.js';
 import { apiSend } from '../api/client.js';
@@ -192,6 +192,143 @@ function refusedUrlSentence(refusal: Exclude<LinkRefusal, { kind: 'blocked_host'
 }
 
 /**
+ * ONE REQUIREMENT, AS THE FUNDER WROTE IT. Nothing here is a claim about the reader.
+ *
+ * The quote block is entered ONLY through `hasFunderWording`, the same gate `IneligibilityDrawer`
+ * and `ProgramTable` use: `.verbatim` means "a funder published this sentence", and an empty
+ * monospaced box under a heading is the same fabrication as filling one in. No constraint in the
+ * shipped corpus is in that state — measured over the 150 publishable records, all 522 hard and all
+ * 127 soft constraints carry funder wording — which is exactly why the branch is written now rather
+ * than when the first one arrives.
+ *
+ * No structured restatement (`tierDetail`) accompanies the quote, deliberately. That line exists in
+ * the drawer to say WHY a rule refused; here nothing refused, and a software-composed paraphrase
+ * beside every requirement would be both the wall of text this panel must not become and a second
+ * voice on a list whose whole value is that it is the funder's.
+ */
+function RequirementQuote({ constraint }: { constraint: Constraint }): JSX.Element {
+  return (
+    <li>
+      <span className="eyebrow">{reasonHeading(constraint)}</span>
+      {hasFunderWording(constraint) ? (
+        <p className="verbatim">{constraint.rawText}</p>
+      ) : (
+        <span className="authored">
+          <span className="authored-by">GrantSpotter&rsquo;s words, not the funder&rsquo;s</span>
+          No funder sentence was recorded for this one. Open this record&rsquo;s source page and
+          read it there before you rely on it.
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * WHAT AN `eligible` VERDICT OWES THE PERSON IT SAYS YES TO.
+ *
+ * An `ineligible` verdict gets a whole drawer quoting the funder on every constraint that refused;
+ * an `unknown` gets a panel naming what is missing and whose gap it is. An `eligible` verdict got a
+ * badge. THIS PAGE READ `program.constraints` IN EXACTLY TWO PLACES — the `orUnrepresented` panel
+ * and the drawer — and both are reachable only from a verdict that is not `eligible`, so a reader
+ * told yes saw no funder requirement sentence anywhere on the page. The full hard-constraint list
+ * existed only in `requirementsChecklistMarkdown`, inside the application-packet ZIP, which is
+ * downloaded AFTER the decision to apply has been made. The reader with the most at stake — an
+ * application fee, transcript fees, three recommendation letters — had the least on screen.
+ *
+ * IT IS ALSO WHERE THE REPO'S STANDING MITIGATION HAD TO BE MADE TRUE. `matcher.ts` justifies
+ * passing a constraint it cannot fully represent on the grounds that the applicant "open[s] the
+ * funder's page, whose verbatim text this app always renders, and find[s] out". For an eligible
+ * verdict the app rendered no such text: `rawOtherText` carries some of it on some records (15 of
+ * the 26 records in the class this round is closing) and nothing on the rest. This panel is what
+ * makes that sentence true rather than aspirational.
+ *
+ * THE LIST MAKES NO CLAIM ABOUT THE READER AT ALL. Every row is a sentence the funder published,
+ * quoted; the one thing the software asserts — that nothing here refused this profile — is a single
+ * marked line at the top wearing "GrantSpotter's words, not the funder's". That division is what
+ * keeps the panel honest for the 26 records where a hard constraint the profile does NOT satisfy
+ * was passed leniently: the reader is not told they meet each line, they are told what the lines
+ * are and that the software only checks the part of each it can represent.
+ *
+ * SIZE, MEASURED, because "a student eligible for 43 programmes should not have to read 43
+ * checklists". This panel renders on ONE programme's record page and never in `ProgramTable`, where
+ * that reader actually is. Over the 150 publishable records at `scripts/profile-corpus.ts`'s fixed
+ * 2026-08-02 clock, the licensed EE undergraduate's 43 `eligible` + 9 `eligible_preferred` records
+ * carry a MEDIAN of 4 hard constraints (max 7) whose `rawText` runs 38 characters at the median.
+ * The requirement half of the panel is 115 characters of quotation at the median, 564 at the 90th
+ * percentile and 1,140 at its worst. Four short quotations is the typical panel, not a wall.
+ *
+ * THE PREFERENCES ARE THE EXPENSIVE HALF, AND THEY ARE KEPT ANYWAY. Of those 51 records 30 carry a
+ * preference and 23 carry one on the `other` axis, which is the extractor's catch-all: on 13 of the
+ * 51 that catch-all constraint's `rawText` CONTAINS another constraint's sentence whole, so the
+ * preference list reprints lines the requirement list quoted a few rows above. Whole-panel
+ * quotation goes from a 115-character median to 236, and from 1,140 at worst to 1,937. That
+ * duplication is a record-quality artifact in `normalize/`, not something to paper over here by
+ * dropping the section: a preference is what an `eligible_preferred` badge is about, and the only
+ * other place on this product that quotes one is the requirements checklist inside the application
+ * packet — which is downloaded after the reader has already decided to apply, the exact failure
+ * this panel exists to close. Suppressing a funder's sentence because another field repeats it
+ * would be the view lying about the record to flatter itself.
+ *
+ * BUCKETED BY THE RECORD'S OWN `hard` FLAG, not by how the matcher treats it. `matchProgram` forces
+ * `financial_need` soft whatever the record says (spec §4.5 rule 11), and moving a funder's stated
+ * requirement under a heading that reads "these never exclude you" would be this software
+ * overruling the funder's sentence in the one place built to reproduce it.
+ */
+function RequirementsPanel({ program }: { program: Program }): JSX.Element {
+  const requirements = program.constraints.filter((constraint) => constraint.hard);
+  const preferences = [...program.constraints.filter((constraint) => !constraint.hard)].sort(
+    (a, b) => a.fallbackRank - b.fallbackRank || a.id.localeCompare(b.id),
+  );
+
+  return (
+    <section className="panel card" aria-labelledby="requirements-heading">
+      <h2 id="requirements-heading">What this program requires</h2>
+      <p className="authored">
+        <span className="authored-by">GrantSpotter&rsquo;s words, not the funder&rsquo;s</span>
+        {requirements.length === 0
+          ? /*
+              AN ELIGIBLE VERDICT OVER AN EMPTY LIST IS A VERDICT ABOUT NOTHING, and saying "you
+              meet every requirement" about a record that states none is the vacuous truth
+              `matcher.ts` withdrew for a record with NO constraints at all. A record that carries
+              preferences but no requirement still reaches here, so the panel says plainly that the
+              yes above rests on an empty list — and, per this file's standing rule, that an absent
+              requirement is not a funder stating there are none.
+            */
+            'No requirement is recorded for this program, so nothing was checked against you — the verdict above rests on an empty list rather than on a funder saying yes. That is not the funder stating there are none. Read their own page before you spend an application fee.'
+          : 'Nothing recorded here refused your profile. That is weaker than a funder saying yes: GrantSpotter checks only the part of each sentence below that it can represent, and the funder holds you to all of it. Read them before you spend an application fee.'}
+      </p>
+
+      {requirements.length > 0 && (
+        <ul className="requirement-list">
+          {requirements.map((constraint) => (
+            <RequirementQuote key={constraint.id} constraint={constraint} />
+          ))}
+        </ul>
+      )}
+
+      {preferences.length > 0 && (
+        <>
+          <h3 className="requirement-subhead">Preferences</h3>
+          {/* Not marked as GrantSpotter's, because it is a section label rather than a sentence
+              standing where a quotation would: the quotes are in their own blocks underneath.
+              The claim is the matcher's own — only `hard` constraints can reach `hardFailures`,
+              and a soft one can never produce a refusal. */}
+          <p className="unstated">
+            These rank you. A preference you do not match cannot make you ineligible, and one you do
+            match is a tie-breaker the funder applies at their discretion.
+          </p>
+          <ul className="requirement-list">
+            {preferences.map((constraint) => (
+              <RequirementQuote key={constraint.id} constraint={constraint} />
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
  * Opportunity detail — spec §8's honesty surfaces in one place: the trust badge, every disputed
  * reading with its own source, the stale-mirror warning, `rawOtherText` verbatim, the quoted AI
  * policy, field-level provenance, and Verify now with its diff.
@@ -379,6 +516,21 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
               </ul>
             )}
           </section>
+
+          {/*
+            THE THIRD VERDICT PANEL, and the one that was missing. The three are mutually exclusive
+            by verdict kind and sit in one place so no reader has to learn a different geography per
+            verdict.
+
+            Only `eligible` and `eligible_preferred`. An `ineligible` reader gets the drawer below,
+            which quotes the constraints that refused them; adding every OTHER constraint underneath
+            it would double the page for the one reader who has already been told no. A null verdict
+            — no profile saved — is not shown one either: this panel's lede is a statement about a
+            verdict, and there is no verdict to make it about.
+          */}
+          {(verdict?.kind === 'eligible' || verdict?.kind === 'eligible_preferred') && (
+            <RequirementsPanel program={program} />
+          )}
 
           {/* Task 18's drawer, not a second one: it quotes each constraint's `rawText` verbatim
               and deliberately does NOT invite the reader to "fill something in" to clear a

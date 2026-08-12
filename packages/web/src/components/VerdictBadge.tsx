@@ -81,13 +81,31 @@ export function VerdictBadge({
   }
 
   switch (verdict.kind) {
+    /**
+     * THE BADGE MAY NOT CLAIM MORE THAN THE MATCHER DID.
+     *
+     * This title used to read "Your profile satisfies every hard constraint recorded for this
+     * program." For 26 records that sentence was false in the dangerous direction: a constraint
+     * with `hard: true` and rawText "4-year college or university" IS recorded — 29 constraints in
+     * the corpus carry that phrase — and the profile does not satisfy it; the axis passed leniently
+     * rather than refusing. `eligible` is produced by `matchProgram` when `hardFailures` is EMPTY,
+     * which is the narrower claim this now makes: nothing recorded refused you. That is true of
+     * every eligible verdict, including the ones a lenient pass produced, and it stays true however
+     * the specs underneath are corrected.
+     *
+     * The escape hatch changed with it. The old one pointed at FRESHNESS — check the funder's page,
+     * this record may be out of date — which is not the failure mode a leniently-passed requirement
+     * produces: the record was right, current, and unenforced. So the title now points at the
+     * requirements themselves, which `Opportunity.tsx` puts on the record page in the funder's own
+     * words for exactly these two verdicts.
+     */
     case 'eligible':
       return (
         <span
           className="badge verdict-eligible"
           role="img"
           aria-label="Eligible"
-          title="Your profile satisfies every hard constraint recorded for this program. Check the funder's own page before you apply — this record is only as fresh as its verification date."
+          title="Nothing recorded for this program refused your profile. That is not a funder judging you eligible — GrantSpotter checks only the part of each recorded requirement it can represent, so open the record and read them in the funder's own words. It is also only as fresh as its verification date."
         >
           Eligible
         </span>
@@ -99,7 +117,7 @@ export function VerdictBadge({
           className="badge verdict-preferred"
           role="img"
           aria-label={`Preferred, rank ${verdict.rank}`}
-          title={`You satisfy every hard constraint, and you also match a preference this funder states (rank ${verdict.rank}). A preference is not a guarantee — it is a tie-breaker the funder applies at their discretion.`}
+          title={`Nothing recorded for this program refused your profile, and you also match a preference this funder states (rank ${verdict.rank}). A preference is not a guarantee — it is a tie-breaker the funder applies at their discretion. Open the record to read every requirement in the funder's own words.`}
         >
           Preferred · <span className="badge-rank">{verdict.rank}</span>
         </span>
