@@ -269,9 +269,15 @@ re-verifies quarterly.
 
 ## The callsign lookup
 
-There is a button beside the callsign field on the profile screen and on the first-run setup
-screen. Press it and this server makes **one** request to `callook.info`, a free service that
-republishes the FCC amateur radio licence database, and offers back what that licence says.
+There is a button beside the callsign field on the profile screen. Press it and this server makes
+**one** request to `callook.info`, a free service that republishes the FCC amateur radio licence
+database, and offers back what that licence says.
+
+The first-run setup screen carried the same button until 2026-08-11 and no longer asks for a
+callsign at all. Setting up a deployment and describing an operator are two jobs, and doing them on
+one screen meant the very first page of the product was a six-field form with a network call in the
+middle of it. The profile screen is one click past it, has the same button, and can show you what
+was filled in.
 
 **One at a time, for the whole deployment, not for the whole session.** While a request to
 `callook.info` is in flight, a second press does not start a second one — it is refused with a
@@ -334,7 +340,7 @@ that holds a street address and nothing here reads one. Of that block only the *
 because eligibility rules are written in terms of states, ARRL Divisions and ARRL Sections. A PO
 box is flagged where the record gives one, since a few funders will not post a cheque to one.
 
-**Who may press it.** You, for your own profile, or the operator during first-run setup. There is
+**Who may press it.** You, signed in, for your own profile. That is the whole list. There is
 no user parameter on the endpoint and a request that names one is refused rather than quietly
 answered for the caller: an administrator creating somebody else's account may not look that
 person's callsign up, because the result is a name and a home address and filling it into a third
@@ -342,6 +348,14 @@ party's profile would make GrantSpotter state facts on their behalf that they ne
 press is one request; eight in ten minutes per person, which is a typist correcting a typo rather
 than a batch. A callsign that is not a US prefix is refused **here**, before any request exists,
 and costs neither a request nor a slice of that allowance.
+
+**There is no unauthenticated way to reach it, and there was one until 2026-08-11.** While the
+setup screen had a callsign field, this endpoint accepted the one-time first-run token in the
+request body and answered a caller with no session at all. The field went; the privilege was left
+behind it, reachable by anyone who could POST to a fresh deployment, serving a screen that no longer
+existed. It is deleted — the token is not passed to the route, the request body has no field for
+one, and a request that sends one is refused as an unknown key rather than answered. Nothing an
+operator does brings it back and there is no setting for it.
 
 **If you are not licensed in the United States**, this button cannot help you and says so in those
 words. callook.info holds FCC records and nothing else. Told "not found" while creating an account,
@@ -523,7 +537,7 @@ the instance.**
 |---|---|---|
 | The first-run token, written to a file in `DATA_DIR` | the operator, once, against a database with no accounts | the first **administrator** |
 | **Admin → User accounts**, which generates a password shown once | an administrator | a member or an administrator, whichever is chosen |
-| [Sign up](#signing-up), at the form on the sign-in screen | the person joining, unaided | a **member**, always |
+| [Sign up](#signing-up), from **Create an account** on the sign-in screen | the person joining, unaided | a **member**, always |
 
 Only the third lets a person create their own account, and it needs nothing from you: **anybody who
 can reach this deployment can create a member account.** That is a change — see
@@ -543,9 +557,10 @@ exist to prevent.
 
 ### Signing up
 
-**Anybody who can reach this deployment can create a member account.** The sign-in screen carries a
-sign-up form; it asks for an email address, a password and an optional display name; it makes the
-account and signs the person in. There is nothing for an administrator to issue first.
+**Anybody who can reach this deployment can create a member account.** The sign-in screen offers
+**Create an account**, which swaps the sign-in box for a sign-up form. It asks for an email address,
+a password and an optional display name — no callsign, and nothing that has to be issued to you
+first — then makes the account and signs the person in.
 
 #### What this replaced, because the argument is worth knowing was made
 
@@ -651,7 +666,7 @@ yet, and eight simultaneous presses produced eight requests where one was intend
 | Route | Who | What it does |
 |---|---|---|
 | `POST /api/auth/enroll` | public | creates the member account and signs them in |
-| `GET /api/auth/bootstrap-status` | public | `{ needsSetup: boolean }` — whether this instance still has no accounts |
+| `GET /api/auth/bootstrap-status` | public | `{ required: boolean }` — whether this instance still has no accounts |
 | `POST /api/auth/bootstrap` | public, once | spends the first-run token and makes the first administrator |
 | `POST /api/admin/users` | admin | creates an account with a chosen role and a generated password shown once |
 | `DELETE /api/admin/users/:id` | admin | deletes the account and everything keyed to it; the audit trail stays |

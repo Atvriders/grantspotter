@@ -9,13 +9,20 @@
       the bundle, and the server serves the bundle, so these are the URLs in production too).
 
       The .ico is listed FIRST and is not redundant. Browsers request /favicon.ico on their own
-      whether or not it is linked; without the file that request lands on the SPA's history
-      fallback, which answers HTML with a 200 and leaves the tab showing the blank-page glyph while
-      nothing anywhere reports a 404. Linking it also names it explicitly for the browsers that
+      whether or not it is linked, and linking it also names it explicitly for the browsers that
       ignore SVG icons rather than leaving them to guess.
 
       Every href is root-absolute. A relative one resolves against the current URL, and this same
       shell is served for /browse and /o/<slug>, where "favicon.svg" would mean "/o/favicon.svg".
+
+      THE apple-touch-icon LINK IS LOAD-BEARING IN ONE DIRECTION ONLY, and it is worth knowing which.
+      With it present, iOS asks for this exact path and nothing else. Remove it and iOS starts
+      guessing a sequence of root filenames instead — apple-touch-icon-152x152-precomposed.png and
+      three more. That used to mean four requests landing on the SPA's history fallback, which
+      answers HTML with a 200: a missing image reported as a success, with nothing anywhere logging
+      a 404. It no longer can. `packages/server/src/api/spa.ts` refuses to answer the shell for a
+      root-level path that names an image file, so a guess that finds nothing gets a 404, and this
+      link is a nicety again rather than the only thing standing between a browser and a lie.
     -->
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />

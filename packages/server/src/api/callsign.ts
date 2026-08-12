@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { Router, type Request } from 'express';
 import { z } from 'zod';
 import { createRateLimiter, type RateLimiter } from '../auth/rateLimit.js';
@@ -17,9 +16,20 @@ import { AppError } from './errors.js';
  *
  * WHO MAY CALL IT, AND WHY THE LIST IS SHORT.
  *
- * Two callers: the first-run setup screen, which has no session and holds the one-time setup
- * token instead, and a signed-in user filling in their OWN profile. That is the entire list,
- * and the omission is the point of the endpoint.
+ * ONE caller: a signed-in user filling in their OWN profile. That is the entire list, and the
+ * omission is the point of the endpoint.
+ *
+ * THERE WERE TWO UNTIL 2026-08-11, AND THE SECOND WAS AN UNAUTHENTICATED ONE. The first-run setup
+ * screen had a callsign field and a lookup panel, no session, and the one-time setup token in a
+ * text box; this route accepted that token in the request body, matched it constant-time and
+ * answered on it, under a rate bucket of its own. `routes/FirstRun.tsx` deleted the field and the
+ * panel in the same round — account creation stopped asking for a callsign at all — and the
+ * privilege was left behind it: an anonymous door into an outbound request, kept open for a screen
+ * that no longer exists, used by nothing and watched by nobody. Deleted here rather than left
+ * "harmless because unreachable", because unreachable-from-our-own-UI is not a property of a route
+ * a stranger can POST to. `index.ts` no longer passes `bootstrap.token()` to this router, and the
+ * body schema no longer has a `setupToken` key at all, so a request carrying one is refused as an
+ * unknown field (422) by the `.strict()` rule below rather than quietly stripped and answered.
  *
  * An administrator creating somebody else's account may NOT look that person's callsign up.
  * The result of a lookup is a name, a home address AND — since `59356c5` stopped discarding
@@ -59,7 +69,7 @@ export interface CallsignTransport {
   (url: string, init: RequestInit): Promise<Response>;
 }
 
-/** PLAN-LOCAL. The signed-in user, or `undefined` — this is the one route with both callers. */
+/** PLAN-LOCAL. The signed-in user, or `undefined` when the request carries no session. */
 export interface CallsignCaller {
   id: string;
   role: 'admin' | 'member';
@@ -68,16 +78,16 @@ export interface CallsignCaller {
 export interface CallsignRouterDeps {
   transport: CallsignTransport;
   /**
-   * The one-time first-run token while no account exists, or `null`. READ, NEVER CONSUMED:
-   * `BootstrapState.consume` spends the token on a match, and spending it here would leave an
-   * operator who looked their callsign up holding a token that can no longer create the
-   * administrator account — a dead end whose only exit is restarting the container.
+   * `setupToken: () => string | null` WAS HERE AND IS GONE (2026-08-11). It was the one-time
+   * first-run token, read and never consumed, so that the setup screen's callsign panel could look
+   * a callsign up before any account existed. That panel is gone; see the header for why the
+   * privilege did not get to outlive it.
    */
-  setupToken: () => string | null;
   /**
-   * Anonymous-tolerant, unlike `RouterDeps.currentUser`, which throws when there is no session.
-   * A missing session is a legitimate state on this route (the first-run caller), so it has to
-   * be a value rather than an exception.
+   * Anonymous-tolerant, unlike `RouterDeps.currentUser`, which throws when there is no session:
+   * this returns `undefined` and the handler refuses. It stays a value rather than becoming a
+   * `requireAuth()` mount because the caller is also the rate-limit key — the handler needs the id,
+   * not merely the guarantee that there is one — and because the unit suite swaps it for a stub.
    */
   sessionUser?: (req: Request) => CallsignCaller | undefined;
   /** Injected by the tests; production gets the module's own, built from the constants below. */
@@ -160,21 +170,17 @@ export const LOOKUP_MAX_PER_WINDOW = 8;
  * The length cap is 16 rather than the longest callsign anyone holds: a US callsign is at most
  * 6 characters, and the slack is for a `/P` or `/4` suffix the client did not strip. Anything
  * longer is not a callsign and never becomes a URL.
+ *
+ * `setupToken: z.string().min(1).max(256).optional()` WAS THE SECOND KEY AND IS GONE (2026-08-11).
+ * Now that it is not declared, `.strict()` refuses it like any other unknown key, which is the
+ * right answer for the only client that could still send one: it is holding a credential this
+ * route no longer honours, and being told so beats being answered as though it had worked.
  */
 const lookupBodySchema = z
   .object({
     callsign: z.string().min(1).max(16),
-    setupToken: z.string().min(1).max(256).optional(),
   })
   .strict();
-
-/** Constant-time, and length-checked first because `timingSafeEqual` throws on a length mismatch. */
-function tokenMatches(expected: string | null, candidate: string | undefined): boolean {
-  if (expected === null || candidate === undefined) return false;
-  const a = Buffer.from(candidate);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
 
 /** `req.auth` is populated by `auth/middleware.ts`'s `attachUser` on every request. */
 function defaultSessionUser(req: Request): CallsignCaller | undefined {
@@ -209,34 +215,28 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
       const body = lookupBodySchema.parse(req.body);
 
       /**
-       * The session first, and the token only when there is no session.
+       * A SESSION, OR NOTHING. There is no second credential and no anonymous branch.
        *
-       * Once an account exists `setupToken()` answers `null` for good (BootstrapState.token
-       * checks the user count on every call), so the anonymous door closes by itself the
-       * moment the deployment is set up. An authenticated request that carries a token is
-       * answered as the signed-in user and the token is not looked at — it cannot widen what
-       * that user may do, and it must not be spendable by anyone who already has a session.
+       * There was one until 2026-08-11: a `tokenMatches(deps.setupToken(), body.setupToken)` arm
+       * that answered an unauthenticated caller holding the one-time first-run token, on a rate
+       * bucket of its own keyed `'setup'` — one bucket for the whole first-run path, deliberately
+       * not per-IP, because `trust proxy` is on and a per-IP key is one the caller can mint a fresh
+       * one of at will. Every word of that reasoning was sound and the branch is gone anyway: the
+       * screen it served was deleted, so what it defended was a door with nothing behind it.
+       *
+       * That the door closed by itself once an account existed (`BootstrapState.token()` answers
+       * `null` for good after the first user) is not an argument for keeping it. It bounded how
+       * long the privilege lasted; it did not make an unauthenticated outbound-request trigger,
+       * live on every fresh deployment, something anybody was watching.
+       *
+       * The rate key is therefore the caller's id and can be nothing else, which also removes the
+       * one case where two different people shared a bucket.
        */
       const user = sessionUser(req);
-      const rateKey =
-        user !== undefined
-          ? `user:${user.id}`
-          : tokenMatches(deps.setupToken(), body.setupToken)
-            ? // ONE bucket for the whole first-run path, deliberately not per-IP. `trust proxy`
-              // is on, so `req.ip` comes from a header the client sets, and a per-IP key would
-              // be a bucket the caller can mint a fresh one of at will. Before any account
-              // exists there is exactly one operator and one token, so one bucket is the honest
-              // shape as well as the unspoofable one.
-              'setup'
-            : null;
-
-      if (rateKey === null) {
-        throw new AppError(
-          'unauthorized',
-          'Sign in to look a callsign up. During first-run setup, send the one-time setup token ' +
-            'printed in the server log with the request.',
-        );
+      if (user === undefined) {
+        throw new AppError('unauthorized', 'Sign in to look a callsign up.');
       }
+      const rateKey = `user:${user.id}`;
 
       /**
        * The gate is on the REQUEST, so a press that cannot become one walks straight past it.
@@ -247,8 +247,8 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
        *
        * The cost of letting it past is local and bounded — a whitespace strip, an upper-case, a
        * prefix test, a URL parse against a ten-name blocklist and one map read — and the caller is
-       * already authenticated or holds the one-time setup token, so this is not a door anyone can
-       * reach without one. Authorisation above; rationing here.
+       * already authenticated, so this is not a door anyone can reach without a session.
+       * Authorisation above; rationing here.
        */
       if (wouldReachTheSource(body.callsign, lookupDeps)) {
         const decision = limiter.check(rateKey);

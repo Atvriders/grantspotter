@@ -23,7 +23,13 @@ import { errorHandler, requestIdMiddleware } from './errors.js';
  * that cannot be tested at all.
  */
 
-const SETUP_TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+/*
+ * `SETUP_TOKEN` WAS DECLARED HERE AND IS GONE, with the six assertions that used it. The route
+ * accepted the one-time first-run token from an unauthenticated caller so that the setup screen's
+ * callsign panel could work before any account existed; `routes/FirstRun.tsx` deleted that panel on
+ * 2026-08-11 and this round deleted the privilege behind it. What each retired test asserted, and
+ * why deleting rather than rewriting it is the honest move, is written at the point it was removed.
+ */
 const MEMBER: CallsignCaller = { id: 'u-member', role: 'member' };
 
 /** A VALID callook body, in the shape its API reference documents. */
@@ -49,7 +55,6 @@ interface Harness {
 function buildApp(
   options: {
     user?: CallsignCaller;
-    setupToken?: string | null;
     respond?: () => Promise<Response>;
     cooldown?: HostCooldown;
   } = {},
@@ -66,7 +71,6 @@ function buildApp(
     '/api/callsign',
     createCallsignRouter({
       transport,
-      setupToken: () => (options.setupToken === undefined ? SETUP_TOKEN : options.setupToken),
       sessionUser: () => options.user,
       ...(options.cooldown === undefined ? {} : { cooldown: options.cooldown }),
     }),
@@ -87,18 +91,27 @@ describe('POST /api/callsign/lookup — who may call it', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
-  it('answers the first-run screen, which has no session and holds the setup token', async () => {
-    const { app, transport } = buildApp({});
-    const res = await request(app)
-      .post('/api/callsign/lookup')
-      .send({ callsign: 'W8UM', setupToken: SETUP_TOKEN });
-
-    expect(res.status).toBe(200);
-    expect(res.body.status).toBe('found');
-    expect(transport).toHaveBeenCalledTimes(1);
-  });
-
-  it('refuses an anonymous caller with no token, and asks nobody anything', async () => {
+  /*
+   * FOUR TESTS ABOUT THE SETUP TOKEN WERE HERE AND ARE DELETED RATHER THAN RELAXED, because what
+   * they asserted is no longer a property this route has:
+   *
+   *   - `answers the first-run screen, which has no session and holds the setup token` asserted
+   *     that an unauthenticated caller presenting the token got a 200 and a record. That is the
+   *     privilege itself. The screen it existed for was deleted on 2026-08-11 with the callsign
+   *     field, so the assertion describes a caller that cannot exist and a behaviour that must not.
+   *   - `refuses an anonymous caller whose token is wrong` and `refuses the token path once an
+   *     administrator account exists` were the two edges of that branch. With no branch there are
+   *     no edges; both collapse into the one assertion below, which is that an anonymous caller is
+   *     refused, full stop, whatever they send.
+   *   - `does not consume the setup token` asserted that a lookup left the token spendable for the
+   *     bootstrap it belongs to. This route never sees the token now, so it cannot spend it — the
+   *     property is held by construction rather than by a test, and `the composition root` block at
+   *     the bottom of this file asserts the construction.
+   *
+   * Rewriting any of them to expect a 401 instead of a 200 would have kept a test named after a
+   * caller that no longer exists, which is the failure mode this codebase keeps finding.
+   */
+  it('refuses an anonymous caller, and asks nobody anything', async () => {
     const { app, transport } = buildApp({});
     const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
 
@@ -107,45 +120,45 @@ describe('POST /api/callsign/lookup — who may call it', () => {
     expect(transport).not.toHaveBeenCalled();
   });
 
-  it('refuses an anonymous caller whose token is wrong', async () => {
-    const { app, transport } = buildApp({});
-    const res = await request(app)
-      .post('/api/callsign/lookup')
-      .send({ callsign: 'W8UM', setupToken: 'not-the-token' });
-
-    expect(res.status).toBe(401);
-    expect(transport).not.toHaveBeenCalled();
-  });
-
   /**
-   * The door closes on its own. `BootstrapState.token()` answers `null` once an account exists,
-   * so the anonymous path needs no separate switch to turn off — and must not survive one.
+   * THE REFUSAL SAYS ONE THING NOW, AND THE THING IT USED TO SAY WAS AN INVITATION.
+   *
+   * It read "Sign in to look a callsign up. During first-run setup, send the one-time setup token
+   * printed in the server log with the request." Two separate wrongs by 2026-08-11: there is no
+   * setup-token path to send anything to, and the token is not printed in the log any more —
+   * `bootstrap.ts` writes it to `first-run-token.txt` because a secret in `docker logs` stays in
+   * `docker logs`. A 401 that tells an anonymous caller how to get a token is the last place that
+   * sentence should have survived.
    */
-  it('refuses the token path once an administrator account exists', async () => {
-    const { app, transport } = buildApp({ setupToken: null });
-    const res = await request(app)
-      .post('/api/callsign/lookup')
-      .send({ callsign: 'W8UM', setupToken: SETUP_TOKEN });
-
-    expect(res.status).toBe(401);
-    expect(transport).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The token is READ, never spent. Spending it here would leave an operator who looked their
-   * own callsign up unable to create the administrator account the same token is for.
-   */
-  it('does not consume the setup token', async () => {
+  it('does not offer the anonymous caller a second credential to try', async () => {
     const { app } = buildApp({});
-    const first = await request(app)
-      .post('/api/callsign/lookup')
-      .send({ callsign: 'W8UM', setupToken: SETUP_TOKEN });
-    const second = await request(app)
-      .post('/api/callsign/lookup')
-      .send({ callsign: 'W1AW', setupToken: SETUP_TOKEN });
+    const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'W8UM' });
 
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
+    expect(res.body.error.message).toBe('Sign in to look a callsign up.');
+    expect(res.body.error.message).not.toMatch(/token|log/i);
+  });
+
+  /**
+   * THE RETIRED CREDENTIAL, PRESENTED ANYWAY, IS AN UNKNOWN KEY AND NOT A LOGIN.
+   *
+   * `setupToken` is no longer declared in the body schema, so `.strict()` treats it exactly as it
+   * treats `userId`: a request that names something this endpoint does not do is refused (422)
+   * rather than stripped and answered. That is the right answer for the only client that could
+   * still send one — it is holding a credential this route no longer honours, and being told so
+   * beats being answered as though it had worked. Asserted from BOTH sides, because the interesting
+   * half is the anonymous one: presenting the token is not a way in.
+   */
+  it('refuses a body carrying the retired setupToken key, signed in or not', async () => {
+    for (const user of [undefined, MEMBER]) {
+      const { app, transport } = buildApp(user === undefined ? {} : { user });
+      const res = await request(app)
+        .post('/api/callsign/lookup')
+        .send({ callsign: 'W8UM', setupToken: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' });
+
+      expect(res.status, user === undefined ? 'anonymous' : 'signed in').toBe(422);
+      expect(res.body.error.code).toBe('validation_failed');
+      expect(transport).not.toHaveBeenCalled();
+    }
   });
 
   /**
@@ -206,7 +219,6 @@ describe('POST /api/callsign/lookup — rate limit', () => {
       '/api/callsign',
       createCallsignRouter({
         transport,
-        setupToken: () => SETUP_TOKEN,
         sessionUser: () => caller,
       }),
     );
@@ -277,11 +289,11 @@ describe('POST /api/callsign/lookup — rate limit', () => {
 
   /**
    * Authorisation is decided BEFORE the ration, and the `not_us` carve-out does not move it: an
-   * anonymous caller with no token is refused whatever they type. Otherwise the cheapest way to
-   * find out whether this endpoint exists, and to burn CPU on it, would be to send it rubbish.
+   * anonymous caller is refused whatever they type. Otherwise the cheapest way to find out whether
+   * this endpoint exists, and to burn CPU on it, would be to send it rubbish.
    */
   it('refuses an anonymous caller even when the press would cost the source nothing', async () => {
-    const { app, transport } = buildApp({ setupToken: 'a-different-token' });
+    const { app, transport } = buildApp({});
     const res = await request(app).post('/api/callsign/lookup').send({ callsign: 'DL1ABC' });
 
     expect(res.status).toBe(401);
@@ -413,7 +425,6 @@ describe('POST /api/callsign/lookup — rate limit', () => {
       createCallsignRouter({
         transport,
         limiter,
-        setupToken: () => SETUP_TOKEN,
         // A different signed-in member per request, which is what the rate limiter counts by.
         sessionUser: () => {
           seat += 1;
@@ -650,8 +661,14 @@ describe('POST /api/callsign/lookup — failing soft', () => {
  *   2. it is mounted BEFORE the SPA fallback — Express matches in registration order and
  *      `createSpaMiddleware` serves index.html for anything the routers above it did not claim,
  *      so a router registered after it is unreachable;
- *   3. the router and `createApp` share ONE BootstrapState, because two would mean two different
- *      random setup tokens — the first-run screen would hold one the lookup route never heard of.
+ *   3. it is handed NO first-run token.
+ *
+ * Fact 3 read the other way round until 2026-08-11 — "the router and `createApp` share ONE
+ * BootstrapState, because two would mean two different random setup tokens, and the first-run
+ * screen would hold one the lookup route never heard of". That was a correct guard on a wiring that
+ * has been removed, so it is inverted rather than deleted: the same line of `index.ts` is still
+ * worth watching, and what is now worth watching for is the argument coming BACK. A dead privilege
+ * is easiest to restore by someone reading an old test that says it should be there.
  *
  * Comments are stripped first, for the reason `index.ts` states in its own header: a comment that
  * quotes a mount call is indistinguishable from a mount call to a scanner.
@@ -679,12 +696,30 @@ describe('the composition root actually mounts this router', () => {
     expect(mount, 'a router after the SPA fallback is unreachable').toBeLessThan(spa);
   });
 
-  it('gives it the same BootstrapState createApp uses, and reads the token rather than spending it', () => {
+  /**
+   * THE ROUTE GETS THE TRANSPORT AND NOTHING ELSE, WHICH IS THE WHOLE OF THE FIX.
+   *
+   * `setupToken: () => bootstrap.token()` was the second argument, and it was the only reason an
+   * unauthenticated request could reach callook.info at all. Asserted against the mount call rather
+   * than against the file, so that a `bootstrap.token()` read somewhere else in the composition
+   * root — there are legitimate ones — does not make this fail for the wrong reason.
+   */
+  it('hands it no first-run token, so there is nothing to authenticate anonymously with', () => {
+    const mount = /createCallsignRouter\(\{[\s\S]*?\}\)/.exec(source)?.[0];
+    expect(mount, 'the mount call is no longer in a shape this test can read').toBeTruthy();
+    expect(mount).toContain('transport: callsignTransport');
+    expect(mount, 'the retired setup-token privilege is wired up again').not.toMatch(/setupToken/);
+    expect(mount).not.toMatch(/bootstrap/);
+  });
+
+  /**
+   * The BootstrapState is still built once and still passed to `createApp` — that is the auth
+   * routes' business and not this router's any more, but it is cheap to keep watching the one
+   * thing that would be catastrophic here: this feature spending a token it must never touch.
+   */
+  it('never spends the one-time token from anywhere in the composition root', () => {
     expect(source).toMatch(/const bootstrap = createBootstrapState\(db\)/);
-    // Passed IN to createApp, so createApp does not build a second one with a second token.
     expect(source).toMatch(/createApp\(\{\s*\n?\s*db,\s*\n?\s*config,\s*\n?\s*bootstrap,/);
-    expect(source).toMatch(/setupToken: \(\) => bootstrap\.token\(\)/);
-    // `consume` spends the token; this route must never call it.
     expect(source).not.toMatch(/bootstrap\.consume\(/);
   });
 

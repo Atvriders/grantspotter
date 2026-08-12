@@ -639,4 +639,32 @@ describe('createSpaMiddleware serves the icons, and never the shell in their pla
     // browser shows the default page glyph while every check for "did it 404" says no.
     expect(body.includes('<div id="root">')).toBe(false);
   });
+
+  /**
+   * THE HALF THE COMMENT ABOVE DESCRIBED AND THE TEST ABOVE COULD NOT SEE.
+   *
+   * Every assertion in this file is about a file that IS there, so all of them pass by fetching the
+   * bytes and never exercise the fallback at all. The failure named three lines up — a missing icon
+   * arriving as `200 text/html` — was therefore still live for every icon path this project does
+   * not ship, and it was MEASURED live on 2026-08-11: `GET /apple-touch-icon-precomposed.png`
+   * returned `200`, `content-type: text/html`, and the whole SPA shell.
+   *
+   * It was not reachable in practice, because `index.html` links `apple-touch-icon` and iOS only
+   * guesses these names when no link is present. That is a fact about a `<link>` tag in another
+   * package, which is a thin thing for a server-side guarantee to rest on. `api/spa.ts` now refuses
+   * to answer the shell for a root-level path naming an image file, and this is that rule asserted
+   * at the layer this file is about: three icons ship, and every other icon name is honestly absent.
+   */
+  it.each([
+    '/apple-touch-icon-precomposed.png',
+    '/apple-touch-icon-152x152-precomposed.png',
+    '/apple-touch-icon-152x152.png',
+    '/favicon-32x32.png',
+    '/icon.svg',
+  ])('answers %s as missing rather than as the shell', async (path) => {
+    const res = await fetch(`${base}${path}`);
+    expect(res.status, path).toBe(404);
+    const body = await res.text();
+    expect(body.includes('<div id="root">'), `${path} served the SPA shell`).toBe(false);
+  });
 });

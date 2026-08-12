@@ -27,6 +27,9 @@ beforeAll(async () => {
   mkdirSync(join(dist, 'assets'));
   writeFileSync(join(dist, 'index.html'), INDEX_HTML, 'utf8');
   writeFileSync(join(dist, 'assets', 'main.js'), 'export const built = true;\n', 'utf8');
+  // A stand-in for what Vite copies out of packages/web/public. One image that IS there, so the
+  // "missing image" rule below can be shown to be about the file rather than about the extension.
+  writeFileSync(join(dist, 'favicon.ico'), 'not really an icon, but it is a file', 'utf8');
 
   // Deliberately the same shape as the real app: request id, an API router, the
   // SPA middleware LAST, then Plan 1's notFoundHandler and errorHandler. If the
@@ -119,6 +122,69 @@ describe('createSpaMiddleware', () => {
     const res = await fetch(`${base}/package.json`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
+    expect(await res.text()).toContain('<div id="root"></div>');
+  });
+});
+
+/**
+ * A MISSING IMAGE MUST NOT ARRIVE AS A 200 FULL OF HTML.
+ *
+ * MEASURED against the built server on 2026-08-11, before this rule existed:
+ * `GET /apple-touch-icon-precomposed.png` answered `200` with `content-type: text/html` and the
+ * whole SPA shell in the body. It was not a live defect — `index.html` links `apple-touch-icon`, so
+ * iOS never guesses the precomposed name — but it is the same hazard the committed `favicon.ico`
+ * was added to close, surviving one path along. The `.ico` closed the instance; this closes the
+ * class, so the guarantee stops depending on a `<link>` tag in another package staying put.
+ */
+describe('a root-level image that is not there', () => {
+  it('404s the precomposed apple icon instead of answering the shell', async () => {
+    const res = await fetch(`${base}/apple-touch-icon-precomposed.png`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.text()).toLowerCase();
+    expect(body).not.toContain('<div id="root">');
+    expect(body).not.toContain('<!doctype html');
+  });
+
+  /**
+   * The whole sequence iOS walks when no `apple-touch-icon` link is present, plus the two other
+   * names a user agent asks for unprompted. Every one of them answered 200 text/html before.
+   */
+  it.each([
+    '/apple-touch-icon-152x152-precomposed.png',
+    '/apple-touch-icon-152x152.png',
+    '/apple-touch-icon-180x180.png',
+    '/apple-touch-icon.png',
+    '/favicon.svg',
+    '/logo.jpg',
+    '/banner.WEBP',
+  ])('404s %s rather than pretending it exists', async (path) => {
+    const res = await fetch(`${base}${path}`);
+    expect(res.status, path).toBe(404);
+    expect(res.headers.get('content-type'), path).toContain('application/json');
+  });
+
+  /**
+   * The rule is about the FILE, not about the extension. An image that is really there is served
+   * by `express.static` before any of this is consulted, exactly as it always was — which is what
+   * keeps the three icons in `packages/web/public` working in production.
+   */
+  it('still serves a root-level image that does exist', async () => {
+    const res = await fetch(`${base}/favicon.ico`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('image/');
+    expect(await res.text()).toContain('not really an icon');
+  });
+
+  /**
+   * SCOPED TO THE ROOT, WHICH IS WHERE USER AGENTS GUESS. A nested path is a place a PERSON can
+   * navigate to — `/o/:programId` is a real client-side route — and handing a browser a JSON
+   * envelope for a mistyped link would replace one wrong answer with another. A programme id that
+   * ends in `.png` is absurd and is exactly the sort of thing that turns up, so it is pinned.
+   */
+  it('leaves a nested path to the SPA, so a deep link still renders Not Found', async () => {
+    const res = await fetch(`${base}/o/some-programme.png`);
+    expect(res.status).toBe(200);
     expect(await res.text()).toContain('<div id="root"></div>');
   });
 });

@@ -25,6 +25,43 @@ function isServerOwned(pathname: string): boolean {
 }
 
 /**
+ * A MISSING IMAGE IS A 404, NOT A 200 CARRYING THE SHELL.
+ *
+ * The history fallback below answers every GET it does not recognise with `index.html`, which is
+ * what makes `/browse` and `/o/:id` survive a reload. Applied to an image request it produces the
+ * worst shape a failure can have: **HTTP 200, `text/html`, and a browser that renders nothing** —
+ * the file is missing and nothing anywhere reports it. That is the exact hazard `/favicon.ico` was
+ * added to `packages/web/public` to close, and adding one file closed one instance of it.
+ *
+ * It closes the rest here, at the layer that decides. When no `apple-touch-icon` link is present
+ * iOS guesses a sequence of root paths on its own — `apple-touch-icon-152x152-precomposed.png`,
+ * `apple-touch-icon-152x152.png`, `apple-touch-icon-precomposed.png`, `apple-touch-icon.png` — and
+ * `index.html` links the last of those, so the earlier guesses are not requested today. "Not
+ * requested today" is a property of the current markup and not of this server: one edited `<link>`
+ * and the guessing starts, silently, into a fallback that answers 200 to all of it. A rule is the
+ * only form of that fix that survives an edit somewhere else.
+ *
+ * SCOPED TO ONE SEGMENT AT THE ROOT, deliberately. That is exactly where a user agent guesses on
+ * its own initiative rather than where a person navigates, and no client-side route in `App.tsx` is
+ * a single root segment ending in an image extension — the nested ones (`/o/:programId`) are left
+ * alone, so a programme id that happened to end in `.png` still renders the SPA's own Not Found
+ * page rather than a JSON envelope a browser cannot show.
+ *
+ * A real file is unaffected: `express.static` runs FIRST and has already answered by the time this
+ * is consulted, so the three icons in `packages/web/public` serve their own bytes as they always
+ * did. This decides only what happens when the file is not there.
+ *
+ * `/package.json` and friends keep the shell, and that is not an oversight — see the standing test
+ * `never serves a file from outside the dist directory`, whose point is that the static root is the
+ * build output. A non-image path with a dot in it is a navigation until something says otherwise.
+ */
+const IMAGE_FILE_AT_THE_ROOT = /^\/[^/]+\.(?:png|ico|svg|jpe?g|gif|webp|avif|apng|bmp)$/i;
+
+function isMissingImage(pathname: string): boolean {
+  return IMAGE_FILE_AT_THE_ROOT.test(pathname);
+}
+
+/**
  * One year, in seconds — the conventional ceiling for `max-age`.
  */
 const ONE_YEAR_SECONDS = 31_536_000;
@@ -77,6 +114,13 @@ export function createSpaMiddleware(webDistDir: string): RequestHandler {
         return;
       }
       if (isServerOwned(req.path)) {
+        next();
+        return;
+      }
+      // Not found, and it was asking for a picture. Falling through hands it to Plan 1's
+      // notFoundHandler, which is the one JSON envelope — a 404 a browser reports rather than a
+      // 200 it silently renders as nothing.
+      if (isMissingImage(req.path)) {
         next();
         return;
       }

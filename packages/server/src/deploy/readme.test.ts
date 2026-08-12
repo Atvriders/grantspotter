@@ -29,6 +29,31 @@ const rootPkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'package.json'), 'utf
   scripts: Record<string, string>;
 };
 
+/**
+ * ONE SECTION OF THE README, SO A GATE CAN SAY "NOT ANYWHERE IN HERE".
+ *
+ * WHY THIS EXISTS AT ALL. On 2026-08-11 the callsign lookup was removed from the first-run setup
+ * screen, and two sentences saying it was still there survived a 425-line rewrite of this file **in
+ * the same commit** — `There is a button beside the callsign field on the profile screen and on the
+ * first-run setup screen`, and `Who may press it. You, for your own profile, or the operator during
+ * first-run setup.` Every gate in this file was green throughout, because each one asserts that
+ * something IS present. A `toContain` cannot see a sentence that should have gone, and a rewrite is
+ * exactly the operation that leaves those behind: the paragraphs around them changed, so they read
+ * as freshly written.
+ *
+ * So the gates below are the other kind. They take a section and require that a retired thing is
+ * absent from all of it, with the source file that retired it read in the same test — an absence
+ * assertion that is bound to the code cannot become a stale prohibition, because the day the code
+ * brings the feature back the gate stops demanding its absence.
+ */
+function readmeSection(heading: string): string {
+  const start = readme.indexOf(`\n${heading}\n`);
+  expect(start, `README has no section headed ${heading}`).toBeGreaterThan(-1);
+  const after = start + heading.length + 2;
+  const nextHeading = /^## /m.exec(readme.slice(after));
+  return readme.slice(after, nextHeading === null ? undefined : after + nextHeading.index);
+}
+
 describe('README honesty surfaces', () => {
   it('says plainly that this is a curated database, not a spider', () => {
     expect(readme).toMatch(/curated database with a change-detection layer, not a spider/i);
@@ -594,6 +619,66 @@ describe('README: the callsign lookup, described against itself', () => {
     expect(readme).toMatch(/second source/i);
   });
 
+  /**
+   * THE BUTTON IS DESCRIBED AS BEING WHERE IT IS, CHECKED AGAINST THE SCREENS THEMSELVES.
+   *
+   * `Profile.tsx` renders `<CallsignLookup`; `FirstRun.tsx` did too until 2026-08-11 and does not
+   * any more — account creation stopped asking for a callsign. The README went on saying the button
+   * was on both screens, in the section a reader goes to precisely because they cannot find it.
+   *
+   * Read from the sources rather than hard-coded, so this is a statement about the product and not
+   * a second copy of it: if the panel ever returns to the setup screen the requirement inverts by
+   * itself, and the README is required to say so again.
+   */
+  it('puts the button on the screens that actually render it, and on no others', () => {
+    const screen = (file: string): string =>
+      readFileSync(resolve(REPO_ROOT, 'packages/web/src/routes', file), 'utf8')
+        // Comments only. Both files carry long notes ABOUT the panel, and `FirstRun.tsx`'s note is
+        // the record of its removal — a scanner cannot tell that from a render.
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+    const section = readmeSection('## The callsign lookup');
+
+    expect(screen('Profile.tsx'), 'the profile screen no longer renders the panel').toMatch(
+      /<CallsignLookup/,
+    );
+    expect(section).toMatch(/button beside the callsign field on the profile screen/i);
+
+    if (!/<CallsignLookup/.test(screen('FirstRun.tsx'))) {
+      expect(
+        section,
+        'the setup screen does not render the lookup panel, and this section says it does',
+      ).not.toMatch(/on the first-run setup\s*\n?\s*screen/i);
+      expect(
+        section,
+        'this section still names the operator during setup as somebody who may press it',
+      ).not.toMatch(/the operator during first-run setup/i);
+    }
+  });
+
+  /**
+   * AND IT IS DESCRIBED AS NEEDING THE CREDENTIAL IT ACTUALLY NEEDS.
+   *
+   * The route accepted the one-time setup token from an unauthenticated caller for as long as the
+   * setup screen had the panel. `api/callsign.ts` retired it on 2026-08-11; the prose has to retire
+   * with it, and — the half that matters — must not be able to come back on its own. Bound to the
+   * route file, so the day a `setupToken` is declared there again this stops forbidding it.
+   */
+  it('does not offer a reader a credential the route no longer accepts', () => {
+    const route = readFileSync(resolve(REPO_ROOT, 'packages/server/src/api/callsign.ts'), 'utf8');
+    const schema = /const lookupBodySchema = z[\s\S]*?\.strict\(\);/.exec(route)?.[0];
+    expect(schema, 'the body schema is no longer in a shape this test can read').toBeTruthy();
+
+    if (!/setupToken/.test(schema ?? '')) {
+      const section = readmeSection('## The callsign lookup');
+      // The README may say the privilege WAS there and went — that record is worth keeping — but it
+      // must not tell anybody how to use it, so the prohibition is on the instruction, not the word.
+      expect(section).not.toMatch(/send the (one-time )?setup token/i);
+      expect(section).toMatch(/no unauthenticated way to reach it/i);
+    }
+  });
+
   it('tells a site owner about it in the template they actually read', () => {
     const template = readFileSync(
       resolve(REPO_ROOT, '.github/ISSUE_TEMPLATE/crawler-contact.md'),
@@ -938,6 +1023,24 @@ describe('README: sign-up is open, and says what that does and does not give awa
     // password is the only shown-once secret left, and the table still has to say so.
     expect(readme).toMatch(/password shown once/i);
     expect(readme).not.toMatch(/carries `plaintext`/);
+  });
+
+  /**
+   * THE ONE ROW IN THAT TABLE THAT PRINTS A RESPONSE BODY, HELD TO THE BODY THE ROUTE SENDS.
+   *
+   * It said `{ needsSetup: boolean }`. The route has answered `{ required: … }` since it was
+   * written — `res.json({ required: deps.bootstrap.required() })` — so anybody building against
+   * this table read `undefined` and concluded the instance was set up. Nothing caught it: the row
+   * is prose, the field name appears nowhere else, and the SPA calls its own typed client.
+   *
+   * A shape transcribed into a document is a copy that can drift, so this one is not transcribed:
+   * the key is read out of `api/auth.ts` and the README is required to print whatever it finds.
+   */
+  it('prints the bootstrap-status body the route actually sends', () => {
+    const route = readFileSync(resolve(REPO_ROOT, 'packages/server/src/api/auth.ts'), 'utf8');
+    const key = /'\/auth\/bootstrap-status'[\s\S]{0,300}?res\.json\(\{\s*(\w+):/.exec(route)?.[1];
+    expect(key, 'the bootstrap-status handler is no longer in a shape this test can read').toBeTruthy();
+    expect(readme).toContain(`\`{ ${String(key)}: boolean }\``);
   });
 });
 

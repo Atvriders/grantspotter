@@ -299,17 +299,16 @@ function main(): void {
       //     registered, so the SPA's profile form falls back to what a non-US
       //     licensee already gets: four fields typed in by hand.
       //
-      //     `bootstrap.token()` is READ, never consumed — spending the one-time
-      //     token on a callsign lookup would leave the operator holding one that
-      //     can no longer create the administrator account. ---
+      //     `setupToken: () => bootstrap.token()` WAS THE SECOND ARGUMENT AND IS
+      //     GONE (2026-08-11). It let the first-run screen's callsign panel look
+      //     a callsign up with no session, holding the one-time token instead.
+      //     That panel was deleted the same day and this route no longer accepts
+      //     the token, so there is nothing left to hand it. See the header of
+      //     api/callsign.ts. Nothing else changed: `bootstrap` is still built
+      //     once above and still passed to createApp, which is where the token
+      //     is actually spent. ---
       if (config.callsignLookupEnabled) {
-        a.use(
-          '/api/callsign',
-          createCallsignRouter({
-            transport: callsignTransport,
-            setupToken: () => bootstrap.token(),
-          }),
-        );
+        a.use('/api/callsign', createCallsignRouter({ transport: callsignTransport }));
       }
 
       // --- The built SPA. THIS IS THE LAST STATEMENT IN THIS CALLBACK
