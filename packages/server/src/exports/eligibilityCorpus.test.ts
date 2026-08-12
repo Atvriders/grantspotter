@@ -102,13 +102,22 @@ describe('the census a licensed EE undergraduate actually gets', () => {
   //                                applied to a SOFT constraint: no eligibility changed, a rank did.
   // The other five defects are geography and licence tiers this profile does not stand on
   // (Brevard/Gwinnett/Oklahoma/New England, and an Amateur Extra of six months).
+  // …AND THE SECOND HALF OF THE SAME ROUND MOVED TWO MORE, both `ineligible -> unknown`, both on
+  // `field_of_study` and both for the same reason: the funder named a DOMAIN, and word overlap
+  // cannot decide who is inside one.
+  //   Carole J. Streeter, KB9JBR  "Medical" — a list of one umbrella that refused all nineteen
+  //                               probed majors, Nursing and Radiography included.
+  //   Michael Tortorella, W2IY    "Mathematics or data science" — "Mathematics" refuses Statistics.
+  // Neither becomes a pass: `orUnrepresented` can only reach `unknown`, so an EE undergraduate is
+  // told this could not be worked out and is shown the funder's own sentence, instead of a "no"
+  // that sentence does not support.
   it('reports 69 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
       eligible: 55,
       eligible_preferred: 14,
-      unknown: 28,
-      ineligible: 53,
+      unknown: 30,
+      ineligible: 51,
     });
     expect(report.counts.eligible + report.counts.eligible_preferred).toBe(69);
   });
@@ -134,7 +143,9 @@ describe('the census a licensed EE undergraduate actually gets', () => {
       // funder's own "etc." says the list is illustrative) — so this axis breakdown is now the
       // count of refusals that survive reading the funder's whole sentence.
       age_stage: 4,
-      field_of_study: 5,
+      // Was 5. Streeter's "Medical" and Tortorella's "Mathematics" are domains this schema cannot
+      // adjudicate membership of; the three that remain name actual fields.
+      field_of_study: 3,
       gpa: 1,
     });
   });
@@ -150,15 +161,15 @@ describe('the census a licensed EE undergraduate actually gets', () => {
    */
   it('gives every excluded record a reason, attributed to whoever actually wrote it', () => {
     const excluded = report.rows.filter((r) => r.verdict === 'ineligible');
-    expect(excluded).toHaveLength(53);
+    expect(excluded).toHaveLength(51);
     expect(excluded.every((r) => r.reasonAxes.trim().length > 0)).toBe(true);
     // Something is always said...
     expect(
       excluded.every((r) => r.reasons.trim().length > 0 || r.reasonsFromGrantSpotter.trim().length > 0),
     ).toBe(true);
-    // ...and the funder's column carries only what a funder wrote. 44 of the 53 quote a page; the
+    // ...and the funder's column carries only what a funder wrote. 42 of the 51 quote a page; the
     // other 9 are the applicant-entity gate, whose text is this software's and is filed as such.
-    expect(excluded.filter((r) => r.reasons.trim().length > 0)).toHaveLength(44);
+    expect(excluded.filter((r) => r.reasons.trim().length > 0)).toHaveLength(42);
     expect(excluded.filter((r) => r.reasonsFromGrantSpotter.trim().length > 0)).toHaveLength(9);
     expect(
       excluded.filter((r) => r.reasons.trim().length > 0 && r.reasonAxes.includes('applicant_entity')),
@@ -325,11 +336,16 @@ describe('an unset profile field yields unknown, never ineligible', () => {
    * learned to say `unknown` with nothing to ask for. There are two kinds of unknown and they are
    * counted separately, because "an unknown that asks for nothing" must never spread quietly:
    *
-   *   119  waiting on a profile field this blank profile has not filled in.
-   *    17  waiting on nothing the reader can supply — 16 records whose audience nobody recorded,
-   *        plus the Yankee Clipper radius whose centre never resolved. For those 16 the missing
-   *        thing is in GrantSpotter's data, and sending the reader to the profile editor would be
-   *        asking them to fix our hole by typing something about themselves.
+   *   118  waiting on a profile field this blank profile has not filled in.
+   *    18  waiting on nothing the reader can supply — 16 records whose audience nobody recorded,
+   *        the Yankee Clipper radius whose centre never resolved, and the ARRL Foundation Special
+   *        Funds, which moved here in round six: the only question it had for an individual came
+   *        from "GROUPS THAT QUALIFY for mini-grants will include… CLUB ACTIVITIES", a rule about
+   *        organisations that could only ever refuse a person. Asking a student what they do on
+   *        the air could not have changed that verdict, so the axis no longer asks. For all
+   *        eighteen the missing thing is in GrantSpotter's data, and sending the reader to the
+   *        profile editor would be asking them to fix our hole by typing something about
+   *        themselves.
    *
    * (16 of the 19 silent-audience records, not 19: the other three also carry a hard axis that
    * this blank profile CAN answer, so they name that field instead and are counted above.)
@@ -339,8 +355,8 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     expect(unknowns).toHaveLength(136);
     const answerable = unknowns.filter((r) => r.missingFields.length > 0);
     const unanswerable = unknowns.filter((r) => r.missingFields.length === 0);
-    expect(answerable).toHaveLength(119);
-    expect(unanswerable).toHaveLength(17);
+    expect(answerable).toHaveLength(118);
+    expect(unanswerable).toHaveLength(18);
     // An unknown is never dressed as an exclusion, whichever kind it is.
     expect(unknowns.every((r) => r.reasons === '' && r.reasonsFromGrantSpotter === '')).toBe(true);
   });

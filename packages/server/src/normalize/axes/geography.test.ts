@@ -70,7 +70,12 @@ describe('defect 1 — fabricated states and dropped DC', () => {
 });
 
 describe('defect 2 — counties dropped into a garbage blob', () => {
-  it('the real Peoria Area entry: all nine named counties present, nothing else', () => {
+  // EVERY VALUE HERE NOW CARRIES ITS STATE, and that is the fix to a false INCLUDE: `evaluateGeo`
+  // passes a bare county name whatever state the applicant is in, so this Illinois-only award
+  // admitted a resident of Fulton County GEORGIA and Knox County TENNESSEE. The qualifier comes
+  // from the funder's own sentence ("Central IL") and from nowhere else — see
+  // `qualifyCountiesWithState`.
+  it('the real Peoria Area entry: all nine named counties present, each qualified by its state', () => {
     const geo = sortValues(
       geoOf(
         'Residence in Central IL in one of these counties: Peoria, Tazewell, Woodford, Knox, McLean, Fulton, Logan, Marshall or Stark',
@@ -79,7 +84,8 @@ describe('defect 2 — counties dropped into a garbage blob', () => {
     expect(geo).toEqual({
       type: 'county',
       values: [
-        'Fulton', 'Knox', 'Logan', 'Marshall', 'McLean', 'Peoria', 'Stark', 'Tazewell', 'Woodford',
+        'Fulton, IL', 'Knox, IL', 'Logan, IL', 'Marshall, IL', 'McLean, IL', 'Peoria, IL',
+        'Stark, IL', 'Tazewell, IL', 'Woodford, IL',
       ].sort(),
     });
   });
@@ -91,13 +97,28 @@ describe('defect 2 — counties dropped into a garbage blob', () => {
       geoOf(
         'Preference will be given to residents of Pasco County, Florida; if no qualified applicant is identified then preference will be given to residents of the West Central Florida Sectioin counties',
       ),
-    ).toEqual({ type: 'county', values: ['Pasco'] });
+    ).toEqual({ type: 'county', values: ['Pasco, FL'] });
   });
 
   it('a multi-word county name (San Diego) is not truncated or prefixed', () => {
     expect(
       geoOf('Preference given to applicants from San Diego County, California.'),
-    ).toEqual({ type: 'county', values: ['San Diego'] });
+    ).toEqual({ type: 'county', values: ['San Diego, CA'] });
+  });
+
+  // The other half of the state rule, and the reason it can only ever narrow a value the funder
+  // themselves qualified: two states named is ambiguous per county, so the Shenandoah Valley list
+  // (five Virginia counties and three West Virginia ones) keeps its bare names — see the test
+  // below — and a list whose own sentence names NO state keeps them too. The Austin ARC `counties`
+  // field is exactly that, so its seven Central Texas counties stay unqualified rather than
+  // gaining a TX this axis would have had to invent.
+  it('does not invent a state for a county list whose own sentence names none (Austin ARC)', () => {
+    expect(
+      geoOf('Travis, Bastrop, Blanco, Burnet, Caldwell, Hays, and Williamson counties.'),
+    ).toEqual({
+      type: 'county',
+      values: ['Travis', 'Bastrop', 'Blanco', 'Burnet', 'Caldwell', 'Hays', 'Williamson'],
+    });
   });
 
   it('two colon-introduced county lists in one sentence stay separate (Shenandoah Valley)', () => {
@@ -316,7 +337,7 @@ describe('round 3 — the real Austin ARC page: an Oxford-comma county list', ()
       sortValues(
         geoOf('Preference will be given to residents of Pasco, and Hernando Counties, Florida.'),
       ),
-    ).toEqual({ type: 'county', values: ['Hernando', 'Pasco'] });
+    ).toEqual({ type: 'county', values: ['Hernando, FL', 'Pasco, FL'] });
   });
 });
 
@@ -377,7 +398,13 @@ describe('round 4 — the spec comes from the requirement clause; the preference
       axis: 'geography',
       geo: {
         type: 'county',
-        values: ['Orange', 'Seminole', 'Osceola', 'Lake', 'Volusia', 'Brevard', 'Polk'],
+        // "Central Florida" names the state, so each county carries it: Orange, Lake, Polk and
+        // Brevard are all names shared with counties in other states, and a preference is still a
+        // claim ("you meet this") that should not be handed to an Orange County CALIFORNIA reader.
+        values: [
+          'Orange, FL', 'Seminole, FL', 'Osceola, FL', 'Lake, FL', 'Volusia, FL', 'Brevard, FL',
+          'Polk, FL',
+        ],
       },
     });
   });
@@ -517,7 +544,7 @@ describe('round 4 — an explicit cascade is never split or hardened', () => {
     expect(cs[0].hard).toBe(false);
     expect(cs[0].spec).toEqual({
       axis: 'geography',
-      geo: { type: 'county', values: ['San Diego', 'Imperial'] },
+      geo: { type: 'county', values: ['San Diego, CA', 'Imperial, CA'] },
     });
   });
 

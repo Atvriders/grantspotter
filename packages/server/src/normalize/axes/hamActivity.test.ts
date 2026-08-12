@@ -290,13 +290,16 @@ describe('no ham-activity bar in this corpus is read off site chrome', () => {
     // was a second defect — prose that MENTIONS an activity without requiring it of the applicant —
     // and `eligibilityTexts` is the fix for it. Austin ARC loses its bar entirely (see below);
     // arrl.org's mega-footer link "Public Service Resources / Public Service Honor Roll" stops
-    // being an ETP requirement; the ARRL Foundation Special Funds' `club_member` survives because
-    // the page's award-history roll ("Winners: 2008 Larry Scheff, W4QEJ, for …") interleaves
-    // punctuated lines and never stands four label-shaped lines deep. It is org-facing and
-    // tracked, not fixed here.
+    // being an ETP requirement.
     expect(kindsFor('arrl-etp-grants::etp-grants')).toEqual([['teaching']]);
-    expect(kindsFor('arrl-foundation-special-funds::foundation-special-funds')).toEqual([['club_member']]);
     expect(kindsFor('austin-arc::austin-arc-scholarships')).toEqual([]);
+    // The ARRL Foundation Special Funds' `club_member` was the one this test recorded as "org-
+    // facing and tracked, not fixed here": its clause is "GROUPS THAT QUALIFY for mini-grants will
+    // include, but not be limited to, … make a special effort to get them involved in CLUB
+    // ACTIVITIES", a rule about GROUPS that only an individual could ever fail, and a student whose
+    // activities are ARES/RACES and Field Day was ineligible on it. Now dropped by
+    // `ORGANISATION_SUBJECT`.
+    expect(kindsFor('arrl-foundation-special-funds::foundation-special-funds')).toEqual([]);
   });
 });
 

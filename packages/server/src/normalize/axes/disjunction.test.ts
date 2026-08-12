@@ -59,7 +59,10 @@ describe('geography: the cascade had one winner and the funder named two places'
     expect(specsOn(irarc, 'geography')).toEqual([
       {
         axis: 'geography',
-        geo: { type: 'county', values: ['Brevard'] },
+        // The county value carries its state since the same round's false-INCLUDE fix — the
+        // funder wrote "Brevard County FL", and a bare county name passes whatever state the
+        // applicant is in.
+        geo: { type: 'county', values: ['Brevard, FL'] },
         anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
       },
     ]);
@@ -70,7 +73,7 @@ describe('geography: the cascade had one winner and the funder named two places'
     expect(specsOn(gwinnett, 'geography')).toEqual([
       {
         axis: 'geography',
-        geo: { type: 'county', values: ['Gwinnett'] },
+        geo: { type: 'county', values: ['Gwinnett, GA'] },
         anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['GA'] } }],
       },
     ]);
@@ -223,7 +226,37 @@ describe('field_of_study: a dropped alternative is a deleted route', () => {
       axis: 'field_of_study',
       fields: ['Engineering'],
       excludedFields: [],
+      // A bare domain, so the schema records that it cannot adjudicate membership of it (a
+      // Mechatronics student shares no word with "Engineering" and was refused). That is
+      // `orUnrepresented`, which can only reach `unknown` — the assertions below are what keep it
+      // from being confused with the route this test is about.
+      orUnrepresented: 'Engineering',
     });
+    // THE SUBJECT OF THIS TEST: no `anyOf`. An alternative tier would be `fields: []`, which the
+    // matcher reads as UNRESTRICTED and passes for everybody — the mirror defect, an
+    // engineering-only award opened to the whole world by a comparative adjective.
+    expect(cs[0].spec).not.toHaveProperty('anyOf');
+    const musicMajor = evaluateConstraint(
+      cs[0].spec,
+      { kind: 'student', fieldOfStudy: 'Music Performance' },
+      NOW,
+      cs[0].rawText,
+    );
+    expect(musicMajor.status).not.toBe('pass');
+    expect(musicMajor).toEqual({ status: 'unknown', missing: [] });
+  });
+
+  /**
+   * …and the refusal itself still happens, on the far commoner shape: a funder who names a
+   * SPECIFIC field rather than a domain. Edmond A. Metzger, verbatim. Kept beside the test above so
+   * "a music major is not admitted to an engineering award" stays pinned as a `fail` somewhere,
+   * rather than softening everywhere the moment domains stopped deciding.
+   */
+  it('a named field, not a domain, still refuses the music major outright', () => {
+    const cs = extractFieldOfStudy(
+      raw({ 'Field of Study': "Bachelor's degree or higher in electrical engineering" }),
+    );
+    expect(cs[0].spec).not.toHaveProperty('orUnrepresented');
     expect(evaluateConstraint(
       cs[0].spec,
       { kind: 'student', fieldOfStudy: 'Music Performance' },
@@ -441,9 +474,11 @@ describe('nothing this round added can refuse anybody', () => {
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard, and the whole blast radius of `anyOf` over the committed fixtures: FIVE
-    // alternatives on four records — IRARC's geography and field_of_study, Gwinnett's and North
-    // Texas's geography, and Ware's licence. Nothing else in 150 programs gained one.
-    expect(total).toBe(5);
+    // Vacuity guard, and the whole blast radius of `anyOf` over the committed fixtures: SIX
+    // alternatives on five records — IRARC's geography and field_of_study, Gwinnett's and North
+    // Texas's geography, Ware's licence, and Fred R. McDaniel's "Resident of FCC 5th call district
+    // (TX, OK, AR, LA, MS, NM)", where the six states the funder spelled out are a second tier
+    // beside a rule stored as a property of a CALLSIGN. Nothing else in 150 programs has one.
+    expect(total).toBe(6);
   });
 });

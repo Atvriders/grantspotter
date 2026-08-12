@@ -186,13 +186,56 @@ export function withoutSiteChrome(text: string): string {
  * asymmetry is why the gate is deliberately strict on the unlabelled surface and does not exist
  * on the labelled one.
  */
-const APPLICANT_REQUIREMENT =
+export const APPLICANT_REQUIREMENT =
   /\b(?:must|shall|requir\w*|eligib\w*|qualif\w*|prerequisite)\b|\bopen (?:only )?to\b|\bapplicants?\s+(?:should|need|needs)\b/i;
 
 /**
+ * A RULE ABOUT GROUPS CAN ONLY EVER BITE THE INDIVIDUAL IT IS NOT ABOUT.
+ *
+ * The ARRL Foundation Special Funds page describes the Victor C. Clark Youth Incentive Fund's
+ * mini-grants:
+ *
+ *   "GROUPS THAT QUALIFY for mini-grants will include, but not be limited to, high school radio
+ *    clubs, youth groups, and general-interest radio clubs that sponsor subgroups of young people
+ *    or otherwise make a special effort to get them involved in CLUB ACTIVITIES."
+ *
+ * The subject is GROUPS. The clause passed `APPLICANT_REQUIREMENT` on the word "qualify", the two
+ * final words matched the club pattern, and the record published `activityKinds: ['club_member']`
+ * as a hard bar. `ham_activity` returns `not_evaluable` for an organisation profile, so that bar
+ * could never touch the audience the sentence actually describes — only an INDIVIDUAL student, who
+ * it does not describe at all. Measured: a student whose activities are ARES/RACES and Field Day
+ * was `ineligible`, sole reason `ham_activity`, on a fund whose sentence sets no condition on an
+ * individual's on-air life whatsoever.
+ *
+ * The funder also says in so many words that the list "will include, BUT NOT BE LIMITED TO" — a
+ * one-item allow-list built out of an explicitly non-exhaustive one. Both faults are in the same
+ * clause and this removes both, because a clause that states a rule for organisations states no
+ * rule for a person, whatever kinds its words happen to contain.
+ *
+ * WHY IT IS THE SUBJECT AND NOT A KEYWORD. "Club" appears in real individual requirements all over
+ * this corpus ("membership in a local or regional club", "participation in college radio clubs"),
+ * so the noun cannot be what decides. What decides is that the clause OPENS with the organisation
+ * as its grammatical subject — the group is who the sentence is predicating of. A requirement
+ * written about the applicant ("Applicant must be a member of a club that…", "Students must
+ * demonstrate…") never opens that way and is untouched; measured over the committed fixtures,
+ * exactly one clause in the corpus matches this and it is the one quoted above.
+ *
+ * MULTILINE, because `splitClauses` does not cut on a bare newline: the fund's HEADING sits on the
+ * line above ("Victor C. Clark Youth Incentive Fund\nGroups that qualify…"), so the sentence this
+ * is about does not start at the beginning of the clause. `^` therefore means start of LINE.
+ */
+const ORGANISATION_SUBJECT =
+  /^(?:[·•▪‣*]\s*)?(?:the\s+|all\s+|any\s+)?(?:groups?|organi[sz]ations?|clubs?|schools?|societies|chapters?|troops?|teams?|entities|institutions?)\b\s+(?:that|which|who|must|will|shall|may|should|are|is|can|receiving|applying|seeking)\b/im;
+
+/**
  * The text this axis is allowed to read a kind out of, chrome already removed. Labelled fields are
- * returned whole (the funder said these are the rules); a whole-page fallback is returned as the
- * subset of its clauses that state a rule.
+ * returned whole (the funder said these are the rules) minus any clause whose subject is an
+ * organisation; a whole-page fallback is returned as the subset of its clauses that state a rule
+ * ABOUT THE APPLICANT.
+ *
+ * The organisation gate applies to BOTH surfaces, unlike `APPLICANT_REQUIREMENT`: "this clause is
+ * not about a person" is a fact about the sentence, not about how well-labelled the page it sits on
+ * is, and this axis has no reading of a group requirement that could ever be right.
  */
 function eligibilityTexts(raw: RawOpportunity): string[] {
   const labelled = [raw.rawFields.Other, raw.rawFields.eligibility].some(
@@ -201,8 +244,50 @@ function eligibilityTexts(raw: RawOpportunity): string[] {
   const candidates = candidateTexts([raw.rawFields.Other, raw.rawFields.eligibility], raw.rawText)
     .map(withoutSiteChrome)
     .filter((t) => t.trim() !== '');
-  if (labelled) return candidates;
-  return candidates.flatMap(splitClauses).filter((c) => APPLICANT_REQUIREMENT.test(c));
+  const clauses = candidates.flatMap(splitClauses).filter((c) => !ORGANISATION_SUBJECT.test(c));
+  if (labelled) return clauses;
+  return clauses.filter((c) => APPLICANT_REQUIREMENT.test(c));
+}
+
+/**
+ * A NUMBER LIFTED OUT OF ONE OF SIX ALTERNATIVES IS NOT A FLOOR ON THE AXIS.
+ *
+ * The CWops Scholarship requires "Demonstrated CW operating ability within the last 24 months …
+ * (EXAMPLES INCLUDE BUT ARE NOT LIMITED TO: ARRL Code Proficiency certificate at 15 WPM or higher;
+ * successful completion of CWA Basic Level or higher; membership in CWops or HSC or other club
+ * where some level of CW proficiency is a requirement for membership; participation in a CW contest
+ * where the results have been published; operation in a CW traffic net…; OR achieving any award
+ * where all contacts are CW)".
+ *
+ * "15 wpm" is one clause of ONE of six alternatives, inside a list the funder calls illustrative,
+ * and `CW_WPM` made it a numeric bar on the whole axis. Measured on the real record:
+ *
+ *   cwWpm undefined -> unknown (missing cwWpm)      cwWpm 10 -> INELIGIBLE      cwWpm 20 -> eligible
+ *
+ * So a student who completed CWA Basic, or belongs to CWops or HSC, or has published CW-contest
+ * results, or holds a CW-only award — every one of them named by the funder — was refused for
+ * answering the speed question honestly with a number under 15. Answering a profile question
+ * MANUFACTURED the exclusion, which is the thing `geo.ts`'s `radiusIsMeasurable` says must never
+ * happen.
+ *
+ * WHY THE FLOOR STAYS AND AN ALTERNATIVE IS ADDED INSTEAD. Deleting the number would say the funder
+ * asked for nothing, and 20 wpm really is the route they named first, so it should still read as a
+ * pass. What is missing is the other five routes, and not one of them is a field `StudentProfile`
+ * holds — there is no value of any input that means "I finished CWA Basic". That is precisely
+ * `ConstraintAlternatives.orUnrepresented`: the tier stands, and when it fails the answer is
+ * `unknown` with nothing to fill in, never a refusal quoting a sentence that invites them.
+ *
+ * SCOPED TO AN OPEN LIST, and it has to be. A funder who states a speed and nothing else ("must be
+ * able to copy CW at 5 wpm") has named ONE route and means it; that floor must keep refusing, or
+ * this becomes a licence to soften every number in the corpus. The trigger is the funder's own
+ * words saying their list is illustrative, quoted verbatim into the spec as the evidence.
+ */
+const OPEN_PROOF_LIST =
+  /\bexamples?\b[^.]{0,40}?\b(?:include|are|such as)\b|\bincluding,? but not\b|\bnot (?:be )?(?:necessarily |strictly |solely )?limited to\b|\bsuch as\b/i;
+
+function unrepresentedProofRoutes(clause: string): string | undefined {
+  const marker = OPEN_PROOF_LIST.exec(clause);
+  return marker === null ? undefined : clause.slice(marker.index).trim();
 }
 
 export function extractHamActivity(raw: RawOpportunity): Constraint[] {
@@ -217,6 +302,11 @@ export function extractHamActivity(raw: RawOpportunity): Constraint[] {
   // terminator it ran across every field, letting another axis's "preference" wording decide
   // whether this axis was a bar.
   const clause = firstClause(candidates, ANY_ACTIVITY) ?? text;
+  // Only a NUMBER can fail here once the funder has opened their own list: `funderOpenedTheList`
+  // already stops an illustrative `activityKinds` list from gating, so the wpm floor is the one
+  // route left that can refuse anybody, and it is the only one that needs the other routes recorded
+  // beside it. Asked only when there IS a floor, so no other record in the corpus gains the field.
+  const orUnrepresented = cw ? unrepresentedProofRoutes(clause) : undefined;
   return [
     makeConstraint(
       'ham_activity',
@@ -226,6 +316,7 @@ export function extractHamActivity(raw: RawOpportunity): Constraint[] {
         activityKinds,
         ...(cw ? { cwProficiencyWpmMin: Number.parseInt(cw[1], 10) } : {}),
         proofRequired: /\b(documented|documentation|proof|certificate|verified)\b/i.test(clause),
+        ...(orUnrepresented !== undefined ? { orUnrepresented } : {}),
       },
       0,
     ),

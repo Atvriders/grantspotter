@@ -331,6 +331,11 @@ describe('round 4 — a requirement and a preference in one Field of Study value
       axis: 'field_of_study',
       fields: ['electronics', 'communications', 'related fields'],
       excludedFields: [],
+      // "communications" is a bare domain, so the spec records that this schema cannot adjudicate
+      // membership of it (see `unadjudicableDomains`). Inert here twice over: the constraint is
+      // soft, and the funder's own "or related fields" already opens the list, so the tier never
+      // fails and the field is never consulted.
+      orUnrepresented: 'communications',
     });
   });
 
@@ -375,6 +380,10 @@ describe('round 4 — a requirement and a preference in one Field of Study value
         'Radiology technician',
       ],
       excludedFields: [],
+      // "Medicine" is a bare domain — the entry that refuses a Radiography student on Carole J.
+      // Streeter's "Medical". Recorded, and inert here: MARCO's own "including, but not
+      // necessarily" opens the list, so this tier passes rather than failing.
+      orUnrepresented: 'Medicine',
     });
   });
 
@@ -389,6 +398,9 @@ describe('round 4 — a requirement and a preference in one Field of Study value
       axis: 'field_of_study',
       fields: ['Engineering'],
       excludedFields: [],
+      // A bare domain: "Engineering" refuses a Mechatronics student on word overlap alone. Soft,
+      // so it changes no verdict here — an unknown on a preference is not a preference met.
+      orUnrepresented: 'Engineering',
     });
   });
 

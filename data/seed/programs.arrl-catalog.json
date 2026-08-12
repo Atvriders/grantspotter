@@ -282,7 +282,8 @@
             "fields": [
               "Communications"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Communications"
           }
         },
         {
@@ -1358,7 +1359,8 @@
               "Engineering",
               "Mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Technology, Engineering, Mathematics"
           }
         },
         {
@@ -1606,7 +1608,8 @@
               "sciences",
               "similar field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "engineering, sciences"
           }
         },
         {
@@ -2582,7 +2585,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -2707,7 +2711,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -2934,7 +2939,8 @@
               "Engineering",
               "Technology"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Math, Engineering, Technology"
           }
         },
         {
@@ -3081,19 +3087,6 @@
           }
         },
         {
-          "id": "age_stage-0-0f82407e",
-          "hard": true,
-          "fallbackRank": 0,
-          "rawText": "Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, graduate or post-graduate, or a fully accredited trade, art or professional school",
-          "spec": {
-            "axis": "age_stage",
-            "stages": [
-              "UNDERGRAD",
-              "GRAD"
-            ]
-          }
-        },
-        {
           "id": "ham_activity-0-0bfb40cc",
           "hard": true,
           "fallbackRank": 0,
@@ -3106,7 +3099,8 @@
               "contesting"
             ],
             "cwProficiencyWpmMin": 15,
-            "proofRequired": true
+            "proofRequired": true,
+            "orUnrepresented": "Examples include but are not limited to: ARRL Code Proficiency certificate at 15 wpm or higher; successful completion of CWA Basic Level or higher; membership in CWops or HSC or other club where some level of CW proficiency is a requirement for membership; participation in a CW contest where the results have been published; operation in a CW traffic net where the net manager provides a letter attesting to the candidate's on-air participation; or achieving any award where all contacts are CW)"
           }
         },
         {
@@ -3210,7 +3204,8 @@
               "engineering",
               "mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, technology, engineering, mathematics"
           }
         },
         {
@@ -3418,7 +3413,8 @@
             "fields": [
               "Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering"
           }
         },
         {
@@ -3545,7 +3541,8 @@
               "engineering",
               "manufacturing"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "STEM, science, technical, engineering"
           }
         },
         {
@@ -3573,7 +3570,6 @@
           "spec": {
             "axis": "age_stage",
             "stages": [
-              "UNDERGRAD",
               "RETRAINING_ADULT"
             ]
           }
@@ -3809,7 +3805,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -4169,7 +4166,8 @@
               "Engineering",
               "Mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "STEM, Science, Technology, Engineering, Mathematics"
           }
         },
         {
@@ -4387,7 +4385,8 @@
             "fields": [
               "Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering"
           }
         }
       ],
@@ -4484,7 +4483,8 @@
               "Engineering",
               "Technology-related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Business, Science, Math, Engineering, Technology-related field"
           }
         },
         {
@@ -4865,7 +4865,8 @@
               "communications",
               "related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -5212,7 +5213,8 @@
               "Engineering",
               "Technology"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Math, Engineering, Technology"
           }
         },
         {
@@ -5325,7 +5327,7 @@
             "geo": {
               "type": "county",
               "values": [
-                "Pasco"
+                "Pasco, FL"
               ]
             }
           }
@@ -5342,7 +5344,8 @@
               "technology",
               "mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, technology, mathematics"
           }
         },
         {
@@ -5433,7 +5436,7 @@
             "geo": {
               "type": "county",
               "values": [
-                "Gwinnett"
+                "Gwinnett, GA"
               ]
             },
             "anyOf": [
@@ -5672,7 +5675,7 @@
             "geo": {
               "type": "county",
               "values": [
-                "San Diego"
+                "San Diego, CA"
               ]
             }
           }
@@ -5848,7 +5851,8 @@
             "fields": [
               "Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering"
           }
         },
         {
@@ -6067,7 +6071,7 @@
             "geo": {
               "type": "county",
               "values": [
-                "Brevard"
+                "Brevard, FL"
               ]
             },
             "anyOf": [
@@ -6358,7 +6362,8 @@
               "technology",
               "engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications, technology, engineering"
           }
         },
         {
@@ -6700,7 +6705,8 @@
               "electronics",
               "physics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "technology, engineering, mathematics, communications"
           }
         },
         {
@@ -6974,7 +6980,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -7108,7 +7115,8 @@
               "Actuarial Science",
               "ABET accredited Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Mathematics"
           }
         },
         {
@@ -7381,7 +7389,8 @@
               "engineering",
               "related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications, engineering"
           }
         },
         {
@@ -7515,7 +7524,8 @@
               "Engineering",
               "Mathematics fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Sciences, Technology, Engineering, Mathematics fields"
           }
         },
         {
@@ -7750,7 +7760,8 @@
               "RF engineering",
               "cybertechnology"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Communications"
           }
         },
         {
@@ -7866,7 +7877,23 @@
               "values": [
                 "5"
               ]
-            }
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "TX",
+                    "OK",
+                    "AR",
+                    "LA",
+                    "MS",
+                    "NM"
+                  ]
+                }
+              }
+            ]
           }
         },
         {
@@ -7881,7 +7908,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -8132,7 +8160,8 @@
               "EMT",
               "Radiology technician"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Medicine"
           }
         },
         {
@@ -8438,7 +8467,8 @@
               "Engineering",
               "Mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Technology, Engineering, Mathematics"
           }
         },
         {
@@ -8583,7 +8613,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -8718,7 +8749,8 @@
               "Science",
               "Business"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering, Medicine, Science, Business"
           }
         },
         {
@@ -8931,13 +8963,13 @@
             "geo": {
               "type": "county",
               "values": [
-                "Orange",
-                "Seminole",
-                "Osceola",
-                "Lake",
-                "Volusia",
-                "Brevard",
-                "Polk"
+                "Orange, FL",
+                "Seminole, FL",
+                "Osceola, FL",
+                "Lake, FL",
+                "Volusia, FL",
+                "Brevard, FL",
+                "Polk, FL"
               ]
             }
           }
@@ -8952,7 +8984,8 @@
             "fields": [
               "Technical field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Technical field"
           }
         },
         {
@@ -9214,7 +9247,8 @@
               "Engineering",
               "other 4-year technical degree"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering"
           }
         },
         {
@@ -9474,7 +9508,8 @@
               "Engineering",
               "Computer Science"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering"
           }
         },
         {
@@ -9757,13 +9792,13 @@
             "geo": {
               "type": "county",
               "values": [
-                "Orange",
-                "Seminole",
-                "Osceola",
-                "Lake",
-                "Volusia",
-                "Brevard",
-                "Polk"
+                "Orange, FL",
+                "Seminole, FL",
+                "Osceola, FL",
+                "Lake, FL",
+                "Volusia, FL",
+                "Brevard, FL",
+                "Polk, FL"
               ]
             }
           }
@@ -9778,7 +9813,8 @@
             "fields": [
               "Technical field of study that would support the radio art"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Technical field of study that would support the radio art"
           }
         },
         {
@@ -9976,8 +10012,8 @@
             "geo": {
               "type": "county",
               "values": [
-                "San Diego",
-                "Imperial"
+                "San Diego, CA",
+                "Imperial, CA"
               ]
             }
           }
@@ -10245,15 +10281,15 @@
             "geo": {
               "type": "county",
               "values": [
-                "Peoria",
-                "Tazewell",
-                "Woodford",
-                "Knox",
-                "McLean",
-                "Fulton",
-                "Logan",
-                "Marshall",
-                "Stark"
+                "Peoria, IL",
+                "Tazewell, IL",
+                "Woodford, IL",
+                "Knox, IL",
+                "McLean, IL",
+                "Fulton, IL",
+                "Logan, IL",
+                "Marshall, IL",
+                "Stark, IL"
               ]
             }
           }
@@ -10492,7 +10528,8 @@
               "Physical Science",
               "Mathematics"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Engineering, Mathematics"
           }
         },
         {
@@ -11141,7 +11178,8 @@
               "Mathematics",
               "data science"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Mathematics"
           }
         },
         {
@@ -11390,7 +11428,8 @@
               "Engineering",
               "Technology-related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Business, Science, Math, Engineering, Technology-related field"
           }
         },
         {
@@ -11649,7 +11688,8 @@
               "mathematics",
               "STEM"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "technology, engineering, mathematics, STEM"
           }
         },
         {
@@ -11790,7 +11830,8 @@
               "Engineering",
               "Math"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Technology, Engineering, Math"
           }
         },
         {
@@ -11894,7 +11935,8 @@
             "fields": [
               "Medical"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Medical"
           }
         },
         {
@@ -12132,7 +12174,8 @@
               "Engineering",
               "Technology-related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Business, Science, Math, Engineering, Technology-related field"
           }
         },
         {
@@ -12472,7 +12515,8 @@
             "fields": [
               "engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "engineering"
           }
         },
         {
@@ -12645,7 +12689,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -12780,7 +12825,8 @@
               "Engineering",
               "Math"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Technology, Engineering, Math"
           }
         },
         {
@@ -12916,8 +12962,8 @@
             "geo": {
               "type": "county",
               "values": [
-                "San Diego",
-                "Imperial"
+                "San Diego, CA",
+                "Imperial, CA"
               ]
             }
           }
@@ -12937,7 +12983,8 @@
               "Technology",
               "Health Care-related field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Math, Engineering, Technology, Health Care-related field"
           }
         },
         {
@@ -13078,7 +13125,8 @@
               "Technology",
               "Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Science, Technology, Engineering"
           }
         },
         {
@@ -13291,7 +13339,8 @@
               "communications",
               "related fields"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "communications"
           }
         },
         {
@@ -13512,7 +13561,8 @@
               "Sciences",
               "Engineering"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Sciences, Engineering"
           }
         },
         {
@@ -13777,7 +13827,8 @@
               "EMT",
               "Radiology"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "Medicine"
           }
         },
         {

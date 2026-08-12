@@ -1,8 +1,9 @@
 import type { Constraint, RawOpportunity, Stage } from '@grantspotter/core';
 import { candidateTexts, firstClause, splitClauses } from './clauses.js';
-// The shared "a link label is not a sentence" filter — see the comment on `stageClauses` below and
-// the rule's own derivation in hamActivity.ts. Imported, never re-derived.
-import { withoutSiteChrome } from './hamActivity.js';
+// The shared "a link label is not a sentence" filter and the shared "this clause asserts something
+// OF THE APPLICANT" test — see `stageClauses` and `INSTITUTION_LABEL` below, and each rule's own
+// derivation in hamActivity.ts. Imported, never re-derived.
+import { APPLICANT_REQUIREMENT, withoutSiteChrome } from './hamActivity.js';
 import { makeConstraint } from './preference.js';
 
 const RANGE = /\b(\d{2})\s*(?:to|through|[-–])\s*(\d{2})\b/;
@@ -133,14 +134,59 @@ function unrepresentedAudience(clauses: string[]): string | undefined {
  * undergraduate, high-school and returning-adult applicant from a student-branch rebate on the
  * strength of a link label. FOREIGN_LABEL could not see it: a menu carries no label at all.
  */
+/**
+ * THE INSTITUTION SENTENCE DESCRIBES THE SCHOOL, NOT THE APPLICANT'S STANDING.
+ *
+ * The CWops Scholarship's `Institution` value is
+ *
+ *   "Fully accredited educational institution of higher learning, 2- OR 4-YEAR, UNDERGRADUATE,
+ *    GRADUATE OR POST-GRADUATE, or a fully accredited trade, art or professional school"
+ *
+ * — a list of the levels a qualifying SCHOOL teaches at, which `institution.ts` reads correctly as
+ * `degreeLevels: [CERT, ASSOC, BACH, GRAD]` with `tradeSchoolOK`. Read here as well, the same three
+ * words became `stages: ['UNDERGRAD','GRAD']`, an ALLOW-list, and an Extra-class graduating high
+ * school senior with 25 wpm was told they were INELIGIBLE, sole reason `age_stage`. Nothing in that
+ * record says a graduating senior may not apply — the award is tuition for the coming academic
+ * year, and the funder's own preamble is "open to ANY QUALIFIED APPLICANT regardless of location or
+ * nationality". A stage list minted from a sentence about buildings refused the applicant the
+ * sentence never mentions.
+ *
+ * This is the same judgement the `undergraduate (?!degree)` lookahead above already makes on a
+ * single phrase, applied to the SURFACE the phrase came from — and the same rule hamActivity.ts
+ * derived for its unlabelled-page fallback: an axis may only read out of text that is actually
+ * about its question. So the `Institution` field (and the `Institution:` line of the flattened
+ * record, which is the same words reached by a different route) contributes a stage only when the
+ * clause ASSERTS SOMETHING OF THE APPLICANT. `APPLICANT_REQUIREMENT` is imported from hamActivity.ts
+ * rather than restated, so the two surfaces cannot drift apart.
+ *
+ * WHAT STILL READS. The Tom and Judith Comstock Scholarship files its whole audience under
+ * `Institution`: "APPLICANT MUST BE a high school senior accepted at a 2 or 4-year college or a
+ * student currently enrolled at a 2 or 4-year college" — an obligation on the applicant, so both
+ * of its stages survive, which matters because that record has no other statement of who may apply.
+ *
+ * DIRECTION OF ERROR. `stages` is an allow-list, so a clause this gate drops WIDENS who may apply;
+ * it can never manufacture a refusal. A stage wrongly dropped costs an applicant a requirement they
+ * will read in the funder's own words on the record; a stage wrongly kept is a silent bar.
+ */
+const INSTITUTION_LABEL = /^(?:[·•▪‣]\s*)?Institution\s*:/i;
+
 function stageClauses(raw: RawOpportunity): string[] {
-  const fields = candidateTexts(
-    [raw.rawFields.Other, raw.rawFields.eligibility, raw.rawFields.Institution],
-    raw.rawText,
-  )
+  const clauses = candidateTexts([raw.rawFields.Other, raw.rawFields.eligibility], raw.rawText)
     .map(withoutSiteChrome)
-    .filter((t) => t.trim() !== '');
-  return fields.flatMap(splitClauses).filter((c) => !FOREIGN_LABEL.test(c));
+    .filter((t) => t.trim() !== '')
+    .flatMap(splitClauses)
+    .filter((c) => !FOREIGN_LABEL.test(c) && !INSTITUTION_LABEL.test(c));
+  const institution = raw.rawFields.Institution;
+  const institutionClauses =
+    typeof institution === 'string' && institution.trim() !== ''
+      ? splitClauses(withoutSiteChrome(institution))
+      : [];
+  return [
+    ...clauses,
+    // The same gate on both routes to the same words: the labelled field, and the `Institution:`
+    // line of the flattened record that `candidateTexts` folds in through `rawText`.
+    ...institutionClauses.filter((c) => APPLICANT_REQUIREMENT.test(c)),
+  ];
 }
 
 export function extractAgeStage(raw: RawOpportunity): Constraint[] {

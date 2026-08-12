@@ -192,34 +192,63 @@ describe('extractAgeStage — clause boundaries', () => {
     ).toEqual([]);
   });
 
-  // The CWops Scholarship — real Institution field. "graduate" standing alone had no spelling
-  // here, so the list came out UNDERGRAD-only and barred the graduate students it names.
-  it('reads "undergraduate, graduate or post-graduate" as both stages (CWops regression)', () => {
+  // The `post-graduate` spelling this axis added for CWops still reads — from a clause that says
+  // something about the APPLICANT. Both halves of that sentence matter and they are asserted
+  // separately below: the spelling here, the surface it may be read from next.
+  it('reads "undergraduate, graduate or post-graduate" as both stages when the clause is about the applicant', () => {
+    const cs = extractAgeStage(
+      raw({ Other: 'Open to undergraduate, graduate or post-graduate students' }),
+    );
+    expect(stagesOf(cs[0].spec)).toEqual(['GRAD', 'UNDERGRAD']);
+  });
+
+  // The CWops Scholarship — real Institution field, and the SAME three words. Here they list the
+  // levels a qualifying SCHOOL teaches at (institution.ts reads them as degreeLevels
+  // ["CERT","ASSOC","BACH","GRAD"]); read as the applicant's own standing they became an ALLOW-list
+  // that told an Extra-class graduating high school senior with 25 wpm they were ineligible, sole
+  // reason age_stage, for an award whose preamble is "open to any qualified applicant". A sentence
+  // about buildings may not decide who the applicant is.
+  it('reads no stage out of an Institution sentence that describes the school (CWops regression)', () => {
+    expect(
+      extractAgeStage(
+        raw({
+          Institution:
+            'Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, graduate or post-graduate, or a fully accredited trade, art or professional school',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  // The Tom and Judith Comstock Scholarship — real Institution field, and the reason the gate is
+  // "does this clause assert something of the applicant?" rather than "ignore Institution". This
+  // record states its whole audience there and nowhere else, so both stages must survive.
+  it('still reads both stages from an Institution clause that states an obligation on the applicant (Comstock)', () => {
     const cs = extractAgeStage(
       raw({
         Institution:
-          'Fully accredited educational institution of higher learning, 2- or 4-year, undergraduate, graduate or post-graduate, or a fully accredited trade, art or professional school',
+          'Applicant must be a high school senior accepted at a 2 or 4-year college or a student currently enrolled at a 2 or 4-year college',
       }),
     );
-    expect(stagesOf(cs[0].spec)).toEqual(['GRAD', 'UNDERGRAD']);
+    expect(stagesOf(cs[0].spec)).toEqual(['HS_SENIOR', 'UNDERGRAD']);
   });
 
   // The Ozaukee Radio Club, W9CQO, Scholarship — real Age field. No pattern here parses "under 26
   // years of age" into ageMax, but the funder's own age wording is still what the applicant needs
   // to read, so it must stay the constraint's rawText.
+  //
+  // The second field is the Comstock Institution line rather than ECARS's "Full-time studies at a
+  // 4-year undergraduate institution": that one describes the SCHOOL and no longer produces a
+  // stage at all (see the CWops regression above), so it can no longer stand in for "the clause
+  // that produced the stages". The assertion — which of two texts becomes the rawText — is the
+  // same one it always was.
   it('keeps an unparsed Age field as the rawText, but not the placeholder "Any"', () => {
+    const institution =
+      'Applicant must be a high school senior accepted at a 2 or 4-year college or a student currently enrolled at a 2 or 4-year college';
     expect(
-      extractAgeStage(
-        raw({
-          Age: 'Applicant must be under 26 years of age.',
-          Institution: 'Full-time studies at a 4-year undergraduate institution',
-        }),
-      )[0].rawText,
-    ).toBe('Applicant must be under 26 years of age.');
-    expect(
-      extractAgeStage(raw({ Age: 'Any', Institution: 'Full-time studies at a 4-year undergraduate institution' }))[0]
+      extractAgeStage(raw({ Age: 'Applicant must be under 26 years of age.', Institution: institution }))[0]
         .rawText,
-    ).toBe('Full-time studies at a 4-year undergraduate institution');
+    ).toBe('Applicant must be under 26 years of age.');
+    expect(extractAgeStage(raw({ Age: 'Any', Institution: institution }))[0].rawText).toBe(institution);
   });
 
   // The Six Meter Club of Chicago Scholarship — real Institution field. "undergraduate degree" is

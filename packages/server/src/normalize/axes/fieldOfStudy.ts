@@ -391,8 +391,126 @@ function unrestrictedAlternative(part: string, fields: string[]): boolean {
     );
 }
 
+/**
+ * A DOMAIN IS NOT A LIST OF MAJORS — the largest false-exclude in the corpus, by a wide margin.
+ *
+ * "Science, Technology, Engineering or Mathematics" (Rev. Paul E. Bittner, WØAIH, Memorial) is
+ * parsed faithfully: `fields: ['Science','Technology','Engineering','Mathematics']` is exactly
+ * what the page says. The refusal happens downstream. `matcher.ts` matches a field by STEMMED WORD
+ * OVERLAP between the applicant's phrase and the funder's — it has no taxonomy, and cannot have
+ * one — so an umbrella noun only admits an applicant who happens to reuse the noun. Measured with
+ * the real `evaluateConstraint` against that exact spec and rawText:
+ *
+ *   "Science, Technology, Engineering or Mathematics"  refused Physics, Chemistry, Biology,
+ *                                                      Astronomy, Geology, Statistics,
+ *                                                      Cybersecurity, Mechatronics, Nursing
+ *   "Sciences or Engineering"        (YASME)           refused the same nine
+ *   "Medical"       (Carole J. Streeter, KB9JBR)       refused all nineteen probes, Nursing and
+ *                                                      Radiography included — nothing passes it
+ *   "…or a Health Care-related field" (Richard Warren) refused Nursing
+ *   "Technical field"  (Wayne Nelson, KB4UT)           refused Computer Science, Welding Technology
+ *   "Communications"   (Goldwater, verified on the
+ *                       ARRL page)                     refused Journalism, Broadcasting
+ *
+ * A physics undergraduate reads "Science" on the screen directly above the word "no". That is the
+ * doctrine's exact failure mode — the evidence GrantSpotter displays refutes the verdict it prints
+ * — and it is why holding everything else identical and changing only the word in the "what do you
+ * study?" box took a student from 55 refusals of 150 to 77.
+ *
+ * WHAT THE HONEST ANSWER IS, and why it is not a wider list. There is no widening marker in these
+ * sentences: "Science, Technology, Engineering or Mathematics" is a genuinely CLOSED list — of
+ * umbrellas — so `funderOpenedTheList` does not apply and must not be made to. Nor may this
+ * extractor invent the members ("Science" → Physics, Chemistry, Biology, …): the list would be
+ * arbitrary, never exhaustive, and every subject it forgot would still be refused, which is the
+ * same defect with a longer tail. What is TRUE is narrower and exactly representable: the funder
+ * named a route — "study a subject that falls within this domain" — and THIS SCHEMA CANNOT CHECK
+ * IT, because deciding whether Radiography is inside "Medical" is not word overlap. So the spec
+ * says so, in the funder's own words, and `ConstraintAlternatives.orUnrepresented` turns what was
+ * a refusal into `unknown` with nothing to fill in. Never a `pass` — a music major is not admitted
+ * to a STEM award by this — and never a refusal.
+ *
+ * WHICH ENTRIES, and why the test is this strict. A BARE domain noun is the whole defect: an
+ * applicant who studies an instance of it shares no word with it. A domain noun with a MODIFIER is
+ * a field in its own right and matches the way lexical matching is meant to — "Computer Science",
+ * "Communications Engineering", "Applied Sciences", "Physical Science", "Science Education",
+ * "electrical engineering", "ABET accredited Engineering" are all left exactly as they are, and
+ * every one of them still refuses a music major. So an entry qualifies only when, after its
+ * scaffolding words are removed, NOTHING IS LEFT BUT THE DOMAIN TERM ITSELF. Nine records carry a
+ * modified domain and no bare one; none of them changes.
+ *
+ * EVERY WORD IN THIS SET WAS MEASURED, not assumed: each one is here because a subject that is
+ * uncontroversially INSIDE it is refused by a real constraint in the corpus (the table above).
+ * That is the bar for adding a tenth: name the domain, name the corpus record, and name the major
+ * it refuses. "Education" and "Agriculture" are deliberately absent — both appear only in lists
+ * that already carry a bare domain, so nothing in this corpus turns on them and no refusal was
+ * measured to justify them.
+ */
+const UNADJUDICABLE_DOMAINS = new Set([
+  'science', 'sciences', 'stem',
+  'technology', 'technologies', 'technical',
+  'engineering',
+  'mathematics', 'math', 'maths',
+  'medical', 'medicine',
+  'health care', 'healthcare',
+  'business',
+  'communications', 'communication',
+]);
+
+/**
+ * Scaffolding around a field name, removed before the domain test and ONLY for that test — the
+ * spec keeps the funder's entry verbatim. "Mathematics fields" (Lois Manley), "Technology-related
+ * field" (Homer V. Thompson, Walter Gallinghouse) and "a Health Care-related field" (Richard
+ * Warren) are the corpus's three shapes, and all three name the domain and nothing else.
+ */
+const ENTRY_SCAFFOLDING = new Set([
+  'field', 'fields', 'discipline', 'disciplines', 'area', 'areas', 'major', 'majors',
+  'subject', 'subjects', 'study', 'studies', 'related', 'of', 'in', 'a', 'an', 'the', 'or',
+]);
+
+/**
+ * A trailing purpose clause says what the study must ACHIEVE, not which subject it names, so it is
+ * cut before the domain test. One record needs it, and it is the clearest evidence that lexical
+ * matching cannot adjudicate a domain: the Orlando HamCation Scholarship's "Technical field of
+ * study that would support the radio art" admits Electrical Engineering and refuses COMPUTER
+ * SCIENCE — an arbitrary split produced by which words happen to appear in the phrase, on a
+ * requirement that is plainly satisfied by both.
+ */
+const PURPOSE_CLAUSE = /\b(?:that|which|leading to|to support|supporting)\b.*$/i;
+
+function namesADomain(entry: string): boolean {
+  const core = entry
+    .replace(PURPOSE_CLAUSE, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w !== '' && !ENTRY_SCAFFOLDING.has(w))
+    .join(' ');
+  return UNADJUDICABLE_DOMAINS.has(core);
+}
+
+/**
+ * The funder's own words for the routes this schema cannot check — the bare domains in their list,
+ * in the order they wrote them.
+ *
+ * NOT WHEN THE RECORD CARRIES AN EXCLUSION. `orUnrepresented` is consulted whenever the tier
+ * fails, and an exclusion failing is the one refusal that must stand: "any field except Liberal
+ * Arts" bars a liberal-arts student whatever else the sentence says, and softening that to
+ * `unknown` would be a route around a bar the funder wrote in so many words. Same rule, and the
+ * same reason, as the `anyOf` alternative below carrying `excludedFields` rather than dropping it.
+ */
+function unadjudicableDomains(fields: string[], excludedFields: string[]): string | undefined {
+  if (excludedFields.length > 0) return undefined;
+  const domains = fields.filter(namesADomain);
+  return domains.length > 0 ? domains.join(', ') : undefined;
+}
+
 function fieldSpec(fields: string[], excludedFields: string[]): ConstraintSpec {
-  return { axis: 'field_of_study', fields, excludedFields };
+  const orUnrepresented = unadjudicableDomains(fields, excludedFields);
+  return {
+    axis: 'field_of_study',
+    fields,
+    excludedFields,
+    ...(orUnrepresented !== undefined ? { orUnrepresented } : {}),
+  };
 }
 
 /**

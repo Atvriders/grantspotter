@@ -313,6 +313,59 @@ function extractCountyNames(text: string): string[] {
   return [...names];
 }
 
+/**
+ * A COUNTY NAME WITHOUT ITS STATE IS A DIFFERENT COUNTY IN THIRTY OTHER STATES.
+ *
+ * `parseCountyValue` (core/geo.ts) reads a value with no comma as state-agnostic and PASSES on a
+ * bare name match, so the Peoria Area Amateur Radio Club Scholarship — "Residence in Central IL in
+ * one of these counties: Peoria, Tazewell, Woodford, Knox, MCLEAN, FULTON, LOGAN, MARSHALL or
+ * Stark" — admitted a resident of Fulton County GEORGIA and Knox County TENNESSEE to an
+ * Illinois-only award. That is a false INCLUDE, the opposite polarity to most of this round: it
+ * costs an applicant an afternoon on a form rather than the award, which is why it is fixed and
+ * why the fix is written to be incapable of the other kind of error.
+ *
+ * THE STATE COMES FROM THE FUNDER'S OWN SENTENCE OR IT DOES NOT COME AT ALL. The qualifier is
+ * attached only when the very text the county list was read from names EXACTLY ONE state — "Central
+ * IL", "Pasco County, Florida", "San Diego or Imperial Counties, CA". Two states named (Shenandoah
+ * Valley's "the following Virginia counties: … or the following West Virginia counties: …") is
+ * ambiguous per county and is left alone; none named (Austin ARC's `counties` field is the bare
+ * list "Travis, Bastrop, …, and Williamson counties.") would mean inventing a value, which this
+ * axis's county reader refuses to do everywhere else and refuses here.
+ *
+ * IT CANNOT MANUFACTURE A REFUSAL FOR SOMEONE IN THE RIGHT COUNTY. `evaluateGeo`'s county branch
+ * answers `unknown` with `missing: ['state']` — a field the editor can offer — when the applicant
+ * named a matching county but no state, rather than failing them. So the worst this does to a real
+ * Peoria-county applicant who left `state` empty is ask them for it.
+ */
+function qualifyCountiesWithState(counties: string[], text: string): string[] {
+  const states = statesIn(text);
+  if (states.length !== 1) return counties;
+  return counties.map((county) => `${county}, ${states[0]}`);
+}
+
+/**
+ * THE FUNDER GLOSSED THE CALL DISTRICT WITH THE STATES IN IT, AND THE SENTENCE IS ABOUT RESIDENCE.
+ *
+ *   Fred R. McDaniel Memorial  "RESIDENT OF FCC 5th call district (TX, OK, AR, LA, MS, NM)"
+ *
+ * `call_district` is a property of a CALLSIGN — `evaluateGeo` falls back to
+ * `callDistrictFromCallsign` — and the sentence states a rule about where the applicant LIVES,
+ * with the six states spelled out in the funder's own parenthesis. A Texas resident holding a
+ * callsign issued in another district (a ham who moved, or holds a vanity call — both legal, both
+ * common, and neither is a change of address) was hard-refused by a rule they satisfy.
+ *
+ * The remedy is the second tier rather than a replacement: the district reading is the funder's
+ * first-named one and still admits everyone it admitted, and `anyOf` can only turn a refusal into
+ * a pass. Emitted only when the text names states BESIDE the district — the funder's own gloss,
+ * never a guess. One record in the corpus qualifies; the Clive Frazier K9FWF preference ("the 9th
+ * call area or attending a Big Ten school") names no state and is untouched.
+ */
+function callDistrictStateTier(text: string, base: GeoSpec): GeoSpec | undefined {
+  if (base.type !== 'call_district') return undefined;
+  const states = statesIn(text);
+  return states.length > 0 ? { type: 'state', values: states } : undefined;
+}
+
 function geoFrom(text: string): GeoSpec {
   const radius = RADIUS.exec(text);
   if (radius) {
@@ -343,7 +396,9 @@ function geoFrom(text: string): GeoSpec {
   if (sections.length > 0) return { type: 'arrl_section', values: sections };
 
   const counties = extractCountyNames(text);
-  if (counties.length > 0) return { type: 'county', values: counties };
+  if (counties.length > 0) {
+    return { type: 'county', values: qualifyCountiesWithState(counties, text) };
+  }
 
   const states = statesIn(text);
   if (states.length > 0) return { type: 'state', values: states };
@@ -425,6 +480,11 @@ function alternativeGeos(text: string, base: GeoSpec): GeoSpec[] {
     if (found.some((g) => sameGeo(g, geo))) return;
     found.push(geo);
   };
+
+  // The funder's own gloss of a call district — see `callDistrictStateTier`. Added first so it
+  // reads as the district's own second tier rather than as one of the marker-found spans below.
+  const districtStates = callDistrictStateTier(text, base);
+  if (districtStates !== undefined) add(districtStates);
 
   for (const marker of [HANDOFF_MARKER, EXPLICIT_WIDENING_MARKER]) {
     marker.lastIndex = 0;
