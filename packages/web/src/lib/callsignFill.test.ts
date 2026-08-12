@@ -212,7 +212,37 @@ describe('building the values and the markers a host writes', () => {
     expect(coordinateSubjectPhrase('street_address')).toMatch(/street address on the licence/i);
     expect(coordinateSubjectPhrase('street_address')).not.toMatch(/POST OFFICE/);
     expect(coordinateSubjectPhrase('address_not_stated')).toMatch(/no address beside it at all/i);
-    expect(coordinateSubjectLabel('po_box')).toBe('a post office');
+  });
+
+  /**
+   * THE PO-BOX ARM SAYS WHOSE CLAIM THE POST OFFICE IS, and that assertion is the inverse of the
+   * one made here until 2026-08-12 (`coordinateSubjectLabel('po_box')` was pinned to exactly
+   * `'a post office'`). What changed is not the standard but a correction: `geocodeSubject` in
+   * `callook.ts` decides this arm by asking whether the address LINE names a box, and its own
+   * header says `8 CLARKSON AVE, P.O. BOX 8550` (K2CC, a committed fixture) names both and that
+   * "which of the two callook geocoded is not stated anywhere in the response". A flat "this
+   * coordinate IS a post office" is therefore a claim the record does not support on precisely the
+   * record this codebase flags as ambiguous — and it was being printed over a number that may be
+   * the campus, to a reader whose job on that panel is to check the record against reality.
+   *
+   * The caution is unchanged and still loud: POST OFFICE, in capitals, in the long phrase. What the
+   * two strings now carry is which half is the record's (the line names a box) and which half is
+   * GrantSpotter's (so it is read as a mail drop).
+   */
+  it('states the PO-box reading as a reading, in both the long and the short form', () => {
+    const phrase = coordinateSubjectPhrase('po_box');
+    // The record's half, and GrantSpotter's half, in the phrase the panel and confirmation share.
+    expect(phrase).toMatch(/an address line that names a PO box/i);
+    expect(phrase).toMatch(/cautious reading rather than something stated/i);
+    // What must NOT come back: the unqualified assertion about what the licence gives.
+    expect(phrase).not.toMatch(/geocode of the PO box on the licence/i);
+
+    // The short form is where this was most likely to be lost, because it is what the live region
+    // reads out to somebody who cannot see the panel it summarises.
+    expect(coordinateSubjectLabel('po_box')).toBe('a geocode of a PO-box address line');
+    expect(coordinateSubjectLabel('po_box')).not.toBe('a post office');
+    // Still one label per arm, and still nothing shared between a street and a box.
+    expect(new Set((['street_address', 'po_box', 'address_not_stated'] as const).map(coordinateSubjectLabel)).size).toBe(3);
   });
 
   /**

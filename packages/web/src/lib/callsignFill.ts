@@ -18,8 +18,8 @@ import {
  * and the two must not arrive at the host looking the same.
  *
  * They did. Every accepted value used to be a bare string carrying one shared `provenance`, and
- * both hosts (the profile editor and the first-run screen) stamped that provenance onto every
- * field they wrote. So choosing EXTRA for a record whose class is ADVANCED — which is exactly what
+ * both hosts of the day (the profile editor and a first-run screen that has since stopped
+ * rendering the lookup panel at all) stamped that provenance onto every field they wrote. So choosing EXTRA for a record whose class is ADVANCED — which is exactly what
  * the panel ASKS the user to do, because the three legacy classes map onto none of GrantSpotter's
  * four — stored `fieldSources.licenseClass = { source: 'callook.info', value: 'EXTRA' }`. callook
  * never said EXTRA. Measured on 2026-08-04 over the 143-record publishable seed corpus, for an
@@ -141,10 +141,31 @@ export function coordinateSubjectPhrase(from: GeocodedFrom): string {
         'callook’s geocode of the street address on the licence — where the licence receives ' +
         'post, which is not necessarily where the station or the antenna is'
       );
+    /*
+     * THE CAUTION, STATED AS CAUTION — because the classification behind it is one.
+     *
+     * This read "callook’s geocode of the PO box on the licence, which makes it a POST OFFICE" and
+     * that is a flat factual claim this product cannot make. `geocodeSubject` in `callook.ts`
+     * decides `po_box` by asking whether the address LINE names a box, and says in its own header
+     * that `8 CLARKSON AVE, P.O. BOX 8550` — a real fixture, K2CC — names both, and that "which of
+     * the two callook geocoded is not stated anywhere in the response". So on the very record this
+     * codebase flags as ambiguous, the sentence was printed over a coordinate that may be the
+     * campus.
+     *
+     * The classification does not change and must not: the cautious reading is the right one, for
+     * the reason `callook.ts` gives — "labelling a street geocode as a mail drop costs a caveat
+     * nobody needed, and the other way round costs a verdict computed from a post office". What
+     * changes is that the caveat now says which part is the record's and which part is
+     * GrantSpotter's, because a reader deciding whether a number is close enough to answer a
+     * radius rule with is entitled to know that the worst case is an assumption rather than a
+     * finding. POST OFFICE stays in capitals; it is still the thing to notice.
+     */
     case 'po_box':
       return (
-        'callook’s geocode of the PO box on the licence, which makes it a POST OFFICE — not the ' +
-        'station, not the antenna and not the campus'
+        'callook’s geocode of an address line that names a PO box, which GrantSpotter therefore ' +
+        'reads as a POST OFFICE — not the station, not the antenna and not the campus. A line ' +
+        'that names a box can name a street too, and the record never says which of the two was ' +
+        'geocoded, so the box is the cautious reading rather than something stated'
       );
     case 'address_not_stated':
       return (
@@ -154,13 +175,22 @@ export function coordinateSubjectPhrase(from: GeocodedFrom): string {
   }
 }
 
-/** Two or three words for the same thing, where a whole clause will not fit. */
+/**
+ * A few words for the same thing, where a whole clause will not fit — the live region's "the
+ * coordinate came from the record and is …", and the panel's "replaces it with …".
+ *
+ * The PO-box arm said "a post office" until 2026-08-12 and is three words longer now for the
+ * reason set out beside its clause above: the record states that the address LINE names a box, and
+ * everything past that is GrantSpotter reading it cautiously. The short form is where that
+ * distinction was most likely to be lost, because the live region is the whole of this panel for
+ * the one reader who cannot see it — so it is the last place to state a classification as a fact.
+ */
 export function coordinateSubjectLabel(from: GeocodedFrom): string {
   switch (from) {
     case 'street_address':
       return 'a street address';
     case 'po_box':
-      return 'a post office';
+      return 'a geocode of a PO-box address line';
     case 'address_not_stated':
       return 'an unattributed point';
   }
@@ -355,8 +385,11 @@ export function derivedProfileValues(
  *      asserted against core's zod mirrors — a marker the schema would strip on save is a badge
  *      that shows on screen and vanishes on reload, which is worse than no badge at all.
  *
- * Both hosts call this. They used to build markers themselves, in two places, with the same
- * mistake in each.
+ * Every host calls this, which today means `Profile.tsx` and nothing else — it said "BOTH hosts"
+ * until 2026-08-12, counting a first-run screen that does not render the lookup panel and never
+ * imports this module. The rule is not weaker for there being one caller: the reason markers are
+ * built here rather than at the host is that they were once built at two hosts, in two places,
+ * with the same mistake in each, and one caller is how many it takes to make that mistake again.
  */
 export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKind): CallsignFill {
   const fillable = new Set(callsignFillableFields(kind));

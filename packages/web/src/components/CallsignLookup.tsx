@@ -23,9 +23,17 @@ import './callsign.css';
 /**
  * "LOOK UP MY CALLSIGN", AND THE RECORD IT PUTS ON SCREEN.
  *
- * One control, used beside the callsign field on the profile editor and on the first-run
- * setup screen. It is the only place in this product where a value about the USER arrives
- * from somewhere other than the user, so the rules it keeps are the whole point of it:
+ * One control, used beside the callsign field on the profile editor. IT SAID "AND ON THE FIRST-RUN
+ * SETUP SCREEN" UNTIL 2026-08-12, and that had not been true for a while: `Profile.tsx:1060` is the
+ * only render site in this repository and `FirstRun.tsx` mentions neither this component nor its
+ * module. This is the same stale sentence the README was corrected of at its lines 272 and 337,
+ * left standing in the file the README was describing — so it is worth saying why it matters
+ * rather than just deleting it. A host that does not exist is a host nobody tests, and every prop
+ * and paragraph written for it (a setup-token credential, a "no saved profile behind us" caveat)
+ * is dead weight that reads as a live requirement to the next person.
+ *
+ * It is the only place in this product where a value about the USER arrives from somewhere other
+ * than the user, so the rules it keeps are the whole point of it:
  *
  *  1. NOTHING IS FILLED IN UNTIL THE PERSON SAYS SO. The panel shows what was found and
  *     waits. There is no auto-fill on success.
@@ -80,9 +88,12 @@ export type CallsignTarget = 'student' | 'organization';
  * the applicant has not answered that field, which is the common case and the one with nothing to
  * warn about.
  *
- * OPTIONAL, and honestly so: the first-run screen this component is also written for has no saved
- * profile behind it, so "nothing is held" is the truth there rather than a default standing in for
- * one.
+ * OPTIONAL, because a host may genuinely have nothing behind the panel — and NOT, as this said
+ * until 2026-08-12, because "the first-run screen this component is also written for has no saved
+ * profile behind it". There is no such screen; see the header. `Profile.tsx` is the only host and
+ * it always passes this, reading it off the OPEN DRAFT rather than off the saved profile, so an
+ * absent `held` today means a caller that has not been written yet rather than a form known to be
+ * empty. The panel says nothing about replacement in that case, which is the safe way to be wrong.
  */
 export interface HeldProfileValues {
   state?: string;
@@ -103,12 +114,19 @@ export interface CallsignLookupProps {
    */
   target: CallsignTarget;
   onAccept: (values: AcceptedCallsign) => void;
-  /** First run only: the one-time setup token, which is the caller's only credential. */
-  setupToken?: string;
+  /*
+   * `setupToken?: string` WAS HERE AND IS GONE (2026-08-12). It was the one-time first-run token,
+   * passed down so a caller with no session could still look a callsign up, and the server retired
+   * that privilege on 2026-08-11. The request type it fed carries the measurement: a body with the
+   * key is now a 422 `unrecognized_keys`, the same body without it is a 200. See
+   * `api/callsign.ts`'s `CallsignLookupRequest`.
+   */
   /**
-   * What this host can and cannot do with a CLUB record. It differs per screen — the profile
-   * editor has an organisation tab to send the user to, the setup screen does not — so the
-   * host supplies the sentence rather than this component guessing at it.
+   * What this host can and cannot do with a CLUB record. It differs per host — the profile editor
+   * has an organisation tab to send the user to, and a host without one has something else to say
+   * — so the host supplies the sentence rather than this component guessing at it. (It read "the
+   * setup screen does not" until 2026-08-12, naming a screen that does not render this panel; the
+   * argument for the prop is unchanged, and it is now stated without an example that is not real.)
    */
   clubNotice?: ReactNode;
 }
@@ -157,6 +175,78 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set<LookupStatus>([
   'updating',
   'unavailable',
 ]);
+
+/**
+ * THE SAME GUARD, ON THE TWO FIELDS THIS ROUND PUT ON THE WIRE — because the argument for
+ * `KNOWN_STATUSES` was never about statuses.
+ *
+ * It is about `api/callsign.ts` being a HAND COPY of a type on the other side of a process
+ * boundary, about this app being served behind a tunnel, and about a 200 being answerable by a
+ * proxy, a stale build or a captive portal with anything at all. `mailingGeocode` and
+ * `geocodeRefusal` arrived on 2026-08-11 with no such guard, and both were narrowed by an
+ * exhaustive `switch` whose `undefined` fall-through is not a blank sentence but a THROW.
+ *
+ * Measured on 2026-08-12 in Chromium against the real SPA on a real server: a profile with
+ * Latitude 42.3601, Longitude -71.0942 and a Field of study typed in and NOT saved, answered with
+ * `{"geocodedFrom":"street_and_po_box", …}`, gave `TypeError: Cannot read properties of undefined
+ * (reading 'latitude')`, `document.body.innerText.length === 0` and `document.querySelectorAll(
+ * 'input').length === 0`. The whole application, and every unsaved answer in it, destroyed by one
+ * field of one record. Nobody has to be attacking: a browser holding yesterday's bundle against an
+ * upgraded server is enough, and `callook.ts` openly contemplates a fourth arm for a K2CC-style
+ * line carrying a street AND a box.
+ *
+ * The rule this file follows, therefore: WHATEVER THE WIRE NARROWS ON IS CHECKED AGAINST A RUNTIME
+ * SET BEFORE THE SWITCH SEES IT, and whatever the switch then reaches is checked for the shape it
+ * is declared to have. An unrecognised arm becomes a sentence saying so, which is what the reader
+ * is owed and is also all that can honestly be said.
+ */
+const KNOWN_GEOCODED_FROM: ReadonlySet<string> = new Set<GeocodedFrom>([
+  'street_address',
+  'po_box',
+  'address_not_stated',
+]);
+
+/**
+ * The evidence each refusal arm is DECLARED to carry, so a body that omits a field cannot render a
+ * sentence with a hole in it.
+ *
+ * `satisfies` is what keeps this honest: adding an arm to `GeocodeRefusal` in `api/callsign.ts`
+ * fails to compile here until its evidence is written down, exactly as `frameFor`'s switch fails
+ * for a new status. The MAP is what is exported to the runtime, because `Record` lookup on a key
+ * that is not in the type is `undefined` while tsc goes on believing it is a `string[]` — which is
+ * the same class of lie this whole block exists to stop.
+ */
+const REFUSAL_EVIDENCE: ReadonlyMap<string, readonly string[]> = new Map(
+  Object.entries({
+    contradicted: ['gridsquare', 'containingLocator'],
+    unreadable_locator: ['gridsquare', 'because'],
+    locator_too_coarse: ['gridsquare'],
+    placeholder: [],
+    incomplete: [],
+  } satisfies Record<NonNullable<CallsignRecord['geocodeRefusal']>['refused'], readonly string[]>),
+);
+
+/** A `GeocodedPoint` as declared, or `undefined` — the three parts, or nothing at all. */
+function readPoint(value: unknown): GeocodedPoint | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { latitude, longitude, gridsquare } = value as Partial<GeocodedPoint>;
+  if (typeof latitude !== 'number' || !Number.isFinite(latitude)) return undefined;
+  if (typeof longitude !== 'number' || !Number.isFinite(longitude)) return undefined;
+  if (typeof gridsquare !== 'string' || gridsquare.trim() === '') return undefined;
+  return { latitude, longitude, gridsquare };
+}
+
+/**
+ * Whatever the wire called something this build does not know, quoted, or nothing.
+ *
+ * Quoted with `JSON.stringify` for the reason `unreadable_locator` quotes its grid square: the
+ * value is the one piece of evidence about what went wrong, and an unquoted one is indistinguishable
+ * from the sentence around it. Non-strings are not printed at all — an object rendered into a
+ * paragraph as `[object Object]` tells the reader nothing and looks like a fault in the page.
+ */
+function quotedArm(value: unknown): string {
+  return typeof value === 'string' && value.trim() !== '' ? ` (${JSON.stringify(value)})` : '';
+}
 
 /**
  * What the values that just left this panel were attributed to — the two lists `fillFromLookup`
@@ -521,6 +611,32 @@ function contradictedNote(gridsquare: string, containingLocator: string): string
 }
 
 /**
+ * THE SENTENCE FOR A COORDINATE THIS BUILD CANNOT READ — which is a refusal like any other, and is
+ * told to the reader like one.
+ *
+ * The alternative was to render nothing for these records, and rendering nothing is what the
+ * server was measured doing on 2026-08-11 before `GeocodeRefusal` existed: the address note then
+ * said the state was all that was kept from those lines, over a record that had also stated a
+ * position. The reader is not owed our diagnosis, but they are owed the fact that something was
+ * there and is not being used — and the honest form of that, when the shape is unrecognised, is to
+ * say which part could not be read and that the boxes are empty because of it.
+ *
+ * NO NUMBER IS QUOTED, for exactly the reason the `'refused'` arm quotes none: a value this panel
+ * has just said it cannot vouch for, printed anyway, is an invitation to type it in by hand.
+ */
+function unreadableGeocodeNote(because: string): string {
+  return (
+    'This record states a position that GrantSpotter cannot read: ' +
+    `${because}. A latitude and a longitude are used here for one thing only — rules of the form ` +
+    '“within 250 miles of Seaford, Delaware” — and answering one of those from a number whose ' +
+    'shape this page did not recognise would be a verdict about you computed from something ' +
+    'nobody has identified. So nothing from it is offered, in the boxes or one press away. The ' +
+    'usual cause is a browser holding an older version of GrantSpotter than the server it is ' +
+    'talking to: reload the page. Type a location in yourself if you need radius rules answered.'
+  );
+}
+
+/**
  * WHY THE BOXES ARE EMPTY WHEN THE RECORD DID STATE SOMETHING.
  *
  * The server refuses a location it cannot vouch for and sends the reason rather than the numbers.
@@ -531,6 +647,43 @@ function contradictedNote(gridsquare: string, containingLocator: string): string
  * statuses do.
  */
 function refusalNote(refusal: NonNullable<CallsignRecord['geocodeRefusal']>): string {
+  /*
+   * THE REASON IS CHECKED BEFORE IT IS SWITCHED ON, AND SO IS THE EVIDENCE IT IS SUPPOSED TO CARRY.
+   *
+   * Two measurements from 2026-08-12, in Chromium against the real SPA, before this guard:
+   *
+   *   {"refused":"geocoder_unavailable"}                  → the panel rendered ONE EMPTY <p>
+   *   {"refused":"contradicted","gridsquare":"FN31pr"}    → "…the coordinate beside it falls in
+   *                                                          undefined instead."
+   *
+   * The first is the worse of the two, because of what is printed directly above it: "This record
+   * did state a position for these lines, and GrantSpotter is not passing it on — THE REASON IS
+   * BELOW." A promise, and then a blank line. The argument that put `GeocodeRefusal` on the wire in
+   * the first place was that "silence about a refusal is a claim that there was nothing to refuse";
+   * a promised reason that renders as nothing is that same silence with a pointer at it.
+   *
+   * The second prints a locator that does not exist as though the record had stated one. The
+   * sentence is evidence — it is the whole basis for calling a record self-contradictory — and
+   * evidence with `undefined` in it is worse than no sentence, because a reader who goes to check
+   * the FCC record against it has been sent after a grid square nobody named.
+   */
+  const wire = refusal as Record<string, unknown>;
+  const evidence = typeof wire.refused === 'string' ? REFUSAL_EVIDENCE.get(wire.refused) : undefined;
+  const missing =
+    evidence === undefined ||
+    evidence.some((field) => typeof wire[field] !== 'string' || (wire[field] as string).trim() === '');
+  if (missing) {
+    return (
+      'This record stated a position and GrantSpotter is not passing it on. The reason it gave' +
+      `${quotedArm(wire.refused)} is not one this page can explain: either it is a reason this ` +
+      'build does not know, or the answer arrived without the detail the sentence for it is made ' +
+      'of. That normally means this page is older than the server that answered it — reload it, ' +
+      'and if nothing changes, the two are not the same version of GrantSpotter. Nothing from the ' +
+      'position is in the boxes either way. Type a location in yourself if you need radius rules ' +
+      'answered.'
+    );
+  }
+
   switch (refusal.refused) {
     case 'contradicted':
       return contradictedNote(refusal.gridsquare, refusal.containingLocator);
@@ -573,10 +726,28 @@ export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefine
       : { kind: 'refused', note: refusalNote(record.geocodeRefusal) };
   }
 
-  // The exhaustive switch is the point of the type: there is no way to reach the numbers without
-  // first saying which of the three things they are, so the paragraph above cannot be skipped by
-  // somebody who only wanted a latitude.
-  const point: GeocodedPoint = ((): GeocodedPoint => {
+  /*
+   * WHAT THE WIRE SAID IT IS, CHECKED BEFORE THE SWITCH NARROWS ON IT.
+   *
+   * The exhaustive switch below is the point of the type — there is no way to reach the numbers
+   * without first saying which of the three things they are, so the paragraph above cannot be
+   * skipped by somebody who only wanted a latitude. What tsc's exhaustiveness does NOT do is
+   * survive contact with a fourth arm, because a `switch` with three cases and no default returns
+   * `undefined`, and `undefined.latitude` is a THROW during render. See `KNOWN_GEOCODED_FROM` for
+   * the measurement: the whole page, and the applicant's unsaved coordinate and field of study
+   * with it.
+   */
+  if (!KNOWN_GEOCODED_FROM.has(geocode.geocodedFrom)) {
+    return {
+      kind: 'refused',
+      note: unreadableGeocodeNote(
+        'it says the coordinate is a geocode of something this page has no name for' +
+          quotedArm(geocode.geocodedFrom),
+      ),
+    };
+  }
+
+  const stated: unknown = ((): unknown => {
     switch (geocode.geocodedFrom) {
       case 'street_address':
         return geocode.mailingAddress;
@@ -586,6 +757,21 @@ export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefine
         return geocode.unattributed;
     }
   })();
+
+  /*
+   * AND THE POINT ITSELF, because the key being right does not make what is under it a point. A
+   * body with the arm spelled correctly and `{"poBox":{}}` beside it renders "This record states
+   * the position undefined, undefined" and then asks `checkCoordinateAgainstLocator` to compare a
+   * missing latitude with a missing grid square. `GeocodedPoint` is all three parts or none — the
+   * server's own rule for the field — so it is read that way here rather than trusted.
+   */
+  const point = readPoint(stated);
+  if (point === undefined) {
+    return {
+      kind: 'refused',
+      note: unreadableGeocodeNote('the latitude, longitude and grid square did not all arrive'),
+    };
+  }
 
   const agreement = checkCoordinateAgainstLocator(point.latitude, point.longitude, point.gridsquare);
   if (agreement.status === 'outside') {
@@ -615,9 +801,14 @@ export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefine
     note:
       `This coordinate is ${coordinateSubjectPhrase(geocode.geocodedFrom)}. GrantSpotter has left ` +
       'the boxes empty rather than fill them with it: latitude and longitude are read for one ' +
-      'thing only, rules of the form “within 70 miles of Schenectady”, and that is a verdict about ' +
-      'you which this software will not compute from a number you did not choose. Use it if it is ' +
-      'close enough that you are happy answering those rules with it.',
+      // ONE EXAMPLE OF ONE RULE PER SCREEN. This read “within 70 miles of Schenectady” while the
+      // note three paragraphs below the same two boxes read “within 250 miles of Seaford,
+      // Delaware” — two different examples of the same thing, a few inches apart, one of which is
+      // the rule this profile is actually judged against (the Chick Allen Memorial Scholarship, in
+      // the seed corpus, is the measurement that put the coordinate rule where it is).
+      'thing only, rules of the form “within 250 miles of Seaford, Delaware”, and that is a ' +
+      'verdict about you which this software will not compute from a number you did not choose. ' +
+      'Use it if it is close enough that you are happy answering those rules with it.',
   };
 }
 
@@ -634,7 +825,6 @@ export function CallsignLookup({
   held,
   target,
   onAccept,
-  setupToken,
   clubNotice,
 }: CallsignLookupProps): JSX.Element {
   const baseId = useId();
@@ -646,10 +836,10 @@ export function CallsignLookup({
   async function run(): Promise<void> {
     setPhase({ kind: 'busy' });
     try {
-      const result = await postCallsignLookup({
-        callsign: typed,
-        ...(setupToken === undefined || setupToken === '' ? {} : { setupToken }),
-      });
+      // The callsign, and nothing else. A `setupToken` was spread in here until 2026-08-12 and the
+      // server has refused the key since 2026-08-11 — `{callsign,setupToken}` measured as a 422
+      // `unrecognized_keys` against a server started from this tree, `{callsign}` as a 200.
+      const result = await postCallsignLookup({ callsign: typed });
       setPhase(
         KNOWN_STATUSES.has(result.status)
           ? { kind: 'answered', result }
@@ -1131,7 +1321,28 @@ function FoundPanel({
           <address>{addressLines.join('\n')}</address>
           <p className="callsign-note">
             The address is here so you can confirm this is your record.
-            {record.isPoBox ? ' The FCC record gives a PO box rather than a street address.' : ''}{' '}
+            {/* WHAT THE RECORD SAYS, NOT WHAT THE CLASSIFICATION ASSUMED. This read "The FCC
+                record gives a PO box rather than a street address." for any `isPoBox` record, and
+                on K2CC — the fixture this codebase itself flags as ambiguous — it printed that
+                directly beneath a rendered address reading "8 CLARKSON AVE, P.O. BOX 8550".
+                Measured in Chromium on 2026-08-12: both strings on screen, one contradicting the
+                other. `callook.ts`'s `geocodeSubject` says as much in its own words — "A LINE
+                CARRYING BOTH IS A BOX … which of the two callook geocoded is not stated anywhere
+                in the response" — so `isPoBox` means the line NAMES a box, and the cautious
+                reading of an ambiguous line is deliberately not the same claim as "there is no
+                street address here". The panel exists so the reader can confirm the record is
+                theirs; telling them the record says something it does not is the one thing that
+                cannot be allowed to happen on it. The caution is still stated, and stated as
+                caution. */}
+            {record.isPoBox
+              ? ' The address line on this record names a PO box' +
+                (geocode?.kind === 'offered'
+                  ? ' — and a line that names one may name a street as well, with nothing in the ' +
+                    'record saying which of the two the coordinate below was geocoded from. ' +
+                    'GrantSpotter reads it as the box, which is the cautious way round rather ' +
+                    'than something the record states.'
+                  : '.')
+              : ''}{' '}
             GrantSpotter does not store it: there is no field for a street address and nothing in
             the product reads one. What is kept is the state — eligibility rules are written in
             terms of states, ARRL Divisions and ARRL Sections —{' '}

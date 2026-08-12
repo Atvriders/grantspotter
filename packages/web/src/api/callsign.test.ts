@@ -95,6 +95,51 @@ function unionLiterals(body: string): string[] {
   return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1] ?? '');
 }
 
+/**
+ * Every `{ … }` arm of a union type body, brace-balanced, in the order written.
+ *
+ * THIS REPLACES TWO HAND-WRITTEN REGEXES THAT DID NOT DO WHAT THIS FILE'S HEADER SAYS IS DONE TO
+ * EVERY MEMBER — "its name, its `?`, and the TYPE TEXT after the colon — is compared, in both
+ * directions". The `GeocodeRefusal` one read `/(\w+)\??:\s*(\w+)/g`: `\??` MATCHED the optional
+ * marker and then discarded it, and `(\w+)` could only ever capture a single-word type. The
+ * `MailingGeocode` one read `/geocodedFrom:\s*'([a-z_]+)';\s*(\w+):/g` and captured the KEY alone,
+ * never the type after it. Measured by breaking each, on 2026-08-12, with
+ * `npx vitest run packages/web/src/api/callsign.test.ts` after each edit:
+ *
+ *   web `containingLocator: string`  → `containingLocator?: string`      NOT CAUGHT
+ *   web `poBox: GeocodedPoint`       → `poBox: { latitude: number; … }`  NOT CAUGHT
+ *
+ * Both are exactly the drift this file exists to stop, and both are worse than a missing field.
+ * An optional `containingLocator` is a browser rendering "the coordinate beside it falls in
+ * undefined instead" — measured happening in Chromium the same day. An inlined point is the
+ * flattening the `MailingGeocode` assertion's own comment warns about, one step from the shape it
+ * says "would compile, would look tidier, and would hand the browser a post office
+ * indistinguishable from a street address".
+ *
+ * So the arms are split structurally and handed to `members()`, which is the same parser the
+ * interface assertions use and the one that already compares optionality and full type text. The
+ * technique was in the file; it was the two flourishes that were not using it.
+ */
+function unionArms(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        out.push(body.slice(start + 1, i));
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
 /** `name`, `name?` and the type text after the colon, for one level of an object body. */
 function members(body: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -157,23 +202,34 @@ describe('the web mirror of the server callsign types', () => {
     expect(sortedMembers(web, 'CallsignLookupResult')).toEqual(expected);
   });
 
+  /**
+   * `discriminant { name?: type; … }` for every arm of a union, fields sorted by name.
+   *
+   * Sorted for the same reason `sortedMembers` sorts: this file compares everything about a member
+   * except where it was written. Built on `members()` rather than on a regex of its own, which is
+   * the whole correction of 2026-08-12 — see {@link unionArms}.
+   */
+  function armMembers(source: string, name: string, discriminant: string): string[] {
+    return unionArms(typeBody(source, name)).map((arm) => {
+      const fields = [...members(arm)].sort((a, b) => a[0].localeCompare(b[0]));
+      const tag = fields.find(([field]) => field === discriminant)?.[1] ?? '<no discriminant>';
+      return `${tag} { ${fields.map(([field, type]) => `${field}: ${type}`).join('; ')} }`;
+    });
+  }
+
   it('states the same reasons for refusing a location, with the same evidence on each', () => {
     // `GeocodeRefusal` is the second shape of the coordinate answer, and it is the one the panel
     // reads to explain an empty box. An arm the browser cannot see is a reason the reader is not
-    // given — which is the whole defect that put this type on the wire.
-    const arms = (source: string): string[] =>
-      [...typeBody(source, 'GeocodeRefusal').matchAll(/refused:\s*'([a-z_]+)'([^}]*)/g)].map(
-        (m) =>
-          `${m[1] ?? ''}(${[...(m[2] ?? '').matchAll(/(\w+)\??:\s*(\w+)/g)]
-            .map((f) => `${f[1] ?? ''}:${f[2] ?? ''}`)
-            .join(',')})`,
-      );
+    // given — which is the whole defect that put this type on the wire. An arm whose evidence is
+    // OPTIONAL in one copy is a worse version of the same thing: the sentence is built from that
+    // evidence, so the browser renders it with a hole where the missing half should be.
+    const arms = (source: string): string[] => armMembers(source, 'GeocodeRefusal', 'refused');
     expect(arms(server)).toEqual([
-      'contradicted(gridsquare:string,containingLocator:string)',
-      'unreadable_locator(gridsquare:string,because:string)',
-      'locator_too_coarse(gridsquare:string)',
-      'placeholder()',
-      'incomplete()',
+      "'contradicted' { containingLocator: string; gridsquare: string; refused: 'contradicted' }",
+      "'unreadable_locator' { because: string; gridsquare: string; refused: 'unreadable_locator' }",
+      "'locator_too_coarse' { gridsquare: string; refused: 'locator_too_coarse' }",
+      "'placeholder' { refused: 'placeholder' }",
+      "'incomplete' { refused: 'incomplete' }",
     ]);
     expect(arms(web)).toEqual(arms(server));
   });
@@ -189,14 +245,18 @@ describe('the web mirror of the server callsign types', () => {
     // until the consumer has narrowed to the arm that has one. A mirror that flattened the three
     // arms into `{ geocodedFrom, point }` would compile, would look tidier, and would hand the
     // browser a post office indistinguishable from a street address.
+    //
+    // AND THE TYPE UNDER THE KEY IS COMPARED TOO, SINCE 2026-08-12. The regex here captured
+    // `geocodedFrom -> key` and stopped at the colon, so `poBox: GeocodedPoint` rewritten as an
+    // inline `{ latitude: number; longitude: number; gridsquare: string }` passed — a copy that had
+    // stopped mirroring `GeocodedPoint` at all, which is one edit away from the flattening
+    // described above and reads as a deliberate difference to nobody.
     const arms = (source: string): string[] =>
-      [...typeBody(source, 'MailingGeocode').matchAll(/geocodedFrom:\s*'([a-z_]+)';\s*(\w+):/g)].map(
-        (m) => `${m[1] ?? ''}->${m[2] ?? ''}`,
-      );
+      armMembers(source, 'MailingGeocode', 'geocodedFrom');
     expect(arms(server)).toEqual([
-      'street_address->mailingAddress',
-      'po_box->poBox',
-      'address_not_stated->unattributed',
+      "'street_address' { geocodedFrom: 'street_address'; mailingAddress: GeocodedPoint }",
+      "'po_box' { geocodedFrom: 'po_box'; poBox: GeocodedPoint }",
+      "'address_not_stated' { geocodedFrom: 'address_not_stated'; unattributed: GeocodedPoint }",
     ]);
     expect(arms(web)).toEqual(arms(server));
   });

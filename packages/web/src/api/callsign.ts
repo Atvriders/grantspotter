@@ -132,15 +132,28 @@ export interface CallsignLookupResult {
   message?: string;
 }
 
+/**
+ * THE WHOLE BODY, AND IT IS ONE FIELD.
+ *
+ * `setupToken?: string` WAS THE SECOND KEY AND IS GONE (2026-08-12). It carried the one-time
+ * first-run token as a credential for looking a callsign up before any account existed, and the
+ * server retired that privilege on 2026-08-11: `lookupBodySchema` is `.strict()` and no longer
+ * declares the key, so a body carrying one is not merely ignored — it is REFUSED. Measured against
+ * a server started from this tree on port 3231:
+ *
+ *   POST /api/callsign/lookup {"callsign":"W8UM","setupToken":"a1b2…f90"}  →  422
+ *       {"error":{"code":"validation_failed", … "code":"unrecognized_keys","keys":["setupToken"]}}
+ *   POST /api/callsign/lookup {"callsign":"W8UM"}                          →  200
+ *
+ * Both measured signed in; unauthenticated the first is still 422 and the second is 401, because
+ * the body is validated before the session is. The declaration outlived the server's by a day and
+ * `CallsignLookup.test.tsx` had a green assertion — under the name "sends the callsign the user
+ * typed, normalised, and nothing else" — pinning the body that gets the 422. Nothing sent one in
+ * production only because the sole render site never passed the prop, which is a latency, not a
+ * defence: a mirror that can only be wrong when somebody uses it is still wrong.
+ */
 export interface CallsignLookupRequest {
   callsign: string;
-  /**
-   * FIRST RUN ONLY. Before any account exists there is no session to authorise with, so the
-   * one-time setup token the operator read out of the server log is the caller's credential.
-   * The server checks it WITHOUT consuming it — spending it on a lookup would leave the
-   * operator holding a token that no longer creates the administrator account.
-   */
-  setupToken?: string;
 }
 
 /**

@@ -85,7 +85,6 @@ function renderLookup(
   options: {
     callsign?: string;
     target?: CallsignTarget;
-    setupToken?: string;
     /** What the form behind the panel already holds. Omitted means an empty form. */
     held?: HeldProfileValues;
   } = {},
@@ -97,7 +96,6 @@ function renderLookup(
       target={options.target ?? 'student'}
       {...(options.held === undefined ? {} : { held: options.held })}
       onAccept={onAccept}
-      {...(options.setupToken === undefined ? {} : { setupToken: options.setupToken })}
       clubNotice="Club details belong on the organization profile."
     />,
   );
@@ -363,17 +361,36 @@ describe('accept, edit, dismiss', () => {
     expect(onAccept).not.toHaveBeenCalled();
   });
 
+  /**
+   * THE ASSERTION UNDER THIS NAME WAS THE OPPOSITE OF ITS NAME UNTIL 2026-08-12.
+   *
+   * It rendered the panel with `setupToken: 'setup-token-1'` and then required the body to be
+   * `{callsign:'W8UM', setupToken:'setup-token-1'}` — "and nothing else", pinning a second thing.
+   * That was not merely redundant: the server retired the key on 2026-08-11 and `lookupBodySchema`
+   * is `.strict()`, so this suite was green on a request the running server refuses. Measured on
+   * 2026-08-12 against a server started from this tree (port 3231, my own DATA_DIR), signed in:
+   *
+   *   {"callsign":"W8UM","setupToken":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}  →  422
+   *       {"error":{"code":"validation_failed", … "unrecognized_keys", "keys":["setupToken"]}}
+   *   {"callsign":"W8UM"}                                                  →  200
+   *
+   * So the assertion is INVERTED rather than relaxed, and it is inverted because the DESIGN changed
+   * underneath it: the prop, the field on `CallsignLookupRequest` and the spread in `run()` are all
+   * gone, and what this now pins is the sentence its name always claimed — one key, and the exact
+   * body the server accepts.
+   */
   it('sends the callsign the user typed, normalised, and nothing else', async () => {
     const fetchMock = stubResult({ status: 'found', record: PERSON });
-    renderLookup({ callsign: ' w8um ', setupToken: 'setup-token-1' });
+    renderLookup({ callsign: ' w8um ' });
     await lookUp();
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/callsign/lookup');
-    expect(JSON.parse(String(init.body))).toEqual({
-      callsign: 'W8UM',
-      setupToken: 'setup-token-1',
-    });
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toEqual({ callsign: 'W8UM' });
+    // Named explicitly, so the day somebody restores the prop this fails by the retired key's own
+    // name rather than as an unexplained object mismatch.
+    expect(Object.keys(body)).not.toContain('setupToken');
   });
 
   it('cannot be pressed with an empty callsign box', () => {
@@ -502,8 +519,16 @@ describe('the coordinate, and what it is a geocode of', () => {
     // The number is on screen — withholding the value is not the same as hiding it.
     expect(screen.getByText(/42\.34991837/)).toBeInTheDocument();
     expect(screen.getByText(/POST OFFICE/)).toBeInTheDocument();
-    // And the reason it matters, in terms of the only thing that reads a coordinate here.
-    expect(screen.getByText(/within 70 miles of Schenectady/i)).toBeInTheDocument();
+    // And the reason it matters, in terms of the only thing that reads a coordinate here. The
+    // example is Seaford and not, as it was until 2026-08-12, "within 70 miles of Schenectady":
+    // the note three paragraphs further down the same screen names Seaford, and one screen giving
+    // two different examples of one rule reads as two different rules. Seaford is also the one
+    // this profile is really judged against — the Chick Allen Memorial Scholarship, in the seed
+    // corpus, is the trace `describeGeocode`'s header is built on.
+    // Two paragraphs name it — the offer's and the one under the boxes — and BOTH say Seaford,
+    // which is the point of this assertion rather than an accident of how it is written.
+    expect(screen.getAllByText(/within 250 miles of Seaford, Delaware/i)).toHaveLength(2);
+    expect(screen.queryByText(/Schenectady/i)).not.toBeInTheDocument();
 
     // Accepting without pressing the extra button sends no coordinate at all.
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
@@ -573,7 +598,12 @@ describe('the coordinate, and what it is a geocode of', () => {
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
 
     const live = liveRegion(container);
-    expect(live).toHaveTextContent(/The coordinate came from the record and is a post office/i);
+    // "…and is a post office" until 2026-08-12, which was the flat form of a cautious reading —
+    // see `coordinateSubjectLabel`. The live region is the whole panel for this reader, so it is
+    // the last surface that may state a classification as a finding.
+    expect(live).toHaveTextContent(
+      /The coordinate came from the record and is a geocode of a PO-box address line/i,
+    );
     expect(live).toHaveTextContent(
       /Latitude and Longitude were values you had already stated, and the record has replaced them/i,
     );
@@ -762,6 +792,203 @@ describe('the coordinate, and what it is a geocode of', () => {
     const note = await screen.findByText(/read for one purpose in GrantSpotter/i);
     expect(note).toHaveTextContent(/within 250 miles of Seaford, Delaware/i);
     expect(note).toHaveTextContent(/leaves those rules unanswered rather than answered against you/i);
+  });
+});
+
+/**
+ * A RESPONSE THIS BUILD DOES NOT RECOGNISE, WHICH IS NOT A HYPOTHETICAL AND IS NOT AN ATTACK.
+ *
+ * `api/callsign.ts` is a hand copy of a type on the other side of a process boundary, the product
+ * is deployed behind a Cloudflare tunnel, and a browser holding yesterday's bundle against an
+ * upgraded server is all it takes — `callook.ts`'s `geocodeSubject` openly contemplates a fourth
+ * `GeocodedFrom` for a line carrying a street AND a box. This file already accepted that argument
+ * once, for `status`, and `KNOWN_STATUSES` is the guard it produced. The two fields added on
+ * 2026-08-11 got no such guard, and each was narrowed by an exhaustive `switch` with no default.
+ *
+ * Every case below was measured in Chromium on 2026-08-12, in the real SPA served by a real
+ * server, with Latitude 42.3601, Longitude -71.0942 and a Field of study typed into the profile
+ * form and NOT saved. What each did before the guards:
+ *
+ *   {"geocodedFrom":"street_and_po_box", …}            TypeError: Cannot read properties of
+ *                                                      undefined (reading 'latitude');
+ *                                                      body.innerText === ""; 0 inputs on the page;
+ *                                                      all three typed values gone with it
+ *   {"refused":"geocoder_unavailable"}                 one empty <p> in the panel, under a
+ *                                                      sentence promising "the reason is below"
+ *   {"refused":"contradicted","gridsquare":"FN31pr"}   "…falls in undefined instead."
+ *
+ * The standard each is held to is the one the file already set for an unknown status: say what is
+ * true (something arrived, it is not being used, nothing was filled in), never invent the part
+ * that is missing, and never take the page down.
+ */
+describe('a record shaped like something this build has never seen', () => {
+  /** The crash, and the only assertion about it that matters: the form is still there. */
+  it('does not throw when the coordinate is filed under a fourth kind of address', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...W1AW_STREET,
+        mailingGeocode: {
+          // The shape `callook.ts` contemplates for `8 CLARKSON AVE, P.O. BOX 8550`, arriving at a
+          // browser whose bundle predates it. Cast because the point of the case is that the wire
+          // is NOT the type — this is exactly what the compiler cannot rule out.
+          geocodedFrom: 'street_and_po_box',
+          streetAndBox: { latitude: 44.66594, longitude: -74.992531, gridsquare: 'FN24mp' },
+        } as unknown as NonNullable<CallsignRecord['mailingGeocode']>,
+      },
+    });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    // The panel rendered at all, which is the whole test: `point.latitude` used to throw here and
+    // React unmounted the entire tree.
+    expect(await screen.findByRole('heading', { name: /FCC record for W1AW/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('');
+    // Told, not hidden — and told what could not be read, with the unknown arm quoted as evidence.
+    const note = await screen.findByText(/states a position that GrantSpotter cannot read/i);
+    expect(note).toHaveTextContent(/no name for \("street_and_po_box"\)/i);
+    expect(note).toHaveTextContent(/reload the page/i);
+    // No number is quoted from a position this panel has just said it cannot read, for the same
+    // reason the contradicted arm quotes none: it would be an invitation to type it in by hand.
+    expect(screen.queryByText(/44\.66594/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /use this coordinate anyway/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /** The arm is known and what is under it is not a point. Same rule: all three parts, or none. */
+  it('does not offer a coordinate whose three parts did not all arrive', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...W1AW_STREET,
+        mailingGeocode: {
+          geocodedFrom: 'street_address',
+          mailingAddress: { latitude: 41.714707 },
+        } as unknown as NonNullable<CallsignRecord['mailingGeocode']>,
+      },
+    });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    const note = await screen.findByText(/states a position that GrantSpotter cannot read/i);
+    expect(note).toHaveTextContent(/latitude, longitude and grid square did not all arrive/i);
+    // The old failure mode, which was quieter than a throw and worse than a refusal: the panel
+    // printed "This record states the position undefined, undefined".
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('');
+  });
+
+  /**
+   * THE PROMISE ABOVE THE PARAGRAPH IS WHAT MAKES AN EMPTY PARAGRAPH A LIE. The address note says
+   * "GrantSpotter is not passing it on — the reason is below", and until 2026-08-12 an unrecognised
+   * reason rendered that reason as `""`.
+   */
+  it('gives a reason for a refusal it does not recognise, rather than an empty paragraph', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...PERSON,
+        geocodeRefusal: { refused: 'geocoder_unavailable' } as unknown as NonNullable<
+          CallsignRecord['geocodeRefusal']
+        >,
+      },
+    });
+    const { container } = renderLookup();
+    await lookUp();
+
+    // The promise, and then the reason it promised.
+    expect(
+      await screen.findByText(/This record did state a position for these lines/i),
+    ).toHaveTextContent(/the reason is below/i);
+    const note = screen.getByText(/GrantSpotter is not passing it on/i, {
+      selector: '.callsign-choose',
+    });
+    expect(note.textContent?.trim()).not.toBe('');
+    expect(note).toHaveTextContent(/\("geocoder_unavailable"\)/);
+    expect(note).toHaveTextContent(/not one this page can explain/i);
+    // And nothing anywhere in the panel is blank. This is the assertion that would have caught it.
+    const blanks = [...container.querySelectorAll('.callsign-panel p')].filter(
+      (p) => (p.textContent ?? '').trim() === '',
+    );
+    expect(blanks).toEqual([]);
+  });
+
+  /**
+   * A KNOWN REASON MISSING THE EVIDENCE ITS SENTENCE IS BUILT FROM. `containingLocator` is required
+   * in both copies of the type and nothing validated the body, so the panel named a grid square
+   * that does not exist — as evidence, in the sentence a reader would take to the FCC to check.
+   */
+  it('never names a locator the record did not state', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...PERSON,
+        geocodeRefusal: { refused: 'contradicted', gridsquare: 'FN31pr' } as unknown as NonNullable<
+          CallsignRecord['geocodeRefusal']
+        >,
+      },
+    });
+    renderLookup();
+    await lookUp();
+
+    await screen.findByRole('heading', { name: /FCC record for W8UM/i });
+    expect(screen.queryByText(/falls in undefined instead/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\bundefined\b/);
+    // The reader is still told a position was refused, because it was.
+    expect(
+      screen.getByText(/This record stated a position and GrantSpotter is not passing it on/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * THE FIXTURE THIS CODEBASE ITSELF FLAGS AS AMBIGUOUS, AND THE SENTENCE THAT CONTRADICTED IT.
+   *
+   * `02-callook-info-k2cc-json.json` is `8 CLARKSON AVE, P.O. BOX 8550` — a street AND a box on one
+   * line — and `geocodeSubject` classifies it `po_box` on purpose, because "which of the two
+   * callook geocoded is not stated anywhere in the response" and the cautious reading costs a
+   * caveat rather than a verdict. The panel then printed, directly beneath the rendered address:
+   * "The FCC record gives a PO box RATHER THAN a street address." Measured in Chromium on
+   * 2026-08-12, both strings on screen at once, the second false about the first.
+   *
+   * Nothing about the classification changes. What changes is that the screen now states the part
+   * the record supports and marks the rest as GrantSpotter's reading.
+   */
+  it('does not tell a K2CC reader their record has no street address', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...CLUB,
+        callsign: 'K2CC',
+        name: 'CLARKSON UNIVERSITY AMATEUR RADIO CLUB',
+        addressLine1: '8 CLARKSON AVE, P.O. BOX 8550',
+        city: 'POTSDAM',
+        state: 'NY',
+        zip: '13699',
+        isPoBox: true,
+        mailingGeocode: {
+          geocodedFrom: 'po_box',
+          poBox: { latitude: 44.66594, longitude: -74.992531, gridsquare: 'FN24mp' },
+        },
+      },
+    });
+    renderLookup({ callsign: 'K2CC', target: 'organization' });
+    await lookUp();
+
+    // The address the reader is looking at, which gives both.
+    expect(await screen.findByText(/8 CLARKSON AVE, P\.O\. BOX 8550/)).toBeInTheDocument();
+    // The claim that is gone, in the exact words it was measured in.
+    expect(screen.queryByText(/PO box rather than a street address/i)).not.toBeInTheDocument();
+    // What is said instead: the record's half, then GrantSpotter's.
+    const address = screen.getByText(/address line on this record names a PO box/i);
+    expect(address).toHaveTextContent(/may name a street as well/i);
+    expect(address).toHaveTextContent(/nothing in the record saying which of the two/i);
+    expect(address).toHaveTextContent(/cautious way round rather than something the record states/i);
+    // And the coordinate's own caveat says the same thing, still in capitals.
+    const offer = screen.getByText(/POST OFFICE/);
+    expect(offer).toHaveTextContent(/an address line that names a PO box/i);
+    expect(offer).toHaveTextContent(/cautious reading rather than something stated/i);
   });
 });
 
@@ -1037,8 +1264,11 @@ describe('a club station, which is what a collegiate club holds', () => {
     expect(screen.getByText(/club station licence has no operator class/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/license class to fill in/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Club details belong on the organization profile/i)).toBeInTheDocument();
-    // The PO box is stated rather than presented as a street address.
-    expect(screen.getByText(/PO box rather than a street address/i)).toBeInTheDocument();
+    // The PO box is stated rather than presented as a street address — and stated as what the
+    // record actually says, which is that the address LINE names a box. "The FCC record gives a PO
+    // box rather than a street address" was the wording until 2026-08-12; see the K2CC test below
+    // for the record it was measured contradicting.
+    expect(screen.getByText(/address line on this record names a PO box/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
     expect(onAccept).toHaveBeenCalledWith(
