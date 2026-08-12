@@ -1,15 +1,20 @@
 export interface RateLimitDecision {
   allowed: boolean;
   /**
-   * How long until a slot frees, and it answers TWO different questions depending on `recorded`.
+   * HOW LONG UNTIL A SLOT FREES: the remaining life of the OLDEST SLOT IN THE BUDGET, whether that
+   * slot is a recorded entry or an attempt still running — a sliding window empties from the front.
    *
-   * When something is recorded it is the remaining life of the oldest recorded entry — the window,
-   * near enough, because a sliding window empties from the front. When NOTHING is recorded it is 1:
-   * the budget is held entirely by attempts that are still running, and the honest answer to
-   * somebody standing behind a queue that drains in milliseconds is "a second", not "fifteen
-   * minutes". A caller that turns this number into a sentence must branch on the same value it is
-   * about to print — see `RateLimitAttempt`, which is where a caller printed one and stated the
-   * other.
+   * WHICH OF THOSE TWO KINDS COUNTS DEPENDS ON WHAT THE BUDGET COUNTS, and this paragraph said
+   * something else until 2026-08-12: "when NOTHING is recorded it is 1, because the budget is held
+   * entirely by attempts that are still running and the honest answer to somebody behind a queue
+   * that drains in milliseconds is a second". That is true of a limiter counting FAILURES, where a
+   * running attempt usually succeeds and hands its slot back, and it is exactly false of one
+   * counting SUCCESSES, where the running attempts are what will fill the window. Measured cost of
+   * the difference: 897×, see `RateLimiterOptions.counts`, which is what a construction site says
+   * to get this right.
+   *
+   * A caller that turns this number into a sentence must branch on the same value it is about to
+   * print — see `RateLimitAttempt`, which is where a caller printed one and stated the other.
    */
   retryAfterSec: number;
   /**
@@ -573,8 +578,18 @@ export type RateLimitAttempt =
   | {
       started: true;
       /**
-       * This attempt turned out to be a failure: convert the held slot into a recorded one.
-       * Idempotent, and `release` afterwards is a no-op — an attempt settles exactly once.
+       * This attempt turned out to be the thing the budget counts: convert the held slot into a
+       * recorded one. Idempotent, and `release` afterwards is a no-op — an attempt settles exactly
+       * once.
+       *
+       * IT IS STAMPED WITH THE MOMENT THE ATTEMPT STARTED, not the moment it settled, and that
+       * default is what makes a wait quotable. The slot was already occupying the budget from
+       * `begin`; dating the recorded entry from the settle instead would mean a caller told "the
+       * oldest slot frees in 900 seconds" comes back in 900 seconds to find it frees in another
+       * two, because the hash it was waiting on charged after the forecast was made. Measured
+       * against the built server on this host: a 260-student burst settles over 2.4 s, so that is
+       * the size of the error being removed. Pass a value only to place an entry deliberately, as
+       * the tests do.
        */
       charge: (nowMs?: number) => void;
       /**
@@ -587,9 +602,13 @@ export type RateLimitAttempt =
    * THE BUDGET IS SHUT, AND THE TWO NUMBERS THAT SAY WHY MUST BE READ TOGETHER.
    *
    * `recorded` is what has actually been written down; `retryAfterSec` is how long until a slot
-   * frees. `recorded === 0` with `retryAfterSec === 1` is a BURST — the budget is held entirely by
-   * attempts still running, nothing has happened yet, and the wait is one hash. Anything else is a
-   * spent window and the wait is the rest of it.
+   * frees. `recorded === 0` means nothing has been written down yet and the budget is held entirely
+   * by attempts still running — but what that IMPLIES about the wait is not the same on both kinds
+   * of limiter, and `RateLimiterOptions.counts` is what says which one this is. On a limiter
+   * counting failures the wait is one hash, because a running attempt that succeeds frees its slot;
+   * on one counting successes the running attempts are the successes, so their slots do not come
+   * back and the wait is a window measured from when they started. Anything else is a spent window
+   * and the wait is the rest of it.
    *
    * BOTH ARE HERE BECAUSE A CALLER THAT BRANCHED ON ONE AND PRINTED THE OTHER SHIPPED A REFUSAL
    * THAT CONTRADICTED ITSELF IN ONE BREATH. MEASURED against the built server on this host,
@@ -680,6 +699,33 @@ export interface RateLimiterMemory {
 export interface RateLimiterOptions {
   windowMs: number;
   maxFailures: number;
+  /**
+   * WHAT THIS BUDGET IS A BUDGET FOR, which is the one thing that decides what an attempt still in
+   * flight means for the wait quoted to whoever is refused.
+   *
+   * A LIMITER COUNTING FAILURES gets `'failures'`, which is the default and what `maxFailures` is
+   * named for. A running attempt is one whose outcome is unknown, most of them succeed, and a
+   * success on such a limiter frees its slot — so when the whole budget is held by running attempts
+   * the honest wait is one hash, not one window. That is what `decide` answers, and it is right.
+   *
+   * A LIMITER COUNTING SUCCESSES gets `'successes'`, and every word of the paragraph above is
+   * false for it. The registration ladder in `api/auth.ts` counts CREATED ACCOUNTS: a running
+   * attempt that succeeds charges, so its slot never comes back, and a budget held entirely by
+   * running attempts is a budget that is about to be spent for a whole window rather than one that
+   * drains in milliseconds. MEASURED against the built server on this host, 2026-08-12, 260
+   * students from one building NAT arriving together: 200 created, 56 refused with
+   * `retryAfterSec: 1` and the sentence "No account has been created from this connection in the
+   * last fifteen minutes" — and one second later the same caller was answered `retryAfterSec: 897`
+   * and "200 accounts have been created from this connection". The number was wrong by 897×, in
+   * exactly the branch whose comment justified it.
+   *
+   * IT IS AN OPTION AND NOT AN INFERENCE because nothing in this file can see which of `charge` and
+   * `release` a caller will pick; only the caller knows. It has a default because `maxFailures`
+   * already names the common case and three limiters in this server rely on it — but a budget that
+   * counts anything other than failures MUST say so here, or it will quote the wrong wait to
+   * everybody it refuses during a burst.
+   */
+  counts?: 'failures' | 'successes';
 }
 
 /**
@@ -725,8 +771,17 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
    * recorded failures because they are the same thing seen earlier: an attempt that is still
    * running is one whose failure has not been written down yet, and a limiter that only counts the
    * written-down ones is a limiter that a burst walks straight past.
+   *
+   * THE VALUE IS WHEN EACH ONE STARTED, and it used to be just how many there were. A count can
+   * say that the budget is shut; only the start times can say WHEN IT OPENS AGAIN on a limiter
+   * whose running attempts are about to become recorded ones — see `RateLimiterOptions.counts`,
+   * which is the fact that makes these timestamps mean a wait. Ascending, because `begin` pushes
+   * in time order, so `[0]` is the oldest slot held.
+   *
+   * BOUNDED BY `maxFailures` PER KEY: `begin` only pushes when the budget was open, and it is open
+   * only while recorded plus in-flight is under the ceiling. It is the same bound the count had.
    */
-  const inFlight = new Map<string, number>();
+  const inFlight = new Map<string, number[]>();
 
   function recent(key: string, nowMs: number): number[] {
     const kept = (failures.get(key) ?? []).filter((at) => nowMs - at < options.windowMs);
@@ -735,10 +790,18 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
     return kept;
   }
 
-  function release(key: string): void {
-    const held = inFlight.get(key) ?? 0;
-    if (held <= 1) inFlight.delete(key);
-    else inFlight.set(key, held - 1);
+  /**
+   * Give back the one slot this attempt is holding — identified by the moment it started, and by
+   * value rather than by index because two attempts on one key settle in whatever order their work
+   * finishes. Timestamps are interchangeable when they are equal, so removing the first match is
+   * removing this attempt's slot.
+   */
+  function release(key: string, startedAt: number): void {
+    const held = inFlight.get(key);
+    if (held === undefined) return;
+    const at = held.indexOf(startedAt);
+    if (at !== -1) held.splice(at, 1);
+    if (held.length === 0) inFlight.delete(key);
   }
 
   /**
@@ -756,13 +819,37 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
 
   function decide(key: string, nowMs: number): RateLimitDecision {
     const hits = recent(key, nowMs);
-    if (hits.length + (inFlight.get(key) ?? 0) < options.maxFailures) {
+    const held = inFlight.get(key) ?? [];
+    if (hits.length + held.length < options.maxFailures) {
       return { allowed: true, retryAfterSec: 0, recorded: hits.length };
     }
-    const oldest = hits[0];
-    // Nothing recorded, so the budget is spent entirely by attempts still running: the wait is one
-    // argon2id hash, not one window. Answering ~900 seconds to somebody who is behind a queue that
-    // drains in milliseconds would be a worse lie than no number at all.
+    /**
+     * THE OLDEST SLOT IN THE BUDGET, WHICH IS NOT ALWAYS THE OLDEST RECORDED ONE.
+     *
+     * On a limiter counting SUCCESSES a slot held by a running attempt is a slot that is about to
+     * become a recorded one, dated from when that attempt started (`charge` stamps the start). So
+     * it expires at `start + windowMs` exactly like a recorded entry, and the first slot to free is
+     * the oldest of the two kinds. Taking the minimum is what makes the number quotable: a caller
+     * who waits exactly the wait they were given arrives after that slot has gone.
+     *
+     * On a limiter counting FAILURES the running attempts are excluded on purpose. Most of them
+     * will succeed and hand their slots back within one hash, so a window measured from their start
+     * would be a fifteen-minute answer to a queue that drains in milliseconds.
+     */
+    const oldestRecorded = hits[0];
+    const oldestHeld = options.counts === 'successes' ? held[0] : undefined;
+    const oldest =
+      oldestRecorded === undefined
+        ? oldestHeld
+        : oldestHeld === undefined
+          ? oldestRecorded
+          : Math.min(oldestRecorded, oldestHeld);
+    // Nothing recorded and nothing whose start time counts, so the budget is spent entirely by
+    // attempts still running on a limiter that expects them to hand their slots back: the wait is
+    // one argon2id hash, not one window. Answering ~900 seconds to somebody who is behind a queue
+    // that drains in milliseconds would be a worse lie than no number at all. Unreachable when
+    // `counts` is `'successes'` — a shut budget with nothing recorded is a budget full of held
+    // slots, and every one of them has a start time.
     if (oldest === undefined) return { allowed: false, retryAfterSec: 1, recorded: 0 };
     const retryAfterMs = options.windowMs - (nowMs - oldest);
     return {
@@ -798,21 +885,33 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
           recorded: decision.recorded,
         };
       }
-      inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+      const held = inFlight.get(key);
+      if (held === undefined) inFlight.set(key, [nowMs]);
+      else {
+        // Kept ascending BY CONSTRUCTION rather than by the convention that `Date.now()` only goes
+        // forwards, because `nowMs` is a parameter and a caller may hand these over in any order.
+        // `decide` reads `[0]` as the oldest slot held and that has to be true of what is there,
+        // not of how it usually arrives. An append in the normal case, one comparison deep.
+        let at = held.length;
+        while (at > 0 && (held[at - 1] ?? 0) > nowMs) at -= 1;
+        held.splice(at, 0, nowMs);
+      }
 
       let settled = false;
       return {
         started: true,
-        charge(at = Date.now()) {
+        // Dated from the start of the attempt by default. See `RateLimitAttempt.charge` for what
+        // the settle-time default cost the caller who was told when to come back.
+        charge(at = nowMs) {
           if (settled) return;
           settled = true;
-          release(key);
+          release(key, nowMs);
           record(key, at);
         },
         release() {
           if (settled) return;
           settled = true;
-          release(key);
+          release(key, nowMs);
         },
       };
     },

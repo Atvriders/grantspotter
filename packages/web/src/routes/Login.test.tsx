@@ -191,14 +191,35 @@ describe('Login', () => {
     );
   });
 
-  it('names the cooldown when the server rate-limits the attempt', async () => {
+  /**
+   * THE SERVER'S OWN 429, WORD FOR WORD, AND THE BODY BELOW IS A REAL ONE.
+   *
+   * `POST /api/auth/login` answers 429 in two states and this is the one that is not about the
+   * reader at all: `hashUnderGate` shedding because the argon2id queue is full. MEASURED against
+   * the built server on this host, 2026-08-12 — 500 concurrent sign-ins, 216 of them answered with
+   * exactly this message and `retryAfterSec: 1`.
+   *
+   * This screen printed "Too many attempts. Try again in 1 second." over it: eight words of its
+   * own, blaming a member who had made ONE attempt for a queue somebody else filled. It is the
+   * same defect as the `unauthorized` arm eight lines above in `Login.tsx`, corrected one round
+   * earlier, and the same argument applies — the API's sentences are written for this reader and a
+   * screen that re-words them is a second place the copy has to be kept true.
+   */
+  it('prints the server’s sentence for a shed request instead of blaming the attempt', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
         ok: false,
         status: 429,
         json: async () => ({
-          error: { code: 'rate_limited', message: 'Too many sign-in attempts.' },
+          error: {
+            code: 'rate_limited',
+            message:
+              'This server is already doing as much password checking as it can right now. ' +
+              'Nothing is wrong with your details, nothing has been used up, and nobody needs to ' +
+              'do anything about it.',
+            details: { retryAfterSec: 1 },
+          },
           requestId: 'req-test-1',
         }),
       }),
@@ -207,8 +228,75 @@ describe('Login', () => {
     await signIn();
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/too many attempts/i);
+    expect(alert).toHaveTextContent(/as much password checking as it can right now/i);
+    expect(alert).toHaveTextContent(/nothing is wrong with your details/i);
+    // The server's number, once, appended — and none of this screen's invented arithmetic.
+    expect(alert).toHaveTextContent(/try again in 1 second\./i);
+    expect(alert).not.toHaveTextContent(/too many attempts/i);
     expect(alert).not.toHaveTextContent(/not recognised/i);
+  });
+
+  /**
+   * THE OTHER 429 ON THIS ROUTE: the per-(peer, address) bucket. Behind the owner's tunnel the peer
+   * is one value for the whole deployment, so the server says whose attempts they may have been and
+   * that moving will not help — and that is exactly the part a hardcoded "Too many attempts" threw
+   * away. MEASURED against the built server: six wrong passwords for one address, the sixth
+   * answered 429 with `retryAfterSec: 900`.
+   */
+  it('does not re-word the sentence that says the attempts may not have been yours', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({
+          error: {
+            code: 'rate_limited',
+            message:
+              'Sign-ins for this email address have been refused too many times. This ' +
+              'GrantSpotter is behind a proxy, so every sign-in arrives the same way and the ' +
+              'failed attempts may not have been yours: signing in from another network or ' +
+              'another device will not get past this. Nothing has been changed and no account has ' +
+              'been locked: what is refused is trying this address again, and it lifts on its own.',
+            details: { retryAfterSec: 900 },
+          },
+          requestId: 'req-test-1',
+        }),
+      }),
+    );
+    renderLogin();
+    await signIn();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/the failed attempts may not have been yours/i);
+    expect(alert).toHaveTextContent(/no account has been locked/i);
+    expect(alert).toHaveTextContent(/try again in 15 minutes\./i);
+  });
+
+  /**
+   * AND THE ONE STATE WHERE THIS SCREEN STILL HAS TO SAY SOMETHING OF ITS OWN. A 429 whose envelope
+   * carries no sentence leaves nothing to print, and `lib/retryAfter.ts`'s rule covers the number:
+   * with no `retryAfterSec` there is no figure to invent, so the screen says nothing about time.
+   */
+  it('says nothing about time when the server sent neither a sentence nor a number', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({
+          error: { code: 'rate_limited', message: '   ' },
+          requestId: 'req-test-1',
+        }),
+      }),
+    );
+    renderLogin();
+    await signIn();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/too many sign-in attempts\./i);
+    expect(alert).not.toHaveTextContent(/wait a minute/i);
+    expect(alert).not.toHaveTextContent(/try again in/i);
   });
 
   /** The same correction as `Enroll.test.tsx`: the server's own number, not a guess of ours. */

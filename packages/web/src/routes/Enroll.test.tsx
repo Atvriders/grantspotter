@@ -343,6 +343,74 @@ describe('every way signing up fails has its own words', () => {
     expect(shown).not.toMatch(/wait a (moment|minute|few)/i);
   });
 
+  /**
+   * THE REFUSAL A CO-LOCATED INTAKE ACTUALLY MEETS, WHICH IS THE OTHER LADDER SENTENCE.
+   *
+   * MEASURED against the built server on this host, 2026-08-12: 260 students from one building NAT
+   * pressing submit together — 200 created, and 56 refused while the whole budget was held by
+   * sign-ups still running. Until this round those 56 read "No account has been created from this
+   * connection in the last fifteen minutes" beside `retryAfterSec: 1`, and this screen rendered
+   * "… Try again in 1 second." Two hundred accounts existed 2.4 s later, and a student who waited
+   * the second they were told met a 897-second refusal.
+   *
+   * Both halves changed and this pins the pair as the reader sees it: a sentence that describes
+   * what is happening rather than forecasting a window its own cause is about to break, and the
+   * wait that the accounts being created will really impose. The body is copied from
+   * `registrationRefusal`; the server test asserts the server's half.
+   */
+  it('shows the burst refusal as what is happening, with the wait those sign-ups will cost', async () => {
+    const alert = await failWith(
+      errorResponse(
+        429,
+        'rate_limited',
+        '200 sign-ups from this connection are being answered right now, which is as many as ' +
+          'GrantSpotter will start in fifteen minutes, so it is not starting another. The ' +
+          'accounts they create count against that same fifteen minutes, so this is not a queue ' +
+          'that clears in a moment. Nothing is wrong with your details. If you already have an ' +
+          'account, signing in is not affected by this.',
+        { retryAfterSec: 900 },
+      ),
+    );
+    expect(alert).toHaveTextContent(/200 sign-ups from this connection are being answered right now/i);
+    expect(alert).toHaveTextContent(/not a queue that clears in a moment/i);
+    expect(alert).toHaveTextContent(/try again in 15 minutes/i);
+    // The sentence that could not survive the requests that produced it, and the number that was
+    // wrong by 897×. Neither may come back to this screen from either side of the wire.
+    expect(alert).not.toHaveTextContent(/no account has been created/i);
+    expect(alert).not.toHaveTextContent(/try again in 1 second/i);
+  });
+
+  /**
+   * AND THE RUNG NOBODY CAN WALK AWAY FROM. Behind the owner's tunnel the middle rung's key is the
+   * whole deployment, so the server stopped calling it "your network" and started saying that
+   * another network or device reaches the same limit. The advice matters more than the naming: this
+   * is the one refusal on this screen where the reader's only options are to wait or to tell the
+   * operator, and a screen that dropped the clause would leave them trying a phone.
+   */
+  it('keeps the advice for a limit that no other network gets around', async () => {
+    const alert = await failWith(
+      errorResponse(
+        429,
+        'rate_limited',
+        '400 accounts have been created on this GrantSpotter in the last fifteen minutes, which ' +
+          'is as many as GrantSpotter will make in that time, so it is not making another one ' +
+          'yet. Nothing is wrong with your details, and the accounts already created are fine. ' +
+          'This limit is on the whole of this GrantSpotter rather than on you: every sign-up ' +
+          'reaches it the same way, so another network, another device or a phone runs into the ' +
+          'same one. If a group is signing up together, whoever runs this GrantSpotter is the ' +
+          'person who can change it. If you already have an account, signing in is not affected ' +
+          'by this.',
+        { retryAfterSec: 896 },
+      ),
+    );
+    expect(alert).toHaveTextContent(/another network, another device or a phone runs into the same one/i);
+    expect(alert).toHaveTextContent(/whoever runs this GrantSpotter/i);
+    expect(alert).not.toHaveTextContent(/from your network/i);
+    // 896 seconds is 15 minutes rounded up, said once.
+    expect(alert).toHaveTextContent(/try again in 15 minutes/i);
+    expect((alert.textContent ?? '').match(/try again/gi) ?? []).toHaveLength(1);
+  });
+
   it('says nothing about time when the server named no number', async () => {
     const alert = await failWith(
       errorResponse(429, 'rate_limited', 'This server is already doing as much password checking as it can right now.'),

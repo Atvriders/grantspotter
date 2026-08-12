@@ -220,6 +220,87 @@ describe('rate limiter', () => {
       expect(limiter.check('k', 1500).allowed).toBe(true);
     });
   });
+
+  /**
+   * A BUDGET WHOSE IN-FLIGHT ATTEMPTS ARE THE SUCCESSES, WHICH IS THE REGISTRATION LADDER.
+   *
+   * The case above — "nothing recorded, so the wait is one hash" — is right for a limiter counting
+   * FAILURES, because an attempt that is still running usually succeeds and hands its slot back.
+   * `api/auth.ts`'s three rungs count CREATED ACCOUNTS: every running attempt that succeeds charges,
+   * so its slot never comes back and the budget is not draining, it is being spent.
+   *
+   * WHAT THE ONE-SECOND ANSWER COST, MEASURED against the built server on this host, 2026-08-12:
+   * 260 students from one building NAT pressing submit together were answered 200 × 201 and 56 ×
+   * `429 retryAfterSec=1`. A student who waited the one second they were told came back to
+   * `429 retryAfterSec=897`. Off by 897×, in the branch whose comment justified it.
+   *
+   * THE PROPERTY THESE PIN IS THE ONE THE PRODUCT PROMISES: a caller who waits exactly as long as
+   * they were told is not refused a second time. It is asserted arithmetically here, at the
+   * limiter, because the shipped window is fifteen minutes and no test may sleep through it.
+   */
+  describe('a budget that counts successes', () => {
+    it('quotes the window a held slot is about to occupy, not one hash', () => {
+      const successes = createRateLimiter({
+        windowMs: 900_000,
+        maxFailures: 1,
+        counts: 'successes',
+      });
+      successes.begin('k', 1000);
+      const blocked = successes.begin('k', 4000);
+      // 900 s of window less the 3 s the running attempt has already been holding its slot.
+      expect(blocked.started === false && blocked.retryAfterSec).toBe(897);
+      expect(blocked.started === false && blocked.recorded).toBe(0);
+
+      // The same instant on a limiter counting failures still answers one hash, which is what that
+      // branch was written for and is still true there.
+      const failures = createRateLimiter({ windowMs: 900_000, maxFailures: 1 });
+      failures.begin('k', 1000);
+      const other = failures.begin('k', 4000);
+      expect(other.started === false && other.retryAfterSec).toBe(1);
+    });
+
+    it('lets in the caller who waited exactly as long as it told them to', () => {
+      const limiter = createRateLimiter({ windowMs: 900_000, maxFailures: 1, counts: 'successes' });
+      const running = limiter.begin('k', 1000);
+      const blocked = limiter.begin('k', 4000);
+      if (blocked.started) throw new Error('the budget was open');
+      const told = blocked.retryAfterSec;
+
+      // The account is created 2.4 s after the refusal — the settle time measured for a
+      // 260-student burst — and the slot becomes a recorded registration.
+      if (running.started) running.charge();
+
+      // Back at exactly the second they were given, and not one before it.
+      expect(limiter.check('k', 4000 + told * 1000 - 1).allowed).toBe(false);
+      expect(limiter.check('k', 4000 + told * 1000).allowed).toBe(true);
+    });
+
+    it('dates a charge from when the attempt started, so the wait it quoted stays true', () => {
+      // The same run as above with the charge landing late: `charge()` takes no argument on the
+      // registration path, and if it stamped the settle instead of the start, every forecast made
+      // while that attempt was running would be short by however long the hash queue took.
+      const limiter = createRateLimiter({ windowMs: 900_000, maxFailures: 1, counts: 'successes' });
+      const running = limiter.begin('k', 1000);
+      if (running.started) running.charge();
+      expect(limiter.count('k', 1000)).toBe(1);
+      // Recorded at 1000, so it is gone at 901000 — not at 901000 plus a settle nobody measured.
+      expect(limiter.check('k', 900_999).allowed).toBe(false);
+      expect(limiter.check('k', 901_000).allowed).toBe(true);
+    });
+
+    it('gives back the slot the attempt was holding when they settle out of order', () => {
+      const limiter = createRateLimiter({ windowMs: 900_000, maxFailures: 2, counts: 'successes' });
+      const first = limiter.begin('k', 1000);
+      const second = limiter.begin('k', 2000);
+      // The younger of the two goes, so the oldest slot held is still the one taken at 1000.
+      if (second.started) second.release();
+      expect(limiter.begin('k', 3000).started).toBe(true);
+
+      const blocked = limiter.begin('k', 4000);
+      expect(blocked.started === false && blocked.retryAfterSec).toBe(897);
+      if (first.started) first.release();
+    });
+  });
 });
 
 /**

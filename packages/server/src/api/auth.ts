@@ -625,21 +625,58 @@ interface Rung {
   /** Derived only from the TCP peer, or from nothing at all. Never from a header. */
   readonly noticeKey: string;
   readonly max: number;
+  /**
+   * WHO THE REFUSAL SAYS HAS BEEN SIGNING UP — the population this rung's key actually covers on
+   * the deployment answering the request, which is not something the rung's NAME can settle. See
+   * `rungWhere`.
+   */
+  readonly where: string;
+  /**
+   * TRUE WHEN NOTHING THE READER CAN DO CHANGES THIS RUNG'S KEY: it covers every request that
+   * reaches this deployment, whatever network or device they come from. It is what earns the
+   * sentence that tells them so, and it is a property of the key rather than of the rung's name.
+   */
+  readonly deploymentWide: boolean;
 }
 
 /**
- * WHO THE 429 SAYS HAS BEEN SIGNING UP, and it is three different sentences because they ask three
- * different things of the reader.
+ * WHO THE 429 SAYS HAS BEEN SIGNING UP, AND WHY THE RUNG'S NAME CANNOT ANSWER IT ALONE.
  *
- * A person who is told "from this connection" can move or wait; a person told "on this server"
- * needs to know that waiting is still the answer and that they have not been singled out. Naming
- * the rung gives an attacker nothing they cannot already count for themselves.
+ * The middle rung is keyed on `coarseOrigin(peerAddress(req))`. Behind the owner's Cloudflare
+ * tunnel — the documented deployment — the TCP peer is cloudflared, one value for the entire
+ * internet, so that key is THE WHOLE DEPLOYMENT and "from your network" is false for everybody who
+ * reads it. MEASURED against the built server on this host, 2026-08-12: 130 students registered
+ * from one building NAT, an attacker created 270 more from two addresses that were nothing to do
+ * with them, and the next student from the building was told "400 accounts have been created from
+ * your network in the last fifteen minutes". 130 came from their network. This file already told
+ * the OPERATOR the truth in `announceClosedRungs` ("`"rung":"network"` is the WHOLE DEPLOYMENT")
+ * while telling the student the pre-tunnel shape.
+ *
+ * IT IS WORSE THAN AN INACCURACY BECAUSE OF THE ADVICE IT IMPLIES. The justification for naming the
+ * rung at all was that "a person who is told 'from this connection' can move or wait". A person
+ * told "from your network" reads an instruction to move, and behind the tunnel there is nowhere to
+ * move TO: no network they can reach changes that key, and a phone on cellular data lands on the
+ * same one. So the sentence has to say which of the two shapes this deployment is, and the
+ * deployment-wide case gets the advice that is actually true for it — see `REFUSAL_NOWHERE_ELSE`.
+ *
+ * HOW THE SHAPE IS TOLD, and it is measured per request rather than configured. `app.ts` sets
+ * `trust proxy` to 1, so `req.ip` is the rightmost `X-Forwarded-For` entry when there is one and
+ * the socket address when there is not. They differ EXACTLY when something in front of this process
+ * wrote that header, which is the same condition that makes the TCP peer a proxy rather than a
+ * client. No new configuration, and nothing that can be true of the deployment while being false of
+ * the request.
+ *
+ * WHAT A FORGED HEADER BUYS, said rather than implied: a caller reaching a DIRECT-facing deployment
+ * with an `X-Forwarded-For` of their own is told the deployment-wide sentence about a rung that in
+ * fact covers only their /24. That is a broader-sounding refusal shown to the one person who forged
+ * it and to nobody else — the same trust `req.ip` is already given as the connection rung's key,
+ * and the honest reader on such a deployment is unaffected because they send no such header.
  */
-const RUNG_WHERE: Record<RungName, string> = {
-  connection: 'from this connection',
-  network: 'from your network',
-  server: 'on this server',
-};
+function rungWhere(name: RungName, proxied: boolean): string {
+  if (name === 'connection') return 'from this connection';
+  if (name === 'network') return proxied ? 'on this GrantSpotter' : 'from your network';
+  return 'on this GrantSpotter';
+}
 
 /**
  * NOT ONE WORD ABOUT HOW LONG, IN ANY OF THE THREE SENTENCES BELOW, AND THAT IS THE 2026-08-12
@@ -654,6 +691,27 @@ const RUNG_WHERE: Record<RungName, string> = {
  */
 const REFUSAL_SIGN_IN_UNAFFECTED =
   ' If you already have an account, signing in is not affected by this.';
+
+/**
+ * THE CLAUSE FOR A RUNG NOBODY CAN WALK AWAY FROM, and it exists because the sentence it is added
+ * to used to imply the opposite.
+ *
+ * It goes on exactly the refusals whose key covers every request the deployment receives — the
+ * deployment rung always, and the middle rung whenever this process is behind a proxy, which
+ * `rungWhere` explains. For those, "try from somewhere else" is not merely unhelpful, it is a
+ * wasted trip: the same key answers a phone on cellular data, a laptop on a different campus, and
+ * a different building.
+ *
+ * SO IT SAYS THE ONE THING THAT IS LEFT TO DO. Waiting is already stated, once, by
+ * `details.retryAfterSec` and by nothing else in this paragraph — see the note above on why no
+ * refusal here carries a duration. What this adds is the part `retryAfterSec` cannot: that a group
+ * arriving together has someone to tell, and that person is whoever runs the deployment, because
+ * the ceiling and the window are theirs and not the reader's.
+ */
+const REFUSAL_NOWHERE_ELSE =
+  ' This limit is on the whole of this GrantSpotter rather than on you: every sign-up reaches it ' +
+  'the same way, so another network, another device or a phone runs into the same one. If a group ' +
+  'is signing up together, whoever runs this GrantSpotter is the person who can change it.';
 
 /**
  * WHY THIS SENTENCE SAYS WHAT IT SAYS, AND WHY THERE ARE THREE OF THEM.
@@ -692,9 +750,22 @@ const REFUSAL_SIGN_IN_UNAFFECTED =
  * function is given both. There is no second read of anything, and no way for the sentence and the
  * number to be about different instants:
  *
- *   NOTHING RECORDED (`recorded === 0`, and the limiter therefore answers a one-second wait) — a
- *   genuine burst, arriving inside the few tens of milliseconds an argon2id takes. It says so, and
- *   says the thing that is true and reassuring: no account has been created here yet.
+ *   NOTHING RECORDED (`recorded === 0`) — the whole budget is held by sign-ups that started and
+ *   have not finished. It says exactly that, and it no longer says the reassuring thing, because
+ *   THE THIRD TIME THIS FUNCTION WAS WRONG WAS THAT REASSURANCE. It read "No account has been
+ *   created from this connection in the last fifteen minutes", which is a claim about a
+ *   FIFTEEN-MINUTE WINDOW made at the one instant in that window when it happened to be true, and
+ *   the very requests that caused the refusal were guaranteed to falsify it. MEASURED against the
+ *   built server on this host, 2026-08-12, 260 students from one building NAT arriving together:
+ *   200 created, 56 refused with that sentence — and 200 accounts existed 2.4 s later. A sentence
+ *   that its own cause is about to break is not true in the state that produced it, however
+ *   carefully the instant is defined, so this branch now states what is HAPPENING (this many
+ *   sign-ups are being answered) rather than forecasting what has not.
+ *
+ *   The wait beside it was wrong in the same breath and is fixed in the limiter rather than here:
+ *   `retryAfterSec` was 1 on the reasoning that a budget held by running attempts frees in one
+ *   hash, which is true of a limiter counting failures and false of this ladder, whose running
+ *   attempts are the successes. See `RateLimiterOptions.counts`.
  *
  *   SOME RECORDED, BELOW THE CEILING — part created, the rest still being answered. Both halves are
  *   named, because "N accounts have been created" alone would understate why the door is shut.
@@ -711,16 +782,21 @@ function registrationRefusal(
   rung: Rung,
   outcome: { readonly recorded: number; readonly retryAfterSec: number },
 ): string {
-  const where = RUNG_WHERE[rung.name];
+  const where = rung.where;
   const window = 'in the last fifteen minutes';
   const { recorded } = outcome;
+  // The clause for a rung whose key nobody can walk away from, then the one that matters most to
+  // somebody who already has an account. Both are appended rather than woven in, so every branch
+  // gets them and no branch can be rewritten without them.
+  const tail = (rung.deploymentWide ? REFUSAL_NOWHERE_ELSE : '') + REFUSAL_SIGN_IN_UNAFFECTED;
 
   if (recorded === 0) {
     return (
-      `GrantSpotter is already making as many accounts at once as it will ${where}, so it is not ` +
-      `starting another one this second. No account has been created ${where} ${window}, and ` +
-      'nothing is wrong with your details.' +
-      REFUSAL_SIGN_IN_UNAFFECTED
+      `${String(rung.max)} sign-ups ${where} are being answered right now, which is as many as ` +
+      'GrantSpotter will start in fifteen minutes, so it is not starting another. The accounts ' +
+      'they create count against that same fifteen minutes, so this is not a queue that clears in ' +
+      'a moment. Nothing is wrong with your details.' +
+      tail
     );
   }
   if (recorded < rung.max) {
@@ -728,14 +804,14 @@ function registrationRefusal(
       `${String(recorded)} accounts have been created ${where} ${window}, and the rest of the ` +
       `${String(rung.max)} GrantSpotter will make in that time are requests it is still working ` +
       'on, so it is not starting another. Nothing is wrong with your details.' +
-      REFUSAL_SIGN_IN_UNAFFECTED
+      tail
     );
   }
   return (
     `${String(recorded)} accounts have been created ${where} ${window}, which is as many as ` +
     'GrantSpotter will make in that time, so it is not making another one yet. Nothing is wrong ' +
     'with your details, and the accounts already created are fine.' +
-    REFUSAL_SIGN_IN_UNAFFECTED
+    tail
   );
 }
 
@@ -903,11 +979,25 @@ function peerAddress(req: Request): string {
 export function createAuthRouter(deps: AuthRouterDeps): Router {
   const users = createUserRepo(deps.db);
   const sessions = createSessionRepo(deps.db);
+  /**
+   * ALL THREE RUNGS COUNT SUCCESSES, and saying so is what makes the wait they quote true.
+   *
+   * `counts: 'successes'` is not a description of these limiters, it is the fact the limiter needs
+   * in order to answer "when does a slot free?" while the budget is held by sign-ups still running.
+   * On a failure budget those slots come back within one hash; on this ladder they become created
+   * accounts and hold for the window, which is why the burst branch answered 1 second to 56 of 260
+   * students who then met a 897-second refusal. See `RateLimiterOptions.counts`.
+   *
+   * A `registrationLimiter` INJECTED FROM OUTSIDE MUST SAY IT TOO. Nothing in this server injects
+   * one today; the option is here for a test that wants a tiny window, and a tiny window with the
+   * default 'failures' would reproduce the exact defect this line exists to close.
+   */
   const connectionLimiter =
     deps.registrationLimiter ??
     createRateLimiter({
       windowMs: REGISTRATION_WINDOW_MS,
       maxFailures: REGISTRATION_MAX_PER_CONNECTION,
+      counts: 'successes',
     });
   /**
    * THE TWO RUNGS BELOW THE CONNECTION, AND WHY NEITHER IS INJECTABLE.
@@ -925,10 +1015,12 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
   const networkLimiter = createRateLimiter({
     windowMs: REGISTRATION_WINDOW_MS,
     maxFailures: REGISTRATION_MAX_PER_NETWORK,
+    counts: 'successes',
   });
   const deploymentLimiter = createRateLimiter({
     windowMs: REGISTRATION_WINDOW_MS,
     maxFailures: REGISTRATION_MAX_DEPLOYMENT,
+    counts: 'successes',
   });
   /**
    * THE RUNGS IN THE ORDER THEY ARE ASKED, NARROWEST FIRST, and the order is load-bearing twice
@@ -938,6 +1030,14 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
    */
   function registrationRungs(req: Request): Rung[] {
     const network = coarseOrigin(peerAddress(req));
+    /**
+     * IS THERE A HOP IN FRONT OF THIS PROCESS? `trust proxy` is 1, so `req.ip` follows the rightmost
+     * `X-Forwarded-For` when one is present and is the socket address when it is not. They differ
+     * exactly when something wrote that header — which is what makes the TCP peer a proxy, and the
+     * middle rung's key everybody rather than one network. `rungWhere` carries the whole argument,
+     * including what a forged header does and does not buy.
+     */
+    const proxied = reportedOrigin(req) !== peerAddress(req);
     return [
       {
         name: 'connection',
@@ -947,6 +1047,10 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         // cannot mint, or the trail is the attacker's to fill.
         noticeKey: `registration:connection:${network}`,
         max: REGISTRATION_MAX_PER_CONNECTION,
+        where: rungWhere('connection', proxied),
+        // The one rung a reader can walk away from: behind the tunnel its key is what cloudflared
+        // reported, so a phone on cellular data really is a different connection.
+        deploymentWide: false,
       },
       {
         name: 'network',
@@ -954,6 +1058,8 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         key: network,
         noticeKey: `registration:network:${network}`,
         max: REGISTRATION_MAX_PER_NETWORK,
+        where: rungWhere('network', proxied),
+        deploymentWide: proxied,
       },
       {
         name: 'server',
@@ -961,6 +1067,9 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         key: DEPLOYMENT_KEY,
         noticeKey: 'registration:server',
         max: REGISTRATION_MAX_DEPLOYMENT,
+        where: rungWhere('server', proxied),
+        // One key for the process, on every deployment shape there is.
+        deploymentWide: true,
       },
     ];
   }
@@ -1190,11 +1299,17 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
         }),
         atISO: new Date().toISOString(),
       });
+      // NOT ONE WORD ABOUT HOW LONG, by the rule the registration refusals follow and for the same
+      // reason: `SHED_RETRY_AFTER_SEC` travels with this in `details.retryAfterSec`, and both
+      // screens now print the server's sentence and then that number. "wait a moment and try
+      // again" stood here until 2026-08-12 and produced "… nobody needs to do anything about it —
+      // wait a moment and try again. Try again in 1 second." — one paragraph, two statements of
+      // when, from two sources. There is one, and it is the number.
       throw refuseWithRetryAfter(
         res,
         'This server is already doing as much password checking as it can right now. Nothing is ' +
           'wrong with your details, nothing has been used up, and nobody needs to do anything ' +
-          'about it — wait a moment and try again.',
+          'about it.',
         SHED_RETRY_AFTER_SEC,
       );
     }
@@ -1674,11 +1789,44 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
        */
       const attempt = deps.loginLimiter.begin(key);
       if (!attempt.started) {
+        /**
+         * THE SENTENCE A LOCKED-OUT MEMBER READS, AND IT IS PRINTED VERBATIM BY THE SIGN-IN SCREEN
+         * SINCE 2026-08-12, which is what made both halves of the old one worth fixing.
+         *
+         * "Too many sign-in attempts. Try again later." said WHEN, and `details.retryAfterSec`
+         * beside it also says when — the second statement of one fact that this file has now
+         * deleted from four refusals. The browser appends "Try again in 15 minutes.", so what
+         * stood here would have rendered as "… Try again later. Try again in 15 minutes."
+         *
+         * AND IT SAID "ATTEMPTS" WITHOUT SAYING WHOSE. The key is the TCP peer and the address, and
+         * `peerAddress` is one value for the whole deployment behind the owner's tunnel — so the
+         * attempts that shut this bucket may be nothing to do with the person reading it, and no
+         * network they can move to changes the key. That is the same defect the registration
+         * ladder's middle rung had (see `rungWhere`), on the route where it matters more: this
+         * reader HAS an account and is locked out of it. The paragraph above already says the
+         * lockout is reachable by anybody who can get through the tunnel; this is that fact told to
+         * the person it happens to, and `proxied` is measured the same way the ladder measures it.
+         *
+         * WHAT IT DOES NOT SAY is whether the address has an account, in either direction. The
+         * bucket is charged for a wrong password against a real account and against no account at
+         * all — `charge` runs on every failed verify — so the sentence has to be true of both
+         * readers. That is why the reassurance is "nothing has been changed and no account has been
+         * locked" rather than the warmer "the password on it still works", which would be a claim
+         * about an account that may not exist, told to somebody who cannot tell.
+         */
+        const proxied = reportedOrigin(req) !== peerAddress(req);
+        const whose = proxied
+          ? 'Sign-ins for this email address have been refused too many times. This GrantSpotter ' +
+            'is behind a proxy, so every sign-in arrives the same way and the failed attempts may ' +
+            'not have been yours: signing in from another network or another device will not get ' +
+            'past this.'
+          : 'Too many failed sign-ins for this email address from this connection.';
         // Retry-After is a transport header; the body stays the one error envelope. See
         // `refuseWithRetryAfter` — this route answered 429 with no header at all until 2026-08-12.
         throw refuseWithRetryAfter(
           res,
-          'Too many sign-in attempts. Try again later.',
+          `${whose} Nothing has been changed and no account has been locked: what is refused is ` +
+            'trying this address again, and it lifts on its own.',
           attempt.retryAfterSec,
         );
       }
@@ -1758,8 +1906,10 @@ export function createAuthRouter(deps: AuthRouterDeps): Router {
          * IT DOES NOT CHARGE THE FAILURE BUDGET AND IT DOES NOT COUNT TOWARDS `FAILED_SIGN_IN_NOTICE`.
          * Neither is a judgement call about kindness. The budget's subject is "how many GUESSES an
          * anonymous caller may make at a credential" and this is not a guess; charging it would put
-         * "Too many sign-in attempts. Try again later." in front of the fifth try, which is a second
-         * false sentence stacked on the first. The notice's subject is "somebody is trying
+         * the bucket's refusal — "Sign-ins for this email address have been refused too many
+         * times … nothing has been changed and no account has been locked" — in front of the fifth
+         * try, which is a second false sentence stacked on the first, and false in the one word
+         * that matters here, because an administrator HAS switched this account off. The notice's subject is "somebody is trying
          * passwords", and one person typing their own correct password is not that. A caller cannot
          * use this as a free-hash path they did not already have: `hashGate` bounds the work, and
          * the docblock above already records that a caller rotating the email address gets an

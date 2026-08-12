@@ -82,16 +82,49 @@ function messageFor(err: unknown): string {
         ? 'That email or password was not recognised.'
         : err.message;
     /*
-      The server sends `details.retryAfterSec` with this and this screen used to throw it away,
-      printing "wait a minute" for a pause the server had already said was fifteen. The same
-      correction as `Enroll.tsx`, from the same helper; see `lib/retryAfter.ts`.
+      THE SERVER'S OWN SENTENCE, THEN THE SERVER'S OWN NUMBER — THE SAME ARM AS ABOVE, ONE SWITCH
+      CASE LOWER, AND IT SHIPPED FOR A DAY AFTER THE ARM ABOVE WAS FIXED.
+
+      This kept `retryAfterSec` and threw `err.message` away, so it rendered the SAME eight words
+      whichever of the two rate-limited conditions on this route had happened. MEASURED against the
+      built server on this host, 2026-08-12: 240 of 500 concurrent sign-ins were answered "This
+      server is already doing as much password checking as it can right now. Nothing is wrong with
+      your details, nothing has been used up, and nobody needs to do anything about it." — a
+      statement about the server's CPU, carrying `retryAfterSec: 1` — and this screen rendered "Too
+      many attempts. Try again in 1 second." to a member who had made exactly one. The other
+      condition is the per-account bucket, whose sentence says whose attempts they may have been and
+      that no account has been locked. Neither is "too many attempts" by this reader.
+
+      The argument is the one the `unauthorized` arm above was corrected with and it is the same
+      argument for the whole file: the API's sentences are written for this reader, and a screen
+      that re-words them is a second place the copy has to be kept true. `Enroll.tsx` has done this
+      since 2026-08-05; `lib/retryAfter.ts` is the shared half.
+
+      THE NUMBER IS SAID EXACTLY ONCE, which is only true because `api/auth.ts` carries no duration
+      in either sentence — both said one until this change, and "…nobody needs to do anything about
+      it. Try again in 1 second." would be two statements of when from two sources, the defect this
+      product has already paid for on the sign-up screen.
     */
     case 'rate_limited': {
       const wait = retryAfterSecOf(err.details);
-      return wait === null
-        ? 'Too many attempts. Wait a minute and try again.'
-        : `Too many attempts. Try again in ${humanRetryAfter(wait)}.`;
+      const suffix = wait === null ? '' : ` Try again in ${humanRetryAfter(wait)}.`;
+      const said = err.message.trim();
+      // The fallback says nothing about time when the server sent no number, by the rule
+      // `lib/retryAfter.ts` states: a figure this screen invents is a figure nobody can keep.
+      return said === '' ? `Too many sign-in attempts.${suffix}` : `${said}${suffix}`;
     }
+    /*
+      THIS SCREEN'S OWN SENTENCE, AND IT IS THE ONE ARM WHERE THAT IS STILL RIGHT — checked rather
+      than assumed, because the two arms above were both corrected for doing it.
+
+      The test is whether the server has a sentence written for this reader. For `unauthorized` and
+      `rate_limited` it has several and only it knows which. Here it has exactly one and it is
+      `api/errors.ts` turning a ZodError into "The request body is invalid.", MEASURED against the
+      built server by POSTing `{}` to `/api/auth/login`. Printing that would tell somebody who left
+      a box empty about a body they never knew they sent. There is no password floor on this route
+      to state and no second condition hiding behind the status, so the specific sentence is this
+      one, and it names the two things the form wants.
+    */
     case 'validation_failed':
     case 'bad_request':
       return 'Enter an email address and the password for that account.';

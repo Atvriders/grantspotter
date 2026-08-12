@@ -592,8 +592,39 @@ describe('the ceiling on how many accounts one caller can make', () => {
         continue;
       }
       ladderRefusals += 1;
-      if (/no account has been created/i.test(message)) {
-        expect(wait, `"nothing created" beside a ${String(wait)}s wait: ${message}`).toBe(1);
+      /*
+        NO LADDER REFUSAL MAY FORECAST, WHICH IS THE 2026-08-12 CORRECTION AND THE REASON THIS
+        ASSERTION IS OUTSIDE THE BRANCHES.
+
+        "No account has been created from this connection in the last fifteen minutes" was true at
+        the instant it was written and could not survive the requests that caused it: MEASURED
+        against the built server, 260 students from one building NAT, 56 of them read it and 200
+        accounts existed 2.4 s later. A claim about a fifteen-minute window, made at the one moment
+        in that window when it holds, is not a true sentence — so no branch may make one, and the
+        burst branch says what is HAPPENING instead.
+      */
+      expect(message, `a refusal that forecast its own window: ${message}`).not.toMatch(
+        /no account has been created/i,
+      );
+      const inFlight = /^(\d+) sign-ups .* are being answered right now/.exec(message)?.[1];
+      if (inFlight !== undefined) {
+        // The burst branch: the budget is held entirely by sign-ups that started and have not
+        // finished. What it quotes is the ceiling, because a shut budget with nothing recorded is
+        // a budget holding exactly that many slots.
+        expect(Number(inFlight)).toBe(REGISTRATION_MAX_PER_CONNECTION);
+        /*
+          AND THE WAIT IS A WINDOW, NOT A HASH. This was 1, on the reasoning that a budget held by
+          running attempts frees as they finish — true of a limiter counting failures, false of
+          this ladder, whose running attempts are the accounts. The students told "1" met a
+          897-second refusal one second later. Held to within a minute of the whole window rather
+          than to an exact figure, because the slots were taken a moment before this request
+          arrived; `test/api.auth.test.ts` pins the arithmetic exactly and pins that a caller who
+          waits exactly this long is then let in.
+        */
+        expect(wait, `a burst refusal asking for a ${String(wait)}s wait: ${message}`).toBeGreaterThan(
+          REGISTRATION_WINDOW_MS / 1000 - 60,
+        );
+        expect(wait).toBeLessThanOrEqual(REGISTRATION_WINDOW_MS / 1000);
       } else {
         const quoted = /^(\d+) accounts have been created/.exec(message)?.[1];
         expect(quoted, `no count in: ${message}`).toBeTruthy();
@@ -648,6 +679,11 @@ describe('the ceiling on how many accounts one caller can make', () => {
     for (let i = 0; i < REGISTRATION_MAX_PER_CONNECTION + 20; i += 1) {
       await request(server)
         .post('/api/auth/enroll')
+        // THE BUILDING NAT, i.e. a request that arrived through a proxy, and every request in this
+        // test that fills a budget is one. That leaves the no-header connection bucket untouched
+        // for the last assertion in this test, which is about a caller reaching a DIRECT-facing
+        // deployment and is the other half of what the middle rung's sentence has to get right.
+        .set('X-Forwarded-For', '203.0.113.7')
         .send({ email: `charge-${String(i)}@example.org`, password: GOOD_PASSWORD });
     }
     // Twenty requests past the connection ceiling, all refused. If any of them had been charged to
@@ -671,12 +707,56 @@ describe('the ceiling on how many accounts one caller can make', () => {
       .set('X-Forwarded-For', '198.51.100.9')
       .send({ email: 'beyond@example.org', password: GOOD_PASSWORD });
     expect(beyond.status).toBe(429);
-    expect(beyond.body.error.message).toMatch(/from your network/i);
+    /*
+      "FROM YOUR NETWORK" WAS REQUIRED HERE AND IS NOW FORBIDDEN, because this request arrived
+      through a proxy and behind one this rung's key — `coarseOrigin(peerAddress(req))` — is the
+      proxy: one value for every user of the deployment. MEASURED against the built server on this
+      host, 2026-08-12: 130 students registered from one building NAT, an attacker created 270 more
+      from two addresses that had nothing to do with them, and the next student from that building
+      was told "400 accounts have been created from your network". 130 came from their network.
+
+      The sentence has to say what the key covers, and — because "your network" implied an
+      instruction to move that behind a tunnel is a wasted trip — it has to say that moving does not
+      help and who can actually do something.
+    */
+    expect(beyond.body.error.message).not.toMatch(/from your network/i);
+    expect(beyond.body.error.message).toMatch(/on this GrantSpotter/);
+    expect(beyond.body.error.message).toMatch(
+      /another network, another device or a phone runs into the same one/i,
+    );
+    expect(beyond.body.error.message).toMatch(/whoever runs this GrantSpotter/i);
     // The sentence names the accounts that exist, which is the whole of `registrationRefusal`'s
     // 2026-08-12 rewrite: 240 were created, 240 is what it says, and the database agrees.
     expect(beyond.body.error.message).toContain(
       `${String(REGISTRATION_MAX_PER_NETWORK)} accounts have been`,
     );
+    expect(memberCount()).toBe(REGISTRATION_MAX_PER_NETWORK);
+
+    /*
+      AND THE OTHER DEPLOYMENT SHAPE, FROM THE SAME RUNG, ONE REQUEST LATER.
+
+      No `X-Forwarded-For`, so `req.ip` is the socket address and nothing wrote a header in front of
+      this process: this caller is reaching the deployment directly, `coarseOrigin(peerAddress)`
+      really is their own /24, and "from your network" is the true sentence rather than the false
+      one. It is reachable here only because every request above carried a header, so this caller's
+      connection rung — keyed on `req.ip` — is untouched and the middle rung is what refuses them.
+
+      Both halves are asserted in one test on purpose. A single hard-coded sentence passes whichever
+      one of these is written down alone, and that is how the tunnel wording survived three rounds.
+    */
+    const direct = await request(server)
+      .post('/api/auth/enroll')
+      .send({ email: 'direct@example.org', password: GOOD_PASSWORD });
+    expect(direct.status).toBe(429);
+    expect(direct.body.error.message).toMatch(/from your network/i);
+    // …and no advice about there being nowhere else to go, because on this shape there is: a
+    // different network is a different key, and telling them otherwise would be the same defect
+    // pointing the other way.
+    expect(direct.body.error.message).not.toMatch(/another network, another device/i);
+    expect(direct.body.error.message).toContain(
+      `${String(REGISTRATION_MAX_PER_NETWORK)} accounts have been`,
+    );
+    // Refused, so nothing was created and nothing was charged by either of the last two requests.
     expect(memberCount()).toBe(REGISTRATION_MAX_PER_NETWORK);
   }, 600_000);
 

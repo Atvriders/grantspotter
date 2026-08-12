@@ -106,12 +106,19 @@ function messageForEnroll(err: unknown): string {
       THE SERVER'S OWN SENTENCE, THEN THE SERVER'S OWN NUMBER, AND THE NUMBER IS SAID EXACTLY ONCE.
 
       There are two rate-limited conditions on this route and they mean different things: the
-      registration ladder (too many accounts created from this connection, this network, or this
-      server, in the last fifteen minutes) and the hash queue shedding a request (the server is
-      doing as much password work as it can this second, retry-after 1). Both are answered with the
-      server's own sentence, because the server is the only party that knows which one happened and
-      its sentences already say so — and both are followed by the wait it actually stated, instead
-      of the flat "wait a minute" this screen used to print over a fifteen-minute pause.
+      registration ladder (accounts already created from this connection, or across the whole of
+      this GrantSpotter, in the last fifteen minutes — `api/auth.ts`'s `rungWhere` decides which of
+      those two a rung honestly is, and the deployment-wide one says so and says that moving
+      networks will not help) and the hash queue shedding a request (the server is doing as much
+      password work as it can this second, retry-after 1). Both are answered with the server's own
+      sentence, because the server is the only party that knows which one happened and its
+      sentences already say so — and both are followed by the wait it actually stated, instead of
+      the flat "wait a minute" this screen used to print over a fifteen-minute pause.
+
+      SINCE 2026-08-12 `routes/Login.tsx` DOES THE SAME with the two rate-limited conditions on the
+      sign-in route, which is where the shed sentence lost its trailing "wait a moment and try
+      again": one screen appending the number to a sentence that also stated one was tolerable only
+      while nothing appended it.
 
       THE CONCATENATION IS ONLY HONEST BECAUSE THE OTHER HALF STOPPED SAYING WHEN, and that half was
       wrong for a day. `api/auth.ts` used to end its refusals with "wait a moment and try again" or
