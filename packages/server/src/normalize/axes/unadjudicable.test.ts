@@ -320,6 +320,14 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     // list member that word overlap admits almost nobody to, and the record hard-refused 16 of 20
     // probed majors, Physics, Chemistry, Biology and Astronomy among them. See
     // `spec-vs-sentence.test.ts`, the corpus-wide rule that found it.
-    expect(checked).toBe(51);
+    //
+    // 66 SINCE ROUND 8, when the geography cascade ladder landed: 15 bounded cascades — "Residence
+    // in WI. If none identified, residence in the ARRL Central Division" and its fourteen siblings
+    // — each publish the funder's own condition here ("If none identified", "if no suitable
+    // applicant found", "If there is no applicant from the preferred areas"), which is what stops
+    // an out-of-ladder applicant being refused by the rung the funder DID name. Fifteen more
+    // strings for the rule above to catch, and it is the only thing standing between that field
+    // and a paraphrase.
+    expect(checked).toBe(66);
   });
 });

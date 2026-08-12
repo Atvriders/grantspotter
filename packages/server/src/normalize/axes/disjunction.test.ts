@@ -489,11 +489,19 @@ describe('nothing this round added can refuse anybody', () => {
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard, and the whole blast radius of `anyOf` over the committed fixtures: SIX
-    // alternatives on five records — IRARC's geography and field_of_study, Gwinnett's and North
-    // Texas's geography, Ware's licence, and Fred R. McDaniel's "Resident of FCC 5th call district
-    // (TX, OK, AR, LA, MS, NM)", where the six states the funder spelled out are a second tier
-    // beside a rule stored as a property of a CALLSIGN. Nothing else in 150 programs has one.
-    expect(total).toBe(6);
+    // Vacuity guard, and the whole blast radius of `anyOf` over the committed fixtures. SIX
+    // alternatives on five records until round 8 — IRARC's geography and field_of_study,
+    // Gwinnett's and North Texas's geography, Ware's licence, and Fred R. McDaniel's "Resident of
+    // FCC 5th call district (TX, OK, AR, LA, MS, NM)", where the six states the funder spelled out
+    // are a second tier beside a rule stored as a property of a CALLSIGN.
+    //
+    // NINETEEN SINCE, and the thirteen new ones are all the same sentence shape: a bounded cascade
+    // whose rungs the corpus had been discarding. "Residence in GA. If no qualified applicant, …
+    // the ARRL Southeastern Division" is `state[GA]` `anyOf` `arrl_division[Southeastern]` — the
+    // same disjunction as Gwinnett's "Resident of Gwinnett County GA, or the State of GA", stated
+    // with a condition instead of a comma. Two of the fifteen bounded cascades carry no `anyOf`:
+    // Vienna Wireless names only states and merges to one tier, and Rodriguez K5AUW's fallback
+    // rung names no place at all ("then no scholarship will be awarded").
+    expect(total).toBe(19);
   });
 });

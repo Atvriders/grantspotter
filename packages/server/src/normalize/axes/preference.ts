@@ -105,6 +105,69 @@ const FALLBACK_CONDITION =
   /^(?:and\s+|but\s+|then\s+)*(?:if|should|unless|when)\s+(?:there\s+(?:is|are)\s+)?(?:no|none|not)\b/i;
 
 /**
+ * THE SAME CONDITION, FOUND WHEREVER IT SITS — the rungs of a cascade, not just its softness.
+ *
+ * `FALLBACK_CONDITION` asks a span whether it BEGINS with a fallback, which is all the softening
+ * decision needs. A LADDER needs the boundaries themselves: "Preference is given to residents of
+ * Texas, If no qualified applicant is identified, … residents of Arkansas. If no qualified
+ * applicant is identified, … the ARRL West Gulf … or Delta … Divisions." (Helen Laughlin, the
+ * funder's own capitalisation) states three areas, and only ONE of its two boundaries falls where
+ * a clause begins — `splitClauses` does not cut at the comma before the first "If".
+ *
+ * Same vocabulary as `FALLBACK_CONDITION`, deliberately, so a sentence cannot be soft because of
+ * a fallback this cannot find, or cut at a fallback that does not soften it. The difference is
+ * only the anchor: start-of-span there, "after a sentence end, a semicolon, a comma, or an
+ * and/but/then" here. Capture group 1 is the condition, so the cut lands on the "if" and the rung
+ * carries the funder's own wording of what happens next.
+ */
+const FALLBACK_BOUNDARY =
+  /(?:^|[.;,]\s*|\s+(?:and|but|then)\s+)((?:if|should|unless|when)\s+(?:there\s+(?:is|are)\s+)?(?:no|none|not)\b)/gi;
+
+/**
+ * The rungs of a cascade, first-named first — or `[]` when the text states no fallback at all.
+ *
+ * "Residence in WI. If none identified, residence in the ARRL Central Division (IL, IN, WI)"
+ * (David Knaus) is TWO statements of area, and the funder named both. Everything before the first
+ * fallback condition is rung 0; each fallback condition opens the next rung and stays inside it,
+ * because the condition is the funder's own words for when that rung applies.
+ *
+ * This says nothing about whether the ladder BOUNDS anything — a rung that widens to everyone
+ * ("…and then the remaining USA") is still a rung. The caller decides what the ladder means; this
+ * only cuts it. See `geography.ts`'s `cascadeConstraints`, the one caller.
+ */
+export function cascadeRungs(text: string): string[] {
+  const cuts: number[] = [];
+  FALLBACK_BOUNDARY.lastIndex = 0;
+  for (let m = FALLBACK_BOUNDARY.exec(text); m !== null; m = FALLBACK_BOUNDARY.exec(text)) {
+    cuts.push(m.index + m[0].length - m[1].length);
+  }
+  if (cuts.length === 0) return [];
+  const bounds = [0, ...cuts, text.length];
+  const rungs: string[] = [];
+  for (let i = 0; i < bounds.length - 1; i += 1) {
+    const rung = text.slice(bounds[i], bounds[i + 1]).trim();
+    if (rung !== '') rungs.push(rung);
+  }
+  return rungs;
+}
+
+/** Where a rung's CONDITION stops and its consequence begins. */
+const CONDITION_END = /,|\s+then\s+/i;
+
+/**
+ * The funder's own words for the condition a rung hangs on, verbatim: "If none identified",
+ * "if no suitable applicant found", "If there is no applicant from the preferred areas".
+ *
+ * Verbatim matters twice over. It is quoted back to the reader as the thing GrantSpotter cannot
+ * check (`ConstraintAlternatives.orUnrepresented`), and it is a substring of the constraint's own
+ * `rawText`, so the sentence printed beside it is the sentence it came out of.
+ */
+export function fallbackCondition(rung: string): string {
+  const end = CONDITION_END.exec(rung);
+  return (end === null ? rung : rung.slice(0, end.index)).trim();
+}
+
+/**
  * How many words a span must carry before it counts as a statement of its own. Below this the
  * span is the connective tissue a preference hangs off — "First" (NEAR-Fest's "First Preference
  * given to Extra Class"), "1)", "Second", "and". Three is not tuned to one entry: this corpus
@@ -332,7 +395,19 @@ export function requirementText(text: string): string {
  *  - an explicit cascade ("…if no qualified applicant is identified, the scholarship may be
  *    awarded to…") — the funder has stated in its own words that the primary criterion does not
  *    exclude anyone, so no part of that sentence is a bar however it is punctuated. This is the
- *    same statement `cascadeRank` publishes as `fallbackRank: 1`;
+ *    same statement `cascadeRank` publishes as `fallbackRank: 1`.
+ *
+ *    THAT IS RIGHT ABOUT THE FIRST RUNG AND SAYS NOTHING ABOUT THE LAST. "Residence in WI. If none
+ *    identified, residence in the ARRL Central Division (IL, IN, WI)" does not exclude a
+ *    Wisconsin-less applicant from Illinois — and it does not admit one from Ohio either. Softening
+ *    the whole sentence answers the first question and silently answers the second one "yes":
+ *    measured over the whole corpus, 15 records shaped like this told applicants in states the
+ *    funder never named that they were `eligible`. The remedy is NOT to harden this — a hard read
+ *    of the last rung would refuse the Ohioan, which no sentence on the page does. It is for the
+ *    axis to publish the LADDER beside the preference, which is what `cascadeRungs` above is for
+ *    and what `geography.ts`'s `cascadeConstraints` does with it: every rung the funder named,
+ *    admitted; everyone else `unknown`. This function's answer is unchanged, and so is every
+ *    constraint it governs;
  *  - a fallback condition inside the ungoverned span, by the same reasoning at clause level.
  *
  * Still biased toward softening at the margin: a span shorter than `MIN_REQUIREMENT_WORDS` is

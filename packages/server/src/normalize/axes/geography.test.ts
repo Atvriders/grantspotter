@@ -1,6 +1,16 @@
-import type { GeoSpec, RawOpportunity } from '@grantspotter/core';
+import type { Constraint, GeoSpec, Profile, RawOpportunity } from '@grantspotter/core';
+import { evaluateConstraint } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 import { extractGeography } from './geography.js';
+
+/** Fixed clock: nothing this file asserts is time-dependent, but `evaluateConstraint` wants one. */
+const NOW = '2026-08-02T00:00:00.000Z';
+
+const ALL_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA',
+  'ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR',
+  'PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+];
 
 const raw = (fields: Record<string, string>): RawOpportunity => ({
   sourceId: 's',
@@ -482,15 +492,45 @@ describe('round 4 — the spec comes from the requirement clause; the preference
 });
 
 /**
- * The over-softening guard rail for round 4. An explicit cascade is the funder saying in its own
- * words that the first-named area does NOT exclude anyone — "State of Indiana; if no qualified
- * applicant is identified, preference given to applicants from the ARRL Central Division". A
- * scoping rule that reads "State of Indiana" as a requirement and hardens it would bar the
- * Illinois applicant the funder has just said may win. So a cascade is never split: the whole
- * field stays ONE soft constraint with `fallbackRank: 1`, exactly as before this round.
+ * The over-softening guard rail for round 4, and round 8's correction to what it was guarding.
+ *
+ * ROUND 4 WAS RIGHT ABOUT THE FIRST RUNG. An explicit cascade is the funder saying in its own words
+ * that the first-named area does NOT exclude anyone — "State of Indiana; if no qualified applicant
+ * is identified, preference given to applicants from the ARRL Central Division". A scoping rule
+ * that reads "State of Indiana" as a requirement and hardens it would bar the Illinois applicant
+ * the funder has just said may win, so the whole field stays ONE soft constraint with
+ * `fallbackRank: 1` — and it still does, byte for byte, in every case below.
+ *
+ * IT SAID NOTHING ABOUT THE LAST RUNG, and "never split" was doing that job by accident. Softening
+ * the whole sentence answers "may an Illinois applicant win Indianapolis?" with yes, and silently
+ * answers "may an OREGON applicant?" with yes too, because a soft constraint refuses nobody.
+ * Measured over the corpus, 15 records shaped like this produced 107 of 987 positive verdicts for
+ * applicants in states their funder never named.
+ *
+ * SO THE LADDER IS PUBLISHED BESIDE THE PREFERENCE, AND IT STILL CANNOT REFUSE ANYBODY. The second
+ * constraint carries every rung the funder named (`geo` + `anyOf`) and the funder's own condition
+ * in `orUnrepresented`, which `ConstraintAlternatives` documents as able to turn a `fail` into an
+ * `unknown` and nothing else. That is asserted here directly, over every US state and over an
+ * empty profile, rather than argued: the pair of claims this round rests on is "an out-of-ladder
+ * applicant stops being told `eligible`" and "no applicant anywhere is refused".
+ *
+ * MMARSI is the control. Its last rung is "and then the remaining USA" — the funder widening to
+ * everybody in its own words — so it keeps exactly the one soft constraint it always had.
  */
-describe('round 4 — an explicit cascade is never split or hardened', () => {
+describe('round 4/8 — an explicit cascade is never hardened into a refusal', () => {
   const constraintsFor = (region: string) => extractGeography(raw({ Region: region }));
+
+  /** Every US state, plus a profile that has answered nothing at all. */
+  const PROBES: Profile[] = [
+    ...ALL_STATES.map((state) => ({ kind: 'student' as const, state })),
+    ...ALL_STATES.map((state) => ({ kind: 'student' as const, state, county: 'Nowhere' })),
+    { kind: 'student' as const },
+  ];
+
+  const neverRefuses = (c: Constraint): string[] =>
+    PROBES.filter((p) => evaluateConstraint(c.spec, p, NOW, c.rawText).status === 'fail').map((p) =>
+      JSON.stringify(p),
+    );
 
   it.each([
     [
@@ -498,6 +538,15 @@ describe('round 4 — an explicit cascade is never split or hardened', () => {
       'State of Indiana; if no qualified applicant is identified, preference given to applicants ' +
         'from the ARRL Central Division (Illinois, Indiana and Wisconsion)',
       { type: 'arrl_division', values: ['Central'] },
+      {
+        axis: 'geography',
+        geo: { type: 'state', values: ['IN'] },
+        anyOf: [{ axis: 'geography', geo: { type: 'arrl_division', values: ['Central'] } }],
+        orUnrepresented: 'if no qualified applicant is identified',
+      },
+      // Indiana is the first rung; Illinois and Wisconsin are the Central Division fallback.
+      // Ohio is on neither, and the funder's page never mentions it.
+      { admits: ['IN', 'IL', 'WI'], undecided: ['OH', 'CA', 'NY'] },
     ],
     [
       'North Fulton',
@@ -505,36 +554,124 @@ describe('round 4 — an explicit cascade is never split or hardened', () => {
         'from the ARRL Southeastern Division (Alabama, Florida, Georgia, Puerto Rico and the US ' +
         'Virgin Islands)',
       { type: 'arrl_division', values: ['Southeastern'] },
+      {
+        axis: 'geography',
+        geo: { type: 'state', values: ['GA'] },
+        anyOf: [{ axis: 'geography', geo: { type: 'arrl_division', values: ['Southeastern'] } }],
+        orUnrepresented: 'If no qualified applicant',
+      },
+      { admits: ['GA', 'AL', 'FL'], undecided: ['OH', 'TX', 'NY'] },
     ],
-    [
-      'MMARSI',
+  ] as const)(
+    '%s: the soft constraint is unchanged, and the ladder beside it admits every named rung',
+    (_name, text, geo, ladder, expected) => {
+      const cs = constraintsFor(text);
+      expect(cs).toHaveLength(2);
+
+      // Unchanged, exactly as round 4 left it — same index, same rawText, same spec, still soft.
+      expect(cs[0].hard).toBe(false);
+      expect(cs[0].fallbackRank).toBe(1);
+      expect(cs[0].rawText).toBe(text);
+      expect(cs[0].spec).toEqual({ axis: 'geography', geo });
+
+      expect(cs[1].hard).toBe(true);
+      expect(cs[1].rawText).toBe(text);
+      expect(cs[1].spec).toEqual(ladder);
+      // The funder's own words, verbatim, so the sentence printed beside it is the one it came from.
+      expect(text).toContain(cs[1].spec.orUnrepresented);
+
+      for (const state of expected.admits) {
+        expect(
+          evaluateConstraint(cs[1].spec, { kind: 'student', state }, NOW, cs[1].rawText).status,
+          state,
+        ).toBe('pass');
+      }
+      for (const state of expected.undecided) {
+        expect(
+          evaluateConstraint(cs[1].spec, { kind: 'student', state }, NOW, cs[1].rawText),
+          state,
+        ).toEqual({ status: 'unknown', missing: [] });
+      }
+      expect(neverRefuses(cs[1])).toEqual([]);
+    },
+  );
+
+  it('MMARSI — a cascade that widens to everybody stays ONE soft constraint', () => {
+    // "…and then the remaining USA" is the funder saying the area excludes nobody at all, so there
+    // is no outer rung to publish and nothing here changes.
+    const text =
       'State of Maryland; if no qualified applicant is identified, preference will be given to ' +
-        'applicants from the states of Virginia, Delaware, The District of Columbia, ' +
-        'Pennsylvania, and West Virginia, and then the remaining USA.',
-      { type: 'state', values: ['DE', 'DC', 'MD', 'PA', 'VA', 'WV'] },
-    ],
-  ] as const)('%s: one soft constraint over the whole field, fallbackRank 1', (_name, text, geo) => {
+      'applicants from the states of Virginia, Delaware, The District of Columbia, ' +
+      'Pennsylvania, and West Virginia, and then the remaining USA.';
     const cs = constraintsFor(text);
     expect(cs).toHaveLength(1);
     expect(cs[0].hard).toBe(false);
     expect(cs[0].fallbackRank).toBe(1);
     expect(cs[0].rawText).toBe(text);
-    expect(cs[0].spec).toEqual({ axis: 'geography', geo });
+    expect(cs[0].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'state', values: ['DE', 'DC', 'MD', 'PA', 'VA', 'WV'] },
+    });
   });
 
-  it('the canonical Louisiana cascade is still one soft constraint, not two', () => {
+  it('a fallback this axis cannot read as a place leaves the cascade exactly as it was', () => {
+    // Two rungs that name no area, and they mean opposite things. Only the funder's own refusal is
+    // recognised as one; anything else is treated as evidence of nothing, which is the direction
+    // that moves no verdict.
+    const open = constraintsFor(
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
+        'identified, the award is open to any eligible applicant.',
+    );
+    expect(open).toHaveLength(1);
+    expect(open[0].hard).toBe(false);
+
+    const closed = constraintsFor(
+      'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
+        'identified then no scholarship will be awarded.',
+    );
+    expect(closed).toHaveLength(2);
+    expect(closed[1].hard).toBe(true);
+    expect(closed[1].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'state', values: ['LA'] },
+      orUnrepresented: 'If no qualified applicant is identified',
+    });
+    expect(neverRefuses(closed[1])).toEqual([]);
+  });
+
+  it('the canonical Louisiana cascade keeps its soft constraint and gains the Delta ladder', () => {
+    // Walter Gallinghouse, K5DSL, verbatim. Round 4's assertion — soft, rank 1, Delta — is
+    // untouched; what is new is the second constraint, and an Ohio applicant it can only leave
+    // undecided.
     const cs = constraintsFor(
       'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
         'identified, the scholarship may be awarded to an applicant from the Delta Division ' +
         '(Arkansas, Louisiana, Mississippi, Tennessee).',
     );
-    expect(cs).toHaveLength(1);
+    expect(cs).toHaveLength(2);
     expect(cs[0].hard).toBe(false);
     expect(cs[0].fallbackRank).toBe(1);
     expect(cs[0].spec).toEqual({
       axis: 'geography',
       geo: { type: 'arrl_division', values: ['Delta'] },
     });
+    expect(cs[1].hard).toBe(true);
+    expect(cs[1].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'state', values: ['LA'] },
+      anyOf: [{ axis: 'geography', geo: { type: 'arrl_division', values: ['Delta'] } }],
+      orUnrepresented: 'If no qualified applicant is identified',
+    });
+    for (const state of ['LA', 'AR', 'MS', 'TN']) {
+      expect(
+        evaluateConstraint(cs[1].spec, { kind: 'student', state }, NOW, cs[1].rawText).status,
+        state,
+      ).toBe('pass');
+    }
+    expect(
+      evaluateConstraint(cs[1].spec, { kind: 'student', state: 'OH' }, NOW, cs[1].rawText),
+    ).toEqual({ status: 'unknown', missing: [] });
+    expect(neverRefuses(cs[1])).toEqual([]);
   });
 
   it('a whole-value preference with no requirement beside it stays one soft constraint', () => {

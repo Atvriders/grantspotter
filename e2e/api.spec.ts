@@ -248,13 +248,29 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   //                                constraint had claimed a met preference, and its rank, for an
   //                                applicant in no emergency communications programme.
   // The pair crosses in `eligible`, so that column is unmoved at 55 and the positive total is 68.
-  expect(browse.summary.eligible + browse.summary.preferred).toBe(68);
+  //
+  // AND ELEVEN MORE LEFT THE POSITIVE COLUMN ON 2026-08-12, WITH `ineligible` UNMOVED AT 51. A
+  // "cascade" — "Residence in WI. If none identified, residence in the ARRL Central Division (IL,
+  // IN, WI)" — is the funder saying its first-named area excludes nobody, and the whole sentence
+  // was therefore published as a single SOFT constraint. A soft constraint refuses nobody, so it
+  // also admitted everybody: this Texas applicant was told `eligible` for eleven awards whose
+  // funders name Wisconsin, Indiana, Louisiana, South Carolina, Georgia, Florida, Virginia,
+  // California and the Shenandoah Valley, and never name Texas. Each record now publishes the
+  // LADDER beside the preference — every rung the funder wrote, as a disjunction — with the
+  // funder's own condition in `orUnrepresented`, which can only reach `unknown`. Ten move
+  // `eligible -> unknown`; North Fulton moves `eligible_preferred -> unknown`.
+  //
+  // The direction is what makes it safe to do at all: measured over 54,600 (profile, programme)
+  // pairs — 58 profiles, one per US state plus the seven shipped ones — the change moved ZERO
+  // pairs into `ineligible` and zero out of it. Every move is a claim withdrawn, never a door shut.
+  // Measured against c1bde9f, the commit before it: 63 positive -> 52, `ineligible` unmoved at 51.
+  expect(browse.summary.eligible + browse.summary.preferred).toBe(52);
   expect(browse.summary).toMatchObject({
     total: 150,
-    eligible: 55,
-    preferred: 13,
+    eligible: 43,
+    preferred: 9,
     ineligible: 51,
-    unknown: 31,
+    unknown: 47,
   });
   expect(browse.rows).toHaveLength(150);
 
@@ -342,7 +358,9 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   const browse = await browseAsEeUndergrad(request);
 
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
-  expect(unknown).toHaveLength(31);
+  // 47 since 2026-08-12: the eleven bounded cascades in the census assertions above. Each is a
+  // question this applicant used to be given an answer to that nobody had written.
+  expect(unknown).toHaveLength(47);
 
   /*
    * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
@@ -422,9 +440,37 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   //             It names no field because this reader HAS answered the activities question; an
   //             applicant who has not still gets `unknown` naming `activityKinds`.
   //
-  // A TWENTY-FIFTH row joining this list is a corpus regression — a funder's rule silently losing
-  // its centre, or a new source publishing no audience — and must fail here rather than disappear
-  // into a count.
+  // AND THE YANKEE CLIPPER LEFT THIS LIST ON 2026-08-12, which is the one direction a row may leave
+  // it in: its centre resolved. `RADIUS` had captured "YCCC center which is in Erving, MA. MA" —
+  // the club, the funder's gloss, and the first two words of the state list that follows the
+  // sentence end — while `RADIUS_CENTERS` has held `erving, ma` all along. Cutting the gloss and
+  // ending the label at its state makes the lookup hit, so the row now asks for `lat` and `lon`,
+  // which is a question the reader can act on rather than one they cannot. It is asserted as an
+  // ANSWERABLE unknown at the foot of the radius test below.
+  //
+  //   7 records THE THIRD KIND ON THE GEOGRAPHY AXIS (2026-08-12), and the reason this list grew
+  //             rather than shrank. A bounded cascade names a ladder of areas — "Residence in WI.
+  //             If none identified, residence in the ARRL Central Division (IL, IN, WI)" — and this
+  //             applicant is in Texas, which is on none of its rungs. Nothing on the funder's page
+  //             refuses them and nothing on it admits them, so the record carries the funder's own
+  //             condition ("If none identified") in `orUnrepresented` and the axis declines to
+  //             decide. They ARE answerable in the only sense that matters — the reader has already
+  //             answered `state`; what is missing is a sentence the funder never wrote — so they
+  //             name no field, and the page shows them the funder's ladder to judge for themselves.
+  //             Four more cascades moved the same way and are NOT here: Gulf Coast, Wayne Nelson,
+  //             Warren K6OBS and Shenandoah Valley state their first rung as COUNTIES, so their
+  //             unknown names `county`, which this profile has genuinely not filled in.
+  //
+  //   5 records NOT FROM THIS CHANGE — from c1bde9f, the commit immediately before it, which names
+  //             all five in its own message and could not update this list because the file was
+  //             already open for the geography work. NCDXF Grant Program, SARA Student and Teacher
+  //             Project Grants and the Yaesu System Fusion DR-2X Repeater Program record no
+  //             audience at all; The John C. York, KE5V, and Medical Amateur Radio Council (MARCO)
+  //             Scholarships each open a list the funder wrote as open. Every one of the five was
+  //             an `eligible` nobody had written, and is a question now.
+  //
+  // A row joining this list is a corpus regression — a funder's rule silently losing its centre, or
+  // a new source publishing no audience — and must fail here rather than disappear into a count.
   expect(unanswerable.map((r) => r.program.name).sort()).toEqual([
     'AMSAT — no grants program',
     'ARRL Collegiate Amateur Radio Initiative (CARI) — not a funding program',
@@ -439,19 +485,34 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'IEEE society funding pages (~39 societies)',
     'Icom America, DX Engineering, Kenwood — relationship-driven, no application path',
     'NASA National Space Grant — 52 state consortia',
+    'NCDXF Grant Program',
     'NCDXF Youth Grant',
     'Public Wireless Supply Chain Innovation Fund',
     'Radio Club of America Scholarship Program',
     'Radio Club of America Youth Activities Program',
+    'SARA Student and Teacher Project Grants',
     'The CARA Merit Scholarship',
     'The Carole J. Streeter, KB9JBR, Scholarship',
+    'The David Knaus Memorial Scholarship',
+    'The Fritz Nitsch, W4NTO, Memorial Scholarship',
+    'The Homer V. Thompson, W4CWV, and Annette P. Thompson, W4LKM, Memorial Scholarship',
+    'The Indianapolis Amateur Radio Association Scholarshp Fund',
+    'The John C. York, KE5V, Scholarship',
+    'The Medical Amateur Radio Council (MARCO) Scholarship',
     'The Michael Tortorella, W2IY, Scholarship Fund',
+    'The North Fulton Amateur Radio League Scholarship',
     'The Robert A. Rodriguez K5AUW Scholarship',
-    'The Yankee Clipper Contest Club Youth Scholarship',
+    'The Vienna Wireless Society Scholarship',
+    'The Walter Gallinghouse, K5DSL, Scholarship',
+    'Yaesu System Fusion DR-2X Repeater Program',
     'Yasme Excellence Award',
     'Yasme Foundation Supporting Grants',
   ]);
-  expect(answerable).toHaveLength(7);
+  // 12 since 2026-08-12, five more than before: the four county-first cascades named above (Gulf
+  // Coast, Wayne Nelson, Warren K6OBS, Shenandoah Valley) each ask for `county`, and the Yankee
+  // Clipper's circle — whose centre resolved in the same change — asks for `lat` and `lon` instead
+  // of asking for nothing.
+  expect(answerable).toHaveLength(12);
   expect(browse.summary.unknownByField.map((f) => f.field).sort()).toEqual([
     'county',
     'cwWpm',
@@ -459,8 +520,8 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'lon',
   ]);
 
-  // The census can therefore be read as a sentence: 31 of these are questions, not refusals.
-  expect(browse.summary.unknown).toBe(31);
+  // The census can therefore be read as a sentence: 47 of these are questions, not refusals.
+  expect(browse.summary.unknown).toBe(47);
   expect(browse.summary.unknown + browse.summary.ineligible).toBeLessThan(browse.summary.total);
 
   // AN INELIGIBLE VERDICT QUOTES THE FUNDER'S OWN WORDS — WHERE THERE ARE ANY, AND ONLY THERE.
@@ -565,34 +626,51 @@ test('a coordinate can decide a circle that has a centre, and can never close on
   expect(schenectady.get(CHICK_ALLEN)?.kind).toBe('ineligible');
 
   /*
-   * AND THE RULE WITH NO CENTRE, FROM FOUR PLACES INCLUDING ITS OWN. Erving, Massachusetts is
-   * inside the circle the funder described and the South Atlantic is 8,000 miles outside it;
-   * GrantSpotter cannot tell, and must say so identically from both rather than pick one. The
-   * verdict is compared to the no-coordinate verdict field by field, so this fails whether the
-   * answer becomes `ineligible` (the shipped defect) or quietly becomes `eligible` (the same
-   * over-assertion pointed the other way).
+   * AND THE THIRD CIRCLE, WHICH USED TO BE THE ONE WITH NO CENTRE — the Yankee Clipper Contest
+   * Club, 175 miles around Erving, Massachusetts.
+   *
+   * Until 2026-08-12 this record's `centerLabel` was "YCCC center which is in Erving, MA. MA": the
+   * `RADIUS` capture had taken the club's name, the funder's own gloss ("which is in") and the
+   * first two words of the state list that follows the sentence end. `RADIUS_CENTERS` has held
+   * `erving, ma` since the table was written, so the lookup missed by a label and the circle
+   * shipped with no coordinate — 12 unknowns that named nothing anyone could fill in, on a record
+   * whose centre was on file the whole time. Cutting the gloss and ending the label at its state
+   * closes it.
+   *
+   * WHAT THIS TEST NO LONGER PROVES, AND WHERE IT IS PROVED. "A coordinate can never close a circle
+   * that has none" was asserted here against this record, because it was the corpus's only
+   * centreless radius. It has no instance to drive now, and inventing one in a fixture to keep an
+   * assertion company would be pinning a defect. The rule itself is not weakened and is not
+   * unguarded: `packages/core/test/geo.test.ts` ("cannot decide a radius with no centre, and does
+   * not pretend to") drives `evaluateGeo` against a centreless spec from Amherst, from Washington
+   * DC and from no coordinate at all, and against a centre with no distance — every branch,
+   * without needing the corpus to contain a broken record. What is asserted HERE is the thing only
+   * an end-to-end run can show: that the label now resolves through the real server, so the answer
+   * moves with the applicant's coordinate the way the other two circles' answers do.
    */
-  const withoutCoordinate = await verdictsAt(null);
-  expect(withoutCoordinate.get(YCCC)).toEqual({ kind: 'unknown', missingProfileFields: [] });
+  const erving = await verdictsAt({ lat: 42.6034, lon: -72.4009 });
+  expect(erving.get(YCCC)?.kind).toBe('eligible');
+  expect(erving.get(CHICK_ALLEN)?.kind).toBe('ineligible');
 
   for (const at of [
-    { lat: 42.6034, lon: -72.4009 }, // Erving, MA — inside the circle the funder meant
     { lat: 30.2672, lon: -97.7431 }, // Austin, TX — where this profile actually is
     { lat: -54.4296, lon: -36.5879 }, // South Georgia, in the South Atlantic
     { lat: 0, lon: 0 }, // Null Island: a real coordinate that a falsy test would drop
   ]) {
     const verdicts = await verdictsAt(at);
     expect(
-      verdicts.get(YCCC),
-      `${YCCC} changed its answer at ${String(at.lat)},${String(at.lon)}, so a rule with no ` +
-        'centre was decided by a coordinate',
-    ).toEqual(withoutCoordinate.get(YCCC));
+      verdicts.get(YCCC)?.kind,
+      `${YCCC} did not refuse ${String(at.lat)},${String(at.lon)}, which is far outside its circle`,
+    ).toBe('ineligible');
+    expect((verdicts.get(YCCC)?.reasons ?? []).map((r) => r.spec.axis)).toContain('geography');
   }
 
   // Left as `browseAsEeUndergrad` leaves it: no coordinate, so the counts every other spec in this
-  // file asserts are the counts this one hands on.
+  // file asserts are the counts this one hands on. And with no coordinate the circle is a QUESTION,
+  // naming the two fields that would settle it — never a refusal, which is the direction the whole
+  // radius axis is built to hold.
   const restored = await verdictsAt(null);
-  expect(restored.get(YCCC)?.kind).toBe('unknown');
+  expect(restored.get(YCCC)).toEqual({ kind: 'unknown', missingProfileFields: ['lat', 'lon'] });
   expect(restored.get(CHICK_ALLEN)?.missingProfileFields).toEqual(['lat', 'lon']);
 });
 
@@ -1010,8 +1088,9 @@ test('the completeness meter speaks for the corpus the user can actually reach',
   // 30 since the two domain records below joined them. 31 since CARA joined them too: a funder's
   // "…Field Day, ETC." stops the list refusing this applicant, and for one round it was also read
   // as admitting them, which is a claim their `activityKinds` of `club_member` and `on_air` does
-  // not support.
-  expect(body.completeness.unknownCount).toBe(31);
+  // not support. 42 since the eleven bounded geography cascades stopped admitting an applicant in a
+  // state their funders never name — see the census assertions in the journey spec for the ledger.
+  expect(body.completeness.unknownCount).toBe(47);
   expect(body.completenessFor).toBe('student');
 
   const me = (await (await request.get('/api/me')).json()) as {

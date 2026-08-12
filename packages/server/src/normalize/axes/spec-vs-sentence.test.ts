@@ -180,12 +180,28 @@ describe('R1 — a state the funder named, that no tier of the spec admits', () 
    * applicant, then <the whole state>" with the second tier dropped. They are recorded here in
    * words because they are real and worth someone's time, and they are NOT asserted, because
    * pinning a defect is what the test at the top of this file was doing.
+   *
+   * ROUND 8 — AND THE SECOND MECHANISM THAT CANNOT REFUSE. `hard` stopped being the same question
+   * as "can this constraint produce an `ineligible`" when the cascade ladder landed: a hard
+   * constraint carrying `orUnrepresented` is consulted exactly when every tier has failed, and the
+   * answer there is `unknown`. `ConstraintAlternatives` states it as an invariant of the schema —
+   * "`orUnrepresented` can only turn a `fail` into an `unknown`. Also never a refusal." — and
+   * `disjunction.test.ts` proves it over this corpus by deleting the field and checking no verdict
+   * improves. So those constraints are out of scope here for the SAME reason soft ones are, and
+   * for no other: a state missing from one costs a rank or an unknown, never an award.
+   *
+   * The Shenandoah Valley ladder is the record this exempts, and it is the shape the paragraph
+   * above already names: eight counties across Virginia AND West Virginia, whose fallback rung
+   * widens only to Virginia. Its county tier admits all eight counties whatever state the applicant
+   * is in, and a West Virginian outside them gets `unknown` rather than a refusal — which is
+   * exactly what this rule exists to guarantee, arrived at by a different route.
    */
   it('no hard geography constraint leaves out a state its own sentence names', async () => {
     const offenders: string[] = [];
     let checked = 0;
     for (const { program, c } of await everyConstraint()) {
       if (c.spec.axis !== 'geography' || !c.hard) continue;
+      if (c.spec.orUnrepresented !== undefined) continue;
       if (!decidableFromStates(c.spec) || statesNamedIn(c.rawText).length === 0) continue;
       checked += 1;
       const missing = statesUnadmitted(c.spec, c.rawText);

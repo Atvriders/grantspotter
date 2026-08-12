@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Program } from '@grantspotter/core';
+import { evaluateConstraint } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 // The offline corpus loader: every committed REAL capture, parsed by its own source module and
 // normalized exactly as the crawler does, minus the records `buildReviewItems` suppresses. Shared
@@ -9,6 +10,14 @@ import { describe, expect, it } from 'vitest';
 import { loadCorpus } from '../../../../scripts/profile-corpus.js';
 import { SOURCES } from '../sources/registry.js';
 import { FIXTURE_ROOT } from '../../test/fixtures.js';
+
+/** Fixed clock and the whole state list, for the "…and it still refuses nobody" checks below. */
+const NOW = '2026-08-02T00:00:00.000Z';
+const ALL_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA',
+  'ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR',
+  'PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+];
 
 /**
  * THE MISSING-LICENCE-FLOOR INVARIANT.
@@ -765,14 +774,35 @@ describe('requirement-and-preference in one field: the requirement half survives
       'arrl-scholarship-descriptions::The Walter Gallinghouse, K5DSL, Scholarship',
     );
     const geo = constraintsOn(gallinghouse, 'geography');
-    expect(geo).toHaveLength(1);
-    expect(geo[0].rawText).toBe(
+    const text =
       'Preference will be given to applicants residing in Louisiana. If no qualified applicant is ' +
-        'identified, the scholarship may be awarded to an applicant from the Delta Division ' +
-        '(Arkansas, Louisiana, Mississippi, Tennessee).',
-    );
+      'identified, the scholarship may be awarded to an applicant from the Delta Division ' +
+      '(Arkansas, Louisiana, Mississippi, Tennessee).';
+    expect(geo[0].rawText).toBe(text);
     expect(geo[0].hard).toBe(false);
     expect(geo[0].fallbackRank).toBe(1);
+
+    // ROUND 8. The preference above is unchanged; the record now also publishes the LADDER the
+    // same sentence states — Louisiana, or failing that the Delta Division — because a soft
+    // constraint refuses nobody and was therefore telling an Ohio applicant `eligible`. The claim
+    // this test makes has not moved: nothing here is a bar. `orUnrepresented` carries the funder's
+    // own condition, and `ConstraintAlternatives` gives it exactly one power, to turn a `fail` into
+    // an `unknown` — asserted below over every state rather than taken on trust.
+    expect(geo).toHaveLength(2);
+    expect(geo[1].hard).toBe(true);
+    expect(geo[1].rawText).toBe(text);
+    expect(geo[1].spec).toEqual({
+      axis: 'geography',
+      geo: { type: 'state', values: ['LA'] },
+      anyOf: [{ axis: 'geography', geo: { type: 'arrl_division', values: ['Delta'] } }],
+      orUnrepresented: 'If no qualified applicant is identified',
+    });
+    const refused = ALL_STATES.filter(
+      (state) =>
+        evaluateConstraint(geo[1].spec, { kind: 'student', state }, NOW, geo[1].rawText).status ===
+        'fail',
+    );
+    expect(refused).toEqual([]);
   });
 
   it('no ARRL catalog award is open to an unlicensed applicant except the one that says so', async () => {

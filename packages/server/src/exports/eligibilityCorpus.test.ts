@@ -125,15 +125,36 @@ describe('the census a licensed EE undergraduate actually gets', () => {
   //                                in the opposite direction to the round that added it.
   // The totals are unchanged in aggregate for this profile (69 -> 68 positive) because the two
   // moves cross: CARA leaves `eligible` and MMARSI arrives in it.
-  it('reports 68 eligible-or-preferred of 150', () => {
+  //
+  // ROUND EIGHT TOOK ELEVEN MORE OUT OF THE POSITIVE COLUMN AND REFUSED NOBODY. Measured against
+  // c1bde9f, the commit immediately before it: 63 positive -> 52, `ineligible` unmoved at 51.
+  // Over the whole 54,600-pair sweep (58 profiles — the seven shipped ones plus a resident of each
+  // US state and DC — by the 150 publishable programmes) the geography change moved ZERO pairs into
+  // `ineligible` and zero out of it. Every move is a claim withdrawn, never a door closed.
+  //
+  // All eleven are bounded cascades — "Residence in WI. If none identified, residence in the ARRL
+  // Central Division (IL, IN, WI)" and its siblings — read against a TEXAS applicant. A cascade
+  // softened the whole sentence, and a soft constraint refuses nobody, so it also admitted
+  // everybody: this profile was told `eligible` for eleven awards whose funders name Wisconsin,
+  // Indiana, Louisiana, South Carolina, Georgia, Florida, Virginia, California and the Shenandoah
+  // Valley, and never name Texas. Ten move `eligible -> unknown`; North Fulton moves
+  // `eligible_preferred -> unknown`, its rank having come from the field-of-study clause beside the
+  // geography one. None becomes a refusal: each record now publishes the funder's whole LADDER as a
+  // disjunction, with the funder's own condition in `orUnrepresented`, which can only reach
+  // `unknown`.
+  //
+  // The two the funder itself left open are still here: MMARSI ("and then the remaining USA") and
+  // CTRI ("applicants from all regions will be considered") keep their single soft constraint and
+  // their verdicts.
+  it('reports 52 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
-      eligible: 55,
-      eligible_preferred: 13,
-      unknown: 31,
+      eligible: 43,
+      eligible_preferred: 9,
+      unknown: 47,
       ineligible: 51,
     });
-    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(68);
+    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(52);
   });
 
   it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {
@@ -267,11 +288,17 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     verdicts = matchAll(blank as Profile, corpus.programs, corpus.now);
   });
 
-  it('leaves 136 of 150 unknown and refuses only the 9 with a researched audience', () => {
+  // 140 AND 1 SINCE THE GEOGRAPHY CASCADE LADDER LANDED. One record moved, `eligible -> unknown`:
+  // a bounded cascade whose ladder now asks this blank profile for the one thing that would decide
+  // it — a state. The direction is the point. An unanswered field still cannot produce a refusal
+  // (`ineligible` is the same 9, still all on the applicant-entity gate, asserted immediately
+  // below), and what used to be a silent `eligible` for a profile that has answered NOTHING is now
+  // a question.
+  it('leaves 140 of 150 unknown and refuses only the 9 with a researched audience', () => {
     expect(empty.counts).toEqual({
-      eligible: 5,
+      eligible: 1,
       eligible_preferred: 0,
-      unknown: 136,
+      unknown: 140,
       ineligible: 9,
     });
   });
@@ -350,8 +377,16 @@ describe('an unset profile field yields unknown, never ineligible', () => {
    * learned to say `unknown` with nothing to ask for. There are two kinds of unknown and they are
    * counted separately, because "an unknown that asks for nothing" must never spread quietly:
    *
-   *   118  waiting on a profile field this blank profile has not filled in.
-   *    18  waiting on nothing the reader can supply — 16 records whose audience nobody recorded,
+   *   119  waiting on a profile field this blank profile has not filled in. (118 until the cascade
+   *        ladders were published; the one that moved is waiting on `state`, which is exactly the
+   *        kind of unknown this column is for.)
+   *    21  waiting on nothing the reader can supply. 18 until c1bde9f, whose three additions are
+   *        its own and are named in its message — NCDXF Grant Program, SARA Student and Teacher
+   *        Project Grants and the Yaesu System Fusion DR-2X Repeater Program, each an `eligible`
+   *        that nobody had written. The geography cascade ladder of the same round changed this
+   *        set by nothing at all: measured both ways, the 21 names are identical, because a
+   *        blank profile's cascade unknown is waiting on `state` and is counted above.
+   *        The 18 were — 16 records whose audience nobody recorded,
    *        the Yankee Clipper radius whose centre never resolved, and the ARRL Foundation Special
    *        Funds, which moved here in round six: the only question it had for an individual came
    *        from "GROUPS THAT QUALIFY for mini-grants will include… CLUB ACTIVITIES", a rule about
@@ -366,11 +401,11 @@ describe('an unset profile field yields unknown, never ineligible', () => {
    */
   it('names the field each unknown is waiting on wherever the profile could supply one', () => {
     const unknowns = empty.rows.filter((r) => r.verdict === 'unknown');
-    expect(unknowns).toHaveLength(136);
+    expect(unknowns).toHaveLength(140);
     const answerable = unknowns.filter((r) => r.missingFields.length > 0);
     const unanswerable = unknowns.filter((r) => r.missingFields.length === 0);
-    expect(answerable).toHaveLength(118);
-    expect(unanswerable).toHaveLength(18);
+    expect(answerable).toHaveLength(119);
+    expect(unanswerable).toHaveLength(21);
     // An unknown is never dressed as an exclusion, whichever kind it is.
     expect(unknowns.every((r) => r.reasons === '' && r.reasonsFromGrantSpotter === '')).toBe(true);
   });

@@ -574,5 +574,14 @@ describe('Inbox states', () => {
     expect(await screen.findByText(/nothing is waiting for review/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /^all$/i }));
     expect(await findItem(/ARRL Foundation Scholarship Program/)).toBeInTheDocument();
+
+    // ...AND IT SAYS WHO. A decided row's whole reason for still being reachable is the audit
+    // trail, so the attribution is part of the claim and not decoration. `userFacingCopyContract`
+    // found this line named by no test in the repository — its only "coverage" was the phrase
+    // "decided by a coordinate" inside an unrelated comment in `e2e/api.spec.ts`, which stopped
+    // existing when that comment was rewritten. An accidental substring is not an assertion, which
+    // is exactly what that ratchet exists to expose.
+    expect(await screen.findByText(/decided by/i)).toBeInTheDocument();
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
   });
 });

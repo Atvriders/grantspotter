@@ -4459,6 +4459,33 @@
           }
         },
         {
+          "id": "geography-1-b19dc5aa",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to applicants residing in Louisiana. If no qualified applicant is identified, the scholarship may be awarded to an applicant from the Delta Division (Arkansas, Louisiana, Mississippi, Tennessee).",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "LA"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Delta"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
+          }
+        },
+        {
           "id": "field_of_study-0-e6083393",
           "hard": true,
           "fallbackRank": 0,
@@ -5322,6 +5349,33 @@
           }
         },
         {
+          "id": "geography-1-91dcfa13",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to residents of Pasco County, Florida; if no qualified applicant is identified then preference will be given to residents of the West Central Florida Sectioin counties",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "county",
+              "values": [
+                "Pasco, FL"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "FL"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "if no qualified applicant is identified"
+          }
+        },
+        {
           "id": "field_of_study-0-bae8086a",
           "hard": true,
           "fallbackRank": 0,
@@ -5667,6 +5721,33 @@
                 "San Diego, CA"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-4336e6a1",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference given to applicants from San Diego County, California. If no qualified applicant is identified, preference will be given to applicants from California",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "county",
+              "values": [
+                "San Diego, CA"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "CA"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
           }
         },
         {
@@ -6227,6 +6308,33 @@
           }
         },
         {
+          "id": "geography-1-d05b7aa2",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "State of Indiana; if no qualified applicant is identified, preference given to applicants from the ARRL Central Division (Illinois, Indiana and Wisconsion)",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "IN"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Central"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "if no qualified applicant is identified"
+          }
+        },
+        {
           "id": "field_of_study-0-4743e2d8",
           "hard": true,
           "fallbackRank": 0,
@@ -6568,6 +6676,33 @@
           }
         },
         {
+          "id": "geography-1-e871483a",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Residence in WI. If none identified, residence in the ARRL Central Division (IL, IN, WI)",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "WI"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Central"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If none identified"
+          }
+        },
+        {
           "id": "field_of_study-0-9d629129",
           "hard": true,
           "fallbackRank": 0,
@@ -6823,6 +6958,35 @@
                 "West Gulf"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-73758ce6",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference is given to residents of Texas, If no qualified applicant is identified, preference will be given to residents of Arkansas. If no qualified applicant is identified, preference will be given to residents of the ARRL West Gulf (Texas, Oklahoma) or Delta (Arkansas, Louisiana, Mississippi, Tennessee) Divisions.",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "TX",
+                "AR"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Delta",
+                    "West Gulf"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
           }
         },
         {
@@ -8963,6 +9127,39 @@
           }
         },
         {
+          "id": "geography-1-db10f613",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to Central Florida hams (Orange, Seminole, Osceola, Lake, Volusia, Brevard and Polk Counties); if no suitable applicant found, preference will be given to hams from the State of Florida",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "county",
+              "values": [
+                "Orange, FL",
+                "Seminole, FL",
+                "Osceola, FL",
+                "Lake, FL",
+                "Volusia, FL",
+                "Brevard, FL",
+                "Polk, FL"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "FL"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "if no suitable applicant found"
+          }
+        },
+        {
           "id": "field_of_study-0-731422a0",
           "hard": true,
           "fallbackRank": 0,
@@ -9225,6 +9422,33 @@
           }
         },
         {
+          "id": "geography-1-f6610b08",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference given to applicants from South Carolina. If no qualified applicant is identified, preference will be given to an applicant from the Roanoke Division",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "SC"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Roanoke"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
+          }
+        },
+        {
           "id": "field_of_study-0-bd3a36b8",
           "hard": true,
           "fallbackRank": 0,
@@ -9483,6 +9707,33 @@
                 "Southeastern"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-e400e51c",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Residence in GA. If no qualified applicant, preference will be awarded to an applicant from the ARRL Southeastern Division (Alabama, Florida, Georgia, Puerto Rico and the US Virgin Islands)",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "GA"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Southeastern"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant"
           }
         },
         {
@@ -11013,6 +11264,22 @@
           }
         },
         {
+          "id": "geography-1-af40b44a",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to applicants who reside in: ARRL South Texas Section (first preference); The State of Texas (second preference); ARRL West Gulf Division (third preference). If there is no applicant from the preferred areas then no scholarship will be awarded.",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "arrl_division",
+              "values": [
+                "West Gulf"
+              ]
+            },
+            "orUnrepresented": "If there is no applicant from the preferred areas"
+          }
+        },
+        {
           "id": "field_of_study-0-b22469f1",
           "hard": false,
           "fallbackRank": 0,
@@ -11400,6 +11667,40 @@
                 "Berkeley"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-dca82bad",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to applicants residing in the following Virginia counties: Page, Shenandoah, Warren, Clarke, City of Winchester, or the following West Virginia counties: Hampshire, Jefferson and Berkeley. If no qualified applicant is identified, the scholarship may be awarded to any applicant residing in Virginia who meets other eligibility requirements.",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "county",
+              "values": [
+                "Page",
+                "Shenandoah",
+                "Warren",
+                "Clarke",
+                "City of Winchester",
+                "Hampshire",
+                "Jefferson",
+                "Berkeley"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "VA"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
           }
         },
         {
@@ -12148,6 +12449,33 @@
           }
         },
         {
+          "id": "geography-1-fe7fdcb7",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to Florida residents. If no qualified Florida applicant is identified, the scholarship may be awarded to an applicant from the ARRL Southeastern Division (Alabama, Florida, Georgia, Puerto Rico and US Virgin Islands).",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "FL"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "Southeastern"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified Florida applicant is identified"
+          }
+        },
+        {
           "id": "field_of_study-0-f153f2da",
           "hard": true,
           "fallbackRank": 0,
@@ -12383,6 +12711,24 @@
                 "VA"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-ba593c3f",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference will be given to applicants from Virginia; if no qualified applicant is identified, preference will be given to applicants from Maryland or the District of Columbia (DC)",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "VA",
+                "DC",
+                "MD"
+              ]
+            },
+            "orUnrepresented": "if no qualified applicant is identified"
           }
         },
         {
@@ -12957,6 +13303,34 @@
           }
         },
         {
+          "id": "geography-1-6a2694b9",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Preference given to residents of San Diego and Imperial Counties of CA; if no qualified candidate identified, scholarship must be awarded to a resident of CA",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "county",
+              "values": [
+                "San Diego, CA",
+                "Imperial, CA"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "CA"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "if no qualified candidate identified"
+          }
+        },
+        {
           "id": "field_of_study-0-c6c49d97",
           "hard": true,
           "fallbackRank": 0,
@@ -13099,6 +13473,33 @@
                 "West Gulf"
               ]
             }
+          }
+        },
+        {
+          "id": "geography-1-03e9fe53",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "Residence or student of 4-year university or college in Oklahoma. If no qualified applicant is identified,resident or student of 4-year college or university in the ARRL West Gulf Division (Texas and Oklahoma).",
+          "spec": {
+            "axis": "geography",
+            "geo": {
+              "type": "state",
+              "values": [
+                "OK"
+              ]
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "arrl_division",
+                  "values": [
+                    "West Gulf"
+                  ]
+                }
+              }
+            ],
+            "orUnrepresented": "If no qualified applicant is identified"
           }
         },
         {
@@ -13674,10 +14075,12 @@
             "geo": {
               "type": "radius",
               "values": [
-                "YCCC center which is in Erving, MA. MA"
+                "Erving, MA"
               ],
               "radiusMiles": 175,
-              "centerLabel": "YCCC center which is in Erving, MA. MA"
+              "centerLabel": "Erving, MA",
+              "centerLat": 42.5987,
+              "centerLon": -72.4009
             }
           }
         },

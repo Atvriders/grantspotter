@@ -303,9 +303,15 @@ describe('W1 — a place the spec admits, that the funder never named', () => {
       if (unnamed.length > 0) offenders.push(`${program.name}: admits ${unnamed.join(',')}`);
     }
     expect(offenders.sort()).toEqual(KNOWN_GEO_OVERCLAIMS);
-    // Vacuity guard: 63 constraints, 246 admitted places. The rule had 246 chances to be wrong.
-    expect(checked).toBe(63);
-    expect(admittedValues).toBe(246);
+    // Vacuity guard: 77 constraints, 287 admitted places. The rule had 287 chances to be wrong.
+    //
+    // 63 AND 246 UNTIL ROUND 8, when 14 cascade ladders were published beside the preferences they
+    // came from. Those are the constraints most able to over-claim — each is a disjunction built
+    // out of two or three rungs of one sentence — and the offender list did not grow by a single
+    // entry, which is the claim worth having: every place a ladder admits is a place its own
+    // funder named.
+    expect(checked).toBe(77);
+    expect(admittedValues).toBe(287);
   });
 
   it('…and it catches an extra state planted in the New England expansion', () => {
@@ -878,10 +884,18 @@ describe('W7 — a field in the list that appears nowhere in the funder’s sent
  * to a test file, and it moves published verdict counts across the suite; it is named here so the
  * next matcher change starts from a measurement instead of rediscovering it an eighth time.
  *
- * THIS LIST MAY ONLY EVER SHRINK. A new name appearing here is a new over-claim and the answer is
- * to fix the matcher, never to extend the array — and because the assertion is an equality, adding
- * one is a deliberate act with a diff, not a silent pass. When the widened branch stops returning
- * `pass`, this whole block goes red and should be deleted, which is the point of writing it down.
+ * ============================== AND THAT IS WHAT ROUND EIGHT DID ==============================
+ *
+ * `matcher.ts`'s `field_of_study` arm now ends `if (required.widened) return unknown();`, so the
+ * eighteen records below produce exactly what the paragraph above says they should. THE LIST IS
+ * KEPT, and the assertion inverted: these are the records whose widened list used to admit
+ * everybody, they are named so the fix has a census rather than an anecdote, and every one of them
+ * must now answer an unrelated major with `unknown` — never `pass`, and never a refusal either.
+ *
+ * IT MAY STILL ONLY EVER SHRINK, in the same direction and for the same reason. A record that
+ * starts blanket-PASSING again is a new over-claim; a record that starts REFUSING one of these
+ * majors on a sentence the funder opened is the false exclude seven rounds drained. Both are
+ * failures of this block, and both are equalities with a diff rather than a silent pass.
  */
 const BLANKET_PASS_ON_A_WIDENED_FIELD_LIST = {
   hard: [
@@ -909,53 +923,108 @@ const BLANKET_PASS_ON_A_WIDENED_FIELD_LIST = {
 /** Five majors no reading of any of those sentences reaches. */
 const PLAINLY_UNRELATED = ['Basket Weaving', 'Medieval Poetry', 'Culinary Arts', 'Hospitality Management', 'Music Performance'];
 
-describe('W9 — a widened field list that admits every major there is', () => {
-  it('the records whose field bar admits any major at all are these, and no others', async () => {
-    const hard: string[] = [];
-    const soft: string[] = [];
+/** The relatedness idiom, as `matcher.ts` spells it — used only to build the CLOSED control. */
+const RELATEDNESS_ENTRY =
+  /\b(?:related|similar|allied|adjacent|comparable|equivalent|associated|akin|analogous|relevant|applicable)\b/i;
+
+describe('W9 — a widened field list that used to admit every major there is', () => {
+  /**
+   * THE ASSERTION THE PARAGRAPH ABOVE ASKED FOR, and it is a stronger one than the name-list it
+   * replaces: not "these eighteen stopped", but "NO pass anywhere in this corpus rests on the
+   * widening". Each (constraint, major) pair that comes out `pass` is re-evaluated against the
+   * same constraint with the funder's widening taken away — the relatedness entries out of
+   * `fields`, the qualifier out of `rawText` — and a pass that survives that is a pass the funder's
+   * own list already gave. A pass that does not is the over-claim, and there are none.
+   */
+  it('no pass anywhere in the corpus rests on the funder having widened their list', async () => {
+    const restsOnTheWidening: string[] = [];
     let checked = 0;
+    let probed = 0;
     for (const { program, c } of await everyConstraint()) {
       if (c.spec.axis !== 'field_of_study' || c.spec.fields.length === 0) continue;
       checked += 1;
-      const admitsAnyone = PLAINLY_UNRELATED.every(
-        (fieldOfStudy) => evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy }, NOW, c.rawText).status === 'pass',
-      );
-      if (admitsAnyone) (c.hard ? hard : soft).push(program.name);
+      const closed: ConstraintSpec = {
+        ...c.spec,
+        fields: c.spec.fields.filter((f) => !RELATEDNESS_ENTRY.test(f)),
+      };
+      for (const fieldOfStudy of PLAINLY_UNRELATED) {
+        probed += 1;
+        const asWritten = evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy }, NOW, c.rawText).status;
+        if (asWritten !== 'pass') continue;
+        const withoutTheWidening = evaluateConstraint(closed, { kind: 'student', fieldOfStudy }, NOW, '').status;
+        if (withoutTheWidening !== 'pass') restsOnTheWidening.push(`${program.name} — ${fieldOfStudy}`);
+      }
     }
-    expect(hard.sort()).toEqual(BLANKET_PASS_ON_A_WIDENED_FIELD_LIST.hard);
-    expect(soft.sort()).toEqual(BLANKET_PASS_ON_A_WIDENED_FIELD_LIST.soft);
-    // Vacuity guard: 60 field lists with at least one entry. The rule saw all of them, and 42 of
-    // them do NOT admit a poetry major — so this is a property of these eighteen, not of the probe.
+    expect(restsOnTheWidening).toEqual([]);
+    // Vacuity guard: 60 field lists with at least one entry, five majors each. Before the fix this
+    // same probe returned 90 pairs across the eighteen records listed above.
     expect(checked).toBe(60);
-    expect(checked - hard.length - soft.length).toBe(42);
+    expect(probed).toBe(300);
   });
 
-  it('…and the harm is a medical scholarship telling a poetry major they qualify', async () => {
+  /**
+   * ...AND THE FALSE EXCLUDES STAY WITHDRAWN. The other half of the same judgement, and the half a
+   * fix in this direction can quietly undo: an opened list must still not REFUSE the applicant its
+   * funder invited. Every record on the census above answers "Medieval Poetry" — a major with no
+   * word in common with any of their sentences — with something that is not a 'no'.
+   */
+  it('and none of the eighteen went back to refusing anybody', async () => {
+    const census = new Set([
+      ...BLANKET_PASS_ON_A_WIDENED_FIELD_LIST.hard,
+      ...BLANKET_PASS_ON_A_WIDENED_FIELD_LIST.soft,
+    ]);
+    const answers = new Map<string, string>();
+    for (const { program, c } of await everyConstraint()) {
+      if (c.spec.axis !== 'field_of_study' || !census.has(program.name)) continue;
+      answers.set(
+        program.name,
+        evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy: 'Medieval Poetry' }, NOW, c.rawText).status,
+      );
+    }
+    expect([...answers.keys()].sort()).toEqual([...census].sort());
+    // Exactly one still admits a poetry major, and it is not a widening that does it: IRARC's
+    // funder named a SECOND ROUTE — "Undergraduate degree or electronic technician certification
+    // program" — which `fieldOfStudy.ts` mints as an `anyOf` tier with `fields: []`. An award open
+    // to any undergraduate is open to a poetry undergraduate, in the funder's own words.
+    const admitted = [...answers].filter(([, status]) => status === 'pass').map(([name]) => name);
+    expect(admitted).toEqual(['IRARC Memorial, Joseph P. Rubino, WA4MMD, Scholarship']);
+    // Every other one declines to decide. None refuses.
+    expect([...answers.values()].filter((s) => s === 'unknown')).toHaveLength(census.size - 1);
+    expect([...answers.values()]).not.toContain('fail');
+  });
+
+  it('…so a medical scholarship no longer tells a poetry major they qualify', async () => {
     const { programs } = await corpus();
     const marco = programs.find((p) => p.name.includes('MARCO'));
     if (marco === undefined) throw new Error('The MARCO Scholarship is missing from the corpus');
     const field = marco.constraints.find((c) => c.spec.axis === 'field_of_study');
     if (field === undefined) throw new Error('MARCO states a field requirement and it is missing');
+    const spec = field.spec;
+    if (spec.axis !== 'field_of_study') throw new Error('unreachable');
     // From the sentence first: change the funder's wording and this line fails before the rest.
     expect(field.rawText).toContain('healing arts');
     expect(field.hard).toBe(true);
-    // WHEN THIS LINE GOES RED THE DEFECT IS FIXED. Delete this block and the list above.
-    expect(evaluateConstraint(field.spec, { kind: 'student', fieldOfStudy: 'Medieval Poetry' }, NOW, field.rawText).status).toBe(
-      'pass',
-    );
-    // The route the funder named first is not in question and must survive any fix.
-    expect(evaluateConstraint(field.spec, { kind: 'student', fieldOfStudy: 'Nursing' }, NOW, field.rawText).status).toBe('pass');
-    // …and the same spec with the funder's widening stripped out of the sentence does NOT pass
-    // them, so the widening is the cause and not the axis giving up. What it gives instead is
-    // `unknown`: MARCO is one of the 49 records carrying `orUnrepresented`, which turns the
-    // refusal into "this could not be worked out" — and that is precisely the answer the widened
-    // branch should be reaching too, by the same record's own spec.
-    const stripped = evaluateConstraint(
-      field.spec, { kind: 'student', fieldOfStudy: 'Medieval Poetry' }, NOW, 'Medicine or Nursing.',
-    );
-    expect(stripped.status).not.toBe('pass');
-    expect(stripped.status).toBe('unknown');
-    expect(field.spec.orUnrepresented).toBeDefined();
+    const answer = (fieldOfStudy: string, rawText = field.rawText) =>
+      evaluateConstraint(field.spec, { kind: 'student', fieldOfStudy }, NOW, rawText);
+    // Not a yes...
+    expect(answer('Medieval Poetry').status).toBe('unknown');
+    // ...and not a no either: the funder's own "including but not necessarily" is why, and it is
+    // the same answer this record's `orUnrepresented` already gave for its bare domains.
+    expect(answer('Medieval Poetry').missing).toEqual([]);
+    expect(spec.orUnrepresented).toBeDefined();
+    // The route the funder named first is not in question and survives the fix.
+    expect(answer('Nursing').status).toBe('pass');
+    // Close the sentence and the same applicant is refused, so the widening is what is doing the
+    // work here rather than the axis giving up.
+    expect(answer('Medieval Poetry', 'Medicine or Nursing.').status).toBe('unknown');
+    expect(
+      evaluateConstraint(
+        { axis: 'field_of_study', fields: spec.fields, excludedFields: [] },
+        { kind: 'student', fieldOfStudy: 'Medieval Poetry' },
+        NOW,
+        'Medicine or Nursing.',
+      ).status,
+    ).toBe('fail');
   });
 });
 

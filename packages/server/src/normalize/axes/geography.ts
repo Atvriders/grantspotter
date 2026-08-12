@@ -1,6 +1,15 @@
 import { ARRL_DIVISIONS, ARRL_SECTIONS } from '@grantspotter/core';
-import type { Constraint, GeoSpec, RawOpportunity } from '@grantspotter/core';
-import { isPreferenceText, makeConstraint, preferenceScope, requirementText } from './preference.js';
+import type { Constraint, ConstraintSpec, GeoSpec, RawOpportunity } from '@grantspotter/core';
+import {
+  cascadeRank,
+  cascadeRungs,
+  fallbackCondition,
+  isPreferenceText,
+  makeConstraint,
+  preferenceScope,
+  requirementText,
+  stableSuffix,
+} from './preference.js';
 import { RADIUS_CENTERS } from './radiusCenters.js';
 
 const STATE_BY_NAME: Record<string, string> = {
@@ -61,6 +70,52 @@ function stateNamePattern(name: string): RegExp {
 
 const RADIUS = /within\s+(\d+)\s+miles\s+of\s+([A-Z][A-Za-z. ]*(?:,\s*[A-Za-z. ]+)?)/i;
 const CALL_DISTRICT = /\b(\d)(?:st|nd|rd|th)?\s+call\s+(?:district|area)\b/i;
+
+/**
+ * A GLOSS IS NOT PART OF THE PLACE NAME, AND THE SENTENCE DID NOT STOP WHERE THE CAPTURE DID.
+ *
+ * `RADIUS` captures everything that looks like "<Name>, <Name>" after "miles of", which is right
+ * for the two centres that resolve ("Seaford, Delaware", "Schenectady, NY") and wrong for the
+ * third, the Yankee Clipper Contest Club Youth Scholarship:
+ *
+ *   "Residence and college/university attendance within 175 miles of YCCC CENTER WHICH IS IN
+ *    Erving, MA. MA, RI, CT and Long Island, NY, …"
+ *
+ * The capture ran from "YCCC" (the club, not a place) through the funder's gloss and on past the
+ * sentence end into the state list, producing the label `YCCC center which is in Erving, MA. MA`.
+ * `RADIUS_CENTERS` holds `erving, ma`, so the lookup missed, the spec shipped with no
+ * `centerLat`/`centerLon`, and `evaluateGeo` answered `unknown` with NOTHING to fill in — 12
+ * unlistable unknowns on the only radius award in the corpus that a reader cannot act on, from a
+ * centre the reference table has always known.
+ *
+ * TWO CUTS, EACH FROM THE FUNDER'S OWN GRAMMAR.
+ *  - `CENTER_GLOSS` drops a relative clause that says where the named thing IS. "X which is in Y"
+ *    names Y as the place; keeping X makes the label the club.
+ *  - the place itself is `<somewhere>, <state>` and ENDS at the state, so the label is cut there
+ *    rather than at a period. Cutting at "." would take "St. Louis, MO" apart at the abbreviation;
+ *    validating the second half against `STATE_BY_NAME` — the same table the state scan uses —
+ *    cuts exactly where the address does and nowhere else.
+ *
+ * A capture that is not shaped like an address is returned as it always was (trailing punctuation
+ * trimmed), so nothing that resolves today can stop resolving: the only thing this can do is turn
+ * a label that missed the table into one that hits it.
+ */
+const CENTER_GLOSS = /^.*?\bwhich\s+is\s+(?:located\s+)?(?:in|at|near)\s+/i;
+const PLACE_WITH_STATE = /^(.+?)\s*,\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)\b/;
+
+function isStateToken(token: string): boolean {
+  return (
+    Object.hasOwn(STATE_BY_NAME, token.toLowerCase()) ||
+    Object.values(STATE_BY_NAME).includes(token.toUpperCase())
+  );
+}
+
+function centerLabelFrom(captured: string): string {
+  const cleaned = captured.replace(/\s+/g, ' ').trim().replace(CENTER_GLOSS, '');
+  const place = PLACE_WITH_STATE.exec(cleaned);
+  if (place !== null && isStateToken(place[2])) return `${place[1].trim()}, ${place[2]}`;
+  return cleaned.replace(/[.,]$/, '');
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -393,7 +448,7 @@ function callDistrictStateTier(text: string, base: GeoSpec): GeoSpec | undefined
 function geoFrom(text: string): GeoSpec {
   const radius = RADIUS.exec(text);
   if (radius) {
-    const centerLabel = radius[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
+    const centerLabel = centerLabelFrom(radius[2]);
     const center = RADIUS_CENTERS[centerLabel.toLowerCase()];
     return {
       type: 'radius',
@@ -681,8 +736,162 @@ function scopedConstraints(text: string): Constraint[] | undefined {
   return [geoConstraint(required, requiredGeo, 0), geoConstraint(preferred, preferredGeo, 1)];
 }
 
+// ---------- the ladder a cascade states ----------
+
+/**
+ * THE FUNDER'S OWN WORDS FOR "AND IF THAT RUNG IS EMPTY TOO, ANYONE".
+ *
+ * Three of the corpus's eighteen cascades end by widening to everybody, and they say so out loud:
+ * CTRI/Chris Seeber "…applicants from ALL REGIONS will be considered"; MMARSI "…and then THE
+ * REMAINING USA"; North Fulton's field-of-study clause "award given REGARDLESS OF the field of
+ * study" (a different axis, same sentence shape). Those three really do exclude nobody, and the
+ * blanket soft reading of a cascade is exactly right for them.
+ *
+ * Tested against the FALLBACK rungs only, never rung 0. This is the funder widening at the bottom
+ * of a ladder; a base tier that happened to contain one of these words is not that statement, and
+ * asking rung 0 would let ordinary prose unbound a real area.
+ */
+const UNBOUNDED_WIDENING =
+  /\b(?:all|any|every|other)\s+(?:regions?|states?|areas?|jurisdictions?|locations?)\b|\bremaining\s+(?:usa|u\.?s\.?a?\.?|united\s+states|states|country|nation)\b|\bnationwide\b|\banywhere\b|\bregardless\s+of\b|\bwithout\s+regard\s+to\b/i;
+
+/**
+ * THE ONE THING A PLACELESS RUNG MAY SAY WITHOUT UNBOUNDING THE LADDER: that there is no award.
+ *
+ * A fallback rung that names no area is the funder finishing the sentence with something other
+ * than a place, and there are two opposite ways to do that:
+ *
+ *   Rodriguez K5AUW  "If there is no applicant from the preferred areas then NO SCHOLARSHIP WILL
+ *                     BE AWARDED."        — the ladder ends; nobody new is admitted
+ *   (the shape        "If no qualified applicant is identified, THE AWARD IS OPEN TO ANY ELIGIBLE
+ *    part2.test.ts     APPLICANT."        — the ladder ends by admitting everybody
+ *    pins)
+ *
+ * Neither names a place, and reading them the same way gets one of them exactly backwards. Only
+ * the refusal is recognised here, by the funder's own words; anything ELSE this axis cannot read
+ * as a place leaves the cascade precisely as it was before this round — soft, one constraint, no
+ * verdict moved. That is the conservative default, and it is the right one: a rung nobody can read
+ * is not evidence of a bound.
+ */
+const NO_AWARD_MADE = /\bno\s+(?:scholarship|award|grant|prize)\b|\b(?:will|shall)\s+not\s+be\s+(?:awarded|made|given)\b/i;
+
+/**
+ * TWO RUNGS AT THE SAME TIER ARE ONE LIST, not two alternatives.
+ *
+ * "Preference will be given to applicants from Virginia; if no qualified applicant is identified,
+ * preference will be given to applicants from Maryland or the District of Columbia" (Vienna
+ * Wireless) names three STATES across two rungs, and `state[VA]` beside `state[MD, DC]` is the
+ * same disjunction as `state[VA, MD, DC]` said twice as slowly. Merging keeps `anyOf` meaning what
+ * it means everywhere else in this axis — the funder's OTHER kind of area — and keeps
+ * `disjunction.test.ts`'s "every alternative is a different tier from its base" true rather than
+ * quietly excepted.
+ *
+ * `radius` is the one type whose values are not a set of places (a second centre is a second
+ * circle, not a longer list), so it never merges. No cascade in the corpus states one.
+ */
+function addTier(tiers: GeoSpec[], geo: GeoSpec): void {
+  const sameType = geo.type === 'radius' ? undefined : tiers.find((t) => t.type === geo.type);
+  if (sameType === undefined) {
+    if (!tiers.some((existing) => sameGeo(existing, geo))) tiers.push(geo);
+    return;
+  }
+  for (const value of geo.values) {
+    if (!sameType.values.includes(value)) sameType.values.push(value);
+  }
+}
+
+/**
+ * A CASCADE IS A LIST OF AREAS, AND THE CODE WAS KEEPING ONLY WHICHEVER ONE `geoFrom` HAPPENED TO
+ * WIN WITH — as a preference, which enforces nothing.
+ *
+ *   David Knaus    "Residence in WI. If none identified, residence in the ARRL Central Division
+ *                   (IL, IN, WI)"
+ *   Richard Warren "Preference given to residents of San Diego and Imperial Counties of CA; if no
+ *    K6OBS          qualified candidate identified, scholarship MUST be awarded to a resident of CA"
+ *   Rodriguez      "…ARRL South Texas Section (first preference); The State of Texas (second
+ *    K5AUW          preference); ARRL West Gulf Division (third preference). If there is no
+ *                   applicant from the preferred areas then NO SCHOLARSHIP WILL BE AWARDED."
+ *
+ * `isPreferenceText` returns true for all three — a stated fallback softens the sentence — and a
+ * soft constraint never refuses anybody, so an Ohio student was told `eligible` for Knaus and a
+ * Georgian and a Floridian for K6OBS. Measured over the corpus this shape produced 107 of 987
+ * positive verdicts. The softening is not the defect: it is right about the FIRST rung, which is
+ * a preference and not a bar. It is silent about the LAST one, where the funder stopped naming
+ * places.
+ *
+ * WHY THIS IS `anyOf` AND NOT A NEW MECHANISM. The corpus already states the same fact with
+ * different punctuation and already enforces it: "Resident of Gwinnett County GA, OR THE STATE OF
+ * GA" is county[Gwinnett] `anyOf` state[GA], hard. "Residence in GA. IF NO QUALIFIED APPLICANT, …
+ * the ARRL Southeastern Division" is the same disjunction with a condition attached to the second
+ * limb, and it was being thrown away.
+ *
+ * WHY THE LADDER CANNOT REFUSE ANYONE. `orUnrepresented` carries the funder's own condition
+ * ("If none identified"), and `evaluateConstraint` consults it precisely when every tier has
+ * failed: the answer there is `unknown`, never `fail`. So the Ohioan facing Knaus gets the honest
+ * verdict — no sentence on that page refuses them, and none admits them — and this constraint is
+ * incapable of producing an `ineligible` for any applicant at all. That is the property to keep if
+ * anything here is ever extended: seven rounds emptied the false-exclude direction, and a hard
+ * read of the outermost rung would refill it.
+ *
+ * IT IS EMITTED BESIDE THE EXISTING CONSTRAINT, WHICH IS UNCHANGED. The soft, `fallbackRank: 1`
+ * constraint every one of these records already published still says what it said, keeps its id,
+ * and still promotes the applicants it promoted — losing that would demote real preferred
+ * applicants to plain `eligible`, trading one wrong verdict for another. The ladder is the second
+ * constraint, and the only verdicts that move are the ones nothing was checking.
+ *
+ * Returns `undefined` — "not a bounded cascade, behave exactly as before" — when the text states
+ * no fallback, when a fallback rung widens to everyone (`UNBOUNDED_WIDENING`), or when no rung
+ * names an area this axis can read.
+ */
+function cascadeConstraints(text: string): Constraint[] | undefined {
+  // The same predicate that publishes `fallbackRank: 1`, so a ladder is only ever built out of a
+  // sentence the corpus already records as a cascade — never out of a stray "if not" in prose.
+  if (cascadeRank(text) !== 1) return undefined;
+  const rungs = cascadeRungs(text);
+  if (rungs.length < 2) return undefined;
+  const fallbacks = rungs.slice(1);
+  if (fallbacks.some((rung) => UNBOUNDED_WIDENING.test(rung))) return undefined;
+  // A fallback whose consequence this axis cannot read as a place — see `NO_AWARD_MADE`.
+  if (fallbacks.some((rung) => geoFrom(rung).type === 'any' && !NO_AWARD_MADE.test(rung))) {
+    return undefined;
+  }
+
+  const tiers: GeoSpec[] = [];
+  for (const rung of rungs) {
+    const geo = geoFrom(rung);
+    // The stated refusal above: a consequence, not a place. Reading `type: 'any'` as a tier would
+    // open the award to everyone, which is that sentence inverted.
+    if (geo.type === 'any') continue;
+    addTier(tiers, geo);
+  }
+  if (tiers.length === 0) return undefined;
+
+  const soft = geoConstraint(text, geoFrom(text), 0);
+  const ladder: ConstraintSpec = {
+    axis: 'geography',
+    geo: tiers[0],
+    ...(tiers.length > 1
+      ? { anyOf: tiers.slice(1).map((geo) => ({ axis: 'geography' as const, geo })) }
+      : {}),
+    orUnrepresented: fallbackCondition(fallbacks[fallbacks.length - 1]),
+  };
+  return [
+    soft,
+    {
+      // `makeConstraint`'s own id shape and index 1, so the two constraints of one field are
+      // distinguishable and the existing one keeps the id it published. Built here rather than
+      // through `makeConstraint` because that function would read this very sentence as preference
+      // prose and hand back a soft constraint — which is the thing being fixed.
+      id: `geography-1-${stableSuffix(`geography|${text}`)}`,
+      hard: true,
+      fallbackRank: 0,
+      rawText: text,
+      spec: ladder,
+    },
+  ];
+}
+
 export function extractGeography(raw: RawOpportunity): Constraint[] {
   const text = raw.rawFields.Region ?? raw.rawFields.counties ?? raw.rawFields.region;
   if (!text || text.trim() === '') return [];
-  return scopedConstraints(text) ?? [geoConstraint(text, geoFrom(text), 0)];
+  return cascadeConstraints(text) ?? scopedConstraints(text) ?? [geoConstraint(text, geoFrom(text), 0)];
 }
