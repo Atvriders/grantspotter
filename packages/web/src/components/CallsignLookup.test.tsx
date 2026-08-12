@@ -371,6 +371,183 @@ describe('accept, edit, dismiss', () => {
   });
 });
 
+/**
+ * THE COORDINATE, AND THE DIFFERENCE BETWEEN A STREET AND A POST OFFICE.
+ *
+ * Every fixture below carries a REAL capture's numbers. `W1AW_STREET` is
+ * `fixtures/callook/00-callook-info-w1aw-json.json` — 225 MAIN ST, Newington, geocoded to a
+ * street. `W1MX_PO_BOX` is `01-callook-info-w1mx-json.json` — M I T RADIO SOCIETY at P.O. BOX
+ * 51421, Boston, whose coordinate is a post office two miles and one river away from the club. It
+ * is the record this whole rule exists for, and it is the median user of this product rather than
+ * an edge case: two of the three real captures in that directory are PO boxes and both are
+ * collegiate clubs.
+ */
+const W1AW_STREET: CallsignRecord = {
+  ...PERSON,
+  callsign: 'W1AW',
+  name: 'ARRL HQ OPERATORS CLUB',
+  addressLine1: '225 MAIN ST',
+  city: 'NEWINGTON',
+  state: 'CT',
+  zip: '06111',
+  mailingGeocode: {
+    geocodedFrom: 'street_address',
+    mailingAddress: { latitude: 41.714707, longitude: -72.728411, gridsquare: 'FN31pr' },
+  },
+};
+
+const W1MX_PO_BOX: CallsignRecord = {
+  ...CLUB,
+  callsign: 'W1MX',
+  name: 'M I T RADIO SOCIETY',
+  addressLine1: 'P.O. BOX 51421',
+  city: 'BOSTON',
+  state: 'MA',
+  zip: '02205-1421',
+  isPoBox: true,
+  mailingGeocode: {
+    geocodedFrom: 'po_box',
+    poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42li' },
+  },
+};
+
+/** The ~1.3% shape: a coordinate, and no address line to attribute it to. */
+const NO_ADDRESS: CallsignRecord = {
+  ...PERSON,
+  addressLine1: undefined,
+  mailingGeocode: {
+    geocodedFrom: 'address_not_stated',
+    unattributed: { latitude: 41.714707, longitude: -72.728411, gridsquare: 'FN31pr' },
+  },
+};
+
+describe('the coordinate, and what it is a geocode of', () => {
+  it('opens with a street address geocode in the boxes', async () => {
+    stubResult({ status: 'found', record: W1AW_STREET });
+    const { onAccept } = renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('41.714707');
+    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('-72.728411');
+    // Still the MAIL and not the station, and the panel says so rather than implying a survey.
+    expect(screen.getByText(/where the licence receives post/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      lat: { value: '41.714707', origin: 'source' },
+      lon: { value: '-72.728411', origin: 'source' },
+    });
+  });
+
+  /**
+   * THE DECISION THIS ROUND HAD TO MAKE, ASSERTED. A PO-box coordinate is shown and not filled in.
+   * It is not refused outright — a club that knows its post office is close enough is entitled to
+   * say so, and radius rules are the only thing lat/lon feed — but it takes a second, separate
+   * press, which is the whole difference between an informed yes and a silent one.
+   */
+  it('will not put a post office in the boxes, and says what the number is', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { onAccept } = renderLookup({ callsign: 'W1MX', target: 'organization' });
+    await lookUp();
+
+    expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('');
+    // The number is on screen — withholding the value is not the same as hiding it.
+    expect(screen.getByText(/42\.34991837/)).toBeInTheDocument();
+    expect(screen.getByText(/this coordinate is a POST OFFICE/i)).toBeInTheDocument();
+    // And the reason it matters, in terms of the only thing that reads a coordinate here.
+    expect(screen.getByText(/within 70 miles of Schenectady/i)).toBeInTheDocument();
+
+    // Accepting without pressing the extra button sends no coordinate at all.
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lat');
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lon');
+  });
+
+  it('fills it in on the second press, and still says the record stated it', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { onAccept } = renderLookup({ callsign: 'W1MX', target: 'organization' });
+    await lookUp();
+
+    await userEvent.click(await screen.findByRole('button', { name: /use this coordinate anyway/i }));
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('42.34991837');
+
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    // `origin: 'source'` is correct and is not a loophole: callook DID state this number. What the
+    // applicant chose is whether to use it, which is a different question from who said it.
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      lat: { value: '42.34991837', origin: 'source' },
+    });
+  });
+
+  it('withholds a coordinate the record cannot attribute to any address', async () => {
+    stubResult({ status: 'found', record: NO_ADDRESS });
+    renderLookup();
+    await lookUp();
+
+    expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(screen.getByText(/states a coordinate and no address at all/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use this coordinate anyway/i })).toBeInTheDocument();
+  });
+
+  /**
+   * THE ORACLE, WIRED TO SOMETHING. `checkCoordinateAgainstLocator` exists because callook states
+   * a coordinate AND a grid square, which are two independent statements about one station — and
+   * it had no caller outside its own test. A record whose coordinate falls outside its own stated
+   * square is internally inconsistent, and there is no honest way to pick which half to believe,
+   * so neither is offered: not pre-filled, and not one press away either.
+   */
+  it('offers neither half of a record that contradicts itself', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...W1AW_STREET,
+        mailingGeocode: {
+          geocodedFrom: 'street_address',
+          // ~2,900 miles from FN31pr, which is what an upstream record with a transposed field
+          // looks like.
+          mailingAddress: { latitude: 10, longitude: 10, gridsquare: 'FN31pr' },
+        },
+      },
+    });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    expect(await screen.findByText(/contradicts itself/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(
+      screen.queryByRole('button', { name: /use this coordinate anyway/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers the boxes even for a record that states no coordinate at all', async () => {
+    // PERSON has no `mailingGeocode`. A person who knows where they are can still answer a radius
+    // rule, and anything they type is theirs because there is nothing to have come from.
+    stubResult({ status: 'found', record: PERSON });
+    const { onAccept } = renderLookup();
+    await lookUp();
+
+    await userEvent.type(await screen.findByLabelText(/latitude to fill in/i), '42.28');
+    await userEvent.type(screen.getByLabelText(/longitude to fill in/i), '-83.74');
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      lat: { value: '42.28', origin: 'user' },
+      lon: { value: '-83.74', origin: 'user' },
+    });
+  });
+
+  it('says what a coordinate is read for, so an empty box is a choice rather than an oversight', async () => {
+    stubResult({ status: 'found', record: W1AW_STREET });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    const note = await screen.findByText(/read for one purpose in GrantSpotter/i);
+    expect(note).toHaveTextContent(/within 250 miles of Seaford, Delaware/i);
+    expect(note).toHaveTextContent(/leaves those rules unanswered rather than answered against you/i);
+  });
+});
+
 describe('what is shown and what is kept', () => {
   it('shows the address to confirm identity and says it is not stored', async () => {
     stubResult({ status: 'found', record: PERSON });
@@ -494,7 +671,13 @@ describe('what the confirmation claims was filled in', () => {
    */
   it('says a field this profile does not have was not filled in, rather than calling it yours', () => {
     const one = acceptedFrame(
-      { marked: ['state'], unmarked: ['callsign'], unfillable: ['licenseClass'] },
+      {
+        marked: ['state'],
+        unmarked: ['callsign'],
+        unmarkable: [],
+        derived: [],
+        unfillable: ['licenseClass'],
+      },
       'organization',
     );
     expect(one.body).toContain('State came from the record');
@@ -508,13 +691,51 @@ describe('what the confirmation claims was filled in', () => {
     expect(one.body).not.toMatch(/License class[^.]*so it is yours/);
 
     const many = acceptedFrame(
-      { marked: [], unmarked: [], unfillable: ['licenseClass', 'orgName'] },
+      {
+        marked: [],
+        unmarked: [],
+        unmarkable: [],
+        derived: [],
+        unfillable: ['licenseClass', 'orgName'],
+      },
       'student',
     );
     expect(many.body).toContain(
       'License class and Organization name are not fields this profile has, so nothing was ' +
         'recorded for them and no source is named for them.',
     );
+  });
+
+  /**
+   * THE TWO SENTENCES THAT DID NOT EXIST, FOR THE TWO CASES THAT DID NOT EXIST.
+   *
+   * A coordinate the record stated is neither marked nor the applicant's, and a call district is
+   * neither — nobody stated it, GrantSpotter worked it out. Both used to be describable only by
+   * one of the two sentences the confirmation had, and both of those sentences would have been
+   * false. Read through the pure function for the same reason as the case above: the panel's own
+   * gates make some of these combinations hard to reach on screen, and unread user-facing copy is
+   * what this test file exists to stop shipping.
+   */
+  it('does not call a coordinate the record stated one of the applicant’s own values', () => {
+    const frame = acceptedFrame(
+      {
+        marked: ['state'],
+        unmarked: ['callsign'],
+        unmarkable: ['lat', 'lon'],
+        derived: ['callDistrict'],
+        unfillable: [],
+      },
+      'student',
+    );
+    expect(frame.body).toContain('Latitude and Longitude came from the record too');
+    // The consequence, said at the moment it is created rather than discovered on the next reload.
+    expect(frame.body).toMatch(/nowhere to record that about a coordinate/i);
+    expect(frame.body).toMatch(/read exactly like values you stated/i);
+    // Not swept into "so they are yours", which is the claim `unmarked` makes.
+    expect(frame.body).not.toMatch(/Latitude[^.]*so they are yours/);
+    // And the arithmetic is credited to nobody.
+    expect(frame.body).toContain('Call district was worked out from the callsign rather than read');
+    expect(frame.body).toMatch(/no source is credited for arithmetic/i);
   });
 
   it('names an organisation profile’s own fields, on the tab that has them', async () => {

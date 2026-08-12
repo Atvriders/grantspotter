@@ -509,20 +509,65 @@ describe('README: the callsign lookup, described against itself', () => {
     expect(written.length, 'the accepted-values parser found nothing').toBeGreaterThan(0);
 
     // Profile field key → the form label the README promises the reader they will see.
+    //
+    // `lat` AND `lon` ARRIVED ON 2026-08-11, AND THE COUNT IN THE README MOVED WITH THEM. This is
+    // the fifth and sixth line in `acceptedValues`, which is exactly what the note above predicts
+    // ("a fifth line there now fails this test until the README grows a fifth value") — the
+    // callsign lookup had been receiving a latitude, a longitude and a grid square on every
+    // successful call and discarding all three, and it now offers the pair the profile has fields
+    // for. The prose obligations below are part of the same claim: a coordinate is filled from a
+    // street address and NOT from a PO box, and it is the one filled value the profile cannot mark.
     const documented: Record<string, string> = {
       callsign: 'Callsign',
       state: 'State',
       licenseClass: 'License class',
       orgName: 'Organization name',
+      lat: 'Latitude',
+      lon: 'Longitude',
     };
     expect(new Set(written)).toEqual(new Set(Object.keys(documented)));
 
-    expect(readme).toMatch(/four values, and only four/i);
+    expect(readme).toMatch(/six values, and only six/i);
     for (const label of Object.values(documented)) {
       expect(readme, label).toContain(`**${label}**`);
     }
     // …and it says, in the same breath, why the rest of the record is not on that list.
     expect(readme).toMatch(/no street field, no\s*\n?\s*city field, no ZIP field/i);
+  });
+
+  /**
+   * THE COORDINATE'S TWO CAVEATS, WHICH ARE THE WHOLE REASON IT IS SAFE TO FILL ONE IN.
+   *
+   * A latitude is the only value this lookup writes that means something other than what it looks
+   * like. callook geocodes the MAILING address, so for the PO box a collegiate club typically
+   * files it is a post office — and `matcher` reads latitude and longitude for radius eligibility
+   * and nothing else, so a mail-drop coordinate accepted silently produces a confident verdict
+   * about somebody's post office. The README has to carry both halves: the rule the software
+   * follows, and the fact that a saved coordinate can no longer say where it came from.
+   */
+  it('says a coordinate is a mail drop, and that the profile cannot mark one', () => {
+    expect(readme).toMatch(/PO box/);
+    expect(readme).toMatch(/the coordinate\s*\n?\s*is a post office/i);
+    // The rule, not merely the risk: filled from a street address, offered for a box.
+    expect(readme).toMatch(/only from a \*\*street address\*\*/i);
+    expect(readme).toMatch(/waits for a second press/i);
+    // The half that outlives the lookup.
+    expect(readme).toMatch(/nowhere to record that about a number/i);
+    expect(readme).toMatch(/reads exactly like one you typed/i);
+    // And what an empty box actually costs, which is the question it raises.
+    expect(readme).toMatch(/\*\*unanswered\*\* rather than answered against you/i);
+  });
+
+  /**
+   * The third case beside "the source said it" and "you said it": a value this tool worked out
+   * from another field. Crediting callook.info for the digit in a callsign would credit a source
+   * for arithmetic — core refuses it in `StudentFieldSources` — so the README must not list the
+   * call district among the values the lookup FILLS while still telling the reader it appears.
+   */
+  it('explains the call district as arithmetic rather than as something read', () => {
+    expect(readme).toMatch(/\*\*Call district\*\*/);
+    expect(readme).toMatch(/digit in your callsign, worked out here rather than read anywhere/i);
+    expect(readme).toMatch(/follows the callsign box/i);
   });
 
   it('says what it fills, what it refuses to fill, and what it does with the address', () => {

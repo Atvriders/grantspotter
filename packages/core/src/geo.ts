@@ -84,6 +84,40 @@ export function withinRadius(lat: number, lon: number, geo: GeoSpec): boolean {
   return haversineMiles(lat, lon, geo.centerLat, geo.centerLon) <= geo.radiusMiles;
 }
 
+/**
+ * Can this radius rule be MEASURED against, by anybody?
+ *
+ * A circle needs a centre and a length. `withinRadius` is a predicate and answers `false` without
+ * one, which is the right answer to "is this point inside" — there is no inside. It is the wrong
+ * answer to "does this applicant satisfy the rule", and `evaluateGeo` was turning the first into
+ * the second: no centre, therefore not within, therefore FAIL.
+ *
+ * THAT IS NOT HYPOTHETICAL — it is in the shipped corpus. `data/seed/programs.arrl-catalog.json`
+ * carries the Yankee Clipper Contest Club Youth Scholarship as
+ * `{ type: 'radius', radiusMiles: 175, centerLabel: 'YCCC center which is in Erving, MA. MA' }`
+ * with no `centerLat`/`centerLon`, because the label never resolved to a centre. Measured over the
+ * 143-record publishable seed corpus: an applicant with no coordinate sees `unknown`, and the
+ * moment they fill in a latitude and longitude — from anywhere on Earth — that program turns
+ * `ineligible`. A confident NO, computed from a circle whose middle GrantSpotter does not know,
+ * arriving as a direct consequence of the applicant answering a question. Filling a field in must
+ * never be able to manufacture an exclusion.
+ *
+ * So an unmeasurable radius is `unknown`, and — see `evaluateGeo` — it is an unknown that names NO
+ * missing profile field, because there is nothing the applicant could type that would decide it.
+ * `matchProgram` already has that case (`unlistableUnknown`) and `VerdictBadge` already renders it:
+ * "Something this program asks for could not be evaluated from your profile. It is not a 'no'."
+ * The gap in the DATA is a separate finding and belongs in the corpus; what belongs here is that a
+ * gap in the data cannot come out as a judgement about a person.
+ */
+function radiusIsMeasurable(geo: GeoSpec): boolean {
+  return (
+    geo.type === 'radius' &&
+    geo.centerLat !== undefined &&
+    geo.centerLon !== undefined &&
+    geo.radiusMiles !== undefined
+  );
+}
+
 const US_SINGLE_LETTER_PREFIXES = new Set(['K', 'N', 'W']);
 
 /**
@@ -156,6 +190,11 @@ export function evaluateGeo(geo: GeoSpec, loc: GeoLocation): GeoDecision {
     }
 
     case 'radius': {
+      // Asked BEFORE the coordinate, so an applicant is never sent to fill in a latitude that
+      // cannot decide anything — the same reasoning as the `decidable` test on the field-of-study
+      // axis in `matcher.ts`, where a wasted `unknown` "reads to the user exactly like a locked
+      // door". See {@link radiusIsMeasurable} for why this is not FAIL.
+      if (!radiusIsMeasurable(geo)) return { status: 'unknown', missing: [] };
       if (loc.lat === undefined || loc.lon === undefined) {
         const missing: string[] = [];
         if (loc.lat === undefined) missing.push('lat');

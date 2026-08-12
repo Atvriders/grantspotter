@@ -8,10 +8,14 @@ import {
 } from '@grantspotter/core';
 import {
   callsignFillableFields,
+  callsignFillCaveat,
+  callsignFillDerivation,
   callsignFillRefusal,
+  fieldUsedInMatching,
   PROFILE_FIELDS,
   profileFieldHelp,
   profileFieldHref,
+  profileFieldKeys,
   profileFieldLabel,
 } from './profileFields.js';
 
@@ -235,5 +239,119 @@ describe('what a callsign lookup may fill', () => {
         .toBeGreaterThan(20);
       expect(callsignFillableFields(field.kind)).not.toContain(field.key);
     }
+  });
+
+  /**
+   * THE TWO FIELDS THIS WHOLE ROUND IS ABOUT WERE THE TWO THE REGISTRY SAID NOTHING ABOUT.
+   *
+   * `lat` and `lon` carried no `callsignFill` at all until 2026-08-11, which this registry reads
+   * as the third state — "the FCC record has nothing to do with this field" — beside a `county`
+   * and a `licensedSince` that each carry an explicit refusal with a reason. It was the opposite
+   * of true: callook states a coordinate on every successful lookup, and the code was discarding
+   * it. Silence in the registry whose job is to say which is happening is the failure mode the
+   * annotations exist to prevent, so it is asserted away here rather than left to be noticed again.
+   */
+  it('says something explicit about the coordinate fields, on both profile kinds', () => {
+    for (const key of ['lat', 'lon']) {
+      const entries = PROFILE_FIELDS.filter((f) => f.key === key);
+      expect(entries.length, `${key} should exist for both kinds`).toBe(2);
+      for (const entry of entries) {
+        expect(entry.callsignFill?.kind, `${key} (${entry.kind}) is unannotated`).toBe(
+          'fills_unattributed',
+        );
+      }
+      // A lookup fills it, so "GrantSpotter will never fill this in" must NOT be what is shown.
+      expect(callsignFillRefusal(key)).toBeUndefined();
+      // The caveat says both halves: the PO box, and that no marker can be stored for a number.
+      const caveat = callsignFillCaveat(key) ?? '';
+      expect(caveat, key).toMatch(/PO box/i);
+      expect(caveat, key).toMatch(/nowhere to record|reads exactly like a coordinate you typed/i);
+    }
+  });
+
+  /**
+   * A value computed from another field of the same profile is a THIRD case, and the registry has
+   * to name the field it comes from — not merely explain itself in prose. The editor recomputes
+   * the district when the callsign changes, and it can only do that if it can ask which input to
+   * watch. A call district left behind after the callsign moves to another licensee is the same
+   * defect as a stale provenance marker, which this product has already had once.
+   */
+  it('names the field a derived value is derived FROM, not just that it is derived', () => {
+    const derivation = callsignFillDerivation('callDistrict', 'student');
+    expect(derivation?.from).toBe('callsign');
+    // ...and that name has to be a real input on the same profile, or nothing can watch it.
+    expect(profileFieldKeys('student')).toContain(derivation?.from);
+    // No source is credited for arithmetic this tool did itself — core says the same thing in
+    // `StudentFieldSources`, which is why `callDistrict` is not in the fillable set.
+    expect(callsignFillableFields('student')).not.toContain('callDistrict');
+    expect(derivation?.because).toMatch(/callsign/i);
+    // An organisation profile has no call district at all, so there is nothing to derive there.
+    expect(profileFieldKeys('organization')).not.toContain('callDistrict');
+  });
+
+  it('leaves no field of either profile without an answer about what a lookup does to it', () => {
+    // Not a demand that every field be annotated — silence is a legitimate answer for `gpa`. What
+    // is asserted is that every annotation present is one of the four the union declares, so a
+    // fifth case cannot be introduced as a free-form string nothing renders.
+    const kinds = new Set(
+      PROFILE_FIELDS.map((f) => f.callsignFill?.kind).filter((k) => k !== undefined),
+    );
+    expect([...kinds].sort()).toEqual(['derived', 'fills', 'fills_unattributed', 'refused']);
+  });
+});
+
+/**
+ * WHICH BOXES CHANGE THE ANSWER, AND WHICH ARE FOR THE APPLICANT'S OWN RECORDS.
+ *
+ * A person filling in thirty-five inputs is owed the difference. `matcher.ts` is the only thing
+ * that computes a verdict and it reads a subset; the rest is real and goes on the application a
+ * funder reads, but cannot move what GrantSpotter says.
+ *
+ * The claim is STRUCTURAL — "matcher.ts reads this field" — and it is pinned as a written-out list
+ * rather than derived, for the same reason `callsignFillableFields` is: this is the claim under
+ * review, and a change to it should be visible in a diff. Verified with
+ * `grep -rn 'profile\.<key>' packages/core/src/`, which finds no read anywhere in core for any of
+ * the seven below.
+ *
+ * NOT a corpus measurement, deliberately. Dropping `state` from an organisation profile moves no
+ * verdict over today's 143-record seed corpus either — the eleven club programs in it are all
+ * `geography: any` — and it would be false to tell a club that its state is decorative.
+ */
+describe('which fields the matcher actually reads', () => {
+  const IGNORED = [
+    'institution', // the axes ask whether the school is accredited and at what level, never which
+    'orgName',
+    'ein',
+    'is501c3',
+    'hasFiscalSponsor',
+    'memberCount',
+    'institutionName',
+  ];
+
+  it('is exactly this list, and everything else is read', () => {
+    const ignored = PROFILE_FIELDS.filter((f) => !f.usedInMatching).map((f) => f.key).sort();
+    expect(ignored).toEqual([...IGNORED].sort());
+  });
+
+  it('gives a field held by both kinds the same answer', () => {
+    // Same reason as the label, help and `callsignFill` assertions above: a lookup by key alone
+    // cannot know the kind, so `lat` must not be load-bearing on one tab and decorative on the other.
+    for (const key of ['state', 'lat', 'lon', 'callsign']) {
+      const entries = PROFILE_FIELDS.filter((f) => f.key === key);
+      expect(new Set(entries.map((f) => f.usedInMatching)).size, key).toBe(1);
+    }
+  });
+
+  it('answers false for a key nobody registered, rather than claiming it matters', () => {
+    expect(fieldUsedInMatching('somethingNew')).toBe(false);
+    expect(fieldUsedInMatching('gpa')).toBe(true);
+    expect(fieldUsedInMatching('memberCount', 'organization')).toBe(false);
+  });
+
+  it('reads the coordinate pair, which is what makes a prefilled coordinate consequential', () => {
+    // The point of the caveat on `lat`/`lon`: these are not inert. `evaluateGeo`'s radius axis is
+    // the only thing in the product that reads them, and it produces a verdict from them.
+    expect(fieldUsedInMatching('lat', 'student')).toBe(true);
+    expect(fieldUsedInMatching('lon', 'organization')).toBe(true);
   });
 });

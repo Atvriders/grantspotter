@@ -283,14 +283,32 @@ the wait and answers subsequent presses without asking again until it has passed
 defects first — a race let eight concurrent presses through a limit meant to allow one, measured
 at 24 requests from 24 members before the fix and 1 after.
 
-**What it fills — four values, and only four**, named here by the form labels you will see them
-under: **Callsign**; **State**; **License class**, on a personal licence; and
-**Organization name**, on a club licence.
+**What it fills — six values, and only six**, named here by the form labels you will see them
+under: **Callsign**; **State**; **License class**, on a personal licence;
+**Organization name**, on a club licence; and **Latitude** and **Longitude**, which are
+callook.info's own geocode of the address on the licence.
 The list is short because the profile has nowhere to put the rest: there is no street field, no
 city field, no ZIP field and no licensee-name field, so those values are shown and then dropped
 rather than kept for later. Nothing is saved by
-pressing the button — each of the four arrives in the form marked as read from callook.info rather
-than stated by you, and you accept or overwrite it before you save anything.
+pressing the button — each value arrives in the form saying where it came from, and you accept or
+overwrite it before you save anything.
+
+The coordinate is the one that needs a caveat, and it carries one on screen as well as here.
+callook geocodes the address post is sent to, so on a licence filed at a **PO box** the coordinate
+is a post office — which is what a great many collegiate club stations file, and a post office can
+be on the other side of a boundary from the club it serves. GrantSpotter therefore fills the two
+boxes only from a **street address**; for a PO box it shows you the coordinate, says what it is,
+and waits for a second press before putting it anywhere. It is also the one pair the profile
+cannot mark: it can record that a callsign, a state, a licence class or an organisation name was
+read from a source, and it has nowhere to record that about a number, so once saved a fetched
+coordinate reads exactly like one you typed. Latitude and longitude are read by one kind of rule
+only — "within 250 miles of Seaford, Delaware" — and leaving them empty leaves those rules
+**unanswered** rather than answered against you.
+
+**Call district** is filled in too, and is not on that list because nobody states it: it is the
+digit in your callsign, worked out here rather than read anywhere, and it follows the callsign box
+if you change it. The matcher does the same arithmetic when the field is empty, so leaving it
+blank costs you nothing either.
 
 The callsign is a special case worth knowing about: it counts as the source's answer only when it
 **differs** from what you typed. callook answers a lookup of a *superseded* callsign with the

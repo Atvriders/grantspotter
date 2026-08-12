@@ -11,12 +11,17 @@ import {
 } from '../store/session.js';
 import {
   callsignFillableFields,
-  callsignFillRefusal,
+  callsignFillCaveat,
+  callsignFillDerivation,
   profileFieldLabelList,
   PROFILE_FIELDS,
   type ProfileFieldMeta,
 } from '../lib/profileFields.js';
-import { fillFromLookup, type AcceptedCallsign } from '../lib/callsignFill.js';
+import {
+  derivedProfileValues,
+  fillFromLookup,
+  type AcceptedCallsign,
+} from '../lib/callsignFill.js';
 import {
   profileValueOrigin,
   pruneFieldSources,
@@ -233,13 +238,43 @@ interface TabSources {
   /** The callsign the record these markers were read from was for. */
   readFor: string;
   marks: Record<string, ProfileFieldSource>;
+  /**
+   * WHAT THE RECORD STATED THAT NO MARKER CAN DESCRIBE — the coordinate, and only ever that.
+   *
+   * `fillFromLookup.unmarkable` is where these come from, and the reason they need a home here at
+   * all is that a marker is what everything else on this screen reads. `lat` and `lon` have no key
+   * in core's `StudentFieldSources`, `z.object` strips what it does not declare, so a marker built
+   * for a coordinate is dropped by the server on the way in — and every mechanism this component
+   * has for saying "a lookup put that there" is built on markers. Without this, a coordinate a
+   * lookup wrote would be indistinguishable from a typed one the moment it landed, and a SECOND
+   * lookup would leave the first licensee's coordinate sitting in the form, which is the exact
+   * two-people-on-one-profile defect `vacated` exists to prevent for the marked fields.
+   *
+   * NOT PERSISTED, and that is not a shortcut — there is nowhere to persist it to. The honest
+   * consequence is stated on screen rather than papered over: while the lookup is still in this
+   * session the field says where its number came from, and after a reload the profile holds a
+   * coordinate it cannot attribute to anybody. Which is the caveat the registry carries for
+   * `lat`/`lon`, shown beside the field whether or not this map has an entry.
+   */
+  unattributed: Record<string, string>;
+  /**
+   * Who stated the values in `unattributed`, and when — the half a `ProfileFieldSource` would have
+   * carried if one could exist for these fields.
+   *
+   * Kept beside them rather than per-field because there is exactly one answer per accepted
+   * record, which is the same reason the banner above the form reads it off whichever marker it
+   * finds first. `undefined` until a record is accepted on this tab, which makes it the honest
+   * test for "has a lookup happened here" — the marker set cannot answer that on its own, since a
+   * record whose only usable answer is a coordinate produces no markers at all.
+   */
+  readFrom?: { source: string; fetchedAt: string };
 }
 
 type FieldSources = Record<ProfileKind, TabSources>;
 
 const NO_SOURCES: FieldSources = {
-  student: { readFor: '', marks: {} },
-  organization: { readFor: '', marks: {} },
+  student: { readFor: '', marks: {}, unattributed: {} },
+  organization: { readFor: '', marks: {}, unattributed: {} },
 };
 
 /** The markers a stored profile arrived with, paired with the callsign stored beside them. */
@@ -250,6 +285,9 @@ function sourcesOf(saved: Record<string, unknown> | null): TabSources {
     readFor: typeof callsign === 'string' ? callsign : '',
     marks:
       typeof raw === 'object' && raw !== null ? (raw as Record<string, ProfileFieldSource>) : {},
+    // A stored profile carries no record of which of its numbers were fetched, because the schema
+    // has nowhere to keep that. Empty is the truthful answer, not a placeholder for one.
+    unattributed: {},
   };
 }
 
@@ -392,12 +430,45 @@ export function Profile(): JSX.Element {
    * well have meant to keep them. What it takes away is the source's name on them, which was never
    * about this callsign.
    */
-  const liveMarks = sameCallsign(drafts[kind].callsign ?? '', sources[kind].readFor)
-    ? sources[kind].marks
-    : {};
+  const forThisCallsign = sameCallsign(drafts[kind].callsign ?? '', sources[kind].readFor);
+  const liveMarks = forThisCallsign ? sources[kind].marks : {};
+  /**
+   * The same rule as `liveMarks`, applied to the values a marker cannot describe. A coordinate
+   * read for W8UM stops being described as read for W8UM the moment the callsign in the form is
+   * somebody else's — the number stays, exactly as a marked value's does, and only the claim about
+   * where it came from goes.
+   */
+  const liveUnattributed = forThisCallsign ? sources[kind].unattributed : {};
 
   function setValue(key: string, value: string): void {
-    setDrafts((current) => ({ ...current, [kind]: { ...current[kind], [key]: value } }));
+    setDrafts((current) => {
+      const draft = current[kind];
+      const next: FormValues = { ...draft, [key]: value };
+      /**
+       * A DERIVED VALUE FOLLOWS THE FIELD IT IS DERIVED FROM, OR IT IS A THIRD KIND OF STALE MARK.
+       *
+       * `callDistrict` is the digit in the callsign. Change W8UM to K5UTD and an 8 left sitting in
+       * the district box is a fact about the licence the applicant no longer holds — the same
+       * defect as a provenance marker that outlives its callsign, which this component already
+       * carries `readFor` to prevent, and which the matcher would read straight into a
+       * `call_district` verdict.
+       *
+       * Recomputed by COMPARISON rather than by remembering, exactly as `profileValueOrigin`
+       * works: the district is replaced only where the box is empty or still holds what the
+       * PREVIOUS callsign implied. A district the applicant typed themselves differs from both and
+       * is left alone, and clearing the callsign clears a district that was derived from it.
+       * Nothing has to be flagged, so no path can forget to unflag it.
+       */
+      const before = derivedProfileValues(kind, { callsign: draft.callsign ?? '' });
+      const after = derivedProfileValues(kind, { callsign: next.callsign ?? '' });
+      for (const [derivedKey, derivedValue] of Object.entries(after)) {
+        // Editing the derived box itself makes the value the applicant's, whatever it is.
+        if (derivedKey === key) continue;
+        const held = draft[derivedKey] ?? '';
+        if (held === '' || held === before[derivedKey]) next[derivedKey] = derivedValue;
+      }
+      return { ...current, [kind]: next };
+    });
     // No marker is touched here, and that is the design rather than an omission: a marker
     // holds the value it wrote, so `profileValueOrigin` reports this field as the user's the
     // moment its value differs. A flag cleared by hand is a flag some path forgets to clear.
@@ -424,8 +495,9 @@ export function Profile(): JSX.Element {
    * is back) or somebody else's.
    */
   function applyLookup(accepted: AcceptedCallsign): void {
-    const { values, fieldSources } = fillFromLookup(accepted, kind);
+    const { values, fieldSources, unmarkable } = fillFromLookup(accepted, kind);
     const held = sources[kind].marks;
+    const heldUnattributed = sources[kind].unattributed;
     const draft = drafts[kind];
 
     /**
@@ -449,6 +521,21 @@ export function Profile(): JSX.Element {
       if (values[key] !== undefined) continue;
       if (profileValueOrigin(draft[key], mark) === 'looked_up') vacated[key] = '';
     }
+    /**
+     * The same clearing, for the values a marker cannot describe.
+     *
+     * `profileValueOrigin` cannot be used here because there is no marker to hand it; the
+     * comparison it makes is available anyway, because this component kept the value the previous
+     * lookup wrote. So the test is identical in substance — the field still holds exactly what the
+     * previous record put there, therefore what is being cleared is that record's answer and not
+     * the applicant's. Without this, looking up a second callsign whose record states no
+     * coordinate would leave the first licensee's mail-drop coordinate in the form, feeding radius
+     * verdicts, with nothing on screen tying it to anybody.
+     */
+    for (const [key, previous] of Object.entries(heldUnattributed)) {
+      if (values[key] !== undefined) continue;
+      if ((draft[key] ?? '') === previous) vacated[key] = '';
+    }
 
     // Emptying a field the applicant can see is a change they are owed a sentence about, in the
     // live region this form already keeps mounted. Silence here would be the same defect as the
@@ -466,7 +553,18 @@ export function Profile(): JSX.Element {
     setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...vacated, ...values } }));
     setSources((current) => ({
       ...current,
-      [kind]: { readFor: accepted.callsign.value, marks: fieldSources },
+      [kind]: {
+        readFor: accepted.callsign.value,
+        marks: fieldSources,
+        // REPLACED rather than merged, for the reason `fieldSources` is: every value here is a
+        // fact about the licensee whose record was just accepted, and keeping the previous one's
+        // alongside is two people's coordinates on one profile.
+        unattributed: Object.fromEntries(unmarkable.map((key) => [key, values[key] ?? ''])),
+        readFrom: {
+          source: accepted.provenance.source,
+          fetchedAt: accepted.provenance.fetchedAt,
+        },
+      },
     }));
     setUlsUrls((current) => ({ ...current, [kind]: accepted.provenance.ulsUrl }));
   }
@@ -520,7 +618,31 @@ export function Profile(): JSX.Element {
       setDrafts((current) => ({ ...current, [kind]: toForm(response.profile, kind) }));
       // The server's echo, so what is on screen is what is stored — including a marker the
       // schema stripped.
-      setSources((current) => ({ ...current, [kind]: sourcesOf(response.profile) }));
+      setSources((current) => ({
+        ...current,
+        [kind]: {
+          ...sourcesOf(response.profile),
+          /**
+           * ...except the two things the echo CANNOT carry, which are carried forward instead of
+           * being dropped on the floor.
+           *
+           * There is no key for a coordinate's provenance anywhere in the stored profile, so
+           * `sourcesOf` reads back `{}` for it — truthfully, about the database. It is not true
+           * about this browser, which watched the value arrive thirty seconds ago. Dropping it
+           * here would mean pressing Save silently turned a fetched coordinate into one nobody
+           * could account for, and the NEXT lookup would then leave the previous licensee's
+           * coordinate sitting in the form: the two-people-on-one-profile defect `vacated`
+           * exists to prevent, reintroduced by an act as innocent as saving.
+           *
+           * A reload is where this knowledge genuinely ends, and the caveat the registry puts
+           * beside `Latitude` says exactly that rather than pretending otherwise. Closing that
+           * last gap needs a `lat`/`lon` key in core's `StudentFieldSources` and `OrgFieldSources`
+           * — the schema is what decides, and `z.object` strips everything it does not declare.
+           */
+          unattributed: current[kind].unattributed,
+          ...(current[kind].readFrom === undefined ? {} : { readFrom: current[kind].readFrom }),
+        },
+      }));
       setHeld((current) => ({ ...current, [kind]: true }));
       setReport(response.completeness);
       // The kind the SERVER echoed, not the tab this component happens to be on.
@@ -568,6 +690,29 @@ export function Profile(): JSX.Element {
     (key) => lookedUpSource(key) !== undefined,
   );
   const lookupMark = firstFilled === undefined ? null : (liveMarks[firstFilled] ?? null);
+  /**
+   * Whether a lookup has happened on this tab, which is what the per-field explanations are gated
+   * on: before one there is nothing to explain, and "we did not fill this from a record you never
+   * asked us to read" is noise.
+   *
+   * NOT `lookupMark !== null`, which is what it was. A record whose only fillable answer is a
+   * coordinate — a club record accepted on the student tab with no state, say — leaves no marker
+   * at all, and the fields it just wrote would then explain nothing about themselves. The
+   * unattributed set is the other half of "a record was accepted here".
+   */
+  const readFrom = forThisCallsign ? sources[kind].readFrom : undefined;
+  const lookupHappened = lookupMark !== null || readFrom !== undefined;
+  /**
+   * What follows RIGHT NOW from the values in the form — recomputed on every render rather than
+   * stored, so the note beside a field can never outlive the value it describes. A district equal
+   * to the digit in the callsign currently in the box is a derived value; anything else in that
+   * box is the applicant's, including the same digit typed under a callsign that does not imply it.
+   */
+  const derivedNow = derivedProfileValues(kind, { callsign: drafts[kind].callsign ?? '' });
+  function isDerivedValue(key: string): boolean {
+    const derived = derivedNow[key];
+    return derived !== undefined && derived !== '' && drafts[kind][key] === derived;
+  }
   const unevaluated = unevaluatedProfileKinds({
     hasStudentProfile: held.student,
     hasOrgProfile: held.organization,
@@ -583,6 +728,16 @@ export function Profile(): JSX.Element {
         computed from one of them at a time — browse, the calendar and the meter beside this
         form each name the profile they used — so holding both lets you switch between two
         views of the corpus rather than merging them into one.
+      </p>
+      {/* WHICH BOXES CHANGE THE ANSWER. Thirty-five inputs is a lot to ask of somebody, and until
+          this said so there was no way to tell the ones a verdict depends on from the ones that
+          only ever appear on the application a funder reads. Every field below carries the answer
+          for itself; this is the sentence that says the distinction exists. */}
+      <p className="profile-lede">
+        Not every box changes what GrantSpotter tells you. Each one below says whether matching
+        reads it or whether it is there for your own records and your application — and none of
+        them is required. Leaving a field empty leaves the rules that need it{' '}
+        <strong>unanswered</strong>, which is not the same as answered against you.
       </p>
 
       <div className="profile-tabs" role="tablist" aria-label="Profile kind">
@@ -644,20 +799,64 @@ export function Profile(): JSX.Element {
             const isRequired = REQUIRED[kind] === field.key;
             const mark = lookedUpSource(field.key);
             /**
-             * One sentence per field about the lookup, and a field can only ever need one of
-             * the two: either a lookup filled this field, or a lookup will never fill it and
-             * `callsignFillRefusal` says why. The refusal only appears once a lookup has
-             * happened — before that there is nothing to explain, and "we did not fill this
-             * from a record you never asked us to read" is noise.
+             * ONE SENTENCE PER FIELD, CHOSEN FROM FOUR, AND THE ORDER IS THE ARGUMENT.
+             *
+             * There used to be two — a lookup filled this, or a lookup will never fill this and
+             * here is why — and the two fields this round is about fitted neither. A coordinate
+             * IS filled by a lookup and CANNOT be marked; a call district is filled by nobody and
+             * computed from the box above it. Both were silent, which on a screen whose whole
+             * business is saying where values came from is the same as claiming the applicant
+             * typed them.
+             *
+             *   1. marked        the record stated it and the profile can say so. Strongest claim,
+             *                    so it is tested first.
+             *   2. unattributed  the record stated it and nothing can record that. Named with the
+             *                    source and the day while this session lasts, and honest about
+             *                    what happens after: the caveat from the registry, which is
+             *                    attached to the field permanently rather than to this event.
+             *   3. derived       GrantSpotter computed it from another field of this form.
+             *   4. caveat        nothing was filled: either a standing refusal (`licensedSince`,
+             *                    `county`) or the coordinate rule explaining why a lookup left
+             *                    this empty.
+             *
+             * `derived` is NOT gated on a lookup having happened, unlike the rest: the arithmetic
+             * runs on a hand-typed callsign too, and a value that appeared in a box the applicant
+             * did not type in has to explain itself the moment it appears.
              */
-            const refusal = lookupMark === null ? undefined : callsignFillRefusal(field.key, kind);
+            const fetchedValue = liveUnattributed[field.key];
+            const isFetched = fetchedValue !== undefined && fetchedValue === value && value !== '';
+            const derivation = isDerivedValue(field.key)
+              ? callsignFillDerivation(field.key, kind)
+              : undefined;
+            const caveat = lookupHappened ? callsignFillCaveat(field.key, kind) : undefined;
             const note =
               mark !== undefined
                 ? `Read from ${mark.source} — not a value you stated. Edit it and it becomes yours.`
-                : refusal;
+                : isFetched && readFrom !== undefined
+                  ? `Read from ${readFrom.source} on ${formatDate(readFrom.fetchedAt)}, and ` +
+                    'carrying no mark, because GrantSpotter cannot record where a coordinate came ' +
+                    'from. Once you save, this reads exactly like a value you stated.'
+                  : derivation !== undefined
+                    ? derivation.because
+                    : caveat;
+            /**
+             * WHETHER A VERDICT CAN DEPEND ON THIS BOX, said per field rather than in a legend
+             * somebody has to hold in their head while they scroll.
+             *
+             * Part of the field's DESCRIPTION, like the note, and for the same reason: a
+             * screen-reader user filling in thirty-five inputs is the person this distinction
+             * helps most, and a badge floating beside the label is one they never hear.
+             */
+            const matcherId = `${id}-matcher`;
+            const matcherNote = field.usedInMatching
+              ? 'Used in matching: an answer here can change your verdicts.'
+              : 'Not used in matching. GrantSpotter never reads this to decide a verdict — it is ' +
+                'for your own records and for the application itself.';
             // The note is part of the field's DESCRIPTION, not decoration beside it: a
             // screen-reader user has to hear that this value was read for them too.
-            const describedBy = note === undefined ? helpId : `${helpId} ${id}-lookup`;
+            const describedBy = [helpId, matcherId, note === undefined ? '' : `${id}-lookup`]
+              .filter((part) => part !== '')
+              .join(' ');
 
             if (ARRAYS.has(field.key)) {
               const chosen = value.split(',').filter((v) => v !== '');
@@ -672,7 +871,7 @@ export function Profile(): JSX.Element {
                     id={id}
                     tabIndex={-1}
                     aria-labelledby={`${id}-label`}
-                    aria-describedby={helpId}
+                    aria-describedby={`${helpId} ${matcherId}`}
                   >
                     {ACTIVITY_KINDS.map((activity) => (
                       <label key={activity}>
@@ -688,6 +887,14 @@ export function Profile(): JSX.Element {
                   </div>
                   <span className="profile-help" id={helpId}>
                     {field.help}
+                  </span>
+                  {/* `profile-help`, deliberately: this is help text, it wants exactly the
+                      styling help text has, and a new class would be a colour nothing in
+                      `contrast.test.ts` has measured. The distinction between the two sentences
+                      is carried by the WORDS, which is also the only way it reaches a reader who
+                      cannot see the styling at all. */}
+                  <span className="profile-help" id={matcherId}>
+                    {matcherNote}
                   </span>
                 </div>
               );
@@ -750,9 +957,16 @@ export function Profile(): JSX.Element {
                 <span className="profile-help" id={helpId}>
                   {field.help}
                 </span>
+                {/* See the note on the checkbox group's copy of this: `profile-help` on purpose. */}
+                <span className="profile-help" id={matcherId}>
+                  {matcherNote}
+                </span>
                 {note !== undefined && (
                   <span
-                    className={mark === undefined ? 'profile-help' : 'callsign-filled'}
+                    /* `callsign-filled` is the "a source put this here" styling. A fetched
+                       coordinate gets it too — it IS a fetched value — and a derived district
+                       does not, because nobody fetched anything. */
+                    className={mark === undefined && !isFetched ? 'profile-help' : 'callsign-filled'}
                     id={`${id}-lookup`}
                   >
                     {note}

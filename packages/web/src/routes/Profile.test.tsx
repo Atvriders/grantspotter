@@ -1177,3 +1177,255 @@ describe('filling the profile from the FCC record', () => {
     expect(auditA11y(container)).toEqual([]);
   });
 });
+
+/**
+ * EVERY DERIVED VALUE IS VISIBLY DERIVED — the three cases, and what happens to each of them when
+ * the field underneath moves.
+ *
+ * The editor holds three kinds of value it did not get from the applicant, and until 2026-08-11 it
+ * could describe only one of them. A marked value says who stated it and self-invalidates on an
+ * edit. A COORDINATE is stated by the record and cannot be marked at all, because core's
+ * `StudentFieldSources` has no key for one and the server strips what it does not declare. A CALL
+ * DISTRICT is stated by nobody: it is the digit in the callsign, and core's own comment refuses to
+ * credit callook.info for arithmetic this tool did itself.
+ */
+describe('the values nobody typed: a coordinate, and a call district', () => {
+  const STREET_RECORD: CallsignRecord = {
+    ...PERSON_RECORD,
+    mailingGeocode: {
+      geocodedFrom: 'street_address',
+      mailingAddress: { latitude: 42.2808, longitude: -83.743, gridsquare: 'EN82dg' },
+    },
+  };
+
+  /** A collegiate club at a PO box: the record two of the three real captures are. */
+  const PO_BOX_RECORD: CallsignRecord = {
+    ...PERSON_RECORD,
+    isPoBox: true,
+    addressLine1: 'P.O. BOX 8550',
+    mailingGeocode: {
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42li' },
+    },
+  };
+
+  async function lookUpAndAccept(): Promise<void> {
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+  }
+
+  it('fills the coordinate from a street address, and says it can never mark it', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
+    expect(screen.getByLabelText(/^longitude$/i)).toHaveValue(-83.743);
+    // Named as fetched WHILE THIS SESSION LASTS, and honest about what happens after it. One per
+    // coordinate: the latitude and the longitude are two fields and each explains itself.
+    const notes = screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i);
+    expect(notes).toHaveLength(2);
+    const note = notes[0] as HTMLElement;
+    expect(note).toHaveTextContent('callook.info');
+    expect(note).toHaveTextContent('2026-08-04');
+    expect(note).toHaveTextContent(/reads exactly like a value you stated/i);
+
+    // The value is saved as a number like any other, and NO marker is sent for it: one would be
+    // stripped by the server, and a badge that vanishes on reload is worse than no badge at all.
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(putCall(fetchMock)).toBeDefined());
+    const body = putBody(fetchMock);
+    expect(body.lat).toBe(42.2808);
+    expect(body.lon).toBe(-83.743);
+    expect((body.fieldSources as Record<string, unknown>) ?? {}).not.toHaveProperty('lat');
+  });
+
+  it('leaves the boxes empty for a PO box, and explains that rather than going quiet', async () => {
+    stubFetch({ lookup: { status: 'found', record: PO_BOX_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/^longitude$/i)).toHaveValue(null);
+    // The standing caveat from the registry, which says why an empty box is an empty box.
+    expect(screen.getAllByText(/only from a street address/i).length).toBeGreaterThan(0);
+  });
+
+  it('derives the call district from the callsign and says who worked it out', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('8');
+    const note = screen.getByText(/works this out from the callsign above/i);
+    expect(note).toHaveTextContent(/no source is credited for arithmetic/i);
+    // Not attributed to callook.info, which stated no district and does not have one to state.
+    expect(note.textContent ?? '').not.toContain('callook.info');
+  });
+
+  it('derives it from a callsign nobody looked up, because it is arithmetic and not a lookup', async () => {
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('5');
+  });
+
+  /**
+   * THE DEFECT THE `derived` CASE EXISTS TO CLOSE, stated as a test. A district left behind after
+   * the callsign changes is a fact about a licence this applicant no longer holds, and the matcher
+   * reads `callDistrict` straight into a `call_district` verdict — the same class of failure as a
+   * provenance marker outliving its callsign, which this component already carries `readFor` for.
+   */
+  it('follows the callsign when it changes, and empties when the callsign is cleared', async () => {
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'W8UM');
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('8');
+
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('5');
+
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('');
+
+    // A callsign the FCC did not issue has no US call district: VE3ABC's 3 is Canadian, and
+    // `callDistrictFromCallsign` refuses it rather than reporting a district that does not apply.
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'VE3ABC');
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('');
+  });
+
+  it('never overwrites a district the applicant typed themselves', async () => {
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'W8UM');
+    await userEvent.clear(screen.getByLabelText(/call district/i));
+    await userEvent.type(screen.getByLabelText(/call district/i), '9');
+
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+
+    // Theirs, and it stays theirs — and it stops describing itself as derived, because it is not.
+    expect(screen.getByLabelText(/call district/i)).toHaveValue('9');
+    expect(screen.queryByText(/works this out from the callsign above/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The coordinate half of "a marker that outlives its callsign describes somebody else". There is
+   * no marker to go inert here, so the component holds the value the lookup wrote and compares
+   * against it — the same arithmetic, one level up.
+   */
+  it('does not leave one licensee’s coordinate behind for the next', async () => {
+    stubFetch({
+      lookups: [
+        { status: 'found', record: STREET_RECORD },
+        { status: 'found', record: SILENT_RECORD },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
+
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
+    expect(screen.getByRole('status')).toHaveTextContent(/Latitude/);
+  });
+
+  /**
+   * PRESSING SAVE MUST NOT LAUNDER A FETCHED COORDINATE INTO AN UNACCOUNTABLE ONE.
+   *
+   * The PUT reply is the profile as STORED, and the stored profile has nowhere to say a coordinate
+   * was fetched — so reading the component's state back from that echo silently forgets it, and
+   * the next lookup then has nothing to compare against and leaves the previous licensee's
+   * coordinate in the form. Measured in a real browser before the fix: accept W1AW's street
+   * coordinate, save, then accept W1MX's record, and Latitude still read 41.714707 — Newington,
+   * Connecticut, on a profile that now said MA.
+   */
+  it('still knows where a coordinate came from after the profile is saved', async () => {
+    stubFetch({
+      lookups: [
+        { status: 'found', record: STREET_RECORD },
+        { status: 'found', record: SILENT_RECORD },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await screen.findByText(/profile saved/i);
+    expect(screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+      .toHaveLength(2);
+
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
+  });
+
+  it('keeps a coordinate the applicant typed over, because that one is theirs', async () => {
+    stubFetch({
+      lookups: [
+        { status: 'found', record: STREET_RECORD },
+        { status: 'found', record: SILENT_RECORD },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+
+    await userEvent.clear(screen.getByLabelText(/^latitude$/i));
+    await userEvent.type(screen.getByLabelText(/^latitude$/i), '40');
+
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(40);
+  });
+
+  it('stops claiming a coordinate was read for this applicant once the callsign is somebody else’s', async () => {
+    stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
+    await renderLoaded();
+    await lookUpAndAccept();
+    expect(screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+      .toHaveLength(2);
+
+    await userEvent.clear(screen.getByLabelText(/callsign/i));
+    await userEvent.type(screen.getByLabelText(/callsign/i), 'K5UTD');
+
+    // The number stays — it is on screen and the applicant may have meant to keep it — and the
+    // claim about whose record it came from does not, exactly as a marker's does not.
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
+    expect(screen.queryAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+      .toHaveLength(0);
+  });
+});
+
+/**
+ * WHICH BOXES CHANGE THE ANSWER. Thirty-five inputs with nothing to tell them apart invites
+ * somebody to treat "Member count" and "GPA" as equally load-bearing and give up in the middle.
+ */
+describe('saying which fields the matcher reads', () => {
+  it('marks a field a verdict can depend on, and one it cannot, in words', async () => {
+    await renderLoaded();
+    expect(screen.getByLabelText(/gpa/i).getAttribute('aria-describedby')).toContain(
+      'field-gpa-matcher',
+    );
+    expect(document.getElementById('field-gpa-matcher')?.textContent).toMatch(
+      /can change your verdicts/i,
+    );
+    expect(document.getElementById('field-institution-matcher')?.textContent).toMatch(
+      /never reads this to decide a verdict/i,
+    );
+  });
+
+  it('says an empty field leaves a rule unanswered rather than answered against you', async () => {
+    await renderLoaded();
+    expect(screen.getByText(/leaving a field empty leaves the rules that need it/i))
+      .toBeInTheDocument();
+  });
+
+  it('tells an organisation which of its own boxes are decorative', async () => {
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    expect(document.getElementById('field-memberCount-matcher')?.textContent).toMatch(
+      /never reads this to decide a verdict/i,
+    );
+    expect(document.getElementById('field-lat-matcher')?.textContent).toMatch(
+      /can change your verdicts/i,
+    );
+  });
+});

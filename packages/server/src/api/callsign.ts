@@ -22,8 +22,11 @@ import { AppError } from './errors.js';
  * and the omission is the point of the endpoint.
  *
  * An administrator creating somebody else's account may NOT look that person's callsign up.
- * The result of a lookup is a name and a home address, and filling them into a third party's
- * profile makes GrantSpotter state, on that person's behalf, facts they never gave it — the
+ * The result of a lookup is a name, a home address AND — since `59356c5` stopped discarding
+ * `location` — callook's geocode of that address, stated to eight decimal places. Filling any of
+ * them into a third party's profile makes GrantSpotter state, on that person's behalf, facts they
+ * never gave it, and the coordinate makes that sharper rather than softer: a latitude at that
+ * precision is the home address again, in a form the profile stores and the matcher reads. The
  * exact failure the whole product is built to avoid. So there is no user-id parameter on this
  * route, and the body schema is `.strict()`: a request that names anybody is REFUSED (422)
  * rather than silently answered for the caller instead. The result is returned to the caller

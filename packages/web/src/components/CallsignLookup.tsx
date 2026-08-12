@@ -1,10 +1,11 @@
 import { useId, useState, type ReactNode } from 'react';
-import type { LicenseClass } from '@grantspotter/core';
+import { checkCoordinateAgainstLocator, type LicenseClass } from '@grantspotter/core';
 import { ApiError } from '../api/client.js';
 import {
   postCallsignLookup,
   type CallsignLookupResult,
   type CallsignRecord,
+  type GeocodedPoint,
 } from '../api/callsign.js';
 import {
   callsignFromRecord,
@@ -49,6 +50,15 @@ import './callsign.css';
  *     `licensedSince` feeds `heldMonthsMin` in the matcher, where a wrong value becomes a
  *     confident, wrong eligibility verdict. The date is shown, labelled for what it is,
  *     and goes no further.
+ *  7. IT WILL NOT PRE-FILL A POST OFFICE AS A LOCATION. Every successful lookup carries a
+ *     latitude, a longitude and a grid square, and every one of them is callook's geocode of
+ *     the licensee's MAILING ADDRESS. Where that address is a street the panel opens with the
+ *     coordinate in the boxes; where it is a PO box — which is what two of the three real
+ *     captures are, both of them collegiate clubs — the boxes open EMPTY, the coordinate is
+ *     shown for what it is, and filling it in takes a second, separate press. The reasoning is
+ *     the same as rule 5's, and so is the shape: the source stated something, it does not mean
+ *     what a reader would take it to mean, so the software declines to choose and says why.
+ *     See {@link describeGeocode}, which is where that decision is written down.
  */
 
 export type CallsignTarget = 'student' | 'organization';
@@ -88,13 +98,18 @@ function isLicenseClass(value: string): value is LicenseClass {
 /**
  * WHAT THIS PANEL CAN RENDER, which is what the server can answer with.
  *
- * `api/callsign.ts` mirrors `packages/server/src/callsign/types.ts` by hand — web may not import
- * from server — and `malformed` is named here rather than there because a mirror that lags is a
- * fact this component already has to survive: `KNOWN_STATUSES` below exists precisely because the
- * wire is not the type. Rendering it is this file's job either way, and a status the panel can
- * frame must not be reported as a proxy having answered instead of GrantSpotter.
+ * This read `CallsignLookupResult['status'] | 'malformed'` until 2026-08-11, and the widening was
+ * a mirror's lag written down as a workaround: `api/callsign.ts` restates
+ * `packages/server/src/callsign/types.ts` by hand — web may not import from server — and it had
+ * not been updated when `malformed` was added on 2026-08-09. So this file had the copy for a
+ * status the type system said could not arrive, and the compensation lived here, where nothing
+ * would ever prompt anyone to remove it. The mirror is correct now and `api/callsign.test.ts`
+ * compares the two declarations, so this is once again just the alias.
+ *
+ * `KNOWN_STATUSES` below stays, and is a different guard entirely: the wire is not the type, and a
+ * proxy or a captive portal can answer 200 with anything at all.
  */
-type LookupStatus = CallsignLookupResult['status'] | 'malformed';
+type LookupStatus = CallsignLookupResult['status'];
 
 /**
  * The six statuses, as a runtime set. The type says a response can only be one of these; the
@@ -121,6 +136,14 @@ interface Attribution {
   marked: string[];
   /** Profile fields written with no mark at all: the applicant's own, however they got there. */
   unmarked: string[];
+  /**
+   * Fields the record stated that this profile cannot record a source for — the coordinate. Named
+   * separately because the sentence they need is neither of the other two: "callook.info said this
+   * and nothing here can go on saying so" is not "it is yours", and it is not "it is marked".
+   */
+  unmarkable: string[];
+  /** Fields GrantSpotter computed from another field it just wrote. Nobody stated these. */
+  derived: string[];
   /**
    * Keys written that this profile has no field for at all — a licence class on an organisation, an
    * organisation name on a person. The panel gates both, so this is normally empty; it is carried
@@ -254,7 +277,7 @@ export function frameFor(status: LookupStatus, callsign: string): Frame {
  * stores — a guarantee that the two agree rather than a second opinion.
  */
 export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): Frame {
-  const { marked, unmarked, unfillable } = attribution;
+  const { marked, unmarked, unmarkable, derived, unfillable } = attribution;
   const one = marked.length === 1;
   const mine =
     unmarked.length === 0
@@ -262,6 +285,28 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       : ` ${profileFieldLabelList(unmarked, kind)} ${unmarked.length === 1 ? 'carries' : 'carry'} no mark: ` +
         `the record either did not state ${unmarked.length === 1 ? 'it' : 'them'}, or you changed ` +
         `what it said, so ${unmarked.length === 1 ? 'it is yours' : 'they are yours'}.`;
+  /**
+   * The third sentence, and the one nobody would think to write. A value the record stated, on a
+   * field this profile has, that carries no mark — not because of anything the applicant did but
+   * because the profile has no room to record a source for a number. Said plainly, because the
+   * consequence lands later: they will reload this page and see a coordinate that looks exactly
+   * like one they typed.
+   */
+  const fetched =
+    unmarkable.length === 0
+      ? ''
+      : ` ${profileFieldLabelList(unmarkable, kind)} came from the record too, and ` +
+        `${unmarkable.length === 1 ? 'carries no mark' : 'carry no marks'}: GrantSpotter can ` +
+        'record where a callsign, a state or a licence class came from, and has nowhere to record ' +
+        `that about a coordinate. Once saved, ${unmarkable.length === 1 ? 'it reads' : 'they read'} ` +
+        `exactly like ${unmarkable.length === 1 ? 'a value' : 'values'} you stated.`;
+  const worked =
+    derived.length === 0
+      ? ''
+      : ` ${profileFieldLabelList(derived, kind)} ` +
+        `${derived.length === 1 ? 'was' : 'were'} worked out from the callsign rather than read ` +
+        'anywhere — no source is credited for arithmetic, and changing the callsign changes ' +
+        `${derived.length === 1 ? 'it' : 'them'}.`;
   /**
    * Named WITHOUT the profile kind, which is the one place in this file that is deliberate: these
    * keys are fields of the OTHER profile, and asking `profileFieldLabel` for this one's name for
@@ -282,7 +327,7 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       body:
         `${profileFieldLabelList(marked, kind)} came from the record rather than from you, and ` +
         `${one ? 'the field stays' : 'those fields stay'} marked that way until you edit ` +
-        `${one ? 'it' : 'them'}.${mine}${elsewhere} Nothing has been saved yet.`,
+        `${one ? 'it' : 'them'}.${mine}${fetched}${worked}${elsewhere} Nothing has been saved yet.`,
     };
   }
 
@@ -295,8 +340,136 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
           `${unmarked.length === 1 ? 'your own value' : 'your own values'}. `) +
       'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
       'is now in it, and that is true of none of these — either the record had nothing to state, ' +
-      `or you changed what it said.${elsewhere} Nothing has been saved yet.`,
+      `or you changed what it said.${fetched}${worked}${elsewhere} Nothing has been saved yet.`,
   };
+}
+
+/**
+ * WHETHER A COORDINATE MAY OPEN IN THE BOX, AND WHAT THE PERSON IS TOLD ABOUT IT.
+ *
+ * THE DECISION, AND THE ARGUMENT FOR IT.
+ *
+ * callook geocodes ONE thing: the address on the licence, which is where the licensee's post goes.
+ * `matcher` reads latitude and longitude for exactly one purpose — radius eligibility — so the
+ * only consequence a coordinate has in this product is a verdict about the place it names. Two of
+ * the three real captures in `fixtures/callook/` resolve to `po_box`, and both are collegiate
+ * clubs: M I T Radio Society files P.O. BOX 51421, BOSTON, and callook answers with a point in
+ * Boston, to eight decimal places, while the club is across the river in Cambridge.
+ *
+ * The three options were: never fill it, fill it with a caveat, or fill it and exclude it from
+ * radius matching. The third is not available honestly and saying why matters more than the
+ * choice: excluding it would have to happen in `matcher`, the stored profile has nowhere to record
+ * that a coordinate is a mail drop (`StudentProfile.lat` is a bare number and the zod schema
+ * strips anything else), and a browser-side flag would be gone by the next page load while the
+ * number stayed. A caveat alone fails for the same reason — the caveat is not stored either, and
+ * after one save the post office is indistinguishable from a measured position.
+ *
+ * So the answer is per-arm, and it is a DIFFERENCE THE PERSON CAN SEE:
+ *
+ *   street_address     the boxes open with the coordinate in them. It is still the mail rather
+ *                      than the station, and the panel says so, but a street address is a
+ *                      defensible answer to "roughly where are you" and the applicant is looking
+ *                      at both the address and the number before anything is written.
+ *   po_box             the boxes open EMPTY and the coordinate is shown beside a sentence naming
+ *                      it as a post office. A second, separate press fills it in. Refusing
+ *                      outright was the other candidate and was rejected: this is the median
+ *                      user, radius rules are the only thing lat/lon feed, and a club that knows
+ *                      its post office is three miles from its shack is better served by an
+ *                      informed yes than by a blanket no. What it must not be is silent.
+ *   address_not_stated the same withholding, for a stronger reason — the record carried no
+ *                      address at all, so nothing here says what the point is a geocode OF.
+ *
+ * AND THE MARGINS ARE NOT ACADEMIC. Measured with this repository's own `haversineMiles` against
+ * the radius centres in the seed corpus: W1AW's own street-address coordinate is 261.23 miles from
+ * Seaford, Delaware, against a 250-mile rule — 11.23 miles outside. A mail drop in the next town
+ * is the same order of magnitude as that margin.
+ *
+ * THE RECORD IS ALSO CHECKED AGAINST ITSELF, HERE, EVEN THOUGH THE SERVER NOW DOES IT TOO. A
+ * callook `location` carries a coordinate AND a grid square, which are two independent statements
+ * about one station, and `checkCoordinateAgainstLocator` in core is what compares them. Since
+ * `5d411a4` the server's parser asks the same question and emits no `mailingGeocode` at all when
+ * the two halves disagree, so this branch is unreachable from a healthy GrantSpotter server — and
+ * it stays, for the reason `KNOWN_STATUSES` stays a few lines up. `api/callsign.ts` is a HAND COPY
+ * of a type on the other side of a process boundary; what actually arrives is whatever JSON the
+ * connection produces, and this app is served behind a tunnel where a proxy, a stale build or a
+ * captive portal can answer 200 with something else. The cost of asking is one function call over
+ * numbers already in memory. The cost of not asking, if the invariant ever stops holding, is a
+ * confident radius verdict computed from a coordinate 2,900 miles from where the same record says
+ * the station is. Its copy is exercised in `CallsignLookup.test.tsx` rather than merely present.
+ */
+export type GeocodeOffer =
+  /** In the boxes when the panel opens. */
+  | { kind: 'prefill'; point: GeocodedPoint; note: string }
+  /** Shown, not filled. One press puts it in the boxes. */
+  | { kind: 'withheld'; point: GeocodedPoint; note: string }
+  /** Shown as a fault in the record. No press fills it. */
+  | { kind: 'contradicted'; point: GeocodedPoint; note: string };
+
+export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefined {
+  const geocode = record.mailingGeocode;
+  if (geocode === undefined) return undefined;
+
+  // The exhaustive switch is the point of the type: there is no way to reach the numbers without
+  // first saying which of the three things they are, so the paragraph above cannot be skipped by
+  // somebody who only wanted a latitude.
+  const [point, note]: [GeocodedPoint, string] = ((): [GeocodedPoint, string] => {
+    switch (geocode.geocodedFrom) {
+      case 'street_address':
+        return [
+          geocode.mailingAddress,
+          'callook geocoded the street address above. That is where the licence receives post, ' +
+            'which is not necessarily where the station or the antenna is — but it is a place ' +
+            'rather than a mail drop, so it is offered here filled in. Change it or clear it if ' +
+            'it is not where you want radius rules answered about.',
+        ];
+      case 'po_box':
+        return [
+          geocode.poBox,
+          'The address on this licence is a PO box, so this coordinate is a POST OFFICE — not the ' +
+            'station, not the antenna, and not the campus. GrantSpotter has left the boxes empty ' +
+            'rather than fill them with it. Latitude and longitude are read for one thing only: ' +
+            'rules of the form “within 70 miles of Schenectady”, and a post office can be on the ' +
+            'other side of that line from the club it serves. Use it if it is close enough for ' +
+            'you to be happy answering those with it.',
+        ];
+      case 'address_not_stated':
+        return [
+          geocode.unattributed,
+          'This record states a coordinate and no address at all, so nothing here says what the ' +
+            'point is a geocode of. GrantSpotter is not going to fill in a location it cannot ' +
+            'attribute to anything; the number is here because the record contains it, and the ' +
+            'judgement about whether it is yours is yours to make.',
+        ];
+    }
+  })();
+
+  const agreement = checkCoordinateAgainstLocator(point.latitude, point.longitude, point.gridsquare);
+  if (agreement.status === 'outside') {
+    return {
+      kind: 'contradicted',
+      point,
+      note:
+        `This record contradicts itself: it states the grid square ${point.gridsquare}, and the ` +
+        `coordinate beside it falls in ${agreement.containingLocator} instead. Those are two ` +
+        'statements about one station and they disagree, so GrantSpotter is not offering either ' +
+        'of them — there is no honest way to pick the right one. Type a location in yourself if ' +
+        'you need radius rules answered.',
+    };
+  }
+  if (agreement.status === 'unknown') {
+    return {
+      kind: 'contradicted',
+      point,
+      note:
+        `GrantSpotter could not read ${JSON.stringify(point.gridsquare)} as a grid square, so the ` +
+        'coordinate in this record could not be checked against it — and a coordinate nothing ' +
+        'corroborates is not something to fill a form in with. ' +
+        `(${agreement.rejection.message}.) Type a location in yourself if you need radius rules ` +
+        'answered.',
+    };
+  }
+
+  return { kind: geocode.geocodedFrom === 'street_address' ? 'prefill' : 'withheld', point, note };
 }
 
 /** The record's own words for its operator class, or the truth about a club licence. */
@@ -472,6 +645,8 @@ export function CallsignLookup({
               attribution: {
                 marked: Object.keys(fill.fieldSources),
                 unmarked: fill.unmarked,
+                unmarkable: fill.unmarkable,
+                derived: fill.derived,
                 unfillable: fill.unfillable,
               },
             });
@@ -586,6 +761,19 @@ function FoundPanel({
   const [licenseClass, setLicenseClass] = useState<string>(record.operClass ?? '');
   const [orgName, setOrgName] = useState(record.type === 'CLUB' ? record.name : '');
   /**
+   * The coordinate boxes, seeded by {@link describeGeocode} and by nothing else. `'prefill'` is
+   * the only arm that opens with a value in it — the same one-line expression of a rule as the
+   * licence-class seed above, and for the same reason: an empty box is what makes the person the
+   * one who decides.
+   */
+  const geocode = describeGeocode(record);
+  const [lat, setLat] = useState(
+    geocode?.kind === 'prefill' ? String(geocode.point.latitude) : '',
+  );
+  const [lon, setLon] = useState(
+    geocode?.kind === 'prefill' ? String(geocode.point.longitude) : '',
+  );
+  /**
    * The record found is for a callsign the user did not type. callook answers a lookup of a
    * SUPERSEDED callsign with the licensee's current record, so this is usually the same person
    * under a call they no longer hold — and it is also what a mistyped callsign that happens to be
@@ -620,6 +808,12 @@ function FoundPanel({
     if (substituted && !confirmed) return;
     const trimmedState = state.trim().toUpperCase();
     const trimmedOrg = orgName.trim();
+    const latText = lat.trim();
+    const lonText = lon.trim();
+    // What the RECORD said, whatever the panel decided to do with it — `undefined` when there was
+    // no coordinate, so anything the applicant types is theirs by `fromSource`'s comparison.
+    const statedLat = geocode === undefined ? undefined : String(geocode.point.latitude);
+    const statedLon = geocode === undefined ? undefined : String(geocode.point.longitude);
     onUse({
       callsign: callsignFromRecord(record.callsign, typed),
       type: record.type,
@@ -641,6 +835,18 @@ function FoundPanel({
       ...(offersOrgName && trimmedOrg !== ''
         ? { orgName: fromSource(record.type === 'CLUB' ? record.name : undefined, trimmedOrg) }
         : {}),
+      /**
+       * The coordinate, compared against what the record STATED rather than against what the
+       * panel offered. Those differ on purpose for a PO box: the boxes opened empty, so a value
+       * in them arrived by the applicant pressing "use the coordinate anyway" or by them typing
+       * one. Pressing the button leaves exactly what callook stated in the box, and that IS the
+       * source's value however it got there — the same rule `fromSource` already applies to a
+       * state somebody edited and then edited back. What the applicant chose is whether to use
+       * it, which is a different question from who said it, and the panel is where that choice
+       * is visible.
+       */
+      ...(latText === '' ? {} : { lat: fromSource(statedLat, latText) }),
+      ...(lonText === '' ? {} : { lon: fromSource(statedLon, lonText) }),
       provenance: {
         source: record.source,
         fetchedAt: record.fetchedAt,
@@ -713,8 +919,13 @@ function FoundPanel({
             The address is here so you can confirm this is your record.
             {record.isPoBox ? ' The FCC record gives a PO box rather than a street address.' : ''}{' '}
             GrantSpotter does not store it: there is no field for a street address and nothing in
-            the product reads one. Only the state below is kept, because eligibility rules are
-            written in terms of states, ARRL Divisions and ARRL Sections.
+            the product reads one. What is kept is the state — eligibility rules are written in
+            terms of states, ARRL Divisions and ARRL Sections —{' '}
+            {geocode === undefined
+              ? 'and nothing else from these lines.'
+              : 'and, if you use it below, callook’s coordinate for these lines. That coordinate ' +
+                'is derived from this address and points back at it, which is worth knowing ' +
+                'before you keep it.'}
           </p>
         </div>
       )}
@@ -783,6 +994,74 @@ function FoundPanel({
             />
           </div>
         )}
+
+        {/* THE COORDINATE. What it is a geocode of is stated before the boxes, never after: a
+            person who reads only the first sentence should already know whether they are looking
+            at a street or a post office. See `describeGeocode` for the decision behind each arm. */}
+        {/* The wrapper carries no class of its own — the paragraphs inside carry the panel's
+            existing styling, and a new class here would be a rule nothing in the CSS audits has
+            measured. */}
+        {geocode !== undefined && (
+          <div>
+            <p className="callsign-note">
+              This record states the position{' '}
+              <strong>
+                {geocode.point.latitude}, {geocode.point.longitude}
+              </strong>{' '}
+              and the grid square <strong>{geocode.point.gridsquare}</strong>. The grid square is
+              the more honest half — it names a box a few miles across rather than a point — and
+              GrantSpotter has no field for one, so only the numbers can be kept.
+            </p>
+            <p className={geocode.kind === 'prefill' ? 'callsign-note' : 'callsign-choose'}>
+              {geocode.note}
+            </p>
+            {geocode.kind === 'withheld' && (
+              <div className="callsign-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setLat(String(geocode.point.latitude));
+                    setLon(String(geocode.point.longitude));
+                  }}
+                >
+                  Use this coordinate anyway
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Always rendered, coordinate or not: a person who knows where they are may type it, and
+            an applicant on a record with no `location` at all would otherwise have no way to
+            answer a radius rule from this panel. */}
+        <div className="callsign-fill-field">
+          <label htmlFor={`${baseId}-lat`}>Latitude to fill in</label>
+          <input
+            id={`${baseId}-lat`}
+            type="text"
+            inputMode="decimal"
+            value={lat}
+            onChange={(event) => setLat(event.target.value)}
+          />
+        </div>
+
+        <div className="callsign-fill-field">
+          <label htmlFor={`${baseId}-lon`}>Longitude to fill in</label>
+          <input
+            id={`${baseId}-lon`}
+            type="text"
+            inputMode="decimal"
+            value={lon}
+            onChange={(event) => setLon(event.target.value)}
+          />
+        </div>
+
+        <p className="callsign-note">
+          A latitude and longitude are read for one purpose in GrantSpotter: rules of the form
+          “within 250 miles of Seaford, Delaware”. Nothing else uses them, and leaving them empty
+          leaves those rules unanswered rather than answered against you.
+        </p>
 
         {/* The decision, beside the button it governs. A record found under a different callsign
             is the one answer this panel will not hand over unasked — and "Discard" is right

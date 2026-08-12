@@ -210,6 +210,50 @@ describe('evaluateGeo across all five GeoSpec shapes', () => {
     expect(evaluateGeo(geo, { lat: 42 })).toEqual({ status: 'unknown', missing: ['lon'] });
   });
 
+  /**
+   * A RULE NOBODY CAN MEASURE MUST NOT BECOME A JUDGEMENT ABOUT A PERSON.
+   *
+   * The corpus holds a radius constraint with no centre: the Yankee Clipper Contest Club Youth
+   * Scholarship, whose `centerLabel` ("YCCC center which is in Erving, MA. MA") never resolved to
+   * a coordinate. `withinRadius` answers `false` for it — correctly, as a predicate: there is no
+   * inside to be in — and this axis used to read that `false` as FAIL. The effect was measurable
+   * over the 143-record publishable seed corpus: with no coordinate the applicant saw `unknown`,
+   * and filling in a latitude and longitude turned that program `ineligible` from anywhere on
+   * Earth. Answering a question you were asked must never be able to manufacture a NO.
+   */
+  it('cannot decide a radius with no centre, and does not pretend to', () => {
+    const noCentre: GeoSpec = {
+      type: 'radius',
+      values: ['YCCC center which is in Erving, MA. MA'],
+      radiusMiles: 175,
+      centerLabel: 'YCCC center which is in Erving, MA. MA',
+    };
+    // Nothing the applicant could type decides it, so nothing is named as missing — the
+    // `unlistableUnknown` case `matchProgram` already handles and `VerdictBadge` already renders.
+    expect(evaluateGeo(noCentre, { lat: AMHERST_MA.lat, lon: AMHERST_MA.lon })).toEqual({
+      status: 'unknown',
+      missing: [],
+    });
+    // ...including for somebody who is obviously nowhere near it. `fail` would be a claim, and
+    // there is nothing here to compute a claim from.
+    expect(evaluateGeo(noCentre, { lat: WASHINGTON_DC.lat, lon: WASHINGTON_DC.lon }).status).toBe(
+      'unknown',
+    );
+    // And an applicant with no coordinate is not sent to go and find one it could not use.
+    expect(evaluateGeo(noCentre, {})).toEqual({ status: 'unknown', missing: [] });
+    // A radius with a centre but no distance is the same defect from the other side.
+    expect(
+      evaluateGeo(
+        { type: 'radius', values: [], centerLat: 42.6001, centerLon: -72.4326 },
+        { lat: AMHERST_MA.lat, lon: AMHERST_MA.lon },
+      ),
+    ).toEqual({ status: 'unknown', missing: [] });
+    // The measurable case is untouched: a real centre still decides, both ways.
+    const real = radius(ERVING_MA, 175, 'Erving, MA');
+    expect(evaluateGeo(real, { lat: AMHERST_MA.lat, lon: AMHERST_MA.lon }).status).toBe('pass');
+    expect(evaluateGeo(real, { lat: WASHINGTON_DC.lat, lon: WASHINGTON_DC.lon }).status).toBe('fail');
+  });
+
   it('evaluates call_district from the field or from the callsign', () => {
     const geo: GeoSpec = { type: 'call_district', values: ['5'] };
     expect(evaluateGeo(geo, { callDistrict: '5' }).status).toBe('pass');

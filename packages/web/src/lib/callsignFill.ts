@@ -1,6 +1,11 @@
-import type { LicenseClass, ProfileFieldSource } from '@grantspotter/core';
+import { callDistrictFromCallsign, type LicenseClass, type ProfileFieldSource } from '@grantspotter/core';
 import type { CallsignRecord } from '../api/callsign.js';
-import { callsignFillableFields, type ProfileFieldKind } from './profileFields.js';
+import {
+  callsignFillableFields,
+  callsignFillDerivation,
+  profileFieldKeys,
+  type ProfileFieldKind,
+} from './profileFields.js';
 
 /**
  * WHAT LEAVES THE CALLSIGN LOOKUP PANEL, AND WHO SAID EACH PART OF IT.
@@ -79,6 +84,25 @@ export interface AcceptedCallsign {
   licenseClass?: AcceptedValue<LicenseClass>;
   /** Club stations only, and only where the host has somewhere to put an organisation name. */
   orgName?: AcceptedValue;
+  /**
+   * THE COORDINATE, AND WHY IT IS A PAIR OF ORDINARY {@link AcceptedValue}s RATHER THAN A
+   * `GeocodedPoint`.
+   *
+   * What arrives from the record is a discriminated `MailingGeocode`, and the whole point of that
+   * type is that a consumer cannot reach the numbers without finding out whether they are a street
+   * address or a post office. That decision belongs to the PANEL, which is where a person can see
+   * it being made — see `CallsignLookup.tsx`, which does the narrowing, refuses to pre-fill a
+   * mail-drop coordinate, and shows it instead. By the time a value reaches here the decision has
+   * been made and a human has accepted it, so what travels is what travels for every other field:
+   * a string, and who stated it.
+   *
+   * They are strings because a `ProfileFieldSource` holds a string and `profileValueOrigin`
+   * compares against `String(value)`; the form's drafts are strings too, and `toPayload` is what
+   * turns them into numbers. That is also the shape of the problem: `StudentFieldSources` has no
+   * key for either, so neither can ever carry a marker — see `unmarkable`.
+   */
+  lat?: AcceptedValue;
+  lon?: AcceptedValue;
   provenance: CallsignProvenance;
 }
 
@@ -150,14 +174,48 @@ export interface CallsignFill {
    */
   unmarked: string[];
   /**
-   * The keys written that this profile kind has no fillable field for — whoever stated them.
+   * A FIELD OF THIS PROFILE, HOLDING WHAT THE RECORD STATED, THAT NOTHING CAN RECORD THAT ABOUT.
    *
-   * `callsignFillableFields` is the test, so this is exactly the complement of the marked and
-   * unmarked sets: a licence class handed to an organisation profile, an organisation name handed
-   * to a student's. Both panels gate those at source, and this is what makes the gate checkable
-   * rather than merely present — a host that says anything about these keys has to say something
-   * true about a field the applicant is not looking at, which is the sentence
-   * `acceptedFrame` writes for them.
+   * `lat` and `lon`, today, and only them. The record states a coordinate; this profile has both
+   * boxes and the matcher reads both; and core's `StudentFieldSources`/`OrgFieldSources` declare
+   * three keys apiece with `z.object`, which strips the rest — so a marker built for `lat` would
+   * be dropped by the server on the way in and the badge would vanish on the next reload.
+   * `fillFromLookup` refuses to build one for exactly that reason (rule 2), and this list is what
+   * that refusal MEANS rather than what it leaves behind.
+   *
+   * It is not `unmarked`, and the difference is the same one that split `unfillable` out in the
+   * first place. `unmarked` means "yours": the record did not state it, or you changed what it
+   * said. Every clause of that is false about a coordinate callook stated in full and the
+   * applicant accepted untouched — and telling somebody a value is their own assertion when it
+   * came from a source is the single misattribution this module exists to prevent, pointed the
+   * other way.
+   */
+  unmarkable: string[];
+  /**
+   * Keys GrantSpotter COMPUTED from another field of this same profile, rather than read anywhere.
+   *
+   * `callDistrict` from `callsign`, and nothing else today. It is in `values` like any other write
+   * and it is deliberately in no other list: crediting callook.info for the digit in a callsign
+   * would credit a source for this tool's own arithmetic (core says exactly that in
+   * `StudentFieldSources`), and calling it the applicant's own would credit them for it instead.
+   * A host names these separately, and — because the input they are computed from is on the same
+   * form — recomputes them when it changes.
+   */
+  derived: string[];
+  /**
+   * The keys written that this profile kind has no field for at all — whoever stated them.
+   *
+   * A licence class handed to an organisation profile, an organisation name handed to a student's.
+   * Both panels gate those at source, and this is what makes the gate checkable rather than merely
+   * present — a host that says anything about these keys has to say something true about a field
+   * the applicant is not looking at, which is the sentence `acceptedFrame` writes for them.
+   *
+   * THE TEST IS `profileFieldKeys`, NOT `callsignFillableFields`, SINCE 2026-08-11. It was the
+   * latter, which made this the complement of everything else — so `lat`, a field the organisation
+   * and student editors both render, would have been announced to the applicant as "not a field
+   * this profile has" the moment a coordinate was accepted. The two questions are "can this
+   * profile hold it" and "can this profile record where it came from", and only the first belongs
+   * here.
    */
   unfillable: string[];
 }
@@ -172,6 +230,47 @@ function acceptedValues(accepted: AcceptedCallsign): Array<[string, AcceptedValu
   if (accepted.state !== undefined) out.push(['state', accepted.state]);
   if (accepted.licenseClass !== undefined) out.push(['licenseClass', accepted.licenseClass]);
   if (accepted.orgName !== undefined) out.push(['orgName', accepted.orgName]);
+  if (accepted.lat !== undefined) out.push(['lat', accepted.lat]);
+  if (accepted.lon !== undefined) out.push(['lon', accepted.lon]);
+  return out;
+}
+
+/**
+ * WHAT FOLLOWS FROM A VALUE ALREADY IN THE FORM, recomputed from scratch every time.
+ *
+ * One derivation exists: the call district is the digit in the callsign, and `evaluateGeo` in core
+ * does the identical sum when the field is empty, so this fills in a box the matcher could already
+ * answer for itself. It is here rather than in the lookup panel because a hand-typed callsign has
+ * to derive it too — the arithmetic is a property of the CALLSIGN, not of a record having been
+ * fetched.
+ *
+ * Returned as a whole map from a whole map, never patched in place, and that is the same device as
+ * `profileValueOrigin`: there is no flag to clear and nothing to remember. The answer for "W1AW"
+ * is `1` and the answer for "" is `''`, so the caller that hands over a cleared callsign gets a
+ * cleared district back and a stale digit cannot survive. `undefined` for a callsign the FCC did
+ * not issue (`callDistrictFromCallsign` refuses `VE3ABC`, whose 3 is not a US call district) comes
+ * back as `''` for the same reason: the previous callsign's district is not this one's.
+ */
+export function derivedProfileValues(
+  kind: ProfileFieldKind,
+  values: { callsign?: string },
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  /**
+   * OWNERSHIP FIRST, THEN THE RULE — and in that order for a reason that has bitten this file
+   * before. `callsignFillDerivation` reads the registry through `lookup`, which FALLS THROUGH to
+   * the other profile kind by design: it answers "where does this field live and what is it
+   * called", which has the same answer whoever asks. Asked alone it therefore hands an
+   * organisation profile the student entry for `callDistrict` and this would have written a call
+   * district into a draft that has no such field, which `toPayload` would then post and the server
+   * would strip. `profileFieldKeys` is the predicate that answers "is this field MINE", the same
+   * split `fillFromLookup` makes one function down.
+   */
+  if (!profileFieldKeys(kind).includes('callDistrict')) return out;
+  const derivation = callsignFillDerivation('callDistrict', kind);
+  if (derivation?.from === 'callsign') {
+    out.callDistrict = callDistrictFromCallsign(values.callsign ?? '') ?? '';
+  }
   return out;
 }
 
@@ -190,20 +289,30 @@ function acceptedValues(accepted: AcceptedCallsign): Array<[string, AcceptedValu
  */
 export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKind): CallsignFill {
   const fillable = new Set(callsignFillableFields(kind));
+  const onThisProfile = new Set(profileFieldKeys(kind));
   const values: Record<string, string> = {};
   const fieldSources: Record<string, ProfileFieldSource> = {};
   const unmarked: string[] = [];
+  const unmarkable: string[] = [];
   const unfillable: string[] = [];
 
   for (const [key, entry] of acceptedValues(accepted)) {
     values[key] = entry.value;
-    // WHOSE PROFILE THE FIELD IS ON IS ASKED FIRST, AND ORIGIN ONLY AFTER. The two questions are
-    // independent — "did the record state this" and "can this profile hold it" — and asking them in
-    // one condition is what collapsed them into a single answer. Splitting them here is what makes
-    // `unmarked` a set of THIS profile's fields by construction, so a host naming them to the
-    // applicant cannot name a field of the other kind.
-    if (!fillable.has(key)) {
+    // THREE INDEPENDENT QUESTIONS, ASKED IN THIS ORDER, AND NEVER COLLAPSED INTO ONE CONDITION.
+    // "Does this profile have the field", "can it record where the value came from", and "did the
+    // record state it" have three different answers and three different sentences, and every time
+    // two of them have been folded together this module has told somebody something false about
+    // their own form. Asking them separately is what makes each list mean exactly one thing.
+    if (!onThisProfile.has(key)) {
       unfillable.push(key);
+      continue;
+    }
+    if (!fillable.has(key)) {
+      // The profile has the box and nothing can mark it. A value the applicant edited inside the
+      // panel is still theirs, though, and saying "the record stated this" about it would be the
+      // original defect wearing a new list — so origin still decides which sentence they get.
+      if (entry.origin === 'source') unmarkable.push(key);
+      else unmarked.push(key);
       continue;
     }
     if (entry.origin !== 'source') {
@@ -217,5 +326,14 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
     };
   }
 
-  return { values, fieldSources, unmarked, unfillable };
+  // LAST, AND FROM THE ACCEPTED CALLSIGN RATHER THAN FROM THE FORM. The district that follows from
+  // this record is the district of the callsign this record is FOR — which is not always the one
+  // the applicant typed, because callook answers a superseded callsign with the current record.
+  const derived: string[] = [];
+  for (const [key, value] of Object.entries(derivedProfileValues(kind, { callsign: values.callsign }))) {
+    values[key] = value;
+    derived.push(key);
+  }
+
+  return { values, fieldSources, unmarked, unmarkable, derived, unfillable };
 }

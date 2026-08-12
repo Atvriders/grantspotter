@@ -69,13 +69,98 @@ describe('building the values and the markers a host writes', () => {
       'student',
     );
 
-    expect(fill.values).toEqual({ callsign: 'W8UM', state: 'MI', licenseClass: 'GENERAL' });
+    /**
+     * `callDistrict: '8'` IS NEW HERE ON 2026-08-11, AND IT IS THE DESIGN CHANGING RATHER THAN
+     * THIS ASSERTION BEING WRONG. A lookup now also writes what FOLLOWS from a value it wrote:
+     * the 8 in W8UM is the call district, `evaluateGeo` in core does the same sum when the field
+     * is empty, and the owner asked for the box to be filled. It is not marked and never will be
+     * — see the `derived` assertion below — because crediting callook.info for the digit in a
+     * callsign would credit a source for this tool's own arithmetic.
+     */
+    expect(fill.values).toEqual({
+      callsign: 'W8UM',
+      state: 'MI',
+      licenseClass: 'GENERAL',
+      callDistrict: '8',
+    });
     expect(fill.fieldSources).toEqual({
       state: { ...PROVENANCE, value: 'MI' },
       licenseClass: { ...PROVENANCE, value: 'GENERAL' },
     });
     // The callsign the user typed is theirs, and the record agreeing with it changes nothing.
     expect(fill.unmarked).toEqual(['callsign']);
+    // Nobody stated the district: not the source, not the applicant. It is arithmetic, in its own
+    // list, so a host cannot describe it as either.
+    expect(fill.derived).toEqual(['callDistrict']);
+    expect(fill.unmarked).not.toContain('callDistrict');
+    expect(fill.fieldSources).not.toHaveProperty('callDistrict');
+  });
+
+  /**
+   * The district follows the callsign THE RECORD IS FOR, which is not always the one that was
+   * typed. callook answers a lookup of a superseded callsign with the licensee's current record,
+   * so accepting a record found for K9OLD puts W5NEW in the field — and district 5, not 9.
+   */
+  it('derives the district from the callsign the record answered with, not the one asked about', () => {
+    const fill = fillFromLookup(
+      accepted({ callsign: callsignFromRecord('W5NEW', 'K9OLD') }),
+      'student',
+    );
+    expect(fill.values.callDistrict).toBe('5');
+  });
+
+  it('empties the district rather than leaving another licensee’s behind', () => {
+    // A callsign the FCC did not issue has no US call district at all — `callDistrictFromCallsign`
+    // refuses VE3ABC, whose 3 is Canadian. The answer is an empty field, not the previous one.
+    const fill = fillFromLookup(
+      accepted({ callsign: { value: 'VE3ABC', origin: 'user' } }),
+      'student',
+    );
+    expect(fill.values.callDistrict).toBe('');
+    expect(fill.derived).toEqual(['callDistrict']);
+  });
+
+  it('derives nothing on an organisation profile, which has no call district', () => {
+    const fill = fillFromLookup(accepted({ type: 'CLUB' }), 'organization');
+    expect(fill.derived).toEqual([]);
+    expect(fill.values).not.toHaveProperty('callDistrict');
+  });
+
+  /**
+   * A COORDINATE IS A FIELD OF THIS PROFILE THAT NOTHING CAN MARK, WHICH IS ITS OWN ANSWER.
+   *
+   * Before this list existed there were two places for it to land and both were false. `unmarked`
+   * says "the record either did not state it, or you changed what it said, so it is yours" — about
+   * a latitude callook stated to eight decimal places and the applicant never touched. `unfillable`
+   * says "not a field this profile has" — about a box the editor renders on both tabs and the
+   * matcher reads for radius eligibility.
+   */
+  it('separates a coordinate the record stated from the values it can attribute', () => {
+    const fill = fillFromLookup(
+      accepted({
+        state: { value: 'MI', origin: 'source' },
+        lat: { value: '41.714707', origin: 'source' },
+        lon: { value: '-72.728411', origin: 'source' },
+      }),
+      'student',
+    );
+
+    expect(fill.values.lat).toBe('41.714707');
+    expect(fill.unmarkable).toEqual(['lat', 'lon']);
+    expect(fill.unmarked).toEqual(['callsign']);
+    expect(fill.unfillable).toEqual([]);
+    // The rule that makes this list necessary: no marker, because the server would strip it.
+    expect(fill.fieldSources).not.toHaveProperty('lat');
+    expect(fill.fieldSources).not.toHaveProperty('lon');
+  });
+
+  it('calls a coordinate the applicant typed over theirs, not the record’s', () => {
+    const fill = fillFromLookup(
+      accepted({ lat: { value: '42.0', origin: 'user' }, lon: { value: '-71.0', origin: 'source' } }),
+      'organization',
+    );
+    expect(fill.unmarked).toEqual(['callsign', 'lat']);
+    expect(fill.unmarkable).toEqual(['lon']);
   });
 
   /**
@@ -195,9 +280,21 @@ describe('building the values and the markers a host writes', () => {
       // Vacuity guard: this accepted value carries a field of the OTHER kind either way round.
       expect(fill.unfillable.length, kind).toBeGreaterThan(0);
       for (const key of fill.unfillable) expect(fillable, `${kind}: ${key}`).not.toContain(key);
-      // Every accepted key is accounted for exactly once, whichever list it lands in.
+      /**
+       * Every key written is accounted for exactly once, whichever list it lands in — and there
+       * are now five lists rather than three. `unmarkable` and `derived` were added on 2026-08-11
+       * with the coordinate and the call district, and this sum is what makes a sixth case
+       * impossible to add silently: a key that lands in no list, or in two, fails here rather than
+       * going unnamed on a confirmation the applicant reads.
+       */
       expect(
-        [...Object.keys(fill.fieldSources), ...fill.unmarked, ...fill.unfillable].sort(),
+        [
+          ...Object.keys(fill.fieldSources),
+          ...fill.unmarked,
+          ...fill.unmarkable,
+          ...fill.derived,
+          ...fill.unfillable,
+        ].sort(),
       ).toEqual(Object.keys(fill.values).sort());
     },
   );
