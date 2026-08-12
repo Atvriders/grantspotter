@@ -49,7 +49,7 @@
  */
 import type { Constraint, ConstraintSpec, GeoSpec, Program, StudentProfile } from '@grantspotter/core';
 import { evaluateConstraint, statesForArrlDivision, statesForArrlSection } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { loadCorpus } from '../../../../../scripts/profile-corpus.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
@@ -59,6 +59,33 @@ function corpus(): ReturnType<typeof loadCorpus> {
   cached ??= loadCorpus();
   return cached;
 }
+
+/**
+ * THE FIXTURE LOAD IS SETUP FOR THE WHOLE FILE, AND IT IS NOT PART OF ANY RULE'S TIME BUDGET.
+ *
+ * WHY THIS HOOK EXISTS, MEASURED. `loadCorpus` re-parses every committed fixture through the real
+ * parsers and the real normalizer; MEASURED on this host on 2026-08-12 on two cores
+ * (`taskset -c 0,1`), a load is 2,374 ms and the R1 sweep over all 652 constraints that follows it
+ * is 1 ms. Without this hook that load was charged to whichever `it` touched the corpus first —
+ * R1's, because it is the first in the file — so a rule that does one millisecond of work was
+ * being run against a 5,000 ms default timeout with 2,400 ms of shared fixture I/O already spent
+ * out of it. On a two-core runner with the rest of the suite competing for the same cores it went
+ * over: reproduced here at 5,837 ms by pinning to two cores and putting two busy loops on them,
+ * and that is exactly the failure CI reported.
+ *
+ * WHY IT IS NOT A LARGER `testTimeout`. The rule's own cost is 1 ms and did not change when R1
+ * grew from 63 constraints to 77; the number that grew is the corpus, which every test in this
+ * file shares and none of them is about. Raising the budget would hide the load in eleven W-rules
+ * and seven R-rules at once and leave the next one to go red as fixtures land. Loading it in a
+ * hook makes each `it` measure the rule again — the same shape as `exports/corpus.test.ts`, which
+ * has done this since it was written, and as the `beforeEach` in `api/calendarRouter.test.ts`.
+ *
+ * THE TIMEOUT HERE IS THE HOOK'S, and it is generous on purpose: it bounds fixture I/O on the
+ * slowest machine this suite runs on, not a property of the product.
+ */
+beforeAll(async () => {
+  await corpus();
+}, 120_000);
 
 /** Every constraint in the publishable corpus, with the program that carries it. */
 async function everyConstraint(): Promise<Array<{ program: Program; c: Constraint }>> {

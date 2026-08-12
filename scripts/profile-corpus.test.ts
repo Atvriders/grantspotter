@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { matchProgram } from '../packages/core/src/matcher.js';
 import { makeStudent } from '../packages/core/test/fixtures.js';
 import { ADJACENCY_THRESHOLD } from '../packages/server/src/federal/adjacency.js';
@@ -9,6 +9,30 @@ import {
   PROFILE_NOW_ISO,
   PROFILES,
 } from './profile-corpus.js';
+
+/**
+ * ONE LOAD FOR THE FILE, AND IT IS SETUP RATHER THAN PART OF ANY TEST'S BUDGET.
+ *
+ * `loadCorpus` re-parses every committed fixture on every call and memoizes nothing: MEASURED on
+ * this host on 2026-08-12 on two cores, 2,351 ms for the first test in this file and about 1,650 ms
+ * for EACH of the five after it, because each one called it again. Six loads of the same immutable
+ * fixtures, every one of them inside a 5,000 ms default test timeout that the assertions around it
+ * need almost none of. `axes/spec-vs-sentence.test.ts` carries the measurement and the argument;
+ * it is the file where this went over the line on a two-core runner.
+ *
+ * SHARED BECAUSE THE CORPUS IS BUILT FROM COMMITTED FILES AND NOTHING HERE WRITES TO IT — every
+ * test below reads counts and filters lists. The eleven axis test files have shared one load per
+ * file since they were written.
+ */
+let cached: ReturnType<typeof loadCorpus> | undefined;
+function corpus(): ReturnType<typeof loadCorpus> {
+  cached ??= loadCorpus();
+  return cached;
+}
+
+beforeAll(async () => {
+  await corpus();
+}, 120_000);
 
 /**
  * The tests for `scripts/profile-corpus.ts` — the dev tool every matcher fix in this remediation
@@ -34,7 +58,7 @@ import {
  */
 describe('scripts/profile-corpus — the corpus is what the product would show', () => {
   it('excludes every do_not_publish record, and reports how many it excluded', async () => {
-    const { programs, loaded, suppressed, belowAdjacency } = await loadCorpus();
+    const { programs, loaded, suppressed, belowAdjacency } = await corpus();
 
     // The whole point: not one suppressed record survives into the measured corpus.
     expect(programs.filter((p) => isDoNotPublish(p))).toEqual([]);
@@ -95,7 +119,7 @@ describe('scripts/profile-corpus — the corpus is what the product would show',
  */
 describe('scripts/profile-corpus — the adjacency gate is the product’s, not a copy of it', () => {
   it('excludes every nsf-funding-rss record, because none of them is adjacent', async () => {
-    const { programs, loaded } = await loadCorpus();
+    const { programs, loaded } = await corpus();
     // A real capture of the three NSF funding feeds: 45 items, best score 1 against a threshold
     // of 6 (Gravitational Physics, Chemical Oceanography, SBIR). Real open solicitations — just
     // not for a radio club, which is why the gate and not `do_not_publish` is what removes them.
@@ -109,7 +133,7 @@ describe('scripts/profile-corpus — the adjacency gate is the product’s, not 
   });
 
   it('keeps the record that scores EXACTLY the threshold — the gate’s only true positive', async () => {
-    const { programs } = await loadCorpus();
+    const { programs } = await corpus();
     // NTIA's Public Wireless Supply Chain Innovation Fund scores exactly ADJACENCY_THRESHOLD, so
     // an off-by-one in a re-expressed gate would empty the federal sweep of the one open federal
     // call in the whole corpus and nothing else would look different.
@@ -168,7 +192,7 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     // Not a synthetic program: the REAL CWops record from the committed fixture, so this proves
     // the institution-axis fix (TRADE_SCHOOL_DISJUNCT in institution.ts) actually reaches a
     // certificate applicant, not just that the fix's own unit test is satisfied.
-    const { programs } = await loadCorpus();
+    const { programs } = await corpus();
     const cwops = programs.find((p) => p.name === 'The CWops Scholarship');
     if (cwops === undefined) throw new Error('The CWops Scholarship is missing from the corpus');
     expect(matchProgram(certTrade, cwops, PROFILE_NOW_ISO)).toEqual({ kind: 'eligible' });
@@ -178,7 +202,7 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     const club = findProfile('radio-club').profile;
     expect(club).toMatchObject({ kind: 'organization', entity: 'club_501c3' });
 
-    const { programs } = await loadCorpus();
+    const { programs } = await corpus();
     const open = programs.filter((p) => p.applicantEntities.includes('club_501c3'));
     expect(open.map((p) => p.name).sort()).toEqual([
       'ARRL Amateur Radio Grants',
@@ -234,7 +258,7 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
   });
 
   it('school-org (school_lea) can see ARISS, which never accepts an individual applicant', async () => {
-    const { programs } = await loadCorpus();
+    const { programs } = await corpus();
     const ariss = programs.find((p) => p.name === 'ARISS-USA ISS Contact Proposal');
     if (ariss === undefined) throw new Error('ARISS-USA ISS Contact Proposal is missing from the corpus');
     expect(ariss.applicantEntities).toEqual(['school_lea', 'university']);

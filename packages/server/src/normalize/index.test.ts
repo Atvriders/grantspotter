@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { OrgProfile, Program, ProgramStatus, RawOpportunity } from '@grantspotter/core';
 import { expandCycles, hashProgram, matchProgram, obligationState, parseRecurrence } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 // The corpus profiler's own loader, imported rather than reimplemented so the corpus-wide count
 // below cannot drift from `npm run profile-corpus`. scripts/ is inside the root tsconfig include
 // and is a vitest project of its own, so this crosses no boundary that is not already crossed.
@@ -665,6 +665,21 @@ describe('disputed claims ship populated', () => {
 });
 
 describe('obligations and restrictions', () => {
+  /**
+   * The one test in this file that reads the real corpus loads it here rather than inside itself:
+   * `loadCorpus` re-parses every committed fixture (MEASURED at 2,220 ms on two cores on
+   * 2026-08-12) and that is shared fixture I/O, not the cost of the assertion below. See
+   * `axes/spec-vs-sentence.test.ts`, which is where the same 5,000 ms default ran out on CI.
+   */
+  let cached: ReturnType<typeof loadCorpus> | undefined;
+  function corpus(): ReturnType<typeof loadCorpus> {
+    cached ??= loadCorpus();
+    return cached;
+  }
+  beforeAll(async () => {
+    await corpus();
+  }, 120_000);
+
   const ardcCtx = () =>
     ctx({ sourceId: 'ardc-grants', funderId: 'ardc', klass: 'ham_grant', tier: 'A', deadlineInheritsFrom: undefined });
 
@@ -888,7 +903,7 @@ describe('obligations and restrictions', () => {
     // `npm run profile-corpus` reports, with `isDoNotPublish` and the adjacency gate already
     // applied. Reimplementing the fixture pairing here would let this count drift from the tool
     // every acceptance figure in this plan is measured with.
-    const { programs } = await loadCorpus();
+    const { programs } = await corpus();
     expect(programs.length).toBeGreaterThan(100);
 
     const stated = (key: 'costShareRequired' | 'coFunderPreference') =>

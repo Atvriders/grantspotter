@@ -638,23 +638,55 @@ describe('the ceiling on how many accounts one caller can make', () => {
     // ladder does — which is precisely the hole the un-named third sentence left open.
     expect(ladderRefusals, 'no request in the burst reached the registration ladder').toBeGreaterThan(0);
 
-    // And once the burst has settled there is nothing in flight, so the next caller gets the third
-    // sentence and its number is the one an operator would count in the users table.
-    //
-    // RETRIED PAST A SHED for the reason above and no further: a shed is the gate saying "ask me
-    // again", the ladder's answer is what this asserts, and the two are told apart by the sentence
-    // rather than by hoping the machine is idle. Three attempts, then the assertion runs on
-    // whatever came back — a run that can only ever shed is a failure worth seeing.
+    /*
+      AND THEN THE LADDER'S OWN ARITHMETIC AT THE CEILING — REACHED BY COUNTING, NOT BY ASSUMING
+      THE BURST GOT THERE. THIS IS THE 2026-08-12 CORRECTION AND IT IS ABOUT THE MEASUREMENT.
+
+      What stood here was ONE request after the burst, retried past up to three sheds, and required
+      to be a 429 quoting `created`. That assertion is only true when the burst created the whole
+      ceiling, and whether it does is a fact about how fast the host is rather than about this
+      server: the 200 sign-ups that take a slot queue for one CPU four at a time, and any of them
+      still waiting after `MAX_QUEUE_WAIT_MS` is refused BY THE GATE and hands its slot back
+      UNRECORDED. MEASURED on this host on 2026-08-12 on two cores (`taskset -c 0,1`), same code,
+      same test: 134 accounts created, 66 sign-ups expired in the queue, 40 refused by the ladder.
+      Sixty-six places in the connection rung were genuinely free afterwards, so the next caller was
+      CORRECTLY answered 201 — and the assertion called that a failure. It was measuring the
+      machine and reporting the product.
+
+      So the ceiling is now reached the one way that cannot depend on the machine: ONE REQUEST AT A
+      TIME. A request that is alone in the hash gate never queues behind another, so it can be
+      neither shed nor expired, and the only two answers left to it are "an account was created"
+      and "the ladder is full". The property this test is named for is unchanged and is asserted
+      where it always was — over the burst above; what follows is the third sentence's arithmetic,
+      pinned against the rows rather than against a stopwatch.
+    */
+    let topUps = 0;
     let after = await request(server)
       .post('/api/auth/enroll')
-      .send({ email: 'burst-after@example.org', password: GOOD_PASSWORD });
-    for (let attempt = 0; attempt < 3 && shed.test(String(after.body.error?.message)); attempt++) {
+      .send({ email: `burst-after-${String(topUps)}@example.org`, password: GOOD_PASSWORD });
+    // Bounded by the ceiling itself: the burst created at least none of it, so at most this many
+    // sequential sign-ups can be answered 201 before the rung is spent. A run that exhausts the
+    // bound fails on the assertions below rather than looping.
+    while (after.status === 201 && topUps < REGISTRATION_MAX_PER_CONNECTION) {
+      topUps += 1;
       after = await request(server)
         .post('/api/auth/enroll')
-        .send({ email: `burst-after-${String(attempt)}@example.org`, password: GOOD_PASSWORD });
+        .send({ email: `burst-after-${String(topUps)}@example.org`, password: GOOD_PASSWORD });
     }
-    expect(after.status).toBe(429);
-    expect(after.body.error.message).toContain(`${String(created)} accounts have been created`);
+    // A shed here would not be the machine being busy — it would be the gate refusing a request
+    // that was alone in it, which is a defect and is worth failing on rather than retrying past.
+    expect(
+      shed.test(String(after.body.error?.message)),
+      `shed a request that was alone in the gate: ${String(after.body.error?.message)}`,
+    ).toBe(false);
+    expect(after.status, `the connection rung never closed in ${String(topUps)} sequential sign-ups`)
+      .toBe(429);
+    // THE CEILING IS SPENT IN ROWS THAT EXIST, which is the state the third sentence describes:
+    // whatever the burst created, the sequential top-up carried it to exactly the ceiling.
+    const atCeiling = memberCount();
+    expect(atCeiling).toBe(REGISTRATION_MAX_PER_CONNECTION);
+    expect(atCeiling).toBe(created + topUps);
+    expect(after.body.error.message).toContain(`${String(atCeiling)} accounts have been created`);
     expect(after.body.error.details.retryAfterSec).toBeGreaterThan(1);
   }, 300_000);
 

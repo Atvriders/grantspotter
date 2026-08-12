@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FetchedPayload, RawOpportunity } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { FIXTURE_ROOT } from '../../test/fixtures.js';
 import { TIER_D_RECORDS } from '../sources/manual-tier-d.js';
 import { SOURCES } from '../sources/registry.js';
@@ -191,7 +191,17 @@ const CONTENT_TYPE: Record<string, string> = {
  * Nothing is caught and swallowed: a parser that throws fails this test, because a write side that
  * silently stops seeing a source is the failure mode this whole file exists to break.
  */
+let fixturesOnce: Promise<{ byId: Map<string, RawOpportunity[]>; noCapture: string[] }> | undefined;
+
 async function parseAllFixtures(): Promise<{ byId: Map<string, RawOpportunity[]>; noCapture: string[] }> {
+  fixturesOnce ??= parseAllFixturesOnce();
+  return fixturesOnce;
+}
+
+async function parseAllFixturesOnce(): Promise<{
+  byId: Map<string, RawOpportunity[]>;
+  noCapture: string[];
+}> {
   const byId = new Map<string, RawOpportunity[]>();
   const noCapture: string[] = [];
   for (const source of SOURCES) {
@@ -274,7 +284,14 @@ async function collectWrites(): Promise<Map<string, string[]>> {
  * excluded because a source reading back a key it just wrote is not consumption — the question
  * this test asks is whether anything downstream ever acts on the value.
  */
+let readersOnce: Promise<Array<[string, string]>> | undefined;
+
 async function collectReaderSources(): Promise<Array<[string, string]>> {
+  readersOnce ??= collectReaderSourcesOnce();
+  return readersOnce;
+}
+
+async function collectReaderSourcesOnce(): Promise<Array<[string, string]>> {
   const files = [
     ...(await walk(SRC_ROOT)).filter(
       (f) => !WRITER_DIRS.some((d) => f.startsWith(path.join(SRC_ROOT, d) + path.sep)),
@@ -288,6 +305,22 @@ async function collectReaderSources(): Promise<Array<[string, string]>> {
     ]),
   );
 }
+
+
+/**
+ * READING THE TREE IS SETUP FOR THE WHOLE FILE, NOT PART OF ANY TEST'S TIME BUDGET, AND THE TWO
+ * COLLECTORS ARE MEMOISED FOR THE SAME REASON `collectWrites` ALREADY WAS.
+ *
+ * MEASURED on this host on 2026-08-12 on two cores (`taskset -c 0,1`): the first `it` below carried
+ * 1,854 ms of scanning inside its 5,000 ms default, and `parseAllFixtures` — the fixture parse —
+ * was being run a second time by a later test for another 1,016 ms. Neither number is anything
+ * these assertions are about. `axes/spec-vs-sentence.test.ts` is the file where the same shape ran
+ * out of budget on a two-core runner and carries the full argument; this one was next in line, at
+ * 37% of it, and gets the same treatment before it gets there.
+ */
+beforeAll(async () => {
+  await Promise.all([collectWrites(), collectReaderSources()]);
+}, 120_000);
 
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

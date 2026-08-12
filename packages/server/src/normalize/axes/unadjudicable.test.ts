@@ -34,7 +34,7 @@
  */
 import type { Program, RawOpportunity, StudentProfile } from '@grantspotter/core';
 import { matchProgram } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { loadCorpus } from '../../../../../scripts/profile-corpus.js';
 import { extractFieldOfStudy } from './fieldOfStudy.js';
 import { extractHamActivity } from './hamActivity.js';
@@ -46,6 +46,18 @@ function corpus(): ReturnType<typeof loadCorpus> {
   cached ??= loadCorpus();
   return cached;
 }
+
+/**
+ * THE FIXTURE LOAD IS SETUP FOR THE WHOLE FILE, NOT PART OF ANY TEST'S TIME BUDGET. `loadCorpus`
+ * re-parses every committed fixture — MEASURED at 2,374 ms on two cores on 2026-08-12 — and
+ * without this hook that cost was charged to whichever `it` reached the corpus first, inside its
+ * 5,000 ms default. `axes/spec-vs-sentence.test.ts` carries the measurement and the argument for
+ * why the answer is a hook rather than a larger `testTimeout`; it is the file that went red first,
+ * and every file in this list was sitting at about half the budget behind it.
+ */
+beforeAll(async () => {
+  await corpus();
+}, 120_000);
 
 const raw = (fields: Record<string, string>): RawOpportunity => ({
   sourceId: 's',

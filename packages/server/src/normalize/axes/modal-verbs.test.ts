@@ -32,7 +32,7 @@
 // and license.test.ts exist.
 import type { Constraint, Program, StudentProfile, Verdict } from '@grantspotter/core';
 import { matchAll } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 // The offline corpus loader: every committed REAL capture, parsed by its own source module and
 // normalized exactly as the crawler does. Shared with the profiler and with
 // licenseFloorContract.test.ts rather than reimplemented, so "the corpus" cannot mean two things.
@@ -51,6 +51,18 @@ function corpus(): ReturnType<typeof loadCorpus> {
   cached ??= loadCorpus();
   return cached;
 }
+
+/**
+ * THE FIXTURE LOAD IS SETUP FOR THE WHOLE FILE, NOT PART OF ANY TEST'S TIME BUDGET. `loadCorpus`
+ * re-parses every committed fixture — MEASURED at 2,374 ms on two cores on 2026-08-12 — and
+ * without this hook that cost was charged to whichever `it` reached the corpus first, inside its
+ * 5,000 ms default. `axes/spec-vs-sentence.test.ts` carries the measurement and the argument for
+ * why the answer is a hook rather than a larger `testTimeout`; it is the file that went red first,
+ * and every file in this list was sitting at about half the budget behind it.
+ */
+beforeAll(async () => {
+  await corpus();
+}, 120_000);
 
 function programNamed(programs: Program[], needle: string): Program {
   const hit = programs.find((p) => p.name.includes(needle));

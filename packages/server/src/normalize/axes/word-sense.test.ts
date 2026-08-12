@@ -31,7 +31,7 @@
 // concurrently-running agents edit for other axes — the same reason license.test.ts,
 // hamActivity.test.ts, chrome-scope.test.ts and preference-scope.test.ts exist.
 import type { Program, RawOpportunity } from '@grantspotter/core';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 // The offline corpus loader: every committed REAL capture, parsed by its own source module and
 // normalized exactly as the crawler does, minus the records the review queue suppresses. Shared
 // with `scripts/profile-corpus.ts` rather than reimplemented, so no two audits can disagree about
@@ -47,6 +47,18 @@ function corpus(): ReturnType<typeof loadCorpus> {
   cached ??= loadCorpus();
   return cached;
 }
+
+/**
+ * THE FIXTURE LOAD IS SETUP FOR THE WHOLE FILE, NOT PART OF ANY TEST'S TIME BUDGET. `loadCorpus`
+ * re-parses every committed fixture — MEASURED at 2,374 ms on two cores on 2026-08-12 — and
+ * without this hook that cost was charged to whichever `it` reached the corpus first, inside its
+ * 5,000 ms default. `axes/spec-vs-sentence.test.ts` carries the measurement and the argument for
+ * why the answer is a hook rather than a larger `testTimeout`; it is the file that went red first,
+ * and every file in this list was sitting at about half the budget behind it.
+ */
+beforeAll(async () => {
+  await corpus();
+}, 120_000);
 
 function keyOf(program: Program): string {
   const tag = (prefix: string): string =>
