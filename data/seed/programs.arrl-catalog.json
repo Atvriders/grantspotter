@@ -3564,18 +3564,6 @@
           }
         },
         {
-          "id": "age_stage-0-3197a526",
-          "hard": false,
-          "fallbackRank": 0,
-          "rawText": "Applicant should generally be between the ages of 17 and 25 at the time of the award, but older applicants retraining in a changing job market will be considered",
-          "spec": {
-            "axis": "age_stage",
-            "stages": [
-              "RETRAINING_ADULT"
-            ]
-          }
-        },
-        {
           "id": "other-0-f6dd6cf2",
           "hard": false,
           "fallbackRank": 0,
@@ -8204,8 +8192,7 @@
           "spec": {
             "axis": "age_stage",
             "stages": [
-              "UNDERGRAD",
-              "GRAD"
+              "UNDERGRAD"
             ]
           }
         },

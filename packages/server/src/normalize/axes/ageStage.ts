@@ -4,7 +4,7 @@ import { candidateTexts, firstClause, splitClauses } from './clauses.js';
 // OF THE APPLICANT" test — see `stageClauses` and `INSTITUTION_LABEL` below, and each rule's own
 // derivation in hamActivity.ts. Imported, never re-derived.
 import { APPLICANT_REQUIREMENT, withoutSiteChrome } from './hamActivity.js';
-import { makeConstraint } from './preference.js';
+import { isPreferenceText, makeConstraint } from './preference.js';
 
 const RANGE = /\b(\d{2})\s*(?:to|through|[-–])\s*(\d{2})\b/;
 const MAX_AGE = /\b(\d{2})\s*(?:years old )?or (?:younger|under)\b/i;
@@ -77,6 +77,59 @@ function stagesFrom(texts: string[]): Stage[] {
     if (texts.some((t) => re.test(t))) stages.add(stage);
   }
   return [...stages];
+}
+
+/**
+ * WHAT A FUNDER TOLERATES IS NOT WHAT A FUNDER PREFERS, AND ONLY ONE OF THE TWO IS A PREFERENCE.
+ *
+ * English states an exception with a concessive connector and a verb of tolerance, and this corpus
+ * states two of them on this axis:
+ *
+ *   ECARS  "Applicant should generally be between the ages of 17 and 25 at the time of the award,
+ *           BUT older applicants retraining in a changing job market WILL BE CONSIDERED."
+ *   MARCO  "Preference will be given to undergraduate students and those in certificate programs,
+ *           BUT graduate students MAY APPLY."
+ *
+ * The preferred group is in front of the "but"; the group behind it is the one the funder has
+ * agreed not to refuse. `stagesFrom` read the whole sentence, so the EXCEPTION landed in `stages`
+ * beside — or, for ECARS, INSTEAD OF — the preference, and `matchProgram` counts a soft `pass` as
+ * a met preference and RANKS on it. Measured before this fix: ECARS made a 41-year-old retraining
+ * adult `eligible_preferred` and left a 20-year-old undergraduate merely `eligible`, which is the
+ * funder's own sentence read backwards; MARCO told every graduate student it preferred them while
+ * its sentence says only that they may apply.
+ *
+ * THE ASYMMETRY THAT DECIDES WHERE THIS RULE MAY FIRE. `stages` is an allow-list, so on a HARD
+ * constraint the tolerated group is the half that must be kept — dropping it would refuse exactly
+ * the applicants the concession invites, which is the silent, unrecoverable error. On a SOFT
+ * constraint nothing can be refused at all, so the only thing at stake is whether the product
+ * claims "you meet this preference" for somebody the funder never said it preferred. So this
+ * narrowing is applied ONLY when `isPreferenceText` has already established that the whole
+ * sentence is preference prose — the same predicate `makeConstraint` uses to decide `hard`, asked
+ * of the same text — and it is incapable of producing a refusal anywhere.
+ *
+ * WHEN NOTHING IS LEFT, NOTHING IS CLAIMED. ECARS's preference proper is an age band, and its
+ * numbers live in no field of `ConstraintSpec` here (`RANGE` reads the `Age` field, and ECARS
+ * states its band in prose). Rather than publish the exception as though it were the preference,
+ * the axis publishes no preference: `extractAgeStage` returns `[]`, nobody is ranked on ECARS's
+ * age, and nobody is refused — a soft constraint's `rawText` is shown only as an ineligibility
+ * reason, so no funder wording is lost from any screen by its absence.
+ *
+ * BOTH HALVES ARE REQUIRED. A bare "but" is ordinary contrast and often introduces a RESTRICTION
+ * ("open to undergraduates, but not to graduate students"), so the tail must also state tolerance
+ * — "will be considered", "may apply". Matching the connector alone would drop stages out of
+ * sentences that never widened anything.
+ */
+const CONCESSION = /\b(?:but|however|although|though)\b/i;
+const TOLERANCE =
+  /\b(?:will|would|may|can|might|are|is)\s+(?:also\s+|still\s+|nonetheless\s+)?(?:be\s+)?(?:considered|accepted|eligible|apply|welcome)\b/i;
+
+/** The clause with its concessive exception removed, or the clause unchanged when it states none. */
+function withoutConcession(clause: string): string {
+  const marker = CONCESSION.exec(clause);
+  if (marker === null) return clause;
+  const tail = clause.slice(marker.index + marker[0].length);
+  if (!TOLERANCE.test(tail)) return clause;
+  return clause.slice(0, marker.index);
 }
 
 /**
@@ -196,9 +249,9 @@ export function extractAgeStage(raw: RawOpportunity): Constraint[] {
   const range = RANGE.exec(ageText);
   const maxAge = MAX_AGE.exec(ageText);
   const minAge = MIN_AGE.exec(ageText);
-  const stages = stagesFrom(clauses);
+  const statedStages = stagesFrom(clauses);
 
-  if (!range && !maxAge && !minAge && stages.length === 0) return [];
+  if (!range && !maxAge && !minAge && statedStages.length === 0) return [];
 
   const asOf = AS_OF.exec(ageText)?.[1];
   // The Age field is the constraint's own wording whenever it says anything — including age
@@ -212,6 +265,17 @@ export function extractAgeStage(raw: RawOpportunity): Constraint[] {
     usableAgeText !== ''
       ? usableAgeText
       : (firstClause(clauses, ANY_STAGE) ?? clauses.join('\n'));
+
+  // A PREFERENCE IS WHAT THE FUNDER PREFERS, NOT WHAT IT TOLERATES — see `withoutConcession`.
+  // Gated on `isPreferenceText(rawText)`, the same predicate `makeConstraint` asks of the same
+  // text to decide `hard`, so this can only ever narrow a constraint that refuses nobody.
+  const stages = isPreferenceText(rawText)
+    ? stagesFrom(clauses.map(withoutConcession))
+    : statedStages;
+
+  // The exception was the only thing this axis could name, and an exception is not a preference.
+  // Publishing it would rank the one applicant the funder singled out as the LEAST preferred.
+  if (!range && !maxAge && !minAge && stages.length === 0) return [];
 
   // Only a STAGE list can hide an audience: an age band is a number, and a number has no second
   // reading. Read from the clauses this axis actually understood, not from the whole record.

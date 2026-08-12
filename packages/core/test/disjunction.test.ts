@@ -214,16 +214,32 @@ describe('the funder who says their own list is illustrative', () => {
     expect(status(kinds, contester, 'Applicant must be an active member of a local radio club.')).toBe('fail');
   });
 
-  it('ham_activity: "and any similar activities" stops the list gating — ARDC, verbatim', () => {
+  /**
+   * AN OPENED LIST STOPS THE LIST GATING. IT DOES NOT ANSWER FOR THE APPLICANT.
+   *
+   * The round that introduced this widening read it as `pass`, which turned a hard requirement
+   * into a positive verdict for someone on none of the funder's examples — including someone
+   * whose `activityKinds` is `[]`, i.e. who answered "none of these". `unknown` is what keeps
+   * both halves: no refusal the sentence does not support, and no claim the funder never made.
+   */
+  it('ham_activity: "and any similar activities" stops the list REFUSING — ARDC, verbatim', () => {
     const ardc =
       'Examples: membership in a local or regional club, participation in amateur radio emergency ' +
       'activities, teaching amateur radio classes, on-the-air activities, participation in college ' +
       'radio clubs, and any similar activities which illustrate his/her interest and participation ' +
       'with the amateur radio avocation.';
-    expect(status(kinds, contester, ardc)).toBe('pass');
-    // …and it stops ASKING, because no answer could change the outcome. A wasted `unknown` reads
-    // to the applicant exactly like a locked door.
-    expect(status(kinds, student({}), ardc)).toBe('pass');
+    // Was `fail` before the widening, and is not a refusal any more.
+    expect(status(kinds, contester, ardc)).toBe('unknown');
+    // …but neither is it a yes: nothing here says a contester's activity is one of the examples.
+    expect(evaluateConstraint(kinds, contester, NOW, ardc).missing).toEqual([]);
+    // Answering "none of these" is an answer, and it is not a qualification either.
+    expect(status(kinds, student({ activityKinds: [] }), ardc)).toBe('unknown');
+    // THE QUESTION IS STILL ASKED. An applicant who has said nothing gets the fillable prompt,
+    // because naming a kind the funder listed is still a pass on the funder's own words.
+    expect(status(kinds, student({}), ardc)).toBe('unknown');
+    expect(evaluateConstraint(kinds, student({}), NOW, ardc).missing).toEqual(['activityKinds']);
+    // And someone who IS on the list passes on it, opened or not.
+    expect(status(kinds, student({ activityKinds: ['teaching'] }), ardc)).toBe('pass');
   });
 
   /**
@@ -245,9 +261,15 @@ describe('the funder who says their own list is illustrative', () => {
     expect(status(closed, clubOnly, 'Applicant must be active in ARES.')).toBe('fail');
     expect(
       status(closed, clubOnly, 'Must demonstrate use of amateur radio through community events, Field Day, etc.'),
-    ).toBe('pass');
+    ).toBe('unknown');
   });
 
+  /**
+   * A HARD FAIL STILL OUTRANKS THE OPENED LIST. The widening is about the LIST, and the numeric
+   * floor beside it is a fact about the applicant that the funder's "not limited to" does not
+   * touch — so a 5 wpm operator is still refused, and the opened list cannot upgrade that refusal
+   * into an `unknown` any more than it may upgrade it into a pass.
+   */
   it('ham_activity: an open list opens the LIST, never a numeric floor', () => {
     const cwops: ConstraintSpec = {
       axis: 'ham_activity',
@@ -256,8 +278,11 @@ describe('the funder who says their own list is illustrative', () => {
       proofRequired: true,
     };
     const open = 'Examples include but are not limited to: ARRL Code Proficiency certificate at 15 wpm or higher';
-    expect(status(cwops, student({ activityKinds: ['teaching'], cwWpm: 20 }), open)).toBe('pass');
+    expect(status(cwops, student({ activityKinds: ['teaching'], cwWpm: 20 }), open)).toBe('unknown');
     expect(status(cwops, student({ activityKinds: ['on_air'], cwWpm: 5 }), open)).toBe('fail');
+    // The list is only ever consulted for the applicant it can answer for: on it, the wpm floor
+    // is the whole question.
+    expect(status(cwops, student({ activityKinds: ['on_air'], cwWpm: 20 }), open)).toBe('pass');
   });
 
   it('field_of_study keeps the behaviour it already had, word for word', () => {

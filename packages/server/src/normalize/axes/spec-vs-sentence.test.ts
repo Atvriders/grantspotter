@@ -405,16 +405,51 @@ function allowListSatisfies(spec: ConstraintSpec, key: 'stages' | 'degreeLevels'
   });
 }
 
+/**
+ * THE ONE THING A PREFERENCE MAY LEAVE OUT: THE EXCEPTION TO ITSELF.
+ *
+ * This rule exists because a missing stage is a SILENT BAR — `spec.stages` is an allow-list and
+ * the matcher refuses whoever is not on it. That harm is real for a HARD constraint and does not
+ * exist for a soft one, which can refuse nobody; there, the same list answers a different
+ * question ("whom does this funder say it prefers?"), and a positive "you meet this preference",
+ * with the rank that comes with it, is a claim of its own.
+ *
+ *   MARCO  "Preference will be given to undergraduate students and those in certificate programs,
+ *           BUT graduate students MAY APPLY."
+ *
+ * A graduate student here is tolerated, not preferred, and publishing GRAD in that soft list told
+ * every one of them the funder preferred them. So a preference may omit an audience its sentence
+ * names only when the sentence names it AFTER a concessive — and the check is written here from
+ * the English rather than imported from `ageStage.ts`, so a production rule that quietly widened
+ * its own vocabulary would show up as an offender instead of excusing itself.
+ *
+ * The exemption is available to soft constraints only. A hard list that drops an audience is the
+ * Goldwater defect whatever punctuation precedes it, and the case below proves the exemption
+ * cannot reach it.
+ */
+const CONCESSIVE_EXCEPTION = /\b(?:but|however|although|though)\b/i;
+
+function namedOnlyAsAnException(rawText: string, says: RegExp): boolean {
+  const marker = CONCESSIVE_EXCEPTION.exec(rawText);
+  if (marker === null) return false;
+  return !says.test(rawText.slice(0, marker.index));
+}
+
 describe('R4 — an audience the funder named, missing from the stage list', () => {
   it('no stage list drops an audience its own sentence names', async () => {
     const offenders: string[] = [];
     let claims = 0;
+    let exceptions = 0;
     for (const { program, c } of await everyConstraint()) {
       if (c.spec.axis !== 'age_stage' || c.spec.stages.length === 0) continue;
       for (const rule of AUDIENCE_RULES) {
         if (!rule.says.test(c.rawText)) continue;
         claims += 1;
         if (allowListSatisfies(c.spec, 'stages', rule.mustAllow)) continue;
+        if (!c.hard && namedOnlyAsAnException(c.rawText, rule.says)) {
+          exceptions += 1;
+          continue;
+        }
         offenders.push(
           `${program.name}: names "${rule.label}" but publishes ${JSON.stringify(c.spec.stages)} — ` +
             JSON.stringify(c.rawText.slice(0, 140)),
@@ -424,6 +459,30 @@ describe('R4 — an audience the funder named, missing from the stage list', () 
     expect(offenders).toEqual([]);
     // Vacuity guard: 19 audience claims across the corpus's stage constraints.
     expect(claims).toBe(19);
+    // …and exactly one of them is a preference declining to claim its own exception (MARCO).
+    expect(exceptions).toBe(1);
+  });
+
+  it('the exception clause is an exception, not a hole in the rule', () => {
+    const graduates = AUDIENCE_RULES.find((r) => r.mustAllow === 'GRAD')?.says;
+    if (graduates === undefined) throw new Error('the graduate-students rule is missing');
+    // MARCO's sentence names graduate students only behind its "but", so a preference may omit them.
+    expect(
+      namedOnlyAsAnException(
+        'Preference will be given to undergraduate students and those in certificate programs, ' +
+          'but graduate students may apply.',
+        graduates,
+      ),
+    ).toBe(true);
+    // A sentence that names the audience in its own right is not excused by a later "but".
+    expect(
+      namedOnlyAsAnException(
+        'Open to graduate students, but the award is paid to the institution.',
+        graduates,
+      ),
+    ).toBe(false);
+    // Nor is a sentence with no concessive at all.
+    expect(namedOnlyAsAnException('Open to graduate students.', graduates)).toBe(false);
   });
 
   it('…and it catches the Goldwater spec as it was published', () => {
@@ -526,10 +585,14 @@ describe('R6 — the funder called their own list illustrative, and it refused s
     const cara: ConstraintSpec = { axis: 'ham_activity', activityKinds: ['on_air', 'field_day'], proofRequired: false };
     const caraText = 'Participation in amateur radio activities: contesting, GOTA, Field Day, etc.';
     expect(ILLUSTRATIVE.test(caraText)).toBe(true);
-    // With the funder's sentence the axis stops gating; strip the widening and the bar returns,
-    // so the pass above comes from the funder's word and not from the axis giving up.
-    expect(evaluateConstraint(cara, OFF_LIST_APPLICANT, NOW, caraText).status).toBe('pass');
+    // With the funder's sentence the axis stops REFUSING; strip the widening and the bar returns,
+    // so the withheld refusal comes from the funder's word and not from the axis giving up.
+    expect(evaluateConstraint(cara, OFF_LIST_APPLICANT, NOW, caraText).status).toBe('unknown');
     expect(evaluateConstraint(cara, OFF_LIST_APPLICANT, NOW, 'Participation in Field Day.').status).toBe('fail');
+    // Not refusing is not the same as admitting. This applicant does nothing on CARA's list, so
+    // the honest answer is that nobody can tell — and, since they HAVE stated their activities,
+    // there is nothing left for them to fill in that would settle it.
+    expect(evaluateConstraint(cara, OFF_LIST_APPLICANT, NOW, caraText).missing).toEqual([]);
 
     // And the same rule reading a spec that was never widened at all: the historical shape.
     const hardened: ConstraintSpec = { axis: 'ham_activity', activityKinds: ['club_member'], proofRequired: false };

@@ -144,7 +144,12 @@ describe('no recommendation or stage constraint in this corpus is read off site 
   it('still finds the real recommendation and stage requirements it must not eat', async () => {
     const { programs } = await corpus();
     expect(programs.filter((p) => specsOn(p, 'recommendation').length > 0).length).toBeGreaterThanOrEqual(10);
-    expect(programs.filter((p) => specsOn(p, 'age_stage').length > 0).length).toBeGreaterThanOrEqual(15);
+    // Exact rather than a floor, which is what a guard against a filter that "starts eating funder
+    // text" actually wants: a floor cannot tell a record lost to over-reach from a record that was
+    // never there. 14, one fewer than when this was written, and the missing one is ECARS —
+    // withdrawn deliberately and asserted by name in `modal-verbs.test.ts` ("the funder widens its
+    // own band, and the widening is not the preference"), where the reason lives.
+    expect(programs.filter((p) => specsOn(p, 'age_stage').length > 0).length).toBe(14);
     // …and the two clearest real ones, by name and wording.
     const goldwater = programs.find(
       (p) => keyOf(p) === 'arrl-scholarship-descriptions::The ARRL Scholarship to Honor Barry Goldwater',
@@ -216,8 +221,17 @@ describe('no recommendation or stage constraint in this corpus is read off site 
    * as a pair of sentence-shape -> required-stage rules rather than as a list of program names,
    * so a new record arriving with a new spelling is checked by the rule and not by whether anyone
    * remembered to add it.
+   *
+   * HARD CONSTRAINTS, WHICH IS THIS FILE'S WHOLE SUBJECT. A stage matched off a menu run is a
+   * defect here because `spec.stages` is an allow-list the matcher REFUSES on — the IEEE Student
+   * Branch Rebate barring every undergraduate on the strength of a footer link. A soft stage list
+   * refuses nobody; it answers the different question of whom the funder says it prefers, where an
+   * omitted audience is a claim withheld rather than a bar invented, and where the funder's own
+   * "…, BUT graduate students may apply" is a reason to withhold it. That case is owned, with its
+   * one licensed exemption and a vacuity count, by R4 in `spec-vs-sentence.test.ts`; duplicating
+   * the exemption here would mean two copies of it to keep honest.
    */
-  it('no stage list drops an audience its own sentence names', async () => {
+  it('no HARD stage list drops an audience its own sentence names', async () => {
     const { programs } = await corpus();
     const RULES: Array<{ says: RegExp; mustAllow: string; label: string }> = [
       { says: /\bgraduating\s+high[\s-]?school\s+seniors?\b/i, mustAllow: 'HS_SENIOR', label: 'graduating high-school seniors' },
@@ -225,11 +239,13 @@ describe('no recommendation or stage constraint in this corpus is read off site 
       { says: /\bgraduate\s+students?\b/i, mustAllow: 'GRAD', label: 'graduate students' },
     ];
     const offenders: string[] = [];
+    let checked = 0;
     for (const program of programs) {
       for (const c of program.constraints) {
-        if (c.spec.axis !== 'age_stage' || c.spec.stages.length === 0) continue;
+        if (c.spec.axis !== 'age_stage' || !c.hard || c.spec.stages.length === 0) continue;
         for (const rule of RULES) {
           if (!rule.says.test(c.rawText)) continue;
+          checked += 1;
           if (c.spec.stages.includes(rule.mustAllow as never)) continue;
           offenders.push(
             `${program.name}: names "${rule.label}" but publishes stages ` +
@@ -239,6 +255,10 @@ describe('no recommendation or stage constraint in this corpus is read off site 
       }
     }
     expect(offenders).toEqual([]);
+    // Vacuity guard, exact: nine hard stage lists in the corpus have an audience claim checked
+    // against them. Exact rather than a floor so that a rule going blind — the way the old
+    // `\b2[\s-]?year\b` spelling went blind to "2- or 4-year" — is a failure and not a silence.
+    expect(checked).toBe(9);
   });
 });
 

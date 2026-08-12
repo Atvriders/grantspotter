@@ -380,7 +380,7 @@ describe('the corpus-wide account of what the modal vocabulary softens', () => {
   /** `other.ts` and `financialNeed.ts` never call `makeConstraint`; both are hard-coded soft. */
   const NEVER_CLASSIFIED = new Set(['other', 'financial_need']);
 
-  it('softens exactly three constraints, and they are these three', async () => {
+  it('softens exactly the constraints it is claimed to, and they are these two', async () => {
     const { programs } = await corpus();
     const softenedByModal = programs
       .flatMap((p) => p.constraints.map((c) => ({ p, c })))
@@ -391,22 +391,44 @@ describe('the corpus-wide account of what the modal vocabulary softens', () => {
       .map(({ p, c }) => `${p.name} :: ${c.spec.axis}`)
       .sort();
     expect(softenedByModal).toEqual([
-      'The East Coast Amateur Radio Service (ECARS) Scholarship :: age_stage',
       'The John C. York, KE5V, Scholarship :: ham_activity',
       'The Medical Amateur Radio Council (MARCO) Scholarship :: ham_activity',
     ]);
+    // ECARS WAS THE THIRD AND ITS SENTENCE IS STILL HERE. It no longer appears in the list above
+    // because `age_stage` publishes nothing for it at all (see the case below), not because the
+    // modal vocabulary stopped reading it — so the claim is asserted on the sentence itself,
+    // taken out of the record rather than retyped.
+    const ecars = programNamed(programs, 'East Coast Amateur Radio Service');
+    const sentence = ecars.constraints
+      .map((c) => c.rawText)
+      .find((t) => /older applicants retraining in a changing job market/i.test(t));
+    if (sentence === undefined) throw new Error('ECARS no longer carries the funder wording anywhere');
+    expect(isPreferenceText(sentence)).toBe(true);
+    expect(isPreferenceText(sentence.replace(MODALS, ''))).toBe(false);
   });
 
-  it('ECARS is the third, and the funder widens it in the same sentence', async () => {
+  it('ECARS: the funder widens its own band, and the widening is not the preference', async () => {
     // "Applicant should generally be between the ages of 17 and 25 at the time of the award, BUT
     // OLDER APPLICANTS RETRAINING IN A CHANGING JOB MARKET WILL BE CONSIDERED." A hard age band
-    // read off that sentence excluded exactly the applicants its second half invites.
+    // read off that sentence excluded exactly the applicants its second half invites — and a
+    // PREFERENCE read off it credited only those applicants, which is the same sentence read
+    // backwards: `stages: ['RETRAINING_ADULT']` made a 41-year-old returner `eligible_preferred`
+    // and left the 20-year-old undergraduate the funder actually prefers merely `eligible`.
+    //
+    // The band itself lives in no field of `ConstraintSpec` here, so the only part of the
+    // sentence this axis could publish was its EXCEPTION. It publishes nothing instead: a
+    // preference the funder never stated is not a safer error than a bar it never stated, merely
+    // a quieter one, and a soft constraint refuses nobody either way.
     const { programs } = await corpus();
     const ecars = programNamed(programs, 'East Coast Amateur Radio Service');
-    const age = axisOf(ecars, 'age_stage');
-    expect(age).toHaveLength(1);
-    expect(age[0].rawText).toMatch(/older applicants retraining in a changing job market/i);
-    expect(age[0].hard).toBe(false);
+    expect(axisOf(ecars, 'age_stage')).toEqual([]);
+    // THE FUNDER'S WORDING IS NOT LOST WITH IT. The same sentence is still on the record, on the
+    // axis for "a requirement no schema captures", so the applicant still reads what ECARS said.
+    const carrying = ecars.constraints.filter((c) =>
+      /older applicants retraining in a changing job market/i.test(c.rawText),
+    );
+    expect(carrying).toHaveLength(1);
+    expect(carrying[0].hard).toBe(false);
     // Its licence floor is untouched: ECARS still requires an active licence, so the unlicensed
     // profile is still excluded from it — on the axis the funder actually states as a requirement.
     const licence = axisOf(ecars, 'license');

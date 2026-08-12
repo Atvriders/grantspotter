@@ -111,15 +111,29 @@ describe('the census a licensed EE undergraduate actually gets', () => {
   // Neither becomes a pass: `orUnrepresented` can only reach `unknown`, so an EE undergraduate is
   // told this could not be worked out and is shown the funder's own sentence, instead of a "no"
   // that sentence does not support.
-  it('reports 69 eligible-or-preferred of 150', () => {
+  // ROUND SEVEN MOVED TWO OF THOSE BACK, AND BOTH WERE CLAIMS THIS PROFILE HAD NOT EARNED. The
+  // open-list widening above had been read as a PASS, so a funder's "…GOTA, Field Day, ETC." was
+  // answering the applicant's question for them. This EE undergraduate's `activityKinds` are
+  // `['club_member','on_air']` — neither is on CARA's list, and CARA's sentence does not say they
+  // count; it says the list is not exhaustive, which is a different sentence.
+  //   The CARA Merit Scholarship   eligible -> unknown. Not a refusal (the funder opened the list)
+  //                                and not an eligibility (nobody said this applicant qualifies).
+  //   MMARSI                       eligible_preferred -> eligible. The same rule on a SOFT
+  //                                constraint had manufactured a met preference — and the rank
+  //                                that comes with it — for an applicant in no emergency
+  //                                communications programme. No eligibility changed, a rank did,
+  //                                in the opposite direction to the round that added it.
+  // The totals are unchanged in aggregate for this profile (69 -> 68 positive) because the two
+  // moves cross: CARA leaves `eligible` and MMARSI arrives in it.
+  it('reports 68 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
       eligible: 55,
-      eligible_preferred: 14,
-      unknown: 30,
+      eligible_preferred: 13,
+      unknown: 31,
       ineligible: 51,
     });
-    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(69);
+    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(68);
   });
 
   it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {

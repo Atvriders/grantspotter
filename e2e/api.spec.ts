@@ -238,13 +238,23 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   //   Michael Tortorella, W2IY    "Mathematics or data science" — "Mathematics" refuses Statistics.
   // Neither is a pass: `ConstraintSpec.orUnrepresented` can only reach `unknown`, so the reader is
   // shown the funder's sentence instead of a "no" that sentence does not support.
-  expect(browse.summary.eligible + browse.summary.preferred).toBe(69);
+  // AND BOTH OPEN-LIST MOVES ABOVE CAME BACK ONE STEP ON 2026-08-12, because reading "the funder
+  // opened their list" as a PASS answered the applicant's question for them. This profile's
+  // `activityKinds` are `['club_member','on_air']`, which are on neither funder's list; "not
+  // exhaustive" is not "you qualify".
+  //   The CARA Merit Scholarship   eligible -> unknown. Still not a refusal — the funder opened
+  //                                the list — but no longer an eligibility either.
+  //   MMARSI                       eligible_preferred -> eligible. The same rule on a SOFT
+  //                                constraint had claimed a met preference, and its rank, for an
+  //                                applicant in no emergency communications programme.
+  // The pair crosses in `eligible`, so that column is unmoved at 55 and the positive total is 68.
+  expect(browse.summary.eligible + browse.summary.preferred).toBe(68);
   expect(browse.summary).toMatchObject({
     total: 150,
     eligible: 55,
-    preferred: 14,
+    preferred: 13,
     ineligible: 51,
-    unknown: 30,
+    unknown: 31,
   });
   expect(browse.rows).toHaveLength(150);
 
@@ -332,7 +342,7 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   const browse = await browseAsEeUndergrad(request);
 
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
-  expect(unknown).toHaveLength(30);
+  expect(unknown).toHaveLength(31);
 
   /*
    * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
@@ -402,7 +412,17 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   //             decide. Thirty records in this corpus carry a bare domain; these two are the ones
   //             this profile reaches without another axis refusing it first.
   //
-  // A TWENTY-FOURTH row joining this list is a corpus regression — a funder's rule silently losing
+  //   1 record  THE THIRD KIND ONE MORE TIME, on the axis that learned it last (2026-08-12). The
+  //             CARA Merit Scholarship requires activity "through public service, community
+  //             events, ARES, RACES or SKYWARN, GOTA, Field Day, ETC." — the funder's own "etc."
+  //             says the list is examples, so it may not refuse this applicant, and it was read as
+  //             a PASS for exactly one round: CARA came out `eligible` for someone whose stated
+  //             activities are `club_member` and `on_air`, neither of which it names, and for an
+  //             applicant whose `activityKinds` is `[]`. "Not exhaustive" is not "you qualify".
+  //             It names no field because this reader HAS answered the activities question; an
+  //             applicant who has not still gets `unknown` naming `activityKinds`.
+  //
+  // A TWENTY-FIFTH row joining this list is a corpus regression — a funder's rule silently losing
   // its centre, or a new source publishing no audience — and must fail here rather than disappear
   // into a count.
   expect(unanswerable.map((r) => r.program.name).sort()).toEqual([
@@ -423,6 +443,7 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'Public Wireless Supply Chain Innovation Fund',
     'Radio Club of America Scholarship Program',
     'Radio Club of America Youth Activities Program',
+    'The CARA Merit Scholarship',
     'The Carole J. Streeter, KB9JBR, Scholarship',
     'The Michael Tortorella, W2IY, Scholarship Fund',
     'The Robert A. Rodriguez K5AUW Scholarship',
@@ -438,8 +459,8 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'lon',
   ]);
 
-  // The census can therefore be read as a sentence: 30 of these are questions, not refusals.
-  expect(browse.summary.unknown).toBe(30);
+  // The census can therefore be read as a sentence: 31 of these are questions, not refusals.
+  expect(browse.summary.unknown).toBe(31);
   expect(browse.summary.unknown + browse.summary.ineligible).toBeLessThan(browse.summary.total);
 
   // AN INELIGIBLE VERDICT QUOTES THE FUNDER'S OWN WORDS — WHERE THERE ARE ANY, AND ONLY THERE.
@@ -986,8 +1007,11 @@ test('the completeness meter speaks for the corpus the user can actually reach',
   // possible user, and are questions now. 28 since later the same day, when the Rodriguez
   // scholarship's second audience — "and to previous awardees", a route no profile field can
   // describe — stopped being a refusal too. See the census assertions above for the whole ledger.
-  // 30 since the two domain records below joined them.
-  expect(body.completeness.unknownCount).toBe(30);
+  // 30 since the two domain records below joined them. 31 since CARA joined them too: a funder's
+  // "…Field Day, ETC." stops the list refusing this applicant, and for one round it was also read
+  // as admitting them, which is a claim their `activityKinds` of `club_member` and `on_air` does
+  // not support.
+  expect(body.completeness.unknownCount).toBe(31);
   expect(body.completenessFor).toBe('student');
 
   const me = (await (await request.get('/api/me')).json()) as {

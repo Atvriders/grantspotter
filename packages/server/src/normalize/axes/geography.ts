@@ -339,8 +339,32 @@ function extractCountyNames(text: string): string[] {
  */
 function qualifyCountiesWithState(counties: string[], text: string): string[] {
   const states = statesIn(text);
-  if (states.length !== 1) return counties;
-  return counties.map((county) => `${county}, ${states[0]}`);
+  if (states.length === 1) return counties.map((county) => `${county}, ${states[0]}`);
+  // A DISJUNCTION MUST NOT UN-QUALIFY THE TIER BESIDE IT.
+  //
+  // The ambiguity this function refuses to guess at is TWO STATES OVER ONE COUNTY LIST
+  // (Shenandoah Valley's "the following Virginia counties: … or the following West Virginia
+  // counties: …"). A second state named in the funder's ALTERNATIVE clause is not that: on
+  // "Resident of Brevard County FL, or any student attending school in Georgia" the whole county
+  // list is stated before the ", or", the only state stated with it is FL, and Georgia belongs to
+  // the other tier entirely. Reading the whole field made adding a disjunction DROP the ", FL"
+  // qualifier from the base tier — re-opening the very false include (a Brevard County GEORGIA
+  // resident admitted to a Florida award) that qualifying counties exists to close, from a clause
+  // that says nothing about Brevard.
+  //
+  // So the base span is asked the same question, and only when it answers unambiguously AND owns
+  // every county in the list. Shenandoah still declines: its second list lives past the marker, so
+  // the base span's counties are not all of them and the whole field stays unqualified, exactly as
+  // before. Nothing here can add or remove a county — it only decides whether the state the funder
+  // stated beside them is attached.
+  const head = baseSpan(text);
+  if (head === text) return counties;
+  const headStates = statesIn(head);
+  if (headStates.length !== 1) return counties;
+  const headCounties = extractCountyNames(head);
+  if (counties.length !== headCounties.length) return counties;
+  if (!counties.every((county) => headCounties.includes(county))) return counties;
+  return counties.map((county) => `${county}, ${headStates[0]}`);
 }
 
 /**
@@ -469,6 +493,72 @@ const HANDOFF_MARKER = /,\s*or\s+/gi;
 const EXPLICIT_WIDENING_MARKER =
   /\badditional\s+applicants?\b[^:.]{0,80}:\s*|\b(?:will|may)\s+also\s+consider\b\s*/gi;
 
+/**
+ * The part of the field stated BEFORE the funder's first alternative — where the base tier is
+ * stated, and the only part of the text that describes it. `qualifyCountiesWithState` reads it so
+ * that adding a disjunction cannot change the tier beside it.
+ *
+ * NON-GLOBAL TWINS, NOT THE MARKERS THEMSELVES. `exec` on a `/g/` regex mutates its `lastIndex`,
+ * and this function is reached from INSIDE `alternativeGeos`'s own `while ((m = marker.exec(...)))`
+ * scan of those same two objects — `geoFrom(span)` calls `qualifyCountiesWithState`, which calls
+ * this. Resetting `lastIndex` there restarts the outer scan at 0 for ever. A leftmost-only search
+ * has no use for `g` anyway, so it gets its own stateless copies and the two searches cannot
+ * interfere.
+ */
+const HANDOFF_FIRST = new RegExp(HANDOFF_MARKER.source, 'i');
+const EXPLICIT_WIDENING_FIRST = new RegExp(EXPLICIT_WIDENING_MARKER.source, 'i');
+
+function baseSpan(text: string): string {
+  let cut = text.length;
+  for (const marker of [HANDOFF_FIRST, EXPLICIT_WIDENING_FIRST]) {
+    const m = marker.exec(text);
+    if (m !== null && m.index < cut) cut = m.index;
+  }
+  return text.slice(0, cut);
+}
+
+/**
+ * A GEOGRAPHY TIER IS A CLAIM ABOUT WHERE THE APPLICANT LIVES, AND THE SPAN HAS TO SAY SO.
+ *
+ * `evaluateGeo` answers every `GeoSpec` against `profile.state`, `profile.county` and
+ * `profile.callDistrict` — the applicant's HOME. So a tier emitted here asserts residence
+ * whatever the sentence it came from was about, and reading everything after ", or" with the full
+ * cascade kept no evidence of that at all. Fed the shapes this rule is warned about it produced,
+ * before this gate:
+ *
+ *   "Resident of Brevard County FL, or any student ATTENDING SCHOOL in Georgia"
+ *        -> anyOf:[state GA]      a residence tier built out of a school clause
+ *   "Resident of Pasco County, Florida, or ATTENDING A SCHOOL LOCATED IN New England"
+ *        -> anyOf:[state CT,ME,MA,NH,RI,VT]
+ *   "…North Texas Section. Additional applicants to be considered: students whose PARENTS WORK in
+ *    Colorado"                                          -> anyOf:[state CO]
+ *
+ * No live instance — all four of the corpus's real geography disjunctions are clean — which is
+ * exactly the problem: a rule that happens to be right is not one that cannot be wrong, and this
+ * one is the widening direction, where the funder's own page is the only thing that would ever
+ * correct it.
+ *
+ * TWO WAYS A SPAN EARNS IT, and the second is why the corpus keeps working:
+ *   1. THE SPAN SAYS SO. "…, or any FL RESIDENT" (IRARC), "Additional applicants to be considered:
+ *      North Texas RESIDENCY, … and Oklahoma RESIDENTS …" (North Texas). A span that names
+ *      residence outright is a residence tier even when it goes on to mention a school, which
+ *      North Texas's does — the funder wrote both.
+ *   2. ELLIPSIS. "Resident of Gwinnett County GA, OR THE STATE OF GA" states its second tier by
+ *      leaving the subject out, and English takes it from the first: "[resident of] the State of
+ *      GA". So a span with no residence word of its own inherits the base clause's, but only when
+ *      it anchors the place to nothing ELSE — a school, an employer, a parent. That anchor is what
+ *      all three shapes above have and what an ellipsis, by definition, does not.
+ */
+const RESIDENCE_EVIDENCE =
+  /\b(?:resid(?:e|es|ed|ent|ents|ing|ence|ency|ential)|domicil(?:e|ed)|lives?|living|home\s+address)\b/i;
+const OTHER_ANCHOR =
+  /\b(?:attend(?:s|ed|ing)?|enrol(?:l|ls|led|ling|lment|lled)?|school|schools|college|colleges|universit(?:y|ies)|campus|institution|employ(?:s|ed|er|ers|ment)?|works?|working|parents?|guardians?)\b/i;
+
+function spanStatesResidence(span: string, before: string): boolean {
+  if (RESIDENCE_EVIDENCE.test(span)) return true;
+  return RESIDENCE_EVIDENCE.test(before) && !OTHER_ANCHOR.test(span);
+}
+
 function sameGeo(a: GeoSpec, b: GeoSpec): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -483,8 +573,11 @@ function alternativeGeos(text: string, base: GeoSpec): GeoSpec[] {
 
   // The funder's own gloss of a call district — see `callDistrictStateTier`. Added first so it
   // reads as the district's own second tier rather than as one of the marker-found spans below.
+  // Asked the same question as every other span: McDaniel's is "RESIDENT OF FCC 5th call district
+  // (TX, OK, AR, LA, MS, NM)", where the whole sentence is the evidence, and a page that glossed a
+  // district with the states its SCHOOLS are in would no longer be read as an address.
   const districtStates = callDistrictStateTier(text, base);
-  if (districtStates !== undefined) add(districtStates);
+  if (districtStates !== undefined && spanStatesResidence(text, '')) add(districtStates);
 
   for (const marker of [HANDOFF_MARKER, EXPLICIT_WIDENING_MARKER]) {
     marker.lastIndex = 0;
@@ -492,6 +585,7 @@ function alternativeGeos(text: string, base: GeoSpec): GeoSpec[] {
     while ((m = marker.exec(text))) {
       const span = text.slice(m.index + m[0].length);
       if (span.trim() === '') continue;
+      if (!spanStatesResidence(span, text.slice(0, m.index))) continue;
       add(geoFrom(span));
       if (marker === EXPLICIT_WIDENING_MARKER) {
         const states = statesIn(span);

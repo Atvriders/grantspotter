@@ -374,19 +374,34 @@ describe('ham_activity: the spelling the funder used', () => {
    * `userFacingCopyContract` count the Profile page's "ARES, RACES or SKYWARN" option label as
    * asserted, on a 16-character coincidence, by a test that never renders that page.
    */
-  it('CARA — a list the funder ends with "etc." does not refuse a club member', async () => {
+  it('CARA — a list the funder ends with "etc." refuses a club member, and admits none either', async () => {
     const cara = await find('CARA Merit');
     const activity = cara.constraints.find((c) => c.spec.axis === 'ham_activity');
     if (activity === undefined) throw new Error('CARA states an activity requirement and it is missing');
     expect(activity.hard).toBe(true);
     expect(activity.rawText.trimEnd().endsWith('etc.')).toBe(true);
     const clubOnly = { kind: 'student' as const, activityKinds: ['club_member' as const] };
-    expect(evaluateConstraint(activity.spec, clubOnly, NOW, activity.rawText).status).toBe('pass');
-    // …and the same spec against a sentence with no such qualifier still bars them, so the pass
-    // above comes from the funder's word and not from the axis giving up.
+    expect(evaluateConstraint(activity.spec, clubOnly, NOW, activity.rawText).status).toBe('unknown');
+    // …and the same spec against a sentence with no such qualifier still bars them, so the
+    // withheld refusal above comes from the funder's word and not from the axis giving up.
     expect(
       evaluateConstraint(activity.spec, clubOnly, NOW, 'Applicant must be active in ARES.').status,
     ).toBe('fail');
+    // THE OTHER HALF, AND THE ONE THAT COST THIS RECORD ITS HONESTY LAST ROUND. Reading the
+    // funder's "etc." as a PASS made CARA `eligible` for an applicant who does none of the things
+    // it names — including one who stated `activityKinds: []`, which is the applicant answering
+    // "none of these" in so many words. Neither answers the funder's question.
+    const noneOfThese = { kind: 'student' as const, activityKinds: [] };
+    expect(evaluateConstraint(activity.spec, noneOfThese, NOW, activity.rawText).status).toBe('unknown');
+    // And an applicant who has not answered is still ASKED, not answered for.
+    const unstated = { kind: 'student' as const };
+    expect(evaluateConstraint(activity.spec, unstated, NOW, activity.rawText)).toEqual({
+      status: 'unknown',
+      missing: ['activityKinds'],
+    });
+    // The list has not stopped meaning anything: someone on it passes on the funder's own words.
+    const onTheList = { kind: 'student' as const, activityKinds: ['field_day' as const] };
+    expect(evaluateConstraint(activity.spec, onTheList, NOW, activity.rawText).status).toBe('pass');
   });
 
   /**

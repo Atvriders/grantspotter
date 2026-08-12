@@ -331,7 +331,22 @@ function isFieldWideningMarker(value: string): boolean {
 // wrote. This rule reads the qualifier the funder put ON the list, and it is now
 // asked by every axis whose spec is such a list and whose corpus contains one —
 // `field_of_study`, which had it, and `ham_activity`, which is where the ninth
-// instance was already sitting:
+// instance was already sitting.
+//
+// ONE SIGNAL, TWO ANSWERS, AND THE DIFFERENCE IS THE EVIDENCE EACH AXIS HOLDS.
+// `funderOpenedTheList` answers exactly one question — "did the funder say this
+// list is illustrative?" — and it is never on its own an answer about the
+// APPLICANT. What each axis does with it differs, and deliberately:
+//   - `field_of_study` reads it as a `pass`, because the applicant HAS named a
+//     field and an opened list plus a named field is a judgement of ADJACENCY
+//     ("is Physical Therapy one of the healing arts?") that the funder invited
+//     and the applicant can make for themselves off the verbatim sentence.
+//   - `ham_activity` reads it as `unknown`, because it does not: the seven
+//     `ActivityKind` values are a checklist, an applicant on none of them has
+//     said "none of these", and turning that into "yes, you qualify" asserts
+//     participation nobody recorded. See the case block for the measurement.
+// Both keep the withdrawal of the false excludes; neither is licence for the
+// next axis to pick whichever answer is more convenient.
 //
 //   ARDC   "…proof of amateur radio activity… EXAMPLES: membership in a local or
 //           regional club, participation in amateur radio emergency activities,
@@ -808,7 +823,8 @@ function evaluateTier(
       let failed = false;
       const mine = profile.activityKinds;
       const wanted: ActivityKind[] = spec.activityKinds;
-      // THE SAME RULE `field_of_study` HAS HAD, ON THE AXIS THAT NEEDED IT NEXT.
+      // AN OPENED LIST IS AN OPENED QUESTION, NOT A YES.
+      //
       // `activityKinds` is an allow-list, so a list the funder gave as EXAMPLES
       // is a bar the funder never wrote: ARDC's "Examples: … and any similar
       // activities", CARA's "…GOTA, Field Day, etc.", CWops's "Examples include
@@ -816,16 +832,40 @@ function evaluateTier(
       // "similar" is not something this matcher can adjudicate, and adjudicating
       // it wrongly is what refused a contester, a Field Day operator and an
       // ARES/RACES/SKYWARN volunteer from the largest programme in the corpus —
-      // whose sentence names emergency activity in so many words.
+      // whose sentence names emergency activity in so many words. So an opened
+      // list does not FAIL anyone.
       //
-      // So the list stops gating. And the question stops being ASKED, for the
-      // reason `field_of_study` gives beside its `decidable` flag: no answer to
-      // "what do you do on the air?" could change this verdict, and an `unknown`
-      // that no input can resolve reads to the applicant exactly like a locked
-      // door. The funder's own sentence is on screen for them to judge the fit.
-      if (wanted.length > 0 && !funderOpenedTheList(rawText)) {
+      // It does not PASS anyone either, and the round that made it do so is the
+      // reason this comment is longer than the rule. Reading the widening as a
+      // pass turned a hard requirement into a positive verdict for an applicant
+      // who satisfies nothing on the list — including one whose `activityKinds`
+      // is `[]`, i.e. who answered the question with "none". Measured over the
+      // committed corpus, hard `ham_activity` facing such an applicant could not
+      // refuse anybody AND asserted eligibility for everybody: CARA, ARDC and
+      // CWops each moved from `ineligible` (or from a fillable `unknown`) to a
+      // positive verdict. The two errors are not symmetric, but they are both
+      // errors: a false exclude hides the money forever and silently, while a
+      // false include spends an application on a promise the funder never made.
+      // `unknown` costs the applicant neither — the door stays open and nothing
+      // is claimed on their behalf — and it is what CWops's own spec already
+      // said through `orUnrepresented`, quoting this very sentence, on a branch
+      // `evaluateTier` used to reach `pass` before `evaluateConstraint` could
+      // ever consult it. Two mechanisms, one sentence, one answer now.
+      //
+      // AND THE QUESTION IS STILL ASKED. An applicant who has not filled in
+      // `activityKinds` gets `unknown` NAMING that field, exactly as a closed
+      // list does, because their answer can still resolve this: naming a kind
+      // the funder listed is a `pass` on the funder's own words. Only once they
+      // have answered, and are on none of the listed kinds, does the `unknown`
+      // become one with nothing to fill in — which is the honest pair of claims
+      // (this could not be worked out; no input of yours would change that).
+      let openedListUndecided = false;
+      if (wanted.length > 0) {
         if (mine === undefined) missing.push('activityKinds');
-        else if (!wanted.some((k) => mine.includes(k))) failed = true;
+        else if (!wanted.some((k) => mine.includes(k))) {
+          if (funderOpenedTheList(rawText)) openedListUndecided = true;
+          else failed = true;
+        }
       }
       if (spec.cwProficiencyWpmMin !== undefined) {
         if (profile.cwWpm === undefined) missing.push('cwWpm');
@@ -833,6 +873,8 @@ function evaluateTier(
       }
       if (failed) return FAIL;
       if (missing.length > 0) return { status: 'unknown', missing };
+      // Unresolved with nothing listable — see `unlistableUnknown` in `matchProgram`.
+      if (openedListUndecided) return unknown();
       // proofRequired is informational.
       return PASS;
     }
