@@ -10,7 +10,13 @@ import {
   type HostCooldown,
 } from './cooldown.js';
 import { classifyCallsign, normaliseCallsign } from './shape.js';
-import type { CallsignLookupResult, CallsignRecord } from './types.js';
+import type {
+  CallsignLookupResult,
+  CallsignRecord,
+  GeocodedFrom,
+  GeocodedPoint,
+  MailingGeocode,
+} from './types.js';
 
 /**
  * ONE CALLSIGN, ONE REQUEST, ON BEHALF OF A HUMAN WHO IS WAITING.
@@ -60,6 +66,15 @@ import type { CallsignLookupResult, CallsignRecord } from './types.js';
  * one, which also means the unit suite cannot reach the network from here even by accident.
  *
  * WHAT THIS MODULE MUST NEVER PRODUCE: `licensedSince`. See {@link toRecord}.
+ *
+ * WHAT IT PRODUCES THAT LOOKS LIKE MORE THAN IT IS: a coordinate. Every VALID body carries a
+ * latitude, a longitude and a grid square, and until 2026-08-11 this file stepped over all three
+ * without comment — a station's position, apparently, arriving on every lookup and being thrown
+ * away. It is not a station's position. callook geocodes the licensee's MAILING address, which for
+ * `01-callook-info-w1mx-json.json` — a collegiate club, the audience this product was built for —
+ * is a post office box, answered to eight decimal places. The whole of that argument, and the shape
+ * that stops a consumer walking into it, is in `types.ts` under {@link GeocodedFrom}; the parsing
+ * of it is at {@link statedPoint} below.
  */
 
 /** The documented pretty-URL base: `https://callook.info/<CALL>/json`. */
@@ -208,6 +223,38 @@ const PO_BOX = /\b(?:p\.?\s*o\.?|post\s+office)\s*box\b/i;
 
 /** MM/DD/YYYY, which is the only date format callook prints. */
 const US_DATE = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+
+/**
+ * A plain decimal number, which is the only shape a coordinate has ever arrived in.
+ *
+ * THE VALUES ARE STRINGS. `"41.714707"`, not `41.714707` — every field in a callook body is a
+ * string and "no data" is `""`, the coordinates included. `text()` disposes of the empty one;
+ * this is what disposes of the rest, because `Number` on its own is far too willing: it reads
+ * `"1e3"`, `"0x2A"` and `"Infinity"` as numbers no geocoder wrote, and turns `"41.7N"` into a
+ * silent `NaN` that then has to be caught somewhere else. Matching the string first means the
+ * conversion below can only be handed digits.
+ */
+const DECIMAL_DEGREES = /^[+-]?\d+(?:\.\d+)?$/;
+
+/**
+ * A Maidenhead locator: a field (`FN`), a square (`31`), and the subsquare (`pr`) that callook has
+ * printed in every capture.
+ *
+ * FOUR CHARACTERS ARE ACCEPTED TOO, and eight are not, and neither of those is arbitrary. A
+ * four-character locator is the same statement made coarsely — a bigger box, honestly labelled —
+ * and refusing one would throw away a usable coordinate over a technicality. The eight-character
+ * "extended" form is refused because there is no single convention for its fifth pair (digits in
+ * some, letters in others), so reading one means guessing which convention wrote it, and this file
+ * does not guess at a source's notation any more than it guesses at a licence class.
+ *
+ * The letter ranges are the notation's own and are not decoration: a field letter runs A-R (18
+ * fields of 20° longitude, 18 of 10° latitude) and a subsquare letter runs A-X (24 divisions). `S`
+ * in a field or `Z` in a subsquare is not a coarse locator, it is not a locator.
+ *
+ * Case-insensitive, because a locator means the same thing in any case; the value is nonetheless
+ * stored exactly as it arrived. See {@link GeocodedPoint}.
+ */
+const MAIDENHEAD = /^[A-R]{2}\d{2}(?:[A-X]{2})?$/i;
 
 /** A trimmed non-empty string, or undefined. callook writes "no data" as `""`, never as null. */
 function text(value: unknown): string | undefined {
@@ -359,6 +406,118 @@ function ulsUrl(value: unknown): string | undefined {
 }
 
 /**
+ * One coordinate component, or undefined — never a number this file could not read off the page.
+ *
+ * `limit` is 90 for a latitude and 180 for a longitude, and it is a check on the NOTATION rather
+ * than on the geography: outside those bounds a value is not a coordinate at all. It is
+ * deliberately not a US bounding box. A US licensee may hold an overseas mailing address — that is
+ * why `person-unsplittable-address.json` exists one screen up — and deciding which coordinates are
+ * PLAUSIBLE for an American licence is exactly the guess this file declines to make about a licence
+ * class. The bound also disposes of the one way a digit string can still overflow: 400 digits match
+ * the pattern and convert to `Infinity`, which is not `<= 90`.
+ */
+function decimalDegrees(value: unknown, limit: number): number | undefined {
+  const raw = text(value);
+  if (raw === undefined || !DECIMAL_DEGREES.test(raw)) return undefined;
+  const degrees = Number(raw);
+  return Math.abs(degrees) <= limit ? degrees : undefined;
+}
+
+/**
+ * The whole of what a record said about where its mail goes, or nothing at all.
+ *
+ * ALL THREE OR NONE, which is the house rule from `CITY_STATE_ZIP` applied to the one other field
+ * callook sends as a compound: half a parsed location silently entered into somebody's profile is
+ * worse than an empty one they can see is empty. There is a second reason here that the address
+ * does not have. Of the two halves, THE GRID SQUARE IS THE HONEST ONE — `FN42li` states its own
+ * precision out loud, a box measured at 2.9 by 4.3 miles at that latitude, while `42.34991837`
+ * states a millimetre it does not have (1.1 mm, measured with `core/geo.ts`'s haversine, is what
+ * one unit in that eighth decimal buys). Dropping the locator and keeping the pair would be
+ * keeping precisely the half that overstates itself.
+ *
+ * WHAT IS NOT CHECKED HERE, AND WHERE IT BELONGS. The two halves can check each other: a point
+ * outside its own stated grid square means the record is internally inconsistent and neither half
+ * should be trusted quietly. Making that check needs Maidenhead-to-bounds arithmetic, that
+ * arithmetic is core's — `shape.ts` already sets the precedent that this file asks rather than
+ * minting a second opinion of its own — and a copy of it living here is how two answers to one
+ * question start disagreeing. Measured by hand on 2026-08-11 rather than in code: all three real
+ * captures state a point that falls inside their own locator.
+ */
+function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefined {
+  const latitude = decimalDegrees(location.latitude, 90);
+  const longitude = decimalDegrees(location.longitude, 180);
+  const gridsquare = text(location.gridsquare);
+  if (latitude === undefined || longitude === undefined || gridsquare === undefined) {
+    return undefined;
+  }
+  if (!MAIDENHEAD.test(gridsquare)) return undefined;
+
+  /*
+   * (0, 0) IS NOT A PLACE ANY OF THESE RECORDS IS.
+   *
+   * The hand-built fixtures carry `"0.0" / "0.0" / "JJ00aa"`. Null island, in the Gulf of Guinea:
+   * 5,334 statute miles from W1AW's coordinate and 5,259 from W1MX's, measured with the haversine
+   * in `core/geo.ts`. callook serves United States records only, so no address it geocodes lands
+   * there, and `fixtures/callook/README.md` says what the pair is doing in those files — "`frn` is
+   * `0000000000`, `ulsUrl` ends `licKey=0`, and the coordinates are `0.0, 0.0`. None of them is a
+   * real key." It is an absence written in the shape of an answer, and an absence that reaches
+   * `withinRadius` is a confident NOT ELIGIBLE for every award on this continent.
+   *
+   * THE CROSS-CHECK DESCRIBED ABOVE — the one this file leaves to core — WOULD NOT HAVE CAUGHT
+   * IT, which is why this is a rule written down and not something inferred later. `JJ00aa` is the subsquare whose south-west corner IS (0, 0) — it was computed
+   * from the zeros — so the pair and the locator corroborate each other perfectly. Two fields
+   * derived from one absence agree exactly as well as two facts do.
+   *
+   * ONLY THE PAIR. A lone zero is left alone: a latitude of 0 beside a real longitude is a
+   * statement about the equator, and dropping it would be this file ruling on which coordinates
+   * are plausible rather than on which values the source actually stated.
+   */
+  if (latitude === 0 && longitude === 0) return undefined;
+
+  return { latitude, longitude, gridsquare };
+}
+
+/**
+ * WHAT THE COORDINATE IS A GEOCODE OF, decided from the one line of the record that says.
+ *
+ * ONE READING OF ONE LINE. `isPoBox` is built from this function's answer rather than from its own
+ * second call to {@link PO_BOX}, so the flag and the discriminant cannot drift into disagreeing
+ * about the same address — a record whose coordinate is filed as a mail drop while its own boolean
+ * says otherwise is worse than either mistake alone, because whichever a consumer reads, the other
+ * one is available to contradict it.
+ *
+ * A LINE CARRYING BOTH IS A BOX. `02-callook-info-k2cc-json.json` is `8 CLARKSON AVE, P.O. BOX
+ * 8550`, and which of the two callook geocoded is not stated anywhere in the response. So the
+ * cautious reading is taken, exactly as `PO_BOX` already asks "does this line name a box" rather
+ * than "is this line only a box": labelling a street geocode as a mail drop costs a caveat nobody
+ * needed, and the other way round costs a verdict computed from a post office.
+ */
+function geocodeSubject(line1: string | undefined): GeocodedFrom {
+  if (line1 === undefined) return 'address_not_stated';
+  return PO_BOX.test(line1) ? 'po_box' : 'street_address';
+}
+
+/**
+ * The point, filed under the key that names what it is.
+ *
+ * Three keys for one shape looks like ceremony until you write the consumer: `geocode.poBox` does
+ * not typecheck on the street-address arm, so a caller cannot reach ANY coordinate without first
+ * narrowing to one, and narrowing is where they find out they are holding a post office. The
+ * `switch` is exhaustive and tsc checks it, so a fourth kind of address stops the build here rather
+ * than arriving downstream under whichever key was nearest.
+ */
+function attributePoint(point: GeocodedPoint, geocodedFrom: GeocodedFrom): MailingGeocode {
+  switch (geocodedFrom) {
+    case 'po_box':
+      return { geocodedFrom, poBox: point };
+    case 'street_address':
+      return { geocodedFrom, mailingAddress: point };
+    case 'address_not_stated':
+      return { geocodedFrom, unattributed: point };
+  }
+}
+
+/**
  * A value from outside, quoted back to the person who will read it, bounded.
  *
  * Two of the messages below contain something this module did not choose — what was typed, and
@@ -417,6 +576,7 @@ function toRecord(body: Record<string, unknown>, fetchedAt: string): CallsignLoo
   }
 
   const line1 = text(address.line1);
+  const geocodedFrom = geocodeSubject(line1);
   const result: CallsignRecord = {
     // What the licensee holds NOW, which is not always what was asked for: callook answers a
     // lookup of a superseded callsign with the current record for that licensee. The caller must
@@ -425,8 +585,10 @@ function toRecord(body: Record<string, unknown>, fetchedAt: string): CallsignLoo
     type,
     name,
     // False also means "we were given no address at all", which is normal — about 1.3% of records
-    // carry none. It is never a claim that we looked and found a street address.
-    isPoBox: line1 !== undefined && PO_BOX.test(line1),
+    // carry none. It is never a claim that we looked and found a street address — and that is why
+    // `geocodeSubject` has THREE answers where this boolean has two, rather than the coordinate
+    // being filed from this flag.
+    isPoBox: geocodedFrom === 'po_box',
     source: 'callook.info',
     fetchedAt,
   };
@@ -449,6 +611,23 @@ function toRecord(body: Record<string, unknown>, fetchedAt: string): CallsignLoo
     result.state = state.toUpperCase();
     result.zip = zip;
   }
+
+  /*
+   * THE FIELD THIS PARSER USED TO STEP OVER.
+   *
+   * Read from `body.location` and NOT from anything derived here: the grid square in particular is
+   * callook's own statement and not this software's arithmetic on the pair beside it.
+   *
+   * WHAT IT DOES WHEN THERE IS NO ADDRESS, established rather than assumed:
+   * `person-no-address.json` — the ~1.3% shape — carries a `location` whose three fields are all
+   * `""`, so nothing is kept and the third arm of {@link GeocodedFrom} never arises from a real
+   * body. The arm exists anyway, because "the source stated a coordinate and showed us no address
+   * to attribute it to" is a shape this module must have an answer for, and the answer is to keep
+   * the value and withhold the claim, exactly as `operClassRaw` does beside an undefined
+   * `operClass`.
+   */
+  const point = statedPoint(record(body.location));
+  if (point !== undefined) result.mailingGeocode = attributePoint(point, geocodedFrom);
 
   const grantDate = isoDate(other.grantDate);
   if (grantDate !== undefined) result.grantDate = grantDate;

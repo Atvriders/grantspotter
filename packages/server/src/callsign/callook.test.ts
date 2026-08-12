@@ -67,6 +67,8 @@ interface CallookBody {
   current: { callsign: string; operClass: string };
   previous: { callsign: string; operClass: string };
   address: { line1: string; line2: string; attn: string };
+  /** Strings, all three of them, and `""` for "no data" — see `person-no-address.json`. */
+  location: { latitude: string; longitude: string; gridsquare: string };
   otherInfo: { grantDate: string; expiryDate: string; frn: string; ulsUrl: string };
 }
 
@@ -94,6 +96,12 @@ describe('lookupCallsign: a live record', () => {
       // Kept exactly as the record printed it, hyphen and all. See the ZIP+4 case below.
       zip: '02205-1421',
       isPoBox: true,
+      // A post office in Boston, to eight decimal places, for a club that is at MIT in Cambridge.
+      // Filed under `poBox` because that is what callook geocoded; see the location block below.
+      mailingGeocode: {
+        geocodedFrom: 'po_box',
+        poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42li' },
+      },
       grantDate: '2024-08-10',
       expiryDate: '2034-08-24',
       frn: '0011325347',
@@ -225,6 +233,264 @@ describe('lookupCallsign: addresses', () => {
     expect(result.record?.zip).toBe('000000000');
     expect(result.record?.city).toBe('EXAMPLEVILLE');
   });
+});
+
+/**
+ * THE THREE FIELDS THIS PARSER USED TO STEP OVER, AND THE ONE THING THEY ARE NOT.
+ *
+ * Every VALID body carries `location: { latitude, longitude, gridsquare }`, and until 2026-08-11
+ * this module read none of them. They are NOT a station: callook geocodes the licensee's mailing
+ * address, so `01-callook-info-w1mx-json.json` — a collegiate club, which is this product's whole
+ * audience — answers with a post office box in Boston stated to eight decimal places, for a club
+ * that is at MIT in Cambridge. `types.ts` carries the argument; what is pinned here is that the
+ * parse is strict, that a placeholder is not a place, and that the shape a consumer receives cannot
+ * be read as a station position without saying out loud that it is a post office.
+ */
+describe('lookupCallsign: where the mail goes', () => {
+  it('reads a street address as a mailing coordinate, not as a station', async () => {
+    const { deps } = serveFixture('00-callook-info-w1aw-json.json');
+    const result = await lookupCallsign('W1AW', deps);
+
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'street_address',
+      mailingAddress: { latitude: 41.714707, longitude: -72.728411, gridsquare: 'FN31pr' },
+    });
+    // Numbers, from strings. The wire says `"41.714707"`; a consumer doing arithmetic on `"41.7"`
+    // gets string concatenation and no error.
+    const geocode = result.record?.mailingGeocode;
+    expect(geocode?.geocodedFrom).toBe('street_address');
+    if (geocode?.geocodedFrom !== 'street_address') throw new Error('narrowing failed');
+    expect(typeof geocode.mailingAddress.latitude).toBe('number');
+    expect(typeof geocode.mailingAddress.longitude).toBe('number');
+  });
+
+  it('files a PO box coordinate as a PO box, so nothing downstream can miss it', async () => {
+    const { deps } = serveFixture('01-callook-info-w1mx-json.json');
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.isPoBox).toBe(true);
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42li' },
+    });
+    // The key IS the warning: there is no `mailingAddress` on this arm to read by accident.
+    expect(result.record?.mailingGeocode).not.toHaveProperty('mailingAddress');
+  });
+
+  /**
+   * A line carrying BOTH a street address and a box is read as a box, which is the cautious half
+   * of a question the response does not answer: callook does not say which of the two it geocoded.
+   * Labelling a street geocode as a mail drop costs a caveat nobody needed; the other way round
+   * costs a radius verdict computed from a post office.
+   */
+  it('reads a line carrying a street address AND a box as a box', async () => {
+    const { deps } = serveFixture('02-callook-info-k2cc-json.json');
+    const result = await lookupCallsign('K2CC', deps);
+
+    expect(result.record?.addressLine1).toBe('8 CLARKSON AVE, P.O. BOX 8550');
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 44.66594, longitude: -74.992531, gridsquare: 'FN24mp' },
+    });
+  });
+
+  /**
+   * ONE READING OF ONE LINE. The boolean and the discriminant are computed from the same call, so
+   * a record cannot say "this is a mail drop" in one field and "this is not" in the other —
+   * whichever a consumer reads, the other cannot contradict it.
+   */
+  it('never disagrees with its own isPoBox flag, on any fixture', async () => {
+    const files = readdirSync(FIXTURES).filter((file) => file.endsWith('.json'));
+    expect(files.length).toBeGreaterThan(10);
+
+    for (const file of files) {
+      const { deps } = serveFixture(file);
+      const { record } = await lookupCallsign('W1MX', deps);
+      if (record?.mailingGeocode === undefined) continue;
+      expect(record.mailingGeocode.geocodedFrom === 'po_box', file).toBe(record.isPoBox);
+    }
+  });
+
+  /**
+   * THE PLACEHOLDER, WHICH IS THE SHAPE OF AN ANSWER AND NOT ONE.
+   *
+   * Six hand-built fixtures carry `"0.0" / "0.0" / "JJ00aa"` — null island, in the Gulf of Guinea,
+   * measured at 5,334 miles from W1AW's coordinate. A US record cannot geocode there, and
+   * `fixtures/callook/README.md` says what the pair is doing in those files: it is a non-key,
+   * beside `frn 0000000000` and `licKey=0`.
+   *
+   * AND A CONSISTENCY CHECK WOULD NOT HAVE CAUGHT IT. `JJ00aa` is the subsquare whose south-west
+   * corner IS (0, 0), because it was computed from the zeros — the two agree perfectly. That is
+   * why the rule is written down rather than inferred from the locator.
+   */
+  it.each([
+    'person-extra.json',
+    'person-general.json',
+    'person-technician.json',
+    'person-advanced.json',
+    'person-novice.json',
+    'person-technician-plus.json',
+    'person-unsplittable-address.json',
+  ])('refuses the 0,0 placeholder in %s rather than putting the Gulf of Guinea in a profile', async (file) => {
+    const { deps } = serveFixture(file);
+    const result = await lookupCallsign('WV0ZZZ', deps);
+
+    expect(result.status).toBe('found');
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * ONLY THE PAIR IS THE PLACEHOLDER. A zero on one axis is a statement about the equator or the
+   * prime meridian, and refusing it would be this parser ruling on which coordinates are PLAUSIBLE
+   * for a US licensee instead of on which values the source stated — the guess it declines to make
+   * about a licence class.
+   */
+  it.each([
+    ['a zero latitude', { latitude: '0.0', longitude: '-71.0538559' }, 0, -71.0538559],
+    ['a zero longitude', { latitude: '42.34991837', longitude: '0' }, 42.34991837, 0],
+  ])('keeps %s beside a real one', async (_what, edit, latitude, longitude) => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.latitude = edit.latitude;
+        body.location.longitude = edit.longitude;
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude, longitude, gridsquare: 'FN42li' },
+    });
+  });
+
+  /**
+   * WHAT `location` DOES WHEN THERE IS NO ADDRESS — read off the fixture rather than assumed.
+   * About 1.3% of records carry no address, and the one in this directory answers the question:
+   * the location object is present and all three of its fields are `""`.
+   */
+  it('gets no coordinate from the ~1.3% of records that carry no address', async () => {
+    const body = JSON.parse(loadFixture('callook', 'person-no-address.json')) as CallookBody;
+    expect(body.location).toEqual({ latitude: '', longitude: '', gridsquare: '' });
+
+    const { deps } = serveFixture('person-no-address.json');
+    const result = await lookupCallsign('NV0ZZZ', deps);
+
+    expect(result.status).toBe('found');
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * The shape no capture has produced, which is exactly why it is pinned: a coordinate with no
+   * address to attribute it to is kept and labelled unattributable, the same division of labour as
+   * `operClassRaw` beside an undefined `operClass`. What must never happen is that it arrives
+   * looking like a street address the source never showed us.
+   */
+  it('keeps a coordinate it cannot attribute, and refuses to say what it is of', async () => {
+    const { deps } = serve(
+      mutate('person-no-address.json', (body) => {
+        body.location = { latitude: '41.714707', longitude: '-72.728411', gridsquare: 'FN31pr' };
+      }),
+    );
+    const result = await lookupCallsign('NV0ZZZ', deps);
+
+    expect(result.record?.isPoBox).toBe(false);
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'address_not_stated',
+      unattributed: { latitude: 41.714707, longitude: -72.728411, gridsquare: 'FN31pr' },
+    });
+  });
+
+  /**
+   * ALL THREE OR NONE, the `CITY_STATE_ZIP` rule applied to the other compound field — plus a
+   * reason of its own. The locator is the honest half of the answer: `FN42li` states a box measured
+   * at 2.9 by 4.3 miles, while `42.34991837` states a millimetre nobody has. Keeping the pair when
+   * the locator is unreadable would keep precisely the half that overstates itself.
+   */
+  it.each([
+    ['an empty latitude', { latitude: '' }],
+    ['an empty longitude', { longitude: '' }],
+    ['an empty gridsquare', { gridsquare: '' }],
+    ['a latitude past the pole', { latitude: '90.5' }],
+    ['a longitude past the meridian', { longitude: '-180.1' }],
+    ['a latitude in exponent notation', { latitude: '4.234991837e1' }],
+    ['a hexadecimal latitude', { latitude: '0x2A' }],
+    ['a latitude with a hemisphere letter', { latitude: '42.34991837N' }],
+    ['a latitude that is a word', { latitude: 'Infinity' }],
+    ['a latitude of 400 digits', { latitude: '1'.repeat(400) }],
+    ['a five-character locator', { gridsquare: 'FN42l' }],
+    ['an eight-character extended locator', { gridsquare: 'FN42li07' }],
+    ['a locator with a field letter past R', { gridsquare: 'FZ42li' }],
+    ['a locator with a subsquare letter past X', { gridsquare: 'FN42zz' }],
+    ['a locator with no square digits', { gridsquare: 'FNxxli' }],
+  ])('drops the whole location for %s', async (_what, edit) => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        Object.assign(body.location, edit);
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    // The rest of the record still arrives: this is one field refused, not a failed lookup.
+    expect(result.status, _what).toBe('found');
+    expect(result.record?.city, _what).toBe('BOSTON');
+    expect(result.record, _what).not.toHaveProperty('mailingGeocode');
+  });
+
+  /**
+   * A four-character locator is the same statement made coarsely — a bigger box, honestly
+   * labelled — so refusing it would throw away a usable coordinate over a technicality.
+   */
+  it('accepts the coarser four-character locator', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.gridsquare = 'FN42';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record?.mailingGeocode).toEqual({
+      geocodedFrom: 'po_box',
+      poBox: { latitude: 42.34991837, longitude: -71.0538559, gridsquare: 'FN42' },
+    });
+  });
+
+  /**
+   * Kept exactly as it arrived, for the reason the ZIP keeps its hyphen or its absence: re-casing
+   * it would be this software presenting its own tidy-up as something the record said. A locator
+   * means the same thing in any case, which is why the odd casing is READ rather than refused.
+   */
+  it('keeps the locator’s case as the record printed it', async () => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        body.location.gridsquare = 'fn42LI';
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+    const geocode = result.record?.mailingGeocode;
+    if (geocode?.geocodedFrom !== 'po_box') throw new Error('expected the PO box arm');
+
+    expect(geocode.poBox.gridsquare).toBe('fn42LI');
+  });
+
+  /**
+   * THE DESIGN, PINNED AS A FACT ABOUT THE SHAPE.
+   *
+   * `matcher` decides radius eligibility from a bare latitude and longitude, so a bare latitude and
+   * longitude on this record would be one assignment away from a profile — and that assignment
+   * prints a confident verdict about somebody's post office. Reaching a coordinate has to go
+   * through a discriminant that names what it is a geocode of. This test fails the moment somebody
+   * flattens the pair back onto the record "for convenience".
+   */
+  it.each(['latitude', 'longitude', 'lat', 'lon', 'gridsquare', 'location'])(
+    'puts no bare %s on the record itself',
+    async (key) => {
+      const { deps } = serveFixture('00-callook-info-w1aw-json.json');
+      const result = await lookupCallsign('W1AW', deps);
+
+      expect(result.record).toBeDefined();
+      expect(result.record).not.toHaveProperty(key);
+    },
+  );
 });
 
 describe('lookupCallsign: the answers that are not a record', () => {
