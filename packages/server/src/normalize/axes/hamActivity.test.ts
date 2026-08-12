@@ -248,11 +248,26 @@ describe('no ham-activity bar in this corpus is read off site chrome', () => {
       (p) => keyOf(p) === 'arrl-scholarship-descriptions::The Amateur Radio Digital Communications (ARDC) Scholarships',
     );
     if (ardc === undefined) throw new Error('the ARDC scholarships are missing from the corpus');
-    // The largest programme in the corpus, and the one whose allow-list a previous round had to
+    // The largest programme in the corpus, and the one whose allow-list two rounds have now had to
     // widen: club membership and on-the-air activity are EXAMPLES of acceptable proof, so an
     // applicant holding either qualifies. Losing a spelling here excludes exactly the person the
     // funder's sentence describes.
-    expect(activityOf(ardc)[0].kinds).toEqual(['club_member', 'teaching', 'on_air']);
+    //
+    // `ares_races_skywarn` is the spelling round six added, and it is derived from the sentence
+    // rather than typed in: the funder's list says "participation in amateur radio EMERGENCY
+    // ACTIVITIES" and names no acronym, so an ARES/RACES/SKYWARN volunteer was refused by a list
+    // that describes exactly what they do. The assertion checks the sentence AND the kinds
+    // together, so a future round that drops the spelling — or a fixture whose wording moves —
+    // fails here instead of quietly certifying a narrower list.
+    expect(activityOf(ardc)[0].rawText).toMatch(
+      /participation in amateur radio emergency activities/i,
+    );
+    expect(activityOf(ardc)[0].kinds).toEqual([
+      'club_member',
+      'ares_races_skywarn',
+      'teaching',
+      'on_air',
+    ]);
   });
 
   /**
@@ -373,7 +388,11 @@ describe('an unlabelled page is not an eligibility field', () => {
       }),
     );
     expect(cs).toHaveLength(1);
-    expect(cs[0].spec).toMatchObject({ activityKinds: ['club_member', 'teaching', 'on_air'] });
+    // `ares_races_skywarn` comes from "participation in amateur radio emergency activities", the
+    // one item in this sentence that names no acronym — see the corpus assertion above.
+    expect(cs[0].spec).toMatchObject({
+      activityKinds: ['club_member', 'ares_races_skywarn', 'teaching', 'on_air'],
+    });
     expect(cs[0].rawText).toBe(examples);
     // Word for word the SAME sentence, reached through the whole-page fallback instead of a
     // labelled field, is not read as a requirement — this is the whole distinction, in one pair.

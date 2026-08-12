@@ -89,15 +89,28 @@ beforeAll(async () => {
 });
 
 describe('the census a licensed EE undergraduate actually gets', () => {
-  it('reports 68 eligible-or-preferred of 150', () => {
+  // ROUND SIX MOVED THESE FIGURES, AND EVERY STEP WAS TOWARD THE APPLICANT. Eight hard refusals
+  // were measured whose evidence — the funder's own displayed sentence — said the applicant
+  // qualified, and `ConstraintSpec` gained the disjunction those funders had written and it could
+  // not hold. For THIS profile (a licensed EE undergraduate in Texas) two of the eight move:
+  //   The CARA Merit Scholarship   ineligible -> eligible. Its activity list ends "…GOTA, Field
+  //                                Day, ETC.", so the list was the funder's examples, not a bar.
+  //   Robert A. Rodriguez K5AUW    ineligible -> unknown. "open to graduating high school seniors,
+  //                                AND TO PREVIOUS AWARDEES" names a route with no profile field,
+  //                                so the axis declines to decide instead of refusing.
+  //   MMARSI                       eligible -> eligible_preferred, on the same open-list rule
+  //                                applied to a SOFT constraint: no eligibility changed, a rank did.
+  // The other five defects are geography and licence tiers this profile does not stand on
+  // (Brevard/Gwinnett/Oklahoma/New England, and an Amateur Extra of six months).
+  it('reports 69 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
       eligible: 55,
-      eligible_preferred: 13,
-      unknown: 27,
-      ineligible: 55,
+      eligible_preferred: 14,
+      unknown: 28,
+      ineligible: 53,
     });
-    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(68);
+    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(69);
   });
 
   it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {
@@ -116,9 +129,12 @@ describe('the census a licensed EE undergraduate actually gets', () => {
       // audience is now `unknown`; the remaining 9 are audiences somebody researched, filed under
       // the name of the gate that produced them.
       applicant_entity: 9,
-      age_stage: 5,
+      // Was `age_stage: 5, ham_activity: 1`. Rodriguez's stage bar became an `unknown` (a route
+      // this schema cannot check is not a refusal) and CARA's activity bar became a pass (the
+      // funder's own "etc." says the list is illustrative) — so this axis breakdown is now the
+      // count of refusals that survive reading the funder's whole sentence.
+      age_stage: 4,
       field_of_study: 5,
-      ham_activity: 1,
       gpa: 1,
     });
   });
@@ -134,15 +150,15 @@ describe('the census a licensed EE undergraduate actually gets', () => {
    */
   it('gives every excluded record a reason, attributed to whoever actually wrote it', () => {
     const excluded = report.rows.filter((r) => r.verdict === 'ineligible');
-    expect(excluded).toHaveLength(55);
+    expect(excluded).toHaveLength(53);
     expect(excluded.every((r) => r.reasonAxes.trim().length > 0)).toBe(true);
     // Something is always said...
     expect(
       excluded.every((r) => r.reasons.trim().length > 0 || r.reasonsFromGrantSpotter.trim().length > 0),
     ).toBe(true);
-    // ...and the funder's column carries only what a funder wrote. 46 of the 55 quote a page; the
+    // ...and the funder's column carries only what a funder wrote. 44 of the 53 quote a page; the
     // other 9 are the applicant-entity gate, whose text is this software's and is filed as such.
-    expect(excluded.filter((r) => r.reasons.trim().length > 0)).toHaveLength(46);
+    expect(excluded.filter((r) => r.reasons.trim().length > 0)).toHaveLength(44);
     expect(excluded.filter((r) => r.reasonsFromGrantSpotter.trim().length > 0)).toHaveLength(9);
     expect(
       excluded.filter((r) => r.reasons.trim().length > 0 && r.reasonAxes.includes('applicant_entity')),

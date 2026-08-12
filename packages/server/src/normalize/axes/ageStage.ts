@@ -20,7 +20,15 @@ const AS_OF = /\bas of\s+([A-Z][a-z]+\.?\s+\d{1,2})/;
  * them.
  */
 const STAGE_PATTERNS: Array<[Stage, RegExp]> = [
-  ['HS_SENIOR', /\b(?:high school seniors?|graduating seniors?)\b/i],
+  // `high[\s-]?school` — ONE SPELLING WAS MISSING AND IT COST THE FIRST AUDIENCE OF AN AWARD.
+  // The ARRL Scholarship to Honor Barry Goldwater is "open only to graduating HIGHSCHOOL seniors
+  // and undergraduate students", written solid, exactly as the live arrl.org capture and the
+  // committed seed record spell it. `\bhigh school seniors?\b` cannot match "highschool seniors",
+  // so the only stage this record published was UNDERGRAD — and `stages` is an ALLOW-LIST, so
+  // every graduating high-school senior, the audience the funder names FIRST, was told they were
+  // ineligible for a $5,000 award written to include them. The optional separator covers all three
+  // spellings volunteers use: "high school", "high-school", "highschool".
+  ['HS_SENIOR', /\b(?:high[\s-]?school seniors?|graduating seniors?)\b/i],
   [
     'UNDERGRAD',
     // Two phrases are excluded because they are not statements about the applicant's standing:
@@ -71,6 +79,48 @@ function stagesFrom(texts: string[]): Stage[] {
 }
 
 /**
+ * AN AUDIENCE WITH NO PROFILE FIELD — the case where widening the spec would be a fabrication.
+ *
+ * The Robert A. Rodriguez K5AUW Scholarship: "The scholarship is open to graduating high school
+ * seniors, AND TO PREVIOUS AWARDEES." Two audiences, and only the first is a `Stage`. "Previous
+ * awardee" is not a stage, not a degree level, not anything `StudentProfile` holds — there is no
+ * value of any field that means "I won this last year", and inventing a stage so the second
+ * audience appears to be captured would put a claim in the record the funder never made. But
+ * publishing `stages: ["HS_SENIOR"]` alone hard-refuses a returning awardee while quoting them the
+ * very sentence that invites them, which is the defect this round is about.
+ *
+ * So the axis says what is true: there is another route and this schema cannot check it. The
+ * matcher turns that into `unknown` — "it is not a 'no'" — instead of a refusal. See
+ * `ConstraintAlternatives.orUnrepresented`.
+ *
+ * WHAT MAKES THIS DETECTABLE RATHER THAN A GUESS: the funder REPEATED THE PREPOSITION. English
+ * repeats "to" when a genuinely separate object follows ("open to A, and TO B") and drops it when
+ * the objects are coordinate members of one audience ("open only to graduating highschool seniors
+ * and undergraduate students" — Goldwater, which must NOT be flagged and is not). Both halves of
+ * the test are needed and each does real work:
+ *   1. the clause must OPEN an audience list ("open to", "available to", "awarded to"), so the
+ *      "and to" of ordinary prose ("submit the form and to the committee") is not an audience; and
+ *   2. the trailing audience must match NO stage pattern, so a second audience this axis DID
+ *      understand widens `stages` in the normal way and is not filed as unrepresentable.
+ * Measured over the committed fixtures: one record in the corpus matches, and it is Rodriguez.
+ */
+const AUDIENCE_INTRO = /\b(?:open|available|awarded|offered|restricted|limited)\s+(?:only\s+)?to\b/i;
+const SECOND_AUDIENCE = /\b(?:and|or)\s+to\s+([^.;]+)/i;
+
+function unrepresentedAudience(clauses: string[]): string | undefined {
+  for (const clause of clauses) {
+    const intro = AUDIENCE_INTRO.exec(clause);
+    if (intro === null) continue;
+    const second = SECOND_AUDIENCE.exec(clause.slice(intro.index + intro[0].length));
+    if (second === null) continue;
+    const audience = second[1].replace(/\s+/g, ' ').trim();
+    if (audience === '' || ANY_STAGE.test(audience)) continue;
+    return audience;
+  }
+  return undefined;
+}
+
+/**
  * The clauses this axis is allowed to read: every structured field that describes the applicant,
  * plus the flattened record's own clauses minus the ones another axis owns (see FOREIGN_LABEL) and
  * minus the site's navigation.
@@ -117,6 +167,10 @@ export function extractAgeStage(raw: RawOpportunity): Constraint[] {
       ? usableAgeText
       : (firstClause(clauses, ANY_STAGE) ?? clauses.join('\n'));
 
+  // Only a STAGE list can hide an audience: an age band is a number, and a number has no second
+  // reading. Read from the clauses this axis actually understood, not from the whole record.
+  const orUnrepresented = stages.length > 0 ? unrepresentedAudience(clauses) : undefined;
+
   return [
     makeConstraint(
       'age_stage',
@@ -128,6 +182,7 @@ export function extractAgeStage(raw: RawOpportunity): Constraint[] {
         ...(!range && minAge ? { ageMin: Number.parseInt(minAge[1], 10) } : {}),
         ...(asOf ? { asOf } : {}),
         stages,
+        ...(orUnrepresented !== undefined ? { orUnrepresented } : {}),
       },
       0,
     ),

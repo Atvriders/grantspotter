@@ -333,6 +333,64 @@ function fieldsIn(part: string, safetyNet: boolean): string[] {
   return segments.flatMap((s) => (UNCONSTRAINED_SEGMENT.test(s) ? [] : splitFields(s)));
 }
 
+/**
+ * Words that name an ACADEMIC ROUTE — a degree level or a kind of programme — as opposed to the
+ * grade-and-comparative scaffolding that also ends up in `NON_FIELD_WORDS`. Drawn from that set,
+ * deliberately narrower than it, and the difference is what makes `unrestrictedAlternative` below
+ * a rule rather than a licence to unrestrict everything.
+ */
+const DEGREE_ROUTE_WORDS = new Set([
+  'degree', 'degrees', 'diploma', 'diplomas', 'undergraduate', 'undergrad', 'graduate',
+  'associate', 'associates', 'bachelor', 'bachelors', 'master', 'masters', 'doctoral',
+  'doctorate', 'phd', 'program', 'programs', 'course', 'courses', 'coursework', 'school',
+  'schools', 'college', 'colleges', 'university', 'universities', 'apprenticeship',
+]);
+
+/**
+ * DROPPING AN ALTERNATIVE FROM A DISJUNCTION REMOVES A ROUTE TO THE MONEY.
+ *
+ * IRARC Memorial (Rubino) states its field requirement as "UNDERGRADUATE DEGREE or electronic
+ * technician certification program". Two routes. The first names an academic route and NO subject,
+ * so `isNonFieldFragment` discards it — correctly, as a field NAME — and the surviving list is the
+ * single value "electronic technician certification program", published as a hard bar. A Biology
+ * undergraduate in Brevard County was refused an award whose own sentence's first words admit her.
+ *
+ * A fragment that names a route and no subject is not noise when it stands as an ALTERNATIVE: it
+ * is the funder saying "…or just be an undergraduate", which places no restriction on the subject
+ * at all. So it is emitted as a tier of its own — `fields: []`, which the matcher already reads as
+ * unrestricted — instead of being dropped. The funder's named programme stays in the base tier, so
+ * the record still says what they wrote.
+ *
+ * WHY IT IS NOT "ANY DROPPED FRAGMENT". The Donald E. Daze, N5DD, Scholarship's value is
+ * "Engineering, GPA requirement 3.0 or higher": splitting it leaves a bare "higher", which is also
+ * discarded and is NOT an alternative — it is the tail of a GPA phrase whose head another axis
+ * owns. Treating it as one would unrestrict an engineering-only award out of a comparative
+ * adjective. The route words above are what separate them, and they are the reason this asks for a
+ * degree/programme noun rather than for "the fragment was dropped".
+ *
+ * The other nine records whose raw text splits this way never reach here at all: "Bachelor's degree
+ * or higher in electronics, communications, or related fields" is consumed by `DEGREE_INTRO`
+ * before any split, exactly as intended, so their degree prefix is never an alternative in the
+ * first place. Measured over the committed fixtures, one record gains this tier: IRARC.
+ */
+function unrestrictedAlternative(part: string, fields: string[]): boolean {
+  if (fields.length === 0) return false;
+  return splitSentences(part)
+    .flatMap(splitClauses)
+    .map(cleanedSentenceOrDrop)
+    .filter((s): s is string => s !== undefined)
+    .some((segment) =>
+      normalizeParens(segment)
+        .split(/\bor\b/i)
+        .some((fragment) => {
+          const words = fragment.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 1);
+          if (words.length === 0) return false;
+          if (!words.every((w) => NON_FIELD_WORDS.has(w))) return false;
+          return words.some((w) => DEGREE_ROUTE_WORDS.has(w));
+        }),
+    );
+}
+
 function fieldSpec(fields: string[], excludedFields: string[]): ConstraintSpec {
   return { axis: 'field_of_study', fields, excludedFields };
 }
@@ -392,9 +450,25 @@ export function extractFieldOfStudy(raw: RawOpportunity): Constraint[] {
   const excludedFields = except ? splitFields(except[1]) : [];
   const requiredPart = except ? text.slice(0, except.index) : text;
 
-  return (
-    scopedConstraints(requiredPart, excludedFields) ?? [
-      makeConstraint('field_of_study', text, fieldSpec(fieldsIn(requiredPart, true), excludedFields), 0),
-    ]
-  );
+  const scoped = scopedConstraints(requiredPart, excludedFields);
+  if (scoped !== undefined) return scoped;
+
+  const fields = fieldsIn(requiredPart, true);
+  // The alternative carries the SAME `excludedFields`. An exclusion is a requirement, never a
+  // tier: "any field except Liberal Arts, or an undergraduate degree" still bars a liberal-arts
+  // student, and an alternative that forgot the exclusion would be a route around it.
+  const alternatives = unrestrictedAlternative(requiredPart, fields)
+    ? [{ axis: 'field_of_study' as const, fields: [], excludedFields }]
+    : [];
+  return [
+    makeConstraint(
+      'field_of_study',
+      text,
+      {
+        ...fieldSpec(fields, excludedFields),
+        ...(alternatives.length > 0 ? { anyOf: alternatives } : {}),
+      },
+      0,
+    ),
+  ];
 }

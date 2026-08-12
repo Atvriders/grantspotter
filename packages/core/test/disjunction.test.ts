@@ -1,0 +1,322 @@
+/**
+ * THE FUNDER NAMED MORE THAN ONE ROUTE — `ConstraintSpec.anyOf` and `.orUnrepresented`, and the
+ * open-list widening now shared by every allow-list axis.
+ *
+ * WHAT THIS FILE IS ABOUT. Eight hard `ineligible` verdicts were measured whose evidence — the
+ * funder's own sentence, the one GrantSpotter prints under the verdict — says the applicant
+ * qualifies. All eight are one shape: the funder named ALTERNATIVES AT DIFFERENT TIERS, the spec
+ * had room for one, the extractor picked a winner, and the losing branch hardened into a refusal.
+ *
+ *   "Resident of Brevard County FL, or any FL resident"    county[Brevard] refused a Floridian
+ *   "Resident of Gwinnett County GA, or the State of GA"   county[Gwinnett] refused a Georgian
+ *   "…General Class … two years …, or hold a current
+ *    Amateur Extra Class License"                          GENERAL+24mo refused an Extra of 6 months
+ *
+ * The two fields are MONOTONE IN THE SAFE DIRECTION and the first three tests below say so
+ * directly, because that property is what makes an extractor bug here cost a page-read rather than
+ * an award: `anyOf` can only turn a `fail` into a `pass`, `orUnrepresented` only a `fail` into an
+ * `unknown`, and neither can invent a refusal.
+ *
+ * Kept in its own file rather than appended to `matcher.test.ts` for the reason `license.test.ts`,
+ * `chrome-scope.test.ts` and `preference-scope.test.ts` exist: concurrently-running agents edit the
+ * big shared suites.
+ */
+import { describe, expect, it } from 'vitest';
+import { evaluateConstraint, matchProgram } from '../src/matcher.js';
+import { constraintSchema, constraintSpecSchema } from '../src/schema.js';
+import type { ConstraintSpec, Profile, StudentProfile } from '../src/types.js';
+import { makeProgram, makeStudent } from './fixtures.js';
+
+const NOW = '2026-08-02T00:00:00.000Z';
+
+const student = (over: Partial<StudentProfile>): Profile => makeStudent(over);
+
+const status = (spec: ConstraintSpec, profile: Profile, rawText = ''): string =>
+  evaluateConstraint(spec, profile, NOW, rawText).status;
+
+// ---------------------------------------------------------------- the property
+
+describe('a disjunction can only ever widen', () => {
+  /**
+   * The load-bearing claim. Every axis, every profile: adding an alternative never turns a pass
+   * into a refusal and never turns an unknown into one. If a future extractor writes nonsense into
+   * `anyOf`, this is the bound on the damage.
+   */
+  it('never turns a pass or an unknown into a fail, on any axis', () => {
+    const bases: ConstraintSpec[] = [
+      { axis: 'license', licenseMin: 'GENERAL', heldMonthsMin: 24 },
+      { axis: 'geography', geo: { type: 'county', values: ['Brevard'] } },
+      { axis: 'field_of_study', fields: ['electronics'], excludedFields: [] },
+      { axis: 'age_stage', stages: ['HS_SENIOR'] },
+      { axis: 'gpa', min: 3.5 },
+      { axis: 'citizenship', allowed: ['US_CITIZEN'] },
+      { axis: 'ham_activity', activityKinds: ['contesting'], proofRequired: false },
+    ];
+    const profiles: Profile[] = [
+      student({}),
+      student({ licenseClass: 'EXTRA', licensedSince: '2010-01-01T00:00:00.000Z' }),
+      student({ state: 'FL', county: 'Brevard', fieldOfStudy: 'electronics', stage: 'HS_SENIOR' }),
+      student({ state: 'GA', county: 'Fulton', fieldOfStudy: 'Music', stage: 'GRAD', gpa: 2.0 }),
+    ];
+    // A deliberately unhelpful alternative: it matches almost nobody, so if `anyOf` could narrow,
+    // it would.
+    const useless: ConstraintSpec['anyOf'] = [
+      { axis: 'gender', allowed: ['female'] },
+      { axis: 'gpa', min: 4.0 },
+    ];
+    for (const base of bases) {
+      for (const profile of profiles) {
+        const before = status(base, profile);
+        const after = status({ ...base, anyOf: useless }, profile);
+        if (before !== 'fail') {
+          expect(after, `${base.axis} went ${before} -> ${after}`).not.toBe('fail');
+        }
+      }
+    }
+  });
+
+  it('a spec with no alternatives evaluates exactly as it did before', () => {
+    const spec: ConstraintSpec = { axis: 'license', licenseMin: 'GENERAL', heldMonthsMin: 24 };
+    const extra6mo = student({ licenseClass: 'EXTRA', licensedSince: '2026-02-01T00:00:00.000Z' });
+    expect(status(spec, extra6mo)).toBe('fail');
+    expect(evaluateConstraint(spec, student({}), NOW)).toEqual({
+      status: 'unknown',
+      missing: ['licenseClass'],
+    });
+  });
+
+  it('orUnrepresented converts a refusal into an unknown with NOTHING to fill in', () => {
+    const spec: ConstraintSpec = {
+      axis: 'age_stage',
+      stages: ['HS_SENIOR'],
+      orUnrepresented: 'previous awardees',
+    };
+    const undergrad = student({ stage: 'UNDERGRAD' });
+    expect(status({ axis: 'age_stage', stages: ['HS_SENIOR'] }, undergrad)).toBe('fail');
+    // Not a refusal — and not an editor field either, because no answer can settle it.
+    expect(evaluateConstraint(spec, undergrad, NOW)).toEqual({ status: 'unknown', missing: [] });
+    // …and it does not reach an applicant who meets the STATED route. They are eligible, not
+    // uncertain: `orUnrepresented` is consulted only once every representable route has failed.
+    expect(status(spec, student({ stage: 'HS_SENIOR' }))).toBe('pass');
+  });
+
+  it('surfaces as "unknown, nothing you can do" and never as ineligible in a whole verdict', () => {
+    const program = makeProgram({
+      applicantEntities: ['individual'],
+      constraints: [
+        {
+          id: 'age-0',
+          hard: true,
+          fallbackRank: 0,
+          rawText: 'The scholarship is open to graduating high school seniors, and to previous awardees.',
+          spec: { axis: 'age_stage', stages: ['HS_SENIOR'], orUnrepresented: 'previous awardees' },
+        },
+      ],
+    });
+    expect(matchProgram(student({ stage: 'GRAD' }), program, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
+  });
+});
+
+// ---------------------------------------------------------------- per-axis composition
+
+describe('the tiers a funder actually writes', () => {
+  it('geography: a county bar with a state alternative admits the whole state', () => {
+    // "Resident of Brevard County FL, or any FL resident"
+    const spec: ConstraintSpec = {
+      axis: 'geography',
+      geo: { type: 'county', values: ['Brevard'] },
+      anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
+    };
+    expect(status(spec, student({ state: 'FL', county: 'Orange' }))).toBe('pass');
+    expect(status(spec, student({ state: 'FL', county: 'Brevard' }))).toBe('pass');
+    expect(status(spec, student({ state: 'GA', county: 'Fulton' }))).toBe('fail');
+    // A profile that never said which county it is in no longer has to: the state settles it.
+    expect(status(spec, student({ state: 'FL' }))).toBe('pass');
+  });
+
+  it('license: "General held two years, OR Extra" stops being an AND', () => {
+    const spec: ConstraintSpec = {
+      axis: 'license',
+      licenseMin: 'GENERAL',
+      heldMonthsMin: 24,
+      anyOf: [{ axis: 'license', licenseMin: 'EXTRA' }],
+    };
+    // The person the second half of the sentence exists for.
+    expect(status(spec, student({ licenseClass: 'EXTRA', licensedSince: '2026-02-01T00:00:00.000Z' }))).toBe('pass');
+    // The first half still holds, both ways round.
+    expect(status(spec, student({ licenseClass: 'GENERAL', licensedSince: '2020-01-01T00:00:00.000Z' }))).toBe('pass');
+    expect(status(spec, student({ licenseClass: 'GENERAL', licensedSince: '2026-02-01T00:00:00.000Z' }))).toBe('fail');
+    expect(status(spec, student({ licenseClass: 'TECH', licensedSince: '2010-01-01T00:00:00.000Z' }))).toBe('fail');
+    // An Extra whose start date is unknown passes on the tier that does not need it — the union of
+    // missing fields is what stops the base tier's `unknown` masking a route that already passed.
+    expect(status(spec, student({ licenseClass: 'EXTRA' }))).toBe('pass');
+  });
+
+  it('field_of_study: an "any field at this level" tier unrestricts, but never past an exclusion', () => {
+    // "Undergraduate degree or electronic technician certification program"
+    const spec: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['electronic technician certification program'],
+      excludedFields: [],
+      anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: [] }],
+    };
+    expect(status(spec, student({ fieldOfStudy: 'Biology' }))).toBe('pass');
+    expect(status(spec, student({ fieldOfStudy: 'Electronics Technology' }))).toBe('pass');
+    // An exclusion is a requirement, not a tier. It rides on both.
+    const barred: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['engineering'],
+      excludedFields: ['Liberal Arts'],
+      anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: ['Liberal Arts'] }],
+    };
+    expect(status(barred, student({ fieldOfStudy: 'Biology' }))).toBe('pass');
+    expect(status(barred, student({ fieldOfStudy: 'Liberal Arts' }))).toBe('fail');
+  });
+
+  it('unknown wins over fail across tiers, and lists every field that could settle any of them', () => {
+    const spec: ConstraintSpec = {
+      axis: 'geography',
+      geo: { type: 'county', values: ['Brevard'] },
+      anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
+    };
+    expect(evaluateConstraint(spec, student({}), NOW)).toEqual({
+      status: 'unknown',
+      missing: ['county', 'state'],
+    });
+  });
+
+  it('an axis that cannot be evaluated at all stays not_evaluable, alternatives or not', () => {
+    const org: Profile = { kind: 'organization', entity: 'club_501c3', state: 'FL' };
+    const spec: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['electronics'],
+      excludedFields: [],
+      anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: [] }],
+    };
+    expect(status(spec, org)).toBe('not_evaluable');
+  });
+});
+
+// ---------------------------------------------------------------- the shared widening
+
+describe('the funder who says their own list is illustrative', () => {
+  const kinds: ConstraintSpec = {
+    axis: 'ham_activity',
+    activityKinds: ['club_member', 'ares_races_skywarn', 'teaching', 'on_air'],
+    proofRequired: false,
+  };
+  const contester = student({ activityKinds: ['contesting', 'field_day'] });
+
+  it('ham_activity: a closed list still bars, so the rule is not a blanket loosening', () => {
+    expect(status(kinds, contester, 'Applicant must be an active member of a local radio club.')).toBe('fail');
+  });
+
+  it('ham_activity: "and any similar activities" stops the list gating — ARDC, verbatim', () => {
+    const ardc =
+      'Examples: membership in a local or regional club, participation in amateur radio emergency ' +
+      'activities, teaching amateur radio classes, on-the-air activities, participation in college ' +
+      'radio clubs, and any similar activities which illustrate his/her interest and participation ' +
+      'with the amateur radio avocation.';
+    expect(status(kinds, contester, ardc)).toBe('pass');
+    // …and it stops ASKING, because no answer could change the outcome. A wasted `unknown` reads
+    // to the applicant exactly like a locked door.
+    expect(status(kinds, student({}), ardc)).toBe('pass');
+  });
+
+  /**
+   * The CARA Merit Scholarship's real sentence ends "…GOTA, Field Day, etc." and is pinned against
+   * the committed capture in `normalize/axes/disjunction.test.ts`, which reads it out of the corpus
+   * record rather than retyping it. It is deliberately NOT reproduced here: `userFacingCopyContract`
+   * treats any 16-character run shared with a product string as a test naming that string, and
+   * CARA's list happens to contain the Profile page's "ARES, RACES or SKYWARN" option label word
+   * for word — so quoting it in a matcher unit test would silently mark a dropdown nobody has
+   * asserted as covered. This case pins the MARKER; the corpus test pins the funder.
+   */
+  it('ham_activity: a trailing "etc." is the funder opening the list too', () => {
+    const clubOnly = student({ activityKinds: ['club_member'] });
+    const closed: ConstraintSpec = {
+      axis: 'ham_activity',
+      activityKinds: ['ares_races_skywarn', 'field_day', 'public_service'],
+      proofRequired: false,
+    };
+    expect(status(closed, clubOnly, 'Applicant must be active in ARES.')).toBe('fail');
+    expect(
+      status(closed, clubOnly, 'Must demonstrate use of amateur radio through community events, Field Day, etc.'),
+    ).toBe('pass');
+  });
+
+  it('ham_activity: an open list opens the LIST, never a numeric floor', () => {
+    const cwops: ConstraintSpec = {
+      axis: 'ham_activity',
+      activityKinds: ['club_member', 'on_air', 'contesting'],
+      cwProficiencyWpmMin: 15,
+      proofRequired: true,
+    };
+    const open = 'Examples include but are not limited to: ARRL Code Proficiency certificate at 15 wpm or higher';
+    expect(status(cwops, student({ activityKinds: ['teaching'], cwWpm: 20 }), open)).toBe('pass');
+    expect(status(cwops, student({ activityKinds: ['on_air'], cwWpm: 5 }), open)).toBe('fail');
+  });
+
+  it('field_of_study keeps the behaviour it already had, word for word', () => {
+    const marco: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['healing arts', 'Medicine', 'Nursing'],
+      excludedFields: [],
+    };
+    const raw =
+      'Field of study must be leading to a career in the healing arts, including, but not ' +
+      'necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, ' +
+      'or Radiology technician.';
+    expect(status(marco, student({ fieldOfStudy: 'Physical Therapy' }), raw)).toBe('pass');
+    expect(status(marco, student({ fieldOfStudy: 'Physical Therapy' }), 'Medicine or Nursing.')).toBe('fail');
+  });
+});
+
+// ---------------------------------------------------------------- the contract
+
+describe('the representation survives the round trip the product actually makes', () => {
+  /**
+   * `constraints.spec` is a JSON column and every stored constraint is re-parsed through
+   * `constraintSchema` on the way out. A zod object strips what it does not know, so without the
+   * schema half of this change every disjunction would work in the extractor, work in this suite,
+   * and be silently deleted between SQLite and the browser.
+   */
+  it('zod keeps anyOf and orUnrepresented through a parse', () => {
+    const stored = {
+      id: 'geography-0-deadbeef',
+      hard: true,
+      fallbackRank: 0,
+      rawText: 'Resident of Brevard County FL, or any FL resident',
+      spec: {
+        axis: 'geography',
+        geo: { type: 'county', values: ['Brevard'] },
+        anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
+      },
+    };
+    expect(constraintSchema.parse(structuredClone(stored))).toEqual(stored);
+    expect(
+      constraintSpecSchema.parse({
+        axis: 'age_stage',
+        stages: ['HS_SENIOR'],
+        orUnrepresented: 'previous awardees',
+      }),
+    ).toEqual({ axis: 'age_stage', stages: ['HS_SENIOR'], orUnrepresented: 'previous awardees' });
+  });
+
+  it('still refuses an axis outside the union, and still enumerates all 13 for the drawer', () => {
+    expect(() => constraintSpecSchema.parse({ axis: 'vibes', note: 'nope' })).toThrow();
+    // `web/src/components/IneligibilityDrawer.test.tsx` reads `.options` to prove no axis can
+    // arrive unlabelled. Wrapping the union in an intersection would have removed it silently.
+    expect(constraintSpecSchema.options).toHaveLength(13);
+    expect(() =>
+      constraintSpecSchema.parse({
+        axis: 'geography',
+        geo: { type: 'county', values: ['Brevard'] },
+        anyOf: [{ axis: 'geography', geo: { type: 'nowhere', values: [] } }],
+      }),
+    ).toThrow();
+  });
+});

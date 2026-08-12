@@ -5,6 +5,7 @@ import type {
   Citizenship,
   Constraint,
   ConstraintSpec,
+  ConstraintTier,
   DegreeLevel,
   LicenseClass,
   OrgProfile,
@@ -323,6 +324,39 @@ function isFieldWideningMarker(value: string): boolean {
 // ---------------------------------------------------------------------------
 // OPEN LISTS — the funder who says their own list is not exhaustive
 //
+// SCOPE, and why this block sits above every axis rather than inside one.
+// `spec.fields`, `spec.activityKinds` and `spec.stages` are ENUMERATED ALLOW-
+// LISTS: the matcher passes an applicant who is on the list and refuses one who
+// is not, so a list the funder never meant as complete is a bar the funder never
+// wrote. This rule reads the qualifier the funder put ON the list, and it is now
+// asked by every axis whose spec is such a list and whose corpus contains one —
+// `field_of_study`, which had it, and `ham_activity`, which is where the ninth
+// instance was already sitting:
+//
+//   ARDC   "…proof of amateur radio activity… EXAMPLES: membership in a local or
+//           regional club, participation in amateur radio emergency activities,
+//           teaching amateur radio classes, on-the-air activities, participation
+//           in college radio clubs, AND ANY SIMILAR ACTIVITIES…"
+//   CARA   "Must demonstrate use of amateur radio through public service,
+//           community events, ARES, RACES or SKYWARN, GOTA, Field Day, ETC."
+//   CWops  "(EXAMPLES INCLUDE BUT ARE NOT LIMITED TO: ARRL Code Proficiency
+//           certificate…; membership in CWops or HSC or other club…; …)"
+//
+// AND THE AXES DELIBERATELY LEFT OUT, each measured over the committed fixtures
+// rather than guessed:
+//   - `institution.degreeLevels`. SEVEN records carry a marker here and in every
+//     one of them the marker is about the FIELD, not the level: the institution
+//     axis reads "Bachelor's degree or higher in electronics, communications, or
+//     RELATED FIELDS" for its `degreeLevels: [BACH, GRAD]`, and widening a degree
+//     floor out of a sentence about subjects would be reading the wrong clause.
+//   - `geography` and `age_stage`. ZERO of their rawTexts carry a marker, so
+//     wiring them would be untested speculation. Their real defects were tiers
+//     and an unrepresentable audience — different causes, different remedies.
+//   - `ham_activity.cwProficiencyWpmMin`. A NUMBER is not a list. CWops's
+//     "at 15 wpm or higher" sits inside its open list of examples and arguably
+//     opens too; that is a separate judgement, unmeasured here, and the widening
+//     below touches `activityKinds` only.
+//
 // `RELATEDNESS_WORDS` above handles exactly one idiom, "or a related field",
 // and handles it by reading `spec.fields` — because that idiom survives
 // extraction as a field alternative of its own ("related fields"). It is not
@@ -359,11 +393,20 @@ function isFieldWideningMarker(value: string): boolean {
 
 /**
  * Nouns a widening idiom lands on: "or a related FIELD", "and related
- * DISCIPLINES". Written out rather than reusing `FIELD_NOISE_WORDS` because
- * that set is about scoring a phrase, and this is about recognising a shape.
+ * DISCIPLINES", "and any similar ACTIVITIES". Written out rather than reusing
+ * `FIELD_NOISE_WORDS` because that set is about scoring a phrase, and this is
+ * about recognising a shape.
+ *
+ * `activit(y|ies)` is the one word this list gained when the rule stopped being
+ * the field axis's private property, and it is the whole of ARDC's widening:
+ * "…participation in college radio clubs, AND ANY SIMILAR ACTIVITIES which
+ * illustrate his/her interest and participation with the amateur radio
+ * avocation." No field_of_study rawText in the corpus contains it, so field
+ * behaviour is byte-for-byte unchanged by its presence.
  */
-const FIELD_NOUN_PATTERN =
-  'fields?|disciplines?|areas?|subjects?|majors?|minors?|studies|study|programs?|courses?|careers?';
+const OPEN_LIST_NOUN_PATTERN =
+  'fields?|disciplines?|areas?|subjects?|majors?|minors?|studies|study|programs?|courses?|careers?' +
+  '|activit(?:y|ies)';
 
 const RELATEDNESS_PATTERN = [...RELATEDNESS_WORDS].join('|');
 const WIDENING_DESCRIPTOR_PATTERN = [...WIDENING_DESCRIPTOR_WORDS].join('|');
@@ -407,7 +450,7 @@ const OPEN_LIST_MARKERS: RegExp[] = [
   /\band more\b/,
   new RegExp(
     `\\b(?:or|and) (?:any |a |an |other |closely |otherwise )*(?:${RELATEDNESS_PATTERN})` +
-      ` (?:(?:${WIDENING_DESCRIPTOR_PATTERN}) )*(?:${FIELD_NOUN_PATTERN})\\b`,
+      ` (?:(?:${WIDENING_DESCRIPTOR_PATTERN}) )*(?:${OPEN_LIST_NOUN_PATTERN})\\b`,
   ),
 ];
 
@@ -421,10 +464,16 @@ const EXCLUSION_INTRO =
   /\b(?:except|excepting|excluding|exclusive of|other than|apart |aside |besides|not eligible|ineligible|does not include|do not include|with the exception)\b/;
 
 /**
- * True when the funder's own sentence says their list of eligible fields is
- * illustrative rather than complete.
+ * True when the funder's own sentence says the list it just gave is illustrative
+ * rather than complete — asked by every allow-list axis, not just fields. See
+ * the SCOPE note at the head of this block for which axes ask it and which
+ * deliberately do not.
+ *
+ * `rawText` is the sentence the funder wrote and GrantSpotter displays, threaded
+ * in by `matchProgram`. Reading the widening from there rather than synthesising
+ * a phantom list member keeps it attached to its own evidence.
  */
-function fieldListIsOpen(rawText: string): boolean {
+function funderOpenedTheList(rawText: string): boolean {
   const text = normText(rawText);
   if (text === '') return false;
   const boundary = EXCLUSION_INTRO.exec(text);
@@ -454,7 +503,7 @@ function readFieldRequirement(
 ): FieldRequirement {
   const informative: FieldPhrase[] = [];
   let unrestricted = false;
-  let widened = fieldListIsOpen(rawText);
+  let widened = funderOpenedTheList(rawText);
   for (const alternative of fields.flatMap(splitFieldAlternatives)) {
     if (isAnyFieldMarker(alternative)) {
       unrestricted = true;
@@ -568,18 +617,20 @@ function isOrg(profile: Profile): profile is OrgProfile {
 }
 
 /**
+ * ONE TIER, evaluated on its own. `evaluateConstraint` below composes tiers; this
+ * is where an axis's actual question is asked.
+ *
  * `rawText` is the funder's own sentence — `Constraint.rawText`, which CONTRACT §3
- * guarantees is ALWAYS populated. It is optional and additive so that every
- * existing three-argument call still compiles and still means what it did; the
- * only axis that reads it today is `field_of_study`, where the qualifier that
- * says a list of eligible fields is not exhaustive lives in the sentence and
- * nowhere in `ConstraintSpec`. `matchProgram` always supplies it.
+ * guarantees is ALWAYS populated — and it is read by every axis whose spec is an
+ * enumerated allow-list the funder may have qualified in prose. `matchProgram`
+ * always supplies it; a tier inside `anyOf` is handed the SAME sentence, because
+ * both tiers came out of it and the funder's widening governs the whole of it.
  */
-export function evaluateConstraint(
-  spec: ConstraintSpec,
+function evaluateTier(
+  spec: ConstraintTier,
   profile: Profile,
   nowISO: string,
-  rawText = '',
+  rawText: string,
 ): AxisResult {
   switch (spec.axis) {
     case 'license': {
@@ -745,7 +796,22 @@ export function evaluateConstraint(
       let failed = false;
       const mine = profile.activityKinds;
       const wanted: ActivityKind[] = spec.activityKinds;
-      if (wanted.length > 0) {
+      // THE SAME RULE `field_of_study` HAS HAD, ON THE AXIS THAT NEEDED IT NEXT.
+      // `activityKinds` is an allow-list, so a list the funder gave as EXAMPLES
+      // is a bar the funder never wrote: ARDC's "Examples: … and any similar
+      // activities", CARA's "…GOTA, Field Day, etc.", CWops's "Examples include
+      // but are not limited to: …". Which of the seven `ActivityKind`s counts as
+      // "similar" is not something this matcher can adjudicate, and adjudicating
+      // it wrongly is what refused a contester, a Field Day operator and an
+      // ARES/RACES/SKYWARN volunteer from the largest programme in the corpus —
+      // whose sentence names emergency activity in so many words.
+      //
+      // So the list stops gating. And the question stops being ASKED, for the
+      // reason `field_of_study` gives beside its `decidable` flag: no answer to
+      // "what do you do on the air?" could change this verdict, and an `unknown`
+      // that no input can resolve reads to the applicant exactly like a locked
+      // door. The funder's own sentence is on screen for them to judge the fit.
+      if (wanted.length > 0 && !funderOpenedTheList(rawText)) {
         if (mine === undefined) missing.push('activityKinds');
         else if (!wanted.some((k) => mine.includes(k))) failed = true;
       }
@@ -784,6 +850,66 @@ export function evaluateConstraint(
       // Long-tail requirements no schema captures. Plan 3 renders rawText.
       return NOT_EVALUABLE;
   }
+}
+
+/**
+ * THE WHOLE CONSTRAINT: the tier the funder named first, OR any other tier they
+ * named, OR — if all of those fail — an admission that they named a route this
+ * schema cannot check.
+ *
+ * `rawText` stays optional and additive so every existing three-argument call
+ * still compiles and still means what it did. `matchProgram` always supplies it.
+ *
+ * THE COMPOSITION, and why each line is the direction it is:
+ *
+ *   pass anywhere        -> `pass`. A disjunction needs one route, and the
+ *                          alternatives are the funder's own words for the
+ *                          others. This is the line that stops eight measured
+ *                          refusals, and the only line that can.
+ *   unknown anywhere     -> `unknown`, listing every field that could resolve
+ *                          ANY tier. A route the applicant might be on, that a
+ *                          missing field is hiding, is not a refusal — and the
+ *                          fields are unioned rather than taken from the base
+ *                          tier alone, or the editor would send the reader to
+ *                          fill in a field that answers a question they have
+ *                          already failed.
+ *   all fail, but the
+ *   funder named a route
+ *   we cannot check      -> `unknown` with NOTHING to fill in. See
+ *                          `ConstraintAlternatives.orUnrepresented`.
+ *   otherwise            -> `fail`, exactly as before.
+ *
+ * `not_evaluable` short-circuits on the base tier: an axis that cannot be
+ * evaluated for this profile kind (a `field_of_study` tier against an
+ * organisation) cannot be evaluated by its siblings either, since they are the
+ * same axis. Returning it unchanged keeps "there is no schema field that could
+ * ever resolve this" distinct from "this applicant does not qualify", which is a
+ * distinction `matchProgram` depends on.
+ *
+ * A spec with no alternatives evaluates to precisely `evaluateTier`, so every
+ * constraint in the corpus that states one thing behaves exactly as it did.
+ */
+export function evaluateConstraint(
+  spec: ConstraintSpec,
+  profile: Profile,
+  nowISO: string,
+  rawText = '',
+): AxisResult {
+  const base = evaluateTier(spec, profile, nowISO, rawText);
+  if (base.status === 'pass' || base.status === 'not_evaluable') return base;
+  const alternatives = spec.anyOf ?? [];
+  if (alternatives.length === 0 && spec.orUnrepresented === undefined) return base;
+
+  const results: AxisResult[] = [base];
+  for (const tier of alternatives) results.push(evaluateTier(tier, profile, nowISO, rawText));
+
+  if (results.some((r) => r.status === 'pass')) return PASS;
+  const missing = [...new Set(results.flatMap((r) => (r.status === 'unknown' ? r.missing : [])))];
+  if (results.some((r) => r.status === 'unknown')) return { status: 'unknown', missing };
+  // Every route this schema can describe is closed. If the funder named one it
+  // cannot, the honest answer is that we do not know — never `ineligible`.
+  if (spec.orUnrepresented !== undefined) return unknown();
+  return FAIL;
 }
 
 export const APPLICANT_ENTITY_CONSTRAINT_SUFFIX = ':applicant-entity';

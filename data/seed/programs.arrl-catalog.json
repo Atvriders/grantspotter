@@ -329,6 +329,7 @@
           "spec": {
             "axis": "age_stage",
             "stages": [
+              "HS_SENIOR",
               "UNDERGRAD"
             ]
           }
@@ -906,6 +907,7 @@
             "axis": "ham_activity",
             "activityKinds": [
               "club_member",
+              "ares_races_skywarn",
               "teaching",
               "on_air"
             ],
@@ -5433,7 +5435,18 @@
               "values": [
                 "Gwinnett"
               ]
-            }
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "GA"
+                  ]
+                }
+              }
+            ]
           }
         },
         {
@@ -5721,6 +5734,19 @@
             "stages": [
               "HS_SENIOR"
             ]
+          }
+        },
+        {
+          "id": "ham_activity-0-8f8d89f1",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "3) Applicant must demonstrate activity and interest in radio service or some technical proficiency by participating in some form of radio related activities such as emergency communications, equipment construction, community radio services, scouting, etc.",
+          "spec": {
+            "axis": "ham_activity",
+            "activityKinds": [
+              "ares_races_skywarn"
+            ],
+            "proofRequired": false
           }
         },
         {
@@ -6043,7 +6069,18 @@
               "values": [
                 "Brevard"
               ]
-            }
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "FL"
+                  ]
+                }
+              }
+            ]
           }
         },
         {
@@ -6056,7 +6093,14 @@
             "fields": [
               "electronic technician certification program"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "anyOf": [
+              {
+                "axis": "field_of_study",
+                "fields": [],
+                "excludedFields": []
+              }
+            ]
           }
         },
         {
@@ -9278,7 +9322,19 @@
               "values": [
                 "North Texas"
               ]
-            }
+            },
+            "anyOf": [
+              {
+                "axis": "geography",
+                "geo": {
+                  "type": "state",
+                  "values": [
+                    "OK",
+                    "TX"
+                  ]
+                }
+              }
+            ]
           }
         },
         {
@@ -9586,6 +9642,19 @@
             "stages": [
               "HS_SENIOR"
             ]
+          }
+        },
+        {
+          "id": "ham_activity-0-8f8d89f1",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "3) Applicant must demonstrate activity and interest in radio service or some technical proficiency by participating in some form of radio related activities such as emergency communications, equipment construction, community radio services, scouting, etc.",
+          "spec": {
+            "axis": "ham_activity",
+            "activityKinds": [
+              "ares_races_skywarn"
+            ],
+            "proofRequired": false
           }
         },
         {
@@ -9947,6 +10016,19 @@
             "stages": [
               "HS_SENIOR"
             ]
+          }
+        },
+        {
+          "id": "ham_activity-0-7423e0ff",
+          "hard": true,
+          "fallbackRank": 0,
+          "rawText": "3) Applicant must demonstrate activity and interest in radio service such as emergency communications, equipment constructions, or community radio services",
+          "spec": {
+            "axis": "ham_activity",
+            "activityKinds": [
+              "ares_races_skywarn"
+            ],
+            "proofRequired": false
           }
         },
         {
@@ -10955,7 +11037,8 @@
             "axis": "age_stage",
             "stages": [
               "HS_SENIOR"
-            ]
+            ],
+            "orUnrepresented": "previous awardees"
           }
         },
         {
@@ -12651,7 +12734,13 @@
           "spec": {
             "axis": "license",
             "licenseMin": "GENERAL",
-            "heldMonthsMin": 24
+            "heldMonthsMin": 24,
+            "anyOf": [
+              {
+                "axis": "license",
+                "licenseMin": "EXTRA"
+              }
+            ]
           }
         },
         {
@@ -12667,7 +12756,13 @@
                 "DE",
                 "MD",
                 "NJ",
-                "NY"
+                "NY",
+                "CT",
+                "ME",
+                "MA",
+                "NH",
+                "RI",
+                "VT"
               ]
             }
           }

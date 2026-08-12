@@ -31,7 +31,36 @@ const KIND_PATTERNS: Array<[ActivityKind, RegExp]> = [
     'club_member',
     /\bclub (?:member|membership|teaching|activit)\w*\b|\b(?:member(?:ship)?|participat\w+|involve\w+|active)\b[^.]{0,60}?\bclubs?\b/i,
   ],
-  ['ares_races_skywarn', /\b(ARES|RACES|SKYWARN)\b/],
+  // THE FUNDER NAMED IT WITHOUT NAMING THE ACRONYM. ARDC's own list of acceptable proof includes
+  // "PARTICIPATION IN AMATEUR RADIO EMERGENCY ACTIVITIES", and `\b(ARES|RACES|SKYWARN)\b` cannot
+  // see it — so an ARES/RACES/SKYWARN volunteer was refused the largest programme in the corpus by
+  // a list that names exactly what they do. On an allow-list axis a missing spelling is a silent
+  // bar (see the note above), and this one was silent on the plainest possible case.
+  //
+  // THE PARTICIPATION PREFIX IS NOT DECORATION — it is the same guard the club pattern above
+  // carries, for the same reason, and it was added after measuring what the bare phrase does. The
+  // ARRL Amateur Radio Grants page says
+  //
+  //     "Grant requests for EMERGENCY COMMUNICATIONS equipment, facilities, or projects WILL NOT
+  //      BE CONSIDERED."
+  //
+  // — a funding RESTRICTION, the exact opposite of an activity the applicant must have performed —
+  // and an unguarded `\bemergency communications\b` published it as a required ham activity,
+  // quoting that sentence back as the evidence. Requiring participation/activity language within
+  // the same clause admits every real case in the corpus (ARDC "participation in … emergency
+  // activities", Hodges and K6GO "participating in … activities such as emergency communications",
+  // PARC "demonstrate activity and interest in radio service such as emergency communications",
+  // MMARSI "demonstrated activity within the several amateur emergency communications programs")
+  // and rejects that one, which carries no such language anywhere in its sentence.
+  //
+  // The acronyms stay CASE-SENSITIVE — "races" is a common English word and this corpus is about a
+  // hobby with contests in it — so the whole entry carries no `i` flag and the spelled-out half
+  // writes its capitals into character classes rather than living in a second entry that could
+  // drift away from this one.
+  [
+    'ares_races_skywarn',
+    /\b(?:ARES|RACES|SKYWARN)\b|\b(?:[Pp]articipat\w+|[Ii]nvolve\w+|[Aa]ctivit\w+|[Aa]ctive|[Vv]olunteer\w+)\b[^.]{0,60}?\b[Ee]mergency\s+(?:[a-z]+\s+)?(?:activit(?:y|ies)|communications?|services?|nets?|preparedness|response|operations?|drills?|exercises?)\b/,
+  ],
   ['teaching', /\b(?:teach(?:es|ing)?|instruct(?:s|ing)?|licensing class(?:es)?|Elmer(?:ing|s)?)\b/i],
   ['on_air', /\bon[-\s]the[-\s]air\b|\bon[-\s]air\b|\boperating activit\w*\b/i],
   ['field_day', /\bField Days?\b/i],

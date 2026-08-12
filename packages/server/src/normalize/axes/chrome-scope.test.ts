@@ -153,7 +153,9 @@ describe('no recommendation or stage constraint in this corpus is read off site 
     expect(specsOn(goldwater, 'recommendation')).toEqual([
       { axis: 'recommendation', recommenderType: 'arrl_affiliated_club_officer', count: 1 },
     ]);
-    expect(specsOn(goldwater, 'age_stage')).toEqual([{ axis: 'age_stage', stages: ['UNDERGRAD'] }]);
+    expect(specsOn(goldwater, 'age_stage')).toEqual([
+      { axis: 'age_stage', stages: ['HS_SENIOR', 'UNDERGRAD'] },
+    ]);
     const ardc = programs.find(
       (p) =>
         keyOf(p) ===
@@ -163,6 +165,80 @@ describe('no recommendation or stage constraint in this corpus is read off site 
     expect(specsOn(ardc, 'recommendation')).toEqual([
       { axis: 'recommendation', recommenderType: 'teacher', count: 3 },
     ]);
+  });
+
+  /**
+   * THE ASSERTION ABOVE USED TO CERTIFY A FALSEHOOD, AND PASSING IS WHY NOBODY LOOKED.
+   *
+   * It read `stages: ['UNDERGRAD']`, introduced as one of "the two clearest real ones, by name and
+   * wording" — and the wording it was quoting is
+   *
+   *     "Applicant must be a US citizen, open only to graduating HIGHSCHOOL SENIORS and
+   *      undergraduate students; …"
+   *
+   * The funder names TWO audiences and the high-school senior is the FIRST. `stages` is an
+   * allow-list, so publishing one of the two hard-refused every graduating senior from a $5,000
+   * award written to include them, quoting them that sentence as the reason. The cause was a
+   * spelling: `\bhigh school seniors?\b` cannot see "highschool", which is how this funder, this
+   * capture and the committed seed record all write it.
+   *
+   * Updating the expected value alone would leave exactly the same test: one that passes for
+   * whatever the extractor happens to emit. So the claim is now made the other way round — the
+   * funder's SENTENCE is asserted first, then every audience it names is required to be in the
+   * spec. Drop `HS_SENIOR` again and this fails; change the spelling in the fixture and the
+   * sentence assertion fails loudly instead of the stage list silently narrowing.
+   */
+  it('publishes BOTH audiences the Goldwater sentence names, the high-school senior first', async () => {
+    const { programs } = await corpus();
+    const goldwater = programs.find(
+      (p) => keyOf(p) === 'arrl-scholarship-descriptions::The ARRL Scholarship to Honor Barry Goldwater',
+    );
+    if (goldwater === undefined) throw new Error('the Goldwater scholarship is missing from the corpus');
+    const stage = goldwater.constraints.find((c) => c.spec.axis === 'age_stage');
+    if (stage === undefined || stage.spec.axis !== 'age_stage') {
+      throw new Error('Goldwater states an age_stage requirement and it is missing');
+    }
+
+    // What the funder wrote, verbatim, including the one-word spelling that caused the defect.
+    expect(stage.rawText).toContain('open only to graduating highschool seniors');
+    expect(stage.rawText).toContain('and undergraduate students');
+    // …therefore both audiences are eligible, and the one named first is not the one dropped.
+    expect(stage.spec.stages).toContain('HS_SENIOR');
+    expect(stage.spec.stages).toContain('UNDERGRAD');
+    expect(stage.spec.stages[0]).toBe('HS_SENIOR');
+    // A hard bar, so this is the difference between an award and a refusal, not a label.
+    expect(stage.hard).toBe(true);
+  });
+
+  /**
+   * The same claim over the whole corpus, which is what stops the ninth instance: no published
+   * stage list may leave out an audience its own quoted sentence names in so many words. Written
+   * as a pair of sentence-shape -> required-stage rules rather than as a list of program names,
+   * so a new record arriving with a new spelling is checked by the rule and not by whether anyone
+   * remembered to add it.
+   */
+  it('no stage list drops an audience its own sentence names', async () => {
+    const { programs } = await corpus();
+    const RULES: Array<{ says: RegExp; mustAllow: string; label: string }> = [
+      { says: /\bgraduating\s+high[\s-]?school\s+seniors?\b/i, mustAllow: 'HS_SENIOR', label: 'graduating high-school seniors' },
+      { says: /\bundergraduate\s+students?\b/i, mustAllow: 'UNDERGRAD', label: 'undergraduate students' },
+      { says: /\bgraduate\s+students?\b/i, mustAllow: 'GRAD', label: 'graduate students' },
+    ];
+    const offenders: string[] = [];
+    for (const program of programs) {
+      for (const c of program.constraints) {
+        if (c.spec.axis !== 'age_stage' || c.spec.stages.length === 0) continue;
+        for (const rule of RULES) {
+          if (!rule.says.test(c.rawText)) continue;
+          if (c.spec.stages.includes(rule.mustAllow as never)) continue;
+          offenders.push(
+            `${program.name}: names "${rule.label}" but publishes stages ` +
+              `${JSON.stringify(c.spec.stages)} — ${JSON.stringify(c.rawText.slice(0, 120))}`,
+          );
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
 

@@ -112,7 +112,18 @@ export interface GeoSpec {
 }
 
 // ---------- constraints ----------
-export type ConstraintSpec =
+
+/**
+ * ONE TIER of a requirement — the whole of `ConstraintSpec` before funders' disjunctions were
+ * representable, and still the shape every reader of a spec understands.
+ *
+ * A tier holds a CONJUNCTION: `{ licenseMin: 'GENERAL', heldMonthsMin: 24 }` means General AND
+ * held two years, and `stages: ['HS_SENIOR','UNDERGRAD']` is a list of equals, not a cascade.
+ * What it cannot hold is the funder's OTHER offer at a different level of the same axis —
+ * "Brevard County, or any Florida resident"; "General held two years, or Extra". See
+ * {@link ConstraintAlternatives}, which is where that goes.
+ */
+export type ConstraintTier =
   | { axis: 'license'; licenseMin: LicenseClass; heldMonthsMin?: number; foreignLicenseOK?: boolean }
   | { axis: 'geography'; geo: GeoSpec }
   | { axis: 'field_of_study'; fields: string[]; excludedFields: string[] }
@@ -137,6 +148,101 @@ export type ConstraintSpec =
   | { axis: 'financial_need'; weighted: true }
   | { axis: 'gender'; allowed: Array<'female' | 'male' | 'any'> }
   | { axis: 'other'; note: string };
+
+/**
+ * THE FUNDER NAMED MORE THAN ONE ROUTE. Two optional fields, one per REASON the extra route could
+ * not be written into the tier beside them — and they are different reasons with different honest
+ * answers, so they are different fields.
+ *
+ * ================================ WHY THIS EXISTS ================================
+ * Eight refusals were measured whose evidence — the funder's own sentence, the one GrantSpotter
+ * prints under the verdict — says the applicant qualifies:
+ *
+ *   "Resident of Brevard County FL, OR ANY FL RESIDENT"          county[Brevard]  refused a Floridian
+ *   "Resident of Gwinnett County GA, OR THE STATE OF GA"         county[Gwinnett] refused a Georgian
+ *   "…North Texas Section. ADDITIONAL APPLICANTS TO BE
+ *    CONSIDERED: … AND OKLAHOMA RESIDENTS…"                      section[NTX]     refused an Oklahoman
+ *   "General Class for at least two years…, OR HOLD A
+ *    CURRENT AMATEUR EXTRA CLASS LICENSE"                        GENERAL+24mo     refused an Extra
+ *   "UNDERGRADUATE DEGREE or electronic technician
+ *    certification program"                                      fields[ette]     refused a Biologist
+ *
+ * Every one is the same shape: alternatives AT DIFFERENT TIERS, a spec with room for one, an
+ * extractor picking a winner, and the losing branch hardening into a refusal. `stages: []` and
+ * `fields: []` are already disjunctions and needed nothing; a county AND a state, or a class AND a
+ * higher class with no duration, cannot be said inside one tier at all.
+ *
+ * ============================== WHY THIS SHAPE ==================================
+ * `anyOf` is a SIBLING LIST, not a new axis and not a new `ConstraintSpec` member. Every surface
+ * that reads a spec today — `IneligibilityDrawer.specDetail`'s exhaustive `switch (spec.axis)`,
+ * the printed eligibility report, the CSV, `constraints.spec` in SQLite, `specValues` in
+ * `normalize/axes/preference.ts` — keeps reading the tier exactly as it did, because the tier is
+ * still the whole object those readers see. A `{ axis: 'any_of' }` union member would have broken
+ * every one of them; a per-axis bespoke field (`alsoGeo`, `orLicenseMin`) would have needed the
+ * matcher to learn each one separately, which is how the ninth instance gets missed.
+ *
+ * The FIRST-NAMED, NARROWEST tier stays in the base object, so an unchanged reader shows something
+ * the funder really wrote, merely incomplete — and the verbatim sentence beside it (`rawText`,
+ * which CONTRACT §3 guarantees) has always carried the rest.
+ *
+ * NOT RECURSIVE, deliberately: `anyOf` holds {@link ConstraintTier}, not `ConstraintSpec`. Two
+ * levels is what funders write and what the corpus contains; a tree would need a reader nobody has.
+ *
+ * ========================== WHY IT CANNOT HIDE MONEY ============================
+ * Both fields are MONOTONE IN THE SAFE DIRECTION, by construction, and that is the property to
+ * preserve if either is ever extended:
+ *   - `anyOf` is a disjunction. It can only turn a `fail` into a `pass`. It can never invent a
+ *     refusal, whatever an extractor puts in it.
+ *   - `orUnrepresented` can only turn a `fail` into an `unknown`. Also never a refusal.
+ * An extractor bug in either direction therefore costs an applicant a page-read, never an award.
+ * "A false exclude hides the money forever, silently" — matcher.ts.
+ */
+export interface ConstraintAlternatives {
+  /**
+   * OTHER TIERS OF THE SAME AXIS THE FUNDER NAMED. Any ONE of them satisfies the constraint, as
+   * does the tier they hang off: the whole thing is an OR.
+   *
+   * Use it when the parser CAN say what the funder said and the tier has no room for it —
+   * `geo: county[Brevard]` + `anyOf: [geo state[FL]]`, `GENERAL+24mo` + `anyOf: [EXTRA]`. It is
+   * NOT for language a parser cannot close; see `orUnrepresented`.
+   *
+   * Each entry is the same axis as its base. Nothing enforces that in the type (a union of 13 arms
+   * cannot be self-referentially narrowed without generics nobody would thank us for), but a
+   * cross-axis entry would be evaluated against the wrong profile fields, so extractors keep to
+   * their own axis and the matcher's per-tier evaluation is the only thing that reads these.
+   */
+  anyOf?: ConstraintTier[];
+
+  /**
+   * THE FUNDER NAMED A ROUTE THIS SCHEMA CANNOT DESCRIBE — verbatim, in the funder's own words.
+   *
+   * Widening is the wrong remedy here and would be a fabrication. The Robert A. Rodriguez K5AUW
+   * Scholarship is "open to graduating high school seniors, AND TO PREVIOUS AWARDEES": the second
+   * audience is not a `Stage`, not a `DegreeLevel`, not anything `StudentProfile` holds, and there
+   * is no value of any profile field that means "I won this last year". Adding a stage would put a
+   * claim in the record the funder never made; refusing a graduate student quotes them a sentence
+   * naming a route they might be on.
+   *
+   * So the axis declines to decide: {@link Verdict} `unknown` with an EMPTY
+   * `missingProfileFields` — "something could not be worked out, and there is no input you could
+   * fill in to change that", the state `VerdictBadge` already renders and the same one an
+   * unmeasurable radius and an unrecorded audience produce. It is not a 'no'.
+   *
+   * Only consulted when the tier and every `anyOf` alternative have FAILED. An applicant who meets
+   * the stated route is eligible, not uncertain.
+   */
+  orUnrepresented?: string;
+}
+
+/**
+ * What a constraint requires: one tier, plus whatever else the funder offered.
+ *
+ * An intersection rather than 13 hand-edited arms so that the two optional fields cannot drift
+ * between axes, and so `switch (spec.axis)` still narrows exactly as before — `(A | B) & C`
+ * distributes to `(A & C) | (B & C)`, and every existing exhaustive switch over the axes still
+ * compiles and is still checked for exhaustiveness.
+ */
+export type ConstraintSpec = ConstraintTier & ConstraintAlternatives;
 
 export interface Constraint {
   id: string;

@@ -139,65 +139,123 @@ export const geoSpecSchema = z.object({
   centerLabel: z.string().optional(),
 });
 
+// ---------- constraint specs ----------
+//
+// Each axis's tier is a NAMED const so that the two unions below can be built from the same
+// thirteen definitions. `constraintSpecSchema` has to stay a `z.discriminatedUnion`, not an
+// intersection wrapping one: `web/src/components/IneligibilityDrawer.test.tsx` reads
+// `constraintSpecSchema.options` to enumerate every axis core can emit — deliberately, so that a
+// new axis cannot arrive in the drawer unlabelled — and `.options` exists only on the union.
+
+const licenseTier = z.object({
+  axis: z.literal('license'),
+  licenseMin: licenseClassSchema,
+  heldMonthsMin: z.number().optional(),
+  foreignLicenseOK: z.boolean().optional(),
+});
+const geographyTier = z.object({ axis: z.literal('geography'), geo: geoSpecSchema });
+const fieldOfStudyTier = z.object({
+  axis: z.literal('field_of_study'),
+  fields: z.array(z.string()),
+  excludedFields: z.array(z.string()),
+});
+const institutionTier = z.object({
+  axis: z.literal('institution'),
+  degreeLevels: z.array(degreeLevelSchema),
+  tradeSchoolOK: z.boolean(),
+  partTimeOK: z.boolean(),
+  accreditationRequired: z.boolean(),
+});
+const gpaTier = z.object({
+  axis: z.literal('gpa'),
+  min: z.number().optional(),
+  classRankTopPct: z.number().optional(),
+});
+const arrlMembershipTier = z.object({
+  axis: z.literal('arrl_membership'),
+  required: z.boolean(),
+  minYears: z.number(),
+});
+const recommendationTier = z.object({
+  axis: z.literal('recommendation'),
+  recommenderType: recommenderTypeSchema,
+  count: z.number(),
+});
+const citizenshipTier = z.object({
+  axis: z.literal('citizenship'),
+  allowed: z.array(citizenshipSchema),
+  withinMonthsOfCitizenship: z.number().optional(),
+});
+const ageStageTier = z.object({
+  axis: z.literal('age_stage'),
+  ageMin: z.number().optional(),
+  ageMax: z.number().optional(),
+  asOf: z.string().optional(),
+  stages: z.array(stageSchema),
+});
+const hamActivityTier = z.object({
+  axis: z.literal('ham_activity'),
+  activityKinds: z.array(activityKindSchema),
+  cwProficiencyWpmMin: z.number().optional(),
+  proofRequired: z.boolean(),
+});
+const financialNeedTier = z.object({ axis: z.literal('financial_need'), weighted: z.literal(true) });
+const genderTier = z.object({
+  axis: z.literal('gender'),
+  allowed: z.array(z.enum(['female', 'male', 'any'])),
+});
+const otherTier = z.object({ axis: z.literal('other'), note: z.string() });
+
+/**
+ * The single-tier union — `ConstraintTier` in types.ts. It exists so `anyOf` can be typed as an
+ * array of TIERS: a tier holds no alternatives of its own, which is what keeps the representation
+ * two levels deep instead of a tree.
+ */
+export const constraintTierSchema = z.discriminatedUnion('axis', [
+  licenseTier,
+  geographyTier,
+  fieldOfStudyTier,
+  institutionTier,
+  gpaTier,
+  arrlMembershipTier,
+  recommendationTier,
+  citizenshipTier,
+  ageStageTier,
+  hamActivityTier,
+  financialNeedTier,
+  genderTier,
+  otherTier,
+]);
+
+/**
+ * A tier PLUS the funder's other routes — `ConstraintAlternatives` in types.ts, where the whole
+ * design is written down.
+ *
+ * THIS SCHEMA IS LOAD-BEARING FOR THE FIX, not paperwork. `constraints.spec` is a JSON column and
+ * `createConstraintRepo.listForProgram` runs every stored constraint back through
+ * `constraintSchema.parse` — and a zod object STRIPS keys it does not know. Adding `anyOf` to the
+ * TypeScript type alone would have left every disjunction working in the extractor, working in
+ * `npm test`, and silently deleted on the way out of SQLite, which is where the product reads them.
+ */
+const alternatives = {
+  anyOf: z.array(constraintTierSchema).optional(),
+  orUnrepresented: z.string().optional(),
+};
+
 export const constraintSpecSchema = z.discriminatedUnion('axis', [
-  z.object({
-    axis: z.literal('license'),
-    licenseMin: licenseClassSchema,
-    heldMonthsMin: z.number().optional(),
-    foreignLicenseOK: z.boolean().optional(),
-  }),
-  z.object({ axis: z.literal('geography'), geo: geoSpecSchema }),
-  z.object({
-    axis: z.literal('field_of_study'),
-    fields: z.array(z.string()),
-    excludedFields: z.array(z.string()),
-  }),
-  z.object({
-    axis: z.literal('institution'),
-    degreeLevels: z.array(degreeLevelSchema),
-    tradeSchoolOK: z.boolean(),
-    partTimeOK: z.boolean(),
-    accreditationRequired: z.boolean(),
-  }),
-  z.object({
-    axis: z.literal('gpa'),
-    min: z.number().optional(),
-    classRankTopPct: z.number().optional(),
-  }),
-  z.object({
-    axis: z.literal('arrl_membership'),
-    required: z.boolean(),
-    minYears: z.number(),
-  }),
-  z.object({
-    axis: z.literal('recommendation'),
-    recommenderType: recommenderTypeSchema,
-    count: z.number(),
-  }),
-  z.object({
-    axis: z.literal('citizenship'),
-    allowed: z.array(citizenshipSchema),
-    withinMonthsOfCitizenship: z.number().optional(),
-  }),
-  z.object({
-    axis: z.literal('age_stage'),
-    ageMin: z.number().optional(),
-    ageMax: z.number().optional(),
-    asOf: z.string().optional(),
-    stages: z.array(stageSchema),
-  }),
-  z.object({
-    axis: z.literal('ham_activity'),
-    activityKinds: z.array(activityKindSchema),
-    cwProficiencyWpmMin: z.number().optional(),
-    proofRequired: z.boolean(),
-  }),
-  z.object({ axis: z.literal('financial_need'), weighted: z.literal(true) }),
-  z.object({
-    axis: z.literal('gender'),
-    allowed: z.array(z.enum(['female', 'male', 'any'])),
-  }),
-  z.object({ axis: z.literal('other'), note: z.string() }),
+  licenseTier.extend(alternatives),
+  geographyTier.extend(alternatives),
+  fieldOfStudyTier.extend(alternatives),
+  institutionTier.extend(alternatives),
+  gpaTier.extend(alternatives),
+  arrlMembershipTier.extend(alternatives),
+  recommendationTier.extend(alternatives),
+  citizenshipTier.extend(alternatives),
+  ageStageTier.extend(alternatives),
+  hamActivityTier.extend(alternatives),
+  financialNeedTier.extend(alternatives),
+  genderTier.extend(alternatives),
+  otherTier.extend(alternatives),
 ]);
 
 export const constraintSchema = z.object({

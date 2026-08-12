@@ -22,6 +22,28 @@ const STATE_BY_NAME: Record<string, string> = {
 };
 
 /**
+ * A REGION NAME IS A LIST OF STATES, and a name this table does not know is a silent bar.
+ *
+ * The Michael R. Ware, NN3I, Scholarship states its area as "Maryland, Delaware, New Jersey, New
+ * York, OR NEW ENGLAND." Four of those five are keys in STATE_BY_NAME; the fifth is not, so it
+ * matched nothing, the published spec was `state: [DE, MD, NJ, NY]`, and every applicant in the six
+ * New England states — the funder's own last-named alternative — was hard-refused while being shown
+ * the sentence that names them. That is a VOCABULARY gap, the kind a parser can close, and the
+ * honest remedy is to close it rather than to decline to decide.
+ *
+ * DELIBERATELY ONE ENTRY. Every other multi-state region word in the corpus ("Northwest",
+ * "Midwest", "Southeastern", "northeastern") appears only where the funder ALSO names the ARRL
+ * Division or a radius, both of which win the cascade in `geoFrom` before the state scan runs, so
+ * a table of guessed region-to-state mappings would be code nothing exercises. "New England" is
+ * the one region this corpus states as a bare region, and its membership is not a judgement call.
+ * Measured against every other record that mentions it — seven, all ARRL New England Division or
+ * an explicit "(ME, NH, VT, CT, RI, MA)" list — this changes no other spec.
+ */
+const REGION_STATES: Record<string, string[]> = {
+  'new england': ['CT', 'ME', 'MA', 'NH', 'RI', 'VT'],
+};
+
+/**
  * Builds the whole-word regex used to test each STATE_BY_NAME entry against the source text.
  * "virginia" is the one name that needs a special case: \bvirginia\b matches the standalone word
  * "Virginia" INSIDE "West Virginia" too (a word boundary exists on both sides of "Virginia" in
@@ -323,6 +345,14 @@ function geoFrom(text: string): GeoSpec {
   const counties = extractCountyNames(text);
   if (counties.length > 0) return { type: 'county', values: counties };
 
+  const states = statesIn(text);
+  if (states.length > 0) return { type: 'state', values: states };
+
+  return { type: 'any', values: [] };
+}
+
+/** Every state the text names — by name, by two-letter code, or by a region name. */
+function statesIn(text: string): string[] {
   const states = new Set<string>();
   for (const [name, code] of Object.entries(STATE_BY_NAME)) {
     if (stateNamePattern(name).test(text)) states.add(code);
@@ -330,9 +360,86 @@ function geoFrom(text: string): GeoSpec {
   for (const m of text.matchAll(/\b([A-Z]{2})\b/g)) {
     if (Object.values(STATE_BY_NAME).includes(m[1])) states.add(m[1]);
   }
-  if (states.size > 0) return { type: 'state', values: [...states] };
+  for (const [region, codes] of Object.entries(REGION_STATES)) {
+    if (new RegExp(`\\b${region}\\b`, 'i').test(text)) for (const code of codes) states.add(code);
+  }
+  return [...states];
+}
 
-  return { type: 'any', values: [] };
+// ---------- the funder's other tier ----------
+
+/**
+ * THE CASCADE IN `geoFrom` HAS EXACTLY ONE WINNER, AND FUNDERS NAME TWO PLACES.
+ *
+ *   IRARC Memorial (Rubino)  "Resident of Brevard County FL, OR ANY FL RESIDENT"
+ *   Gwinnett ARS             "Resident of Gwinnett County GA, OR THE STATE OF GA"
+ *   North Texas (Nelson)     "…graduated high school located within the North Texas Section…
+ *                             ADDITIONAL APPLICANTS TO BE CONSIDERED: … applicants of other Texas
+ *                             sections attending school in our state or out AND OKLAHOMA RESIDENTS
+ *                             attending school in Texas or another state."
+ *
+ * `county` is checked before `state` and returns immediately, so the state branch never ran and
+ * `arrl_section` swallowed North Texas the same way. Each award published its NARROWEST tier as a
+ * hard bar and refused precisely the applicants its second clause invites: a Floridian outside
+ * Brevard, a Georgian outside Gwinnett, an Oklahoman.
+ *
+ * Widening the cascade to "emit every tier the text names" was the obvious fix and is wrong: on
+ * "Residence in Central IL in one of these counties: Peoria, Tazewell, …" the state scan finds IL,
+ * and the award would silently open to all of Illinois. The state name there is not a second tier;
+ * it is part of saying WHERE the counties are. So the extra tiers are read only from a span the
+ * FUNDER marked as an alternative — the same discipline `matcher.ts` uses for open field lists,
+ * where the widening is taken from the funder's own words and nowhere else.
+ *
+ * TWO MARKER FAMILIES, because they carry different amounts of authority.
+ *
+ *   `, or` — a hand-off. English's ordinary disjunction, and the span after it is read with the
+ *   SAME cascade a whole Region field gets, so the reading is as conservative as the base. An
+ *   alternative is emitted only when that reading lands on a DIFFERENT tier: on the other five
+ *   corpus records carrying ", or" the span resolves to the same tier as the base and to values
+ *   the base already lists (K3IVO "…Pennsylvania, or West Virginia", Shenandoah's second county
+ *   list, Lippert, PVRC), so nothing is emitted and nothing changes. A list joined without the
+ *   comma ("Logan, Marshall or Stark") is not matched at all.
+ *
+ *   "Additional applicants to be considered:" / "will also consider" — the funder saying OUT LOUD
+ *   that a broader pool qualifies. Here the span is also read at the STATE tier directly, because
+ *   the cascade's own narrowness is the trap: North Texas's widening span says "applicants of
+ *   other Texas SECTIONS", the section scan finds "North Texas" in it and hands back the very tier
+ *   that was already refusing people. Reading the states it names — Texas and Oklahoma — is what
+ *   the sentence actually says. One record in the corpus carries this marker, and it is that one.
+ *
+ * SAFE BY CONSTRUCTION: `anyOf` is a disjunction, so anything emitted here can only turn a refusal
+ * into a pass. A wrong entry costs an applicant a page-read; a missing one costs them the award.
+ */
+const HANDOFF_MARKER = /,\s*or\s+/gi;
+const EXPLICIT_WIDENING_MARKER =
+  /\badditional\s+applicants?\b[^:.]{0,80}:\s*|\b(?:will|may)\s+also\s+consider\b\s*/gi;
+
+function sameGeo(a: GeoSpec, b: GeoSpec): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function alternativeGeos(text: string, base: GeoSpec): GeoSpec[] {
+  const found: GeoSpec[] = [];
+  const add = (geo: GeoSpec): void => {
+    if (geo.type === 'any' || geo.type === base.type) return;
+    if (found.some((g) => sameGeo(g, geo))) return;
+    found.push(geo);
+  };
+
+  for (const marker of [HANDOFF_MARKER, EXPLICIT_WIDENING_MARKER]) {
+    marker.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = marker.exec(text))) {
+      const span = text.slice(m.index + m[0].length);
+      if (span.trim() === '') continue;
+      add(geoFrom(span));
+      if (marker === EXPLICIT_WIDENING_MARKER) {
+        const states = statesIn(span);
+        if (states.length > 0) add({ type: 'state', values: states });
+      }
+    }
+  }
+  return found;
 }
 
 // ---------- requirement vs preference ----------
@@ -351,7 +458,19 @@ function preferenceTextOf(text: string): string {
 }
 
 function geoConstraint(text: string, geo: GeoSpec, index: number): Constraint {
-  return makeConstraint('geography', text, { axis: 'geography', geo }, index);
+  const alternatives = alternativeGeos(text, geo);
+  return makeConstraint(
+    'geography',
+    text,
+    {
+      axis: 'geography',
+      geo,
+      ...(alternatives.length > 0
+        ? { anyOf: alternatives.map((alt) => ({ axis: 'geography' as const, geo: alt })) }
+        : {}),
+    },
+    index,
+  );
 }
 
 /**

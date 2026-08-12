@@ -199,8 +199,20 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   const browse = await browseAsEeUndergrad(request);
   expect(browse.profileApplied).toBe('student');
 
-  // THE CENSUS, as `npm run profile-corpus -- ee-undergrad` measures it: 68 of 150 are open to
-  // this applicant (55 plain + 13 preferred), 55 are not, and 27 cannot be decided at all.
+  // THE CENSUS, as `npm run profile-corpus -- ee-undergrad` measures it: 69 of 150 are open to
+  // this applicant (55 plain + 14 preferred), 53 are not, and 28 cannot be decided at all.
+  //
+  // MOVED AGAIN 2026-08-12, and again toward the applicant. `ConstraintSpec` gained the
+  // DISJUNCTION funders keep writing and it could not hold — "Brevard County FL, OR ANY FL
+  // RESIDENT"; "General held two years, OR HOLD A CURRENT AMATEUR EXTRA" — plus the widening
+  // language a funder puts on their own list. Three records move for THIS profile:
+  //   The CARA Merit Scholarship   ineligible -> eligible. Its activity list ends "…Field Day,
+  //                                ETC.", so the list was examples, not a bar.
+  //   Robert A. Rodriguez K5AUW    ineligible -> unknown. "open to graduating high school seniors,
+  //                                AND TO PREVIOUS AWARDEES" is a route with no profile field, so
+  //                                the axis declines to decide rather than refusing.
+  //   MMARSI                       eligible -> eligible_preferred, the same open-list rule on a
+  //                                SOFT constraint: a rank changed, no eligibility did.
   //
   // WAS 74 / 8 UNTIL 2026-08-12, and the 19 that moved are the whole point. `matchProgram`'s first
   // act was `program.applicantEntities.includes(applyingAs)`, and `[].includes(anything)` is
@@ -210,13 +222,13 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   // consortia", the two the corpus itself annotates as this audience's real routes to money. None
   // of them became `eligible` — nobody said the applicant may apply either — so eligible and
   // preferred are unchanged at 55 and 13, and the 19 moved from a refusal to a question.
-  expect(browse.summary.eligible + browse.summary.preferred).toBe(68);
+  expect(browse.summary.eligible + browse.summary.preferred).toBe(69);
   expect(browse.summary).toMatchObject({
     total: 150,
     eligible: 55,
-    preferred: 13,
-    ineligible: 55,
-    unknown: 27,
+    preferred: 14,
+    ineligible: 53,
+    unknown: 28,
   });
   expect(browse.rows).toHaveLength(150);
 
@@ -304,7 +316,7 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   const browse = await browseAsEeUndergrad(request);
 
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
-  expect(unknown).toHaveLength(27);
+  expect(unknown).toHaveLength(28);
 
   /*
    * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
@@ -342,8 +354,8 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   }
 
   // The other kind is NAMED, never counted. Measured 2026-08-12 against the built server on the
-  // fixture corpus: 27 unknown, 7 naming a field, 20 naming none. There are now two reasons a row
-  // can name none, and both are a hole in GRANTSPOTTER'S DATA rather than in the reader:
+  // fixture corpus: 28 unknown, 7 naming a field, 21 naming none. There are now THREE reasons a
+  // row can name none. The first two are a hole in GRANTSPOTTER'S DATA rather than in the reader:
   //
   //   1 record  the Yankee Clipper Contest Club Youth Scholarship, stored as `{ type: 'radius',
   //             radiusMiles: 175, centerLabel: 'YCCC center which is in Erving, MA. MA' }` with no
@@ -355,7 +367,16 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   //             in the data cannot come out as a judgement about a person — and this is that rule
   //             applied to the gate that runs first and short-circuits every axis after it.
   //
-  // A TWENTY-FIRST row joining this list is a corpus regression — a funder's rule silently losing
+  //   1 record  THE THIRD KIND, and the only one that is a hole in the SCHEMA rather than in the
+  //             data: the Robert A. Rodriguez K5AUW Scholarship is "open to graduating high school
+  //             seniors, AND TO PREVIOUS AWARDEES". The second audience is not a `Stage`, not a
+  //             `DegreeLevel`, not anything `StudentProfile` can hold, and no answer the reader
+  //             could type means "I won this last year". Until 2026-08-12 it was a hard
+  //             `ineligible` for every non-senior, quoting them the sentence that invites them;
+  //             `ConstraintSpec.orUnrepresented` records the route and the axis declines to decide.
+  //             Widening `stages` instead would have put an audience in the record no funder wrote.
+  //
+  // A TWENTY-SECOND row joining this list is a corpus regression — a funder's rule silently losing
   // its centre, or a new source publishing no audience — and must fail here rather than disappear
   // into a count.
   expect(unanswerable.map((r) => r.program.name).sort()).toEqual([
@@ -376,6 +397,7 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'Public Wireless Supply Chain Innovation Fund',
     'Radio Club of America Scholarship Program',
     'Radio Club of America Youth Activities Program',
+    'The Robert A. Rodriguez K5AUW Scholarship',
     'The Yankee Clipper Contest Club Youth Scholarship',
     'Yasme Excellence Award',
     'Yasme Foundation Supporting Grants',
@@ -388,8 +410,8 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'lon',
   ]);
 
-  // The census can therefore be read as a sentence: 27 of these are questions, not refusals.
-  expect(browse.summary.unknown).toBe(27);
+  // The census can therefore be read as a sentence: 28 of these are questions, not refusals.
+  expect(browse.summary.unknown).toBe(28);
   expect(browse.summary.unknown + browse.summary.ineligible).toBeLessThan(browse.summary.total);
 
   // AN INELIGIBLE VERDICT QUOTES THE FUNDER'S OWN WORDS — WHERE THERE ARE ANY, AND ONLY THERE.
@@ -404,7 +426,10 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   // assertion is SPLIT: a funder-derived reason must still quote a real sentence, and a composed
   // one must be unmistakable as composed.
   const ineligible = browse.rows.filter((r) => r.verdict?.kind === 'ineligible');
-  expect(ineligible).toHaveLength(55);
+  // 55 until 2026-08-12: CARA (an activity list the funder ends with "etc.") and Rodriguez (a
+  // second audience no profile field can describe) stopped being refusals. Both quoted a funder
+  // sentence that says the applicant qualifies, which is why they moved.
+  expect(ineligible).toHaveLength(53);
   let quotedReasons = 0;
   let composedReasons = 0;
   for (const row of ineligible) {
@@ -423,8 +448,10 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
       }
     }
   }
-  // Vacuity guard on both halves.
-  expect(quotedReasons).toBe(48);
+  // Vacuity guard on both halves. 48 quoted until 2026-08-12 — the two rows above carried one
+  // funder-quoted reason each. The composed half is untouched: the applicant-entity gate is not
+  // an axis and has no tiers.
+  expect(quotedReasons).toBe(46);
   expect(composedReasons).toBe(9);
 });
 
@@ -927,8 +954,10 @@ test('the completeness meter speaks for the corpus the user can actually reach',
   expect(body.completeness.total).toBe(150);
   // 8 until 2026-08-12, when `matcher.ts` stopped reading an unrecorded applicant-entity list as a
   // refusal: 19 records that stated nothing about who may apply were a hard `ineligible` for every
-  // possible user, and are questions now. See the census assertions above for the whole ledger.
-  expect(body.completeness.unknownCount).toBe(27);
+  // possible user, and are questions now. 28 since later the same day, when the Rodriguez
+  // scholarship's second audience — "and to previous awardees", a route no profile field can
+  // describe — stopped being a refusal too. See the census assertions above for the whole ledger.
+  expect(body.completeness.unknownCount).toBe(28);
   expect(body.completenessFor).toBe('student');
 
   const me = (await (await request.get('/api/me')).json()) as {

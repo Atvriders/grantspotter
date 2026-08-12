@@ -85,6 +85,52 @@ function heldMonthsFrom(text: string): number | undefined {
   return undefined;
 }
 
+/**
+ * AN OR RENDERED AS AN AND. The one spec in this file that holds two facts at once holds them
+ * CONJUNCTIVELY — `licenseMin` AND `heldMonthsMin` must both be satisfied — and the Michael R.
+ * Ware, NN3I, Scholarship states them the other way round:
+ *
+ *   "Must hold a current General Class License for at least two years or more before application
+ *    submission, OR HOLD A CURRENT AMATEUR EXTRA CLASS LICENSE"
+ *
+ * Read over the whole field, that is `licenseMin: GENERAL, heldMonthsMin: 24` — General AND two
+ * years — which refuses an Amateur Extra licensed six months, the person the second half of the
+ * sentence exists for. (The first half's own reading is right: `licenseMinFrom` takes the LOWEST
+ * class named, and over the whole field that is GENERAL, so nothing about the base tier changes.)
+ *
+ * The remedy is the second tier: `anyOf: [{ licenseMin: 'EXTRA' }]`. Each half of the funder's
+ * disjunction is read on its own, so the two-year floor stays attached to the General route where
+ * the funder put it and does not follow the Extra route, which carries none.
+ *
+ * THE GUARD IS THE POINT, and it is the licence floor this repo already protects by contract
+ * (`licenseFloorContract.test.ts`). `licenseMinFrom` FALLS THROUGH to TECH for text that names no
+ * class — the right answer for "Any active Amateur Radio license", and a catastrophe as an
+ * alternative tier: "Must hold a General Class license, or be a member of the club" would mint
+ * `anyOf: [{ licenseMin: 'TECH' }]` and delete the General floor for everyone. So a second tier is
+ * emitted ONLY when its own half NAMES A CLASS IN SO MANY WORDS. A fallthrough is a guess, and a
+ * guess is never an alternative. One record in the corpus qualifies; it is Ware.
+ */
+const CLASS_NAMED = /\b(?:extra|general|technician|tech|novice)\b/i;
+const CLASS_ALTERNATIVE = /,\s*or\s+|\bor\s+(?:hold|have|possess)\b\s*/i;
+
+function alternativeLicenseTier(
+  stated: string,
+  base: { licenseMin: LicenseClass; heldMonthsMin?: number },
+): { axis: 'license'; licenseMin: LicenseClass; heldMonthsMin?: number } | undefined {
+  const split = CLASS_ALTERNATIVE.exec(stated);
+  if (split === null) return undefined;
+  const alternative = stated.slice(split.index + split[0].length);
+  if (!CLASS_NAMED.test(alternative)) return undefined;
+  const licenseMin = licenseMinFrom(alternative);
+  const heldMonthsMin = heldMonthsFrom(alternative);
+  if (licenseMin === base.licenseMin && heldMonthsMin === base.heldMonthsMin) return undefined;
+  return {
+    axis: 'license',
+    licenseMin,
+    ...(heldMonthsMin !== undefined ? { heldMonthsMin } : {}),
+  };
+}
+
 export function extractLicense(raw: RawOpportunity): Constraint[] {
   const text = raw.rawFields['License Requirement'] ?? raw.rawFields.license;
   if (!text || text.trim() === '') return [];
@@ -102,15 +148,18 @@ export function extractLicense(raw: RawOpportunity): Constraint[] {
   const foreignLicenseOK =
     /\b(worldwide|foreign|international|US licensure (?:is )?not required|any country)\b/i.test(text) ||
     undefined;
+  const licenseMin = licenseMinFrom(stated);
+  const alternative = alternativeLicenseTier(stated, { licenseMin, heldMonthsMin });
   return [
     makeConstraint(
       'license',
       text,
       {
         axis: 'license',
-        licenseMin: licenseMinFrom(stated),
+        licenseMin,
         ...(heldMonthsMin !== undefined ? { heldMonthsMin } : {}),
         ...(foreignLicenseOK ? { foreignLicenseOK } : {}),
+        ...(alternative !== undefined ? { anyOf: [alternative] } : {}),
       },
       0,
     ),
