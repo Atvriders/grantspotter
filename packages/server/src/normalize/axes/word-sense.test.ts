@@ -309,6 +309,68 @@ describe('recommendation: which sense of the word the funder is using', () => {
       ),
     ).toEqual([{ axis: 'recommendation', recommenderType: 'teacher', count: 1 }]);
   });
+
+  /**
+   * ...AND A THIRD WAY THE WORD IS NOT A REQUIREMENT: THE FUNDER'S OWN HEDGE.
+   *
+   * A signal that survives only INSIDE a list the funder opened ("such as", "such items as",
+   * "including but not limited to") is an EXAMPLE. Two records in the corpus are made entirely of
+   * that shape and both published a HARD bar off it — and one of them, the ARRL Foundation
+   * Scholarship Program, is the deadline owner for 112 catalogue entries, so its single fabricated
+   * requirement was enough to make the catalogue's front door read `unknown` to every student in
+   * every state.
+   *
+   * `data/seed/programs.curated.json` — this project's own hand-reviewed record of the same
+   * programme — already carries that sentence as `hard: false` with the reviewer's note "Which
+   * ones is an entry-level fact, not a programme-level one." The crawl-side extractor disagreed
+   * with the product's reviewed data about the same sentence on the same page.
+   *
+   * SOFT, NOT DROPPED. The funder wrote the sentence and an applicant needs to read it; a soft
+   * constraint is displayed, bars nobody, and — this axis being `not_evaluable` by construction —
+   * is never counted as a preference anybody met either.
+   */
+  const hardness = (text: string): boolean[] =>
+    extractRecommendation(raw({ Other: text })).map((c) => c.hard);
+
+  it('reads a hedged example as a note, not a bar — ARRL Foundation, verbatim', () => {
+    const arrl =
+      'A number of scholarships require additional documents, such as a letter of recommendation ' +
+      'from a sitting Officer of an ARRL-affiliated club.';
+    expect(reco(arrl)).toEqual([
+      { axis: 'recommendation', recommenderType: 'arrl_affiliated_club_officer', count: 1 },
+    ]);
+    // The sentence is kept and shown. Only its FORCE is withdrawn, because the funder withdrew it.
+    expect(hardness(arrl)).toEqual([false]);
+  });
+
+  it('…and the same for a signal that is only an ITEM in an illustrative list', () => {
+    // ARRL Foundation Special Funds, verbatim. The signal is the word "sponsors" inside a list of
+    // things a PROPOSAL should contain; nobody writes a letter about the applicant here.
+    expect(
+      hardness(
+        'An applicant for a mini-grant must write a brief, but complete proposal including such ' +
+          'items as: Names, call signs (if applicable), addresses and telephone numbers of sponsors',
+      ),
+    ).toEqual([false]);
+  });
+
+  it('keeps a requirement stated IN FRONT of the funder’s own examples — CWops, verbatim', () => {
+    // Neutralise the opened span and retest, the same shape as the sense rules above: the funder
+    // opened a list of PROOFS, and the letter requirement is stated before the marker.
+    const cwops =
+      'Demonstrated CW operating ability within the last 24 months by providing a copy of a ' +
+      'certificate, listing in a magazine showing results or a letter from a person responsible ' +
+      'for membership (Examples include but are not limited to: ARRL Code Proficiency certificate ' +
+      'at 15 wpm or higher; successful completion of CWA Basic Level or higher)';
+    expect(hardness(cwops)).toEqual([true]);
+    // …as is a plain requirement with no hedge anywhere in it — ARDC, the largest programme here.
+    expect(
+      hardness(
+        'Three letters of recommendation must be provided from teachers, local radio club officers ' +
+          "and/or others with familiarity with the applicant's character.",
+      ),
+    ).toEqual([true]);
+  });
 });
 
 describe('gender: only a field the funder labelled as eligibility', () => {

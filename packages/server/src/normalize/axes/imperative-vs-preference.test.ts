@@ -146,8 +146,35 @@ function readImperatives(programs: Program[]): ImperativeCensus {
  * an axis that "enforced" them would refuse everybody forever. Soft is the right classification and
  * `other.ts` reached it correctly; what is wrong for these three is the HEADING the web layer
  * prints them under, which is `Opportunity.tsx`'s and not this package's.
+ *
+ * AND TWO MORE OF THAT SAME THIRD KIND ARRIVED WITH THE ROUND THAT UNDID THE `institution.ts`
+ * REGRESSION, both on `recommendation` and both packet items:
+ *
+ *   ARRL Foundation        "A NUMBER OF scholarships require additional documents, SUCH AS a letter
+ *   Scholarship Program     of recommendation from a sitting Officer of an ARRL-affiliated club."
+ *   ARRL Foundation        "An applicant for a mini-grant must write a brief, but complete proposal
+ *   Special Funds           INCLUDING SUCH ITEMS AS: * Names … of sponsors * Objectives …"
+ *
+ * Both were HARD until that round — a recommendation requirement fabricated out of the funder's own
+ * hedge, and on the first record it was the ONLY constraint, which took the deadline owner for 112
+ * catalogue entries to `unknown` for every student in every state. `recommendation.ts` now reads a
+ * signal that survives only inside a list the funder opened as the example it is, and the
+ * hand-reviewed `data/seed/programs.curated.json` has always carried the first of these as
+ * `hard: false`. They belong to the "nobody's" kind above for the same reason the other three do:
+ * a letter and a proposal are packet items, no field in CONTRACT §3 addresses either, and an axis
+ * that "enforced" them would refuse everybody forever.
+ *
+ * They are NOT the class the ARRL-membership assertion below guards. That assertion read
+ * `/\bARRL\b/` over the whole entry — which includes the PROGRAMME NAME, and 111 of the 150
+ * programmes in this corpus are ARRL Foundation catalogue entries — so it fired on any unenforced
+ * imperative filed under an ARRL-named record, whatever the sentence said. It now asks whether the
+ * SENTENCE is about ARRL membership, which is the class it names.
  */
+const ARRL_MEMBERSHIP_SENTENCE =
+  /\bARRL\b[^\n]{0,40}?\bmember|\bmember(?:s|ship)?\b[^\n]{0,25}?\bARRL\b/i;
 const STILL_UNENFORCED = [
+  'ARRL Foundation Scholarship Program [recommendation] — "A number of scholarships require additional documents, such as a letter of recom"',
+  'ARRL Foundation Special Funds [recommendation] — "An applicant for a mini-grant must write a brief, but complete proposal includin"',
   'The Challenge Met Scholarship [other] — "Applicants must submit documents of learning disability (by physician or school)"',
   'The Fort Meyers Amateur Radio Club Scholarship [other] — "Student must be full time"',
   'The Free Family [N3TG (sk), K3MAF, KC3YO, K4FRE, KB4HGU (sk), KB4HGV (sk)] Scholarship [other] — "Student must be full time"',
@@ -162,7 +189,7 @@ describe('an imperative sentence that no constraint enforces', () => {
     const census = readImperatives(programs);
     // THE CLASS THIS ROUND CLOSED, as an empty equality rather than a count: a membership sentence
     // arriving here again fails with its own name and the funder's own words in the diff.
-    expect(census.enforcedNowhere.filter((entry) => /\bARRL\b/i.test(entry))).toEqual([]);
+    expect(census.enforcedNowhere.filter((entry) => ARRL_MEMBERSHIP_SENTENCE.test(entry))).toEqual([]);
     expect(census.enforcedNowhere).toEqual(STILL_UNENFORCED);
     // Vacuity guard. Without it every assertion above passes on an empty census, which is the shape
     // three guards in this repository failed in three consecutive rounds.
@@ -170,7 +197,10 @@ describe('an imperative sentence that no constraint enforces', () => {
       soft: census.soft,
       quotingAnImperative: census.quotingAnImperative,
       backedByAHardSibling: census.backedByAHardSibling,
-    }).toEqual({ soft: 127, quotingAnImperative: 35, backedByAHardSibling: 29 });
+    // 127 / 35 / 29 until the two `recommendation` fabrications above stopped being hard: both
+    // become soft constraints quoting an imperative, and neither gains a hard sibling, so all
+    // three of the first bucket's numbers move by two and the residual grows by two.
+    }).toEqual({ soft: 129, quotingAnImperative: 37, backedByAHardSibling: 29 });
     expect(census.backedByAHardSibling + census.enforcedNowhere.length).toBe(census.quotingAnImperative);
   });
 
@@ -185,7 +215,7 @@ describe('an imperative sentence that no constraint enforces', () => {
         (c) => !(c.spec.axis === 'arrl_membership' && /\bmember(?:s|ship)?\s+of\b/i.test(c.rawText)),
       ),
     }));
-    const accused = readImperatives(disarmed).enforcedNowhere.filter((e) => /\bARRL\b/i.test(e));
+    const accused = readImperatives(disarmed).enforcedNowhere.filter((e) => ARRL_MEMBERSHIP_SENTENCE.test(e));
     expect(accused).toHaveLength(2);
     expect(accused.join('\n')).toContain('North Fulton');
     expect(accused.join('\n')).toContain("You've Got a Friend in Pennsylvania");

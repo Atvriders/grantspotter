@@ -139,6 +139,57 @@ function inLetterSense(clause: string): boolean {
   return SIGNAL.test(remaining);
 }
 
+/**
+ * THE FUNDER'S OWN HEDGE — "SUCH AS", "SUCH ITEMS AS", "INCLUDING BUT NOT LIMITED TO".
+ *
+ * A signal word that survives only INSIDE a list the funder opened is an EXAMPLE, not a
+ * requirement of this record. Two records in this corpus are made entirely of that shape, and both
+ * were published as a hard bar:
+ *
+ *   ARRL Foundation        "A NUMBER OF scholarships require additional documents, SUCH AS a letter
+ *   Scholarship Program     of recommendation from a sitting Officer of an ARRL-affiliated club."
+ *                           Two hedges in one sentence: the subject is SOME OTHER AWARDS in the
+ *                           family, and the letter is an example of "additional documents". This
+ *                           record is the deadline owner for 112 catalogue entries — the front door
+ *                           — and a hard `recommendation` was its ONLY constraint, so a rule in
+ *                           `matcher.ts` read it as a record where nothing had been checked and
+ *                           answered `unknown` to every student, in every state.
+ *   ARRL Foundation        "An applicant for a mini-grant must write a brief, but complete proposal
+ *   Special Funds           INCLUDING SUCH ITEMS AS: * Names, call signs …, addresses and telephone
+ *                           numbers of SPONSORS * Objectives of the proposed program …" The signal
+ *                           is the word "sponsors" inside an illustrative list of things a PROPOSAL
+ *                           should contain. Nobody writes a letter about the applicant here.
+ *
+ * THIS PROJECT ALREADY DECIDED THIS SENTENCE, AND DECIDED IT THE OTHER WAY. `data/seed/
+ * programs.curated.json` — the hand-reviewed record of the same programme — carries the ARRL
+ * Foundation sentence verbatim as `hard: false`, on the `other` axis, with the reviewer's note:
+ * "Some catalogue entries require a recommendation from a sitting officer of an ARRL-affiliated
+ * club. WHICH ONES IS AN ENTRY-LEVEL FACT, NOT A PROGRAMME-LEVEL ONE." The crawl-side extractor
+ * disagreed with the product's own reviewed data about the same sentence on the same page.
+ *
+ * SOFT, NOT DELETED, and the difference is the point. The funder did write the sentence and an
+ * applicant needs to read it; dropping the constraint takes it off the eligibility report, which
+ * is the one thing this product promises to show (`matcher.ts` makes exactly that argument about
+ * The Free Family). A soft constraint is displayed, bars nobody, and — because this axis is
+ * `not_evaluable` by construction — is never counted as a preference anybody met either. It is
+ * also the direction `preference.ts` says to take a doubt: "a false negative here converts a
+ * stated preference into a hard bar … a false positive merely softens a real requirement."
+ *
+ * IT IS THE SPAN THAT IS NEUTRALISED, NOT THE CLAUSE — the same mechanism as `inLetterSense`
+ * above, and for the same reason: a clause may open an illustrative list AND state a real
+ * requirement outside it. The CWops award writes "…or A LETTER FROM a person responsible for
+ * membership (Examples include but are not limited to: …)": the signal is in front of the marker,
+ * survives the cut, and that constraint stays hard.
+ */
+const FUNDER_OPENED_THE_LIST =
+  /\bsuch\s+(?:[\w-]+\s+){0,2}?as\b|\bincluding,?\s+but\s+not\b|\bnot\s+(?:be\s+)?limited\s+to\b|\bexamples?\s+(?:include|are)\b|\bfor\s+example\b|\be\.g\./i;
+
+function signalIsOnlyAnExample(clause: string): boolean {
+  const marker = FUNDER_OPENED_THE_LIST.exec(clause);
+  if (marker === null) return false;
+  return !SIGNAL.test(clause.slice(0, marker.index));
+}
+
 function recommenderTypeFrom(text: string): RecommenderType {
   if (
     /\b(?:officer of an ARRL[- ]affiliated club|ARRL[- ]affiliated club officers?|sitting officers?)\b/i.test(
@@ -205,14 +256,19 @@ export function extractRecommendation(raw: RawOpportunity): Constraint[] {
     const count = countMatch
       ? (WORD_COUNT[countMatch[1].toLowerCase()] ?? Number.parseInt(countMatch[1], 10))
       : 1;
-    return [
-      makeConstraint(
-        'recommendation',
-        clause,
-        { axis: 'recommendation', recommenderType: recommenderTypeFrom(clause), count },
-        0,
-      ),
-    ];
+    const constraint = makeConstraint(
+      'recommendation',
+      clause,
+      { axis: 'recommendation', recommenderType: recommenderTypeFrom(clause), count },
+      0,
+    );
+    // The funder's sentence is kept and shown; only its FORCE is withdrawn, because the funder
+    // withdrew it themselves. See `signalIsOnlyAnExample`. `makeConstraint` is the shared
+    // hard/soft classifier and reads preference VOCABULARY ("preferred", "should", "may"); an
+    // illustrative list is a different way of not requiring something, and it is this axis's own
+    // reading of its own signal, so it is applied here rather than by widening that classifier
+    // for every axis at once.
+    return [signalIsOnlyAnExample(clause) ? { ...constraint, hard: false } : constraint];
   }
   return [];
 }

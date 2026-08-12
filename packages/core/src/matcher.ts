@@ -793,18 +793,41 @@ function evaluateTier(
 
     case 'institution': {
       if (!isStudent(profile)) return NOT_EVALUABLE;
+      /**
+       * THE TWO ROUTES A FUNDER CLOSES BY NAME ON THIS AXIS, and the reason the distinction is
+       * drawn here rather than left to whatever softens a failure later.
+       *
+       * "Full-time student at…" and "Accredited…" are the funder's own words about the APPLICANT,
+       * on fields `StudentProfile` holds and the profile editor asks for. `degreeLevels`, when it
+       * came off a school TIER, is an inference this schema cannot check against any field — which
+       * is why `institution.ts` records the tier phrase in `orUnrepresented`, and why that field
+       * softens the level refusal into an `unknown`.
+       *
+       * `orUnrepresented` softens the whole constraint, though, so without this a part-time
+       * bachelor's applicant would have their "Full-time student at an accredited 4-year college
+       * or university" refusal (Holt K8MJH) softened by a tier phrase that says nothing about
+       * enrolment intensity — a bar the funder wrote, walked past by a route they never named.
+       * `barred` is the flag that already means exactly this, and `evaluateConstraint` honours it
+       * before any widening. See {@link AxisResult.barred}.
+       */
+      const closedByName =
+        (spec.accreditationRequired && profile.accredited === false) ||
+        (!spec.partTimeOK && profile.partTime === true);
       if (spec.degreeLevels.length > 0) {
         if (profile.degreeLevel === undefined) return unknown('degreeLevel');
         const levels: DegreeLevel[] = spec.degreeLevels;
-        if (!levels.includes(profile.degreeLevel)) return FAIL;
+        // Field order is unchanged, deliberately: a level refusal still answers first, so no
+        // profile is asked a new question and no `unknown` becomes a `fail`. What is added is
+        // WHICH KIND of refusal it is when a named route refuses the same applicant anyway.
+        if (!levels.includes(profile.degreeLevel)) return closedByName ? BARRED : FAIL;
       }
       if (spec.accreditationRequired) {
         if (profile.accredited === undefined) return unknown('accredited');
-        if (!profile.accredited) return FAIL;
+        if (!profile.accredited) return BARRED;
       }
       if (!spec.partTimeOK) {
         if (profile.partTime === undefined) return unknown('partTime');
-        if (profile.partTime) return FAIL;
+        if (profile.partTime) return BARRED;
       }
       // tradeSchoolOK is informational: CONTRACT §3 has no profile field for it.
       return PASS;
@@ -1429,52 +1452,42 @@ export function matchProgram(
   const recordStatesNothing = program.constraints.length === 0;
 
   /**
-   * …AND A RECORD WHOSE ONLY STATED REQUIREMENT IS ONE NO PROFILE CAN EVER ANSWER STATES NOTHING
-   * THIS MATCHER CHECKED.
+   * …AND WHAT IS DELIBERATELY *NOT* HERE: A DEMOTION READ OFF A RECORD'S OTHER CONSTRAINTS.
    *
-   * `recordStatesNothing` tests the LIST. This tests what the list came to. A hard `not_evaluable`
-   * "does not block", which is right and stays right — `recommendation` and `other` have no
-   * profile field that could ever resolve them, so refusing on one would refuse everybody forever.
-   * But "does not block" was also the ENTIRE verdict when such an axis was the only requirement in
-   * the record, and then `eligible` — "you meet every requirement this record states" — was
-   * computed without a single requirement having been looked at.
+   * A rule stood here that made a record `unknown` when its only hard requirement was on an axis
+   * no profile can answer (`recommendation`, `other`). It was written for one sentence and it is
+   * removed with that sentence's extraction, because BOTH halves of it were decided by something
+   * other than the funder's words:
    *
-   * Measured over the 150 publishable programs the committed fixtures produce, exactly one record
-   * reaches that state: the ARRL Foundation Scholarship Program, whose one hard constraint is a
-   * `recommendation` axis quoting the funder's own sentence. It returned `eligible` to EVERY
-   * individual profile in `scripts/profile-corpus.ts` — including the empty one, which has
-   * answered nothing at all, and the one that answers "none" to everything, in all 51 states. That
-   * is silence-as-permission, the shape the two blocks above refuse, arriving one axis short of
-   * `recordStatesNothing`.
+   *   BY THE RECORD'S NEIGHBOURS. It was cleared by any OTHER hard constraint coming back with a
+   *   status, so the identical sentence — "a letter of recommendation from a sitting officer of an
+   *   ARRL-affiliated club" — produced `unknown` on 2 of the 12 records that state one and
+   *   `eligible` on the other 10. Measured over the 150 publishable programmes: 255 positive
+   *   verdicts carried an unchecked hard `recommendation` and kept it, while two records lost
+   *   theirs. One reading of a sentence cannot be right in both places.
    *
-   * TWO AXES, NOT "ANYTHING THAT CAME BACK not_evaluable" — and the difference is the whole safety
-   * of this rule. `recommendation` and `other` are unanswerable BY CONSTRUCTION: no field in
-   * CONTRACT §3 addresses them, for any applicant, ever. Most other `not_evaluable`s in this file
-   * mean something quite different — `if (!isStudent(profile)) return NOT_EVALUABLE` means "this
-   * axis is about schooling and you are an organisation", i.e. the requirement does not bear on
-   * this applicant, and a citizenship line reading "Any" is still the funder answering. Reading
-   * those as "nothing was checked" would put every organisation on every student-worded record
-   * into `unknown` — a second silence, invented by us, over records where the funder was not
-   * silent at all.
+   *   BY THE APPLICANT. The flag was cleared from EVALUATION results, and most `not_evaluable`s in
+   *   this file mean "this axis is about schooling and you are an organisation". So the same
+   *   record could be `eligible` for a student and `unknown` for a club on identical funder
+   *   wording — a verdict about the applicant produced by a rule that claimed to be about the
+   *   record.
    *
-   * IT IS THE SAME `unknown` AS THE OTHER THREE: not `ineligible` (nobody said no, and this record
-   * is a live index of real scholarships), not `eligible` (that is the claim being withdrawn), and
-   * nothing the reader could type would change it — a letter of recommendation is a packet item,
-   * not a profile field. `VerdictBadge` already renders it, and the funder's sentence is still
-   * shown beside it.
+   * AND THE THING IT WAS DEFENDING IS STILL DEFENDED. `not_evaluable` does not block (rule 1
+   * above), which is settled: a letter of recommendation is a packet item, and no value of any
+   * profile field can ever satisfy or fail one, so a record that demanded one before saying
+   * `eligible` could never say `eligible` to anybody, ever — a verdict unreachable by construction
+   * is not a verdict. What must not happen is a record that states NOTHING publishing a
+   * permission, and that is `recordStatesNothing` immediately above, which is unchanged and still
+   * fires on the 28 records it was measured on.
    *
-   * IT DOES NOT FIRE WHERE ANYTHING WAS DECIDED. One hard axis returning `pass` is a requirement
-   * really checked against this applicant, which is what `eligible` claims — so a record with a
-   * recommendation line AND a GPA floor the applicant clears still says `eligible`. Nor does a
-   * vacuous `recommendation` ("no letters required") trigger it: `statesARequirement` is asked
-   * first, so a funder ANSWERING the question keeps the same reading "Any" already gets.
+   * BOTH RECORDS IT EVER FIRED ON WERE MISREADINGS, WHICH IS THE EVIDENCE THIS IS THE RIGHT
+   * DIRECTION. The ARRL Foundation Scholarship Program — the deadline owner for 112 catalogue
+   * entries — was demoted by "A NUMBER OF scholarships require additional documents, SUCH AS a
+   * letter of recommendation", and ARRL Foundation Special Funds by "a proposal including SUCH
+   * ITEMS AS: names … of sponsors". Neither states a requirement of its own record, both are now
+   * read as the hedges they are (`normalize/axes/recommendation.ts`), and after that fix no record
+   * in the corpus reaches the state this rule existed for.
    */
-  const unanswerableRequirement = (c: Constraint): boolean =>
-    (c.spec.axis === 'recommendation' || c.spec.axis === 'other') && statesARequirement(c.spec);
-  let onlyUnanswerableRequirements = program.constraints.some(
-    (c) => c.hard && unanswerableRequirement(c),
-  );
-
   const hardFailures: Constraint[] = [];
   const missingFields = new Set<string>();
   const metPreferences: Constraint[] = [];
@@ -1514,14 +1527,12 @@ export function matchProgram(
       // reader, say so with an empty list rather than dropping the unknown entirely.
       if (!listedOne) unlistableUnknown = true;
     }
-    // 'pass' and 'not_evaluable' do not block. But an axis that came back `not_evaluable` was not
-    // CHECKED either, and a record where nothing else was decided has had nothing about it decided
-    // at all — see `onlyUnanswerableRequirements` above.
-    if (result.status !== 'not_evaluable') onlyUnanswerableRequirements = false;
+    // 'pass' and 'not_evaluable' do not block — see the note above this loop for why the second
+    // one is not allowed to demote either.
   }
 
   if (hardFailures.length > 0) return { kind: 'ineligible', reasons: hardFailures };
-  if (missingFields.size > 0 || unlistableUnknown || onlyUnanswerableRequirements) {
+  if (missingFields.size > 0 || unlistableUnknown) {
     return { kind: 'unknown', missingProfileFields: [...missingFields].sort() };
   }
   if (metPreferences.length > 0) {

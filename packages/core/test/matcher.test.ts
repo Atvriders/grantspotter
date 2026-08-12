@@ -331,15 +331,27 @@ describe('matchProgram — hard constraints', () => {
   });
 
   /**
-   * A HARD AXIS NOBODY CAN ANSWER STILL BLOCKS NOBODY — and no longer ADMITS everybody either.
+   * A HARD AXIS NOBODY CAN ANSWER BLOCKS NOBODY, AND DEMOTES NOBODY — AND THE SECOND HALF IS WHAT
+   * THIS BLOCK EXISTS TO HOLD, BECAUSE IT WAS BRIEFLY THE OTHER WAY.
    *
    * `recommendation` and `other` have no profile field in CONTRACT §3, for any applicant, ever.
-   * Refusing on one would refuse the whole user base forever, so `not_evaluable` does not block,
-   * and that half is unchanged and asserted first below. What changed is the other half: when
-   * these are the ONLY requirements a record states, "does not block" was the entire verdict, and
-   * `eligible` — "you meet every requirement this record states" — was published without one
-   * requirement having been looked at. The ARRL Foundation Scholarship Program is that record in
-   * the real corpus, and it said `eligible` to a profile that has answered nothing at all.
+   * Refusing on one would refuse the whole user base forever, so `not_evaluable` does not block.
+   *
+   * A rule was then added that made a record `unknown` when such an axis was its ONLY hard
+   * requirement — and it was cleared by whatever ELSE the record happened to hold, so the identical
+   * funder sentence produced `unknown` on 2 records in the real corpus and `eligible` on the other
+   * 10 that state one. Measured over the 150 publishable programmes: 255 positive verdicts carried
+   * an unchecked hard `recommendation` and kept it, and two records lost theirs. One reading of one
+   * sentence cannot be right in both places, and the rule was removed — `matcher.ts` carries the
+   * account.
+   *
+   * THE READING THAT REPLACED IT IS ASSERTED HERE AS A PAIR, deliberately: the same record with and
+   * without a checkable neighbour, and the two must agree. A verdict that depends on a record's
+   * other constraints is not a reading of the funder's sentence.
+   *
+   * WHAT IS *NOT* WITHDRAWN, and is asserted last: a record that states NOTHING must not publish a
+   * permission. That is `recordStatesNothing`, it fires on 28 records in the corpus, and it is
+   * untouched.
    */
   const unanswerableOnly = makeProgram({
     constraints: [
@@ -362,30 +374,49 @@ describe('matchProgram — hard constraints', () => {
     if (verdict.kind === 'unknown') expect(verdict.missingProfileFields).toEqual([]);
   });
 
-  it('does not say yes out of nothing when every stated requirement is unanswerable', () => {
-    expect(matchProgram(makeStudent(), unanswerableOnly, NOW)).toEqual({
-      kind: 'unknown',
-      missingProfileFields: [],
+  const withOneCheckableAxis = makeProgram({
+    constraints: [
+      ...unanswerableOnly.constraints,
+      makeConstraint({ axis: 'gpa', min: 2.0 }, { id: 'gpa', hard: true }),
+    ],
+  });
+
+  it('reads the same unanswerable sentence the same way, with a neighbour and without', () => {
+    // A letter of recommendation excludes nobody: no value of any profile field can satisfy or
+    // fail one, so a record that withheld `eligible` until one was checked could never say
+    // `eligible` to anybody, ever. Both of these therefore say the same thing, and the assertion
+    // is that they say the SAME thing — the defect was the difference, not either value.
+    expect(matchProgram(makeStudent({ gpa: 3.1 }), unanswerableOnly, NOW)).toEqual({
+      kind: 'eligible',
     });
-    // …and it is not about how full the profile is. A profile that answered NOTHING gets the same
-    // reading, because the gap is in what the record can be checked against, not in the reader.
-    expect(matchProgram({ kind: 'student' }, unanswerableOnly, NOW)).toEqual({
-      kind: 'unknown',
-      missingProfileFields: [],
+    expect(matchProgram(makeStudent({ gpa: 3.1 }), withOneCheckableAxis, NOW)).toEqual({
+      kind: 'eligible',
     });
   });
 
-  it('still says eligible when one hard axis really was decided', () => {
-    const withOneCheckableAxis = makeProgram({
+  it('does not let the APPLICANT decide it either — a club reads it as a student does', () => {
+    // The removed flag was cleared from EVALUATION results, and `if (!isStudent(profile))` is the
+    // commonest `not_evaluable` in the file. So the same record could come back `eligible` for a
+    // student and `unknown` for a club on identical funder wording — a verdict about the applicant,
+    // produced by a rule that claimed to be about the record.
+    const openToBoth = makeProgram({
+      applicantEntities: ['individual', 'club_501c3'],
       constraints: [
         ...unanswerableOnly.constraints,
-        makeConstraint({ axis: 'gpa', min: 2.0 }, { id: 'gpa', hard: true }),
+        makeConstraint({ axis: 'institution', degreeLevels: ['BACH'], tradeSchoolOK: false, partTimeOK: true, accreditationRequired: false }, { id: 'inst', hard: true }),
       ],
     });
-    // The GPA clears 2.0, so a requirement really was checked and met — which is exactly what
-    // `eligible` claims, and the recommendation line beside it does not withdraw it.
-    expect(matchProgram(makeStudent({ gpa: 3.1 }), withOneCheckableAxis, NOW)).toEqual({
-      kind: 'eligible',
+    expect(matchProgram(makeStudent({ degreeLevel: 'BACH' }), openToBoth, NOW).kind).toBe('eligible');
+    expect(matchProgram(makeOrg({ entity: 'club_501c3' }), openToBoth, NOW).kind).toBe('eligible');
+  });
+
+  it('…and a record that states NOTHING still does not publish a permission', () => {
+    // The half that was worth keeping, and the one `recordStatesNothing` holds. An empty
+    // constraint list is not an "Any": nobody wrote a requirement and nobody wrote a permission.
+    const statesNothing = makeProgram({ constraints: [] });
+    expect(matchProgram(makeStudent({ gpa: 3.1 }), statesNothing, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
     });
   });
 
@@ -433,6 +464,71 @@ describe('matchProgram — hard constraints', () => {
       ],
     });
     expect(matchProgram(makeOrg({ entity: 'club_501c3' }), studentWorded, NOW).kind).toBe('eligible');
+  });
+});
+
+/**
+ * A SCHOOL TIER SOFTENS A LEVEL LIST AND NOTHING ELSE ON THE SAME SENTENCE.
+ *
+ * "Full-time student at an accredited 4-year college or university" (Michael Holt K8MJH/KC8OIP,
+ * verbatim) states three things and this schema can check only two of them. `institution.ts`
+ * records the tier in `orUnrepresented`, which softens a `fail` into an `unknown` — and it softens
+ * the WHOLE constraint, so without the `barred` flag below it would also walk past "full-time" and
+ * "accredited", which are the funder's own words about the applicant on fields the profile editor
+ * asks for.
+ *
+ * The direction that matters is asserted both ways: the applicant the tier does not settle is
+ * asked to read the sentence, and the applicant the funder refused by name is still refused.
+ */
+describe('institution — the tier this schema cannot check, and the two bars it may not soften', () => {
+  const holt = makeProgram({
+    constraints: [
+      makeConstraint(
+        {
+          axis: 'institution',
+          degreeLevels: ['BACH', 'GRAD'],
+          tradeSchoolOK: false,
+          partTimeOK: false,
+          accreditationRequired: true,
+          orUnrepresented: '4-year college or university',
+        },
+        {
+          id: 'inst',
+          hard: true,
+          rawText: 'Full-time student at an accredited 4-year college or university',
+        },
+      ),
+    ],
+  });
+  const enrolled = { degreeLevel: 'BACH' as const, accredited: true, partTime: false };
+
+  it('admits the levels the tier names, and moves nobody who satisfies it', () => {
+    expect(matchProgram(makeStudent(enrolled), holt, NOW).kind).toBe('eligible');
+    expect(matchProgram(makeStudent({ ...enrolled, degreeLevel: 'GRAD' }), holt, NOW).kind).toBe('eligible');
+  });
+
+  it('asks the associate and certificate student to read the sentence — never refuses them', () => {
+    // They are at a four-year university; their CREDENTIAL is one this schema holds and the
+    // sentence does not name. `unknown` with nothing to fill in, and it is not a 'no'.
+    for (const degreeLevel of ['ASSOC', 'CERT'] as const) {
+      expect(matchProgram(makeStudent({ ...enrolled, degreeLevel }), holt, NOW)).toEqual({
+        kind: 'unknown',
+        missingProfileFields: [],
+      });
+    }
+  });
+
+  it('still refuses the applicant the funder refused BY NAME, at any level', () => {
+    // "Full-time" and "accredited" are checkable statements about the applicant, so a tier phrase
+    // that says nothing about either may not reopen them.
+    for (const degreeLevel of ['CERT', 'ASSOC', 'BACH', 'GRAD'] as const) {
+      expect(matchProgram(makeStudent({ ...enrolled, degreeLevel, partTime: true }), holt, NOW).kind).toBe(
+        'ineligible',
+      );
+      expect(matchProgram(makeStudent({ ...enrolled, degreeLevel, accredited: false }), holt, NOW).kind).toBe(
+        'ineligible',
+      );
+    }
   });
 });
 

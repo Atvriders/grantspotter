@@ -328,6 +328,14 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     // an out-of-ladder applicant being refused by the rung the funder DID name. Fifteen more
     // strings for the rule above to catch, and it is the only thing standing between that field
     // and a paraphrase.
-    expect(checked).toBe(66);
+    //
+    // 86 SINCE THE LAST ROUND, when the institution axis stopped writing a school TIER into the
+    // applicant's CREDENTIAL field alone: the 20 records whose only degree statement is "4-year
+    // college or university" keep the floor and now publish the funder's own tier phrase here, so
+    // an associate- or certificate-seeking student AT a four-year university reads `unknown` and
+    // the funder's sentence rather than a refusal that sentence does not state. Every one of the
+    // 20 is caught by the rule above — the phrase is a substring of the funder's own wording, and
+    // `institution.test.ts` asserts that record by record as well.
+    expect(checked).toBe(86);
   });
 });

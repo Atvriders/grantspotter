@@ -147,23 +147,33 @@ describe('the census a licensed EE undergraduate actually gets', () => {
   // CTRI ("applicants from all regions will be considered") keep their single soft constraint and
   // their verdicts.
   //
-  // ROUND NINE TOOK ONE MORE, AND REFUSED NOBODY: 52 positive -> 51, `ineligible` unmoved at 51.
-  // The ARRL Foundation Scholarship Program moves `eligible -> unknown` for every individual
-  // profile, this one included — its only hard constraint is a `recommendation` axis no profile
-  // field can answer, so `eligible` was being published without one requirement having been
-  // checked. The round's other change — reading a bare "4-year college or university" as a floor —
-  // moves nothing for this profile, which is a bachelor's student at a 4-year school and is inside
-  // every one of those 20 sentences. It is measured on the profiles it does move, in
-  // `institution.ts` and in the round summary.
-  it('reports 51 eligible-or-preferred of 150', () => {
+  // ROUND NINE TOOK ONE, AND THE LAST ROUND GAVE IT BACK: 52 positive -> 51 -> 52, `ineligible`
+  // unmoved at 51 throughout.
+  //
+  // The one is the ARRL Foundation Scholarship Program, and both moves are the same record. Round
+  // nine read "A NUMBER OF scholarships require additional documents, SUCH AS a letter of
+  // recommendation" as a hard `recommendation` requirement, which — being the record's ONLY
+  // constraint — made it a record where nothing had been checked, and `eligible -> unknown` for
+  // every individual profile, this one included. The sentence states no requirement of that record
+  // (`normalize/axes/recommendation.ts`; the hand-reviewed `data/seed/programs.curated.json` has
+  // always carried it as `hard: false`), so it is a soft note again and the verdict is `eligible`
+  // again. It is the deadline owner for 112 catalogue entries.
+  //
+  // THE INSTITUTION CHANGE MOVES NOTHING FOR THIS PROFILE, IN EITHER ROUND, and that is the
+  // property worth stating: a bachelor's student at a 4-year school is inside all 20 of those
+  // sentences, so neither the floor nor the `orUnrepresented` beside it reaches them. Measured
+  // across all 51 states x 150 programmes, a bachelor's and a graduate applicant move ZERO pairs
+  // on that axis; the applicants who move are the associate and certificate students, and they
+  // move `ineligible -> unknown`, never into a refusal. See `institution.ts`.
+  it('reports 52 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
-      eligible: 42,
+      eligible: 43,
       eligible_preferred: 9,
-      unknown: 48,
+      unknown: 47,
       ineligible: 51,
     });
-    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(51);
+    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(52);
   });
 
   it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {
@@ -297,27 +307,48 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     verdicts = matchAll(blank as Profile, corpus.programs, corpus.now);
   });
 
-  // 141 AND 0 — AND THE ZERO IS THE WHOLE POINT OF THE COLUMN. A profile that has answered
-  // NOTHING is now told `eligible` by nothing at all in this corpus.
+  // 140 AND 1 — AND THE ONE IS NAMED, BECAUSE IT IS THE UNCOMFORTABLE HALF OF THIS ROUND'S FIX.
   //
-  // The last one was the ARRL Foundation Scholarship Program, whose only hard constraint is a
-  // `recommendation` axis: no profile field can ever answer it, so it came back `not_evaluable`,
-  // `not_evaluable` does not block, and a record with nothing else in it published `eligible` on
-  // the strength of a requirement nobody had looked at. It is `unknown` now, with nothing to ask
-  // for — see `matchProgram`'s `onlyUnanswerableRequirements`.
+  // The one is the ARRL Foundation Scholarship Program. Round nine read the funder's hedge — "A
+  // NUMBER OF scholarships require additional documents, SUCH AS a letter of recommendation" — as
+  // a hard requirement, and since it was that record's only constraint, added a rule making such a
+  // record `unknown`. That took this column to 0, and it took the catalogue's front door (the
+  // deadline owner for 112 entries) to `unknown` for every student in every state.
   //
-  // The 140 before it was 140-and-1 since the geography cascade ladder landed, where one record
-  // moved `eligible -> unknown` because its ladder asks this blank profile for the one thing that
-  // would decide it — a state. The direction is the point in both rounds. An unanswered field
-  // still cannot produce a refusal: `ineligible` is the same 9, still all on the applicant-entity
-  // gate, asserted immediately below.
-  it('leaves 141 of 150 unknown, says yes to none, and refuses only the 9 with a researched audience', () => {
+  // The sentence is a hedge and states no requirement of that record — `recommendation.ts` has the
+  // account, and `data/seed/programs.curated.json`, hand-reviewed, has always carried it as
+  // `hard: false`. With it soft, the record holds no requirement at all, so it excludes nobody and
+  // says so.
+  //
+  // WHAT THAT COSTS, STATED RATHER THAN AVERAGED AWAY: a reader who has typed nothing is told
+  // `eligible` by one record out of 150. It is the least harmful `eligible` in the corpus — the
+  // ARRL Foundation's own index page, free to read, with the funder's sentence displayed beside
+  // the verdict — but it IS a claim made from an empty profile, and the reason it can be made is
+  // that GrantSpotter extracted no requirement from that page. The page states one: "All
+  // applicants must be an active, FCC-licensed amateur radio operator." No axis reads it, because
+  // the source files no eligibility field for this record and the sentence lives in the flattened
+  // page text. Extracting it would make this column 0 again AND leave the front door `eligible`
+  // for a licensed student, which is the answer that is right in both directions. It is recorded
+  // here rather than guessed at, and it is the next thing to fix on this record.
+  //
+  // The 140 was 140-and-1 before round nine too, and for the same record. What moved in between
+  // was the geography cascade ladder, which took a different record `eligible -> unknown` because
+  // its ladder asks this blank profile for the one thing that would decide it — a state.
+  //
+  // THE INVARIANT THIS DESCRIBE IS NAMED FOR IS UNMOVED: an unanswered field still cannot produce
+  // a refusal. `ineligible` is the same 9, still all on the applicant-entity gate, asserted
+  // immediately below.
+  it('leaves 140 of 150 unknown, and refuses only the 9 with a researched audience', () => {
     expect(empty.counts).toEqual({
-      eligible: 0,
+      eligible: 1,
       eligible_preferred: 0,
-      unknown: 141,
+      unknown: 140,
       ineligible: 9,
     });
+    // The one, by name — so it cannot become two without somebody reading this comment.
+    expect(empty.rows.filter((r) => r.verdict === 'eligible').map((r) => r.programName)).toEqual([
+      'ARRL Foundation Scholarship Program',
+    ]);
   });
 
   it('excludes ONLY on the applicant-entity gate, which is a fact and not an unanswered field', () => {
@@ -418,14 +449,14 @@ describe('an unset profile field yields unknown, never ineligible', () => {
    */
   it('names the field each unknown is waiting on wherever the profile could supply one', () => {
     const unknowns = empty.rows.filter((r) => r.verdict === 'unknown');
-    expect(unknowns).toHaveLength(141);
+    expect(unknowns).toHaveLength(140);
     const answerable = unknowns.filter((r) => r.missingFields.length > 0);
     const unanswerable = unknowns.filter((r) => r.missingFields.length === 0);
     expect(answerable).toHaveLength(119);
-    // 21 until the ARRL Foundation Scholarship Program joined them: its only hard constraint is a
-    // letter of recommendation, which is a packet item and not a profile field, so there is
-    // nothing to ask this reader for — the same empty list the other 21 carry.
-    expect(unanswerable).toHaveLength(22);
+    // 22 while the ARRL Foundation Scholarship Program was among them. It is not: the sentence
+    // that put it there is the funder's own hedge and states no requirement of that record, so the
+    // record holds nothing to be uncertain about — see the census above, which names it.
+    expect(unanswerable).toHaveLength(21);
     // An unknown is never dressed as an exclusion, whichever kind it is.
     expect(unknowns.every((r) => r.reasons === '' && r.reasonsFromGrantSpotter === '')).toBe(true);
   });

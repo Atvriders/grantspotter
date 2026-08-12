@@ -369,21 +369,21 @@ describe('profiles API, beyond the brief', () => {
       .send({ kind: 'organization', entity: 'club_501c3', orgName: 'Example University ARC' });
 
     const profiles = await request(app).get('/api/profiles');
-    // Two of the five are undecidable for a club and only one of them is a question for the
-    // reader: the ARRL Club Grant waits on `arrlAffiliated`, while ARDC's only hard requirement is
-    // an `other` tier no profile field can ever answer. See `completeness.test.ts`, which names
-    // both and asserts the same pair.
+    // One of the five is undecidable for a club, and it is a question for the reader: the ARRL Club
+    // Grant waits on `arrlAffiliated`. ARDC's only hard requirement is an `other` tier no profile
+    // field can ever answer, and an axis nobody can answer decides nothing in either direction —
+    // see `completeness.test.ts`, which names it and asserts the same pair.
     expect(profiles.body.completeness).toEqual({
       total: 5,
-      unknownCount: 2,
-      score: 60,
+      unknownCount: 1,
+      score: 80,
       fields: [{ field: 'arrlAffiliated', resolves: 1 }],
     });
 
     const me = await request(app).get('/api/me');
     expect(me.body.hasStudentProfile).toBe(false);
     expect(me.body.hasOrgProfile).toBe(true);
-    expect(me.body.completeness.score).toBe(60);
+    expect(me.body.completeness.score).toBe(80);
   });
 
   it('prefers the student profile for the meter when a user holds both', async () => {
@@ -481,7 +481,7 @@ describe('profiles API, beyond the brief', () => {
       const preferred = await request(app).get('/api/profiles?profile=organization');
       expect(preferred.status).toBe(200);
       expect(preferred.body.completenessFor).toBe('organization');
-      expect(preferred.body.completeness.score).toBe(60);
+      expect(preferred.body.completeness.score).toBe(80);
       // Still held, still returned, just not what this report was measured against.
       expect(preferred.body.student).not.toBeNull();
     });

@@ -17,6 +17,7 @@ interface InstitutionSpec {
   tradeSchoolOK: boolean;
   partTimeOK: boolean;
   accreditationRequired: boolean;
+  orUnrepresented?: string;
 }
 
 const specs = (fields: Record<string, string>): InstitutionSpec[] =>
@@ -226,6 +227,91 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     ]) {
       expect(levels({ Institution: text })).toEqual([]);
     }
+  });
+
+  /**
+   * ...AND THE FLOOR SAYS, IN THE FUNDER'S OWN WORDS, WHAT IT CANNOT CHECK.
+   *
+   * A SCHOOL TIER IS NOT A CREDENTIAL. `degreeLevel` is what the applicant is studying FOR
+   * ("Associate degree", "Certificate, trade or professional school"); `institution` is free text
+   * no axis reads. So an associate- or certificate-seeking student AT a four-year university
+   * satisfies "4-year college or university" verbatim, and a floor written into the credential
+   * field alone made them `ineligible` — 1,456 (profile, state, programme) pairs, measured over
+   * all 51 states, none of them stated by any sentence on any funder's page.
+   *
+   * `ConstraintAlternatives.orUnrepresented` is the field for exactly this and it can only turn a
+   * `fail` into an `unknown`, never a refusal. The floor stays — a bachelor's or graduate
+   * applicant plainly satisfies the tier and goes on reading `eligible`, which is the half the
+   * floor got right — and the applicant whose credential does not settle the sentence is asked to
+   * read it rather than told no.
+   */
+  it.each([
+    ['4-year college or university', '4-year college or university'],
+    ['4 year college or university', '4 year college or university'],
+    ['Accredited 4-year college or university', '4-year college or university'],
+    ['Accredited four-year college or university', 'four-year college or university'],
+    [
+      'Full-time student at an accredited 4-year college or university\nMust be a citizen of the ' +
+        'United States but without regard to gender, race, national origin, handicap status or any other factor.',
+      '4-year college or university',
+    ],
+  ])('records the tier it read the floor off, verbatim: %s', (text, route) => {
+    const spec = first({ Institution: text });
+    expect(spec.degreeLevels).toEqual(['BACH', 'GRAD']);
+    expect(spec.orUnrepresented).toBe(route);
+    // Verbatim means verbatim: the route is the funder's own substring, never a paraphrase.
+    expect(text).toContain(route);
+  });
+
+  it('records no such route where the FUNDER stated the credential themselves', () => {
+    // "Bachelor's degree or higher" is a statement about the applicant's own course of study, and
+    // this schema holds the field that answers it. Nothing is unrepresented, so nothing is claimed
+    // to be — a softening minted here would let a certificate student past a floor the funder wrote.
+    for (const text of [
+      "Bachelor's degree or higher in electronics, communications, or related fields",
+      'Accredited 4-year college or university, or graduate program.',
+      'Any accredited 4-year college or university, graduate studies permitted',
+    ]) {
+      expect(first({ Institution: text }).orUnrepresented).toBeUndefined();
+    }
+    // ...and neither does a sentence that never produced a floor at all.
+    expect(first({ Institution: 'Any accredited 2- or 4-year college or university' }).orUnrepresented).toBeUndefined();
+  });
+
+  /**
+   * THE WORDINGS THE CRAWL WILL BRING, AND NOT ONE OF THEM IS A PLACE OF STUDY.
+   *
+   * None of these is in the corpus today; every one is ordinary funder English, and every one
+   * minted `['BACH','GRAD']` — a hard refusal of every associate and certificate applicant — off a
+   * sentence about how long the money lasts, about secondary school, about where the money may be
+   * spent, or off a vocational route the tier vocabulary did not happen to spell.
+   */
+  it.each([
+    // A DURATION, not a tier. English puts the adjectival form in the singular ("4-year college")
+    // and a length of time in the plural ("four years"), which is the whole difference.
+    ['The award is renewable for up to four years at any college or university.'],
+    ['Must have completed four years of high school.'],
+    // A PERMISSION about the money, beside a sentence admitting every institution there is.
+    ['Open to students at any accredited institution; award may be used at a 4-year college or university.'],
+    // A VOCATIONAL ROUTE the funder named. `LOWER_TIER_NAMED` was a fixed vocabulary of school
+    // NOUNS and omitted "technical institute" — the exact phrase this product's own `cert-trade`
+    // corpus profile uses for where that student studies.
+    ['4-year university or a technical institute'],
+    ['Accredited 4-year college or university, or an approved career academy'],
+  ])('mints no floor and no route from: %s', (text) => {
+    const spec = first({ Institution: text });
+    expect(spec.degreeLevels).toEqual([]);
+    expect(spec.orUnrepresented).toBeUndefined();
+  });
+
+  it('still reads a floor where the award clause sits BESIDE a real one', () => {
+    // The award-clause guard is asked of the clause the tier is in, never of the whole field, so a
+    // record that states a floor and then says something about the money keeps its floor.
+    const spec = first({
+      Institution: 'Applicant must attend an accredited 4-year college. The award may be used for tuition or fees.',
+    });
+    expect(spec.degreeLevels).toEqual(['BACH', 'GRAD']);
+    expect(spec.orUnrepresented).toBe('4-year college');
   });
 
   /**

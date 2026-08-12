@@ -329,30 +329,35 @@ describe('the applicant shapes the corpus has to serve', () => {
   });
 
   /**
-   * TWO UNDECIDABLE RECORDS FOR AN ORGANISATION, AND ONLY ONE OF THEM IS ABOUT THE PROFILE.
+   * ONE UNDECIDABLE RECORD FOR AN ORGANISATION, AND IT IS THE ONE THE READER CAN DO SOMETHING
+   * ABOUT.
    *
    *   ARRL Club Grant  waiting on `arrlAffiliated` — a question for the reader, named below.
-   *   ARDC Grants      waiting on nothing the reader can supply. Its ONLY hard constraint is an
-   *                    `other` tier quoting "Clubs and individuals need a fiscal sponsor.
-   *                    For-profits ineligible." — a real requirement in the funder's own words
-   *                    that no field in CONTRACT §3 can answer. Until round nine that
-   *                    `not_evaluable` was the whole verdict and the record published `eligible`
-   *                    to a club without one requirement having been checked; it is now the same
-   *                    `unknown`-with-nothing-to-ask that `chicagoFmScholarship` gets.
    *
-   * The meter counts both, because the score is the share of the corpus that yields a real
-   * verdict. What it must not do is name a field for the second, and that is asserted here.
+   * ARDC Grants IS NO LONGER THE SECOND, and the reason is the whole of this round's matcher
+   * change. Its only hard constraint is an `other` tier quoting "Clubs and individuals need a
+   * fiscal sponsor. For-profits ineligible." — a real requirement in the funder's own words that
+   * no field in CONTRACT §3 can answer. Round nine made a record whose only hard requirement is
+   * unanswerable come back `unknown`; that rule was cleared by whatever ELSE a record happened to
+   * hold, so the identical sentence meant two different things in two records, and it was cleared
+   * from EVALUATION results, so it meant two different things for a student and for a club. It is
+   * gone — `matcher.ts` carries the account — and an axis nobody can answer decides nothing in
+   * either direction again.
+   *
+   * The meter counts what is left, because the score is the share of the corpus that yields a real
+   * verdict. What it must not do is name a field for a record the reader cannot resolve, and that
+   * is still asserted here.
    */
   it('meters a radio club against the org-facing half of the corpus', () => {
     const club: OrgProfile = { kind: 'organization', entity: 'club_501c3' };
     const report = computeCompleteness(club, fixturePrograms, NOW);
     expect(report.total).toBe(5);
-    expect(report.unknownCount).toBe(2);
+    expect(report.unknownCount).toBe(1);
     expect(report.fields).toEqual([{ field: 'arrlAffiliated', resolves: 1 }]);
-    expect(report.score).toBe(60);
+    expect(report.score).toBe(80);
   });
 
-  it('asks a school for nothing, and still does not judge the record it cannot check', () => {
+  it('asks a school for nothing, and names no field it could not use', () => {
     const school: OrgProfile = {
       kind: 'organization',
       entity: 'school_lea',
@@ -361,8 +366,8 @@ describe('the applicant shapes the corpus has to serve', () => {
     const report = computeCompleteness(school, fixturePrograms, NOW);
     // Nothing is waiting on THIS READER — which is what the meter promises…
     expect(report.fields).toEqual([]);
-    // …while ARDC's unanswerable `other` requirement stays unanswered. See the block above.
-    expect(report.unknownCount).toBe(1);
+    // …and nothing is waiting on anything else either. See the block above.
+    expect(report.unknownCount).toBe(0);
   });
 
   it('never asks an organisation for a field only a student profile has', () => {
