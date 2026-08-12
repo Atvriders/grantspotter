@@ -269,13 +269,58 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     // to be — a softening minted here would let a certificate student past a floor the funder wrote.
     for (const text of [
       "Bachelor's degree or higher in electronics, communications, or related fields",
-      'Accredited 4-year college or university, or graduate program.',
-      'Any accredited 4-year college or university, graduate studies permitted',
+      'Applicant must be enrolled in a certificate program at a 4-year college or university',
+      'A 4-year college or university leading to an undergraduate degree',
     ]) {
       expect(first({ Institution: text }).orUnrepresented).toBeUndefined();
     }
     // ...and neither does a sentence that never produced a floor at all.
     expect(first({ Institution: 'Any accredited 2- or 4-year college or university' }).orUnrepresented).toBeUndefined();
+  });
+
+  /**
+   * …AND "OR GRADUATE PROGRAM" IS A SECOND SCHOOL, NOT THE APPLICANT'S CREDENTIAL. THIS CASE IS
+   * THE INVERSION OF TWO LINES THAT STOOD IN THE CASE ABOVE, AND THEY WERE WRONG.
+   *
+   * The rule they encoded was `levels.size === 0` — record the tier only when the sentence created
+   * no level at all. `CREATES` reads "graduate program", "graduate studies" and "graduate school"
+   * and creates GRAD, so these sentences were held to have stated a credential, kept a hard
+   * `["BACH","GRAD"]` (WIDENS pulls the floor to BACH off the tier token anyway), and refused every
+   * associate- and certificate-seeking applicant. FOUR REAL RECORDS were still in that state after
+   * the round that was meant to end it: Atlanta Radio Club and Buckner WØVZK ("Accredited 4-year
+   * college or university, or graduate program."), Daze N5DD, and Ware NN3I ("…4-year US college or
+   * university or graduate school thereof").
+   *
+   * None of those sentences says the applicant must already hold a bachelor's. Each names a
+   * BUILDING and then another BUILDING, and an associate student at the first one satisfies it
+   * verbatim — the same defect, in the same words, as the 1,456 the tier rule was written for.
+   *
+   * MEASURED, BOTH DIRECTIONS, over 306,300 (profile, state, programme) pairs — 7 corpus profiles
+   * x 4 credential rungs x full/part-time x 51 states x 150 publishable programmes:
+   *
+   *   pairs moving INTO `ineligible`      0
+   *   pairs moving OUT of `ineligible`  928   every one to `unknown`; none to a positive
+   *   pairs moving INTO a positive        0
+   *   pairs moving OUT of a positive      0
+   *
+   * All 928 are CERT and ASSOC applicants on those four records. A bachelor's and a graduate
+   * applicant move zero pairs, full- and part-time, in all 51 states.
+   */
+  it('records the route where the funder named a second SCHOOL rather than a credential', () => {
+    for (const text of [
+      'Accredited 4-year college or university, or graduate program.',
+      'Any accredited 4-year college or university, graduate studies permitted',
+      'Any fully accredited 4-year US college or university or graduate school thereof',
+    ]) {
+      const spec = first({ Institution: text });
+      // The floor the funder plainly wrote is unchanged — this is not a return to `[]`, which told
+      // a certificate student at a trade school `eligible`.
+      expect(spec.degreeLevels).toEqual(['BACH', 'GRAD']);
+      // …and the tier phrase is recorded beside it, verbatim, so the two rungs it does not settle
+      // read `unknown` instead of `ineligible`.
+      expect(spec.orUnrepresented).toBeDefined();
+      expect(text).toContain(spec.orUnrepresented);
+    }
   });
 
   /**

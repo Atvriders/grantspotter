@@ -1,6 +1,12 @@
 /**
  * DOES THE SENTENCE NAME EVERY VALUE THE SPEC ADMITS?
  *
+ * ...AND, SINCE W12 AT THE FOOT OF THIS FILE, DOES ANY SPEC REFUSE AN APPLICANT ITS SENTENCE
+ * ADMITS? Those are the two directions, and for nine rounds this file only had rules for the
+ * first. `docs/how-this-catalogue-can-be-wrong.md` is the maintainer's account of what that cost,
+ * which shapes are guarded, and which are still guarded by nothing — read it before adding a rule
+ * here, and add to it when you find a tenth shape.
+ *
  * `spec-vs-sentence.test.ts` reads in one direction only. All seven of its rules detect a spec
  * NARROWER than the sentence printed beside it — a state the funder named and no tier admits, a
  * region resolved to too few states, an audience missing from an allow-list. Not one of them
@@ -485,37 +491,54 @@ const LEVEL_SAYS: Record<string, RegExp> = {
 const OR_HIGHER = /\bor (?:higher|above|beyond|greater)\b|\band (?:higher|above)\b/i;
 
 /**
- * A SCHOOL TIER IS NOT A CREDENTIAL, AND READING IT AS ONE IS WHAT MADE W3 AND W10 BOTH WRONG ABOUT
- * THE SAME TWENTY-SIX RECORDS.
+ * A SCHOOL TIER IS A ROUTE, NOT A CREDENTIAL BAR — AND THE CORRECTED VERSION OF THIS NOTE IS THE
+ * WHOLE OF ROUND TEN, BECAUSE THE VERSION THAT STOOD HERE WAS CONFIDENTLY FALSE AND 1,456 WRONG
+ * REFUSALS WERE SHIPPED ON THE STRENGTH OF IT.
  *
- * `LEVEL_SAYS` above reads bare year-phrases: "4-year" names BACH, "2-year" names ASSOC. That is
- * right about a CREDENTIAL — "a four-year degree" is a bachelor's — and wrong about a BUILDING. When
- * the year-phrase qualifies a school noun the funder has named a PLACE, and a place awards a BAND of
- * credentials, not one rung:
+ * WHAT IT SAID, VERBATIM, AND WHY IT IS UNTRUE:
  *
- *   "4-year college or university"   awards BACH *and* GRAD. A master's candidate attends a
- *                                    four-year university; nobody earns a certificate there.
- *   "2-year / community / junior
- *    college"                        awards CERT *and* ASSOC. A certificate student at a community
- *                                    college is a student at a community college.
- *   "trade / vocational / technical
- *    school"                         awards CERT — already read by `LEVEL_SAYS.CERT`.
+ *     "4-year college or university" awards BACH *and* GRAD. A master's candidate attends a
+ *     four-year university; NOBODY EARNS A CERTIFICATE THERE.
  *
- * Both halves of that fact were load-bearing and both were missing, in opposite directions:
+ * People earn certificates at four-year universities constantly — graduate certificates,
+ * post-baccalaureate certificates, undergraduate certificates — and plenty of four-year
+ * institutions award associate degrees as well. The clause was invented to justify a downward
+ * probe, was never checked against anything, and then a product change was built on it. That is
+ * the shape to watch for in this file: A SENTENCE OF WORLD-KNOWLEDGE WITH NO MEASUREMENT UNDER IT,
+ * loud enough that the next reader takes it as settled.
  *
- *   UPWARD, W3 flagged 20 records as over-claims for admitting GRAD under "4-year college or
- *   university" — every record the round-nine floor fix had just corrected. They are not over-claims.
- *   The funder named the building a graduate student studies in.
+ * WHAT IS ACTUALLY TRUE, AND IT IS A FACT ABOUT THE SCHEMA RATHER THAN ABOUT AMERICAN EDUCATION:
+ * "4-year college or university" is a statement about the SCHOOL THE APPLICANT ATTENDS.
+ * `StudentProfile.degreeLevel` is a statement about THE CREDENTIAL THE APPLICANT IS PURSUING.
+ * They are different questions, and this schema has a field for the second and none for the first
+ * (`institution` is free text no axis reads). So the tier phrase:
  *
- *   DOWNWARD, W10 accused 6 records of enforcing nothing because they did not refuse a CERTIFICATE
- *   student under "Any accredited 2- or 4-year college or university". That accusation was false:
- *   the union of the two tiers is the whole ladder, so there is no rung the sentence puts outside,
- *   and `degreeLevels: []` is the honest record of a funder who barred nobody by credential. Six
- *   entries of `KNOWN_TOOTHLESS` were a rule crying wolf, pinned as a product defect.
+ *   ADMITS  the rungs that plainly satisfy it. A bachelor's or graduate applicant is, without
+ *           further argument, a student at a four-year college or university. `degreeLevels`
+ *           records exactly them, and `TIER_AWARDS` below is that list — an ADMISSION list.
  *
- * This is a fact about American higher education, restated here rather than imported, for the reason
- * the header gives — `institution.ts` reaches the same reading through `statesAFourYearFloor`, and
- * the two must be able to disagree or neither is evidence about the other.
+ *   REFUSES nobody. An associate- or certificate-seeking student AT a four-year university
+ *           satisfies the sentence verbatim; a certificate student at a TRADE school does not.
+ *           The credential does not settle which, and neither does anything else this schema
+ *           holds, so the honest verdict for those two rungs is `unknown` — which is what
+ *           `institution.ts` now produces, by recording the funder's own tier phrase in
+ *           `ConstraintAlternatives.orUnrepresented`, a field that can only turn a `fail` into an
+ *           `unknown` and never a refusal.
+ *
+ * THIS IS THE MIRROR IMAGE OF AN INFERENCE THIS SAME FILE ALREADY DECLINES, AND THE FILE SHIPPED
+ * BOTH ANSWERS TO ONE QUESTION FOR A ROUND. The cross-axis note near the end reads
+ * "Accredited 4-year college or university in NC, VA, WV, MD or TN" and refuses to treat it as a
+ * residence bar, because it "names where the SCHOOL is, and `state` on a profile is where the
+ * APPLICANT lives … the schema has no field for the other one". The degree half of that very
+ * sentence is the same shape and was being read the opposite way. When one rule in this file
+ * declines an inference, THE MIRRORED RULE MUST BE MADE TO ANSWER FOR ITS OWN.
+ *
+ * SO THE READING IS SPLIT, and the split is the correction. `levelsNamed` is the ADMISSION width
+ * W3 measures and keeps the tier band. `credentialLevelsNamed` is the REFUSAL floor W10 measures
+ * and reads the tier band NOT AT ALL. Neither of the previous states is restored: `degreeLevels:
+ * []` on a bare tier is a false include (a certificate student at a trade school reads `eligible`
+ * for an award whose funder wrote "4-year college"), and a `fail` on that rung is the false
+ * refusal this round exists to undo. W12 below is the rule that now holds the second half down.
  */
 const SCHOOL_NOUN = String.raw`(?:colleges?|universit(?:y|ies)|institutions?|schools?)`;
 const FOUR_YEAR_SCHOOL = new RegExp(
@@ -527,17 +550,23 @@ const TWO_YEAR_SCHOOL = new RegExp(
     String.raw`|\b(?:community|junior)\s+colleges?\b`,
   'i',
 );
-/** The band of credentials each named school tier awards. See the note above. */
+/**
+ * The rungs each named school tier ADMITS WITHOUT FURTHER ARGUMENT — an admission list, never a
+ * refusal list. See the note above: the rungs not listed here are not excluded by the tier, they
+ * are unsettled by it, and `unknown` rather than `fail` is what the product owes them.
+ */
 const TIER_AWARDS: Array<[RegExp, readonly string[]]> = [
   [FOUR_YEAR_SCHOOL, ['BACH', 'GRAD']],
   [TWO_YEAR_SCHOOL, ['CERT', 'ASSOC']],
 ];
 
 /**
- * Every degree level the sentence names — outright, through "or higher", or through the band of
- * credentials a school tier it names awards. Split out of `levelsUnnamed`, for the reason
- * `placesNamed` gives: W3 and W10 read the same sentence and must reach the same reading of it, or
- * one of them is quietly excusing what the other flags.
+ * EVERY DEGREE LEVEL THE SENTENCE NAMES AS ADMITTED — outright, through "or higher", or through a
+ * school tier it names. This is W3's vocabulary and W3 measures WIDTH: which values may a spec
+ * publish without over-claiming. A tier belongs in it, because "4-year college or university" does
+ * say a bachelor's and a graduate applicant are welcome.
+ *
+ * It is deliberately NOT the vocabulary W10 reads. See `credentialLevelsNamed`.
  */
 function levelsNamed(rawText: string): string[] {
   const named = new Set<string>(LEVEL_ORDER.filter((l) => LEVEL_SAYS[l].test(rawText)));
@@ -545,6 +574,91 @@ function levelsNamed(rawText: string): string[] {
     if (tier.test(rawText)) for (const level of awards) named.add(level);
   }
   if (OR_HIGHER.test(rawText)) {
+    const ceiling = Math.max(-1, ...[...named].map((l) => LEVEL_ORDER.indexOf(l)));
+    if (ceiling >= 0) for (const level of LEVEL_ORDER.slice(ceiling + 1)) named.add(level);
+  }
+  return LEVEL_ORDER.filter((l) => named.has(l));
+}
+
+/**
+ * EVERY DEGREE LEVEL THE SENTENCE NAMES AS A CREDENTIAL, WITH THE SCHOOL TIERS STRUCK OUT OF IT
+ * FIRST. This is the vocabulary a REFUSAL may be read from, and the tier is struck out for the
+ * reason the note above gives: a tier says nothing about the applicant's credential in either
+ * direction, so it may not put a rung outside.
+ *
+ * The strike-out is what makes the two readings agree instead of contradicting each other.
+ * Without it, "Any accredited 2- or 4-year college or university" reads BACH through
+ * `LEVEL_SAYS.BACH`'s bare "4-year" and ASSOC through `LEVEL_SAYS.ASSOC`'s bare "2-year", computes
+ * a floor at ASSOC, and demands a refusal of a certificate student — the six false accusations
+ * `KNOWN_TOOTHLESS` was carrying at the start of round nine. And "Accredited 4-year college or
+ * university" reads BACH, computes a floor at BACH, and demands the refusal of the associate
+ * student that IS the 1,456. THE RULE WAS ASKING FOR THE REGRESSION, and only `orUnrepresented`
+ * routing those records into a bucket that asks them nothing was hiding it.
+ *
+ * `institution.ts` reaches the same reading through `statesAFourYearFloor` and `CREATES`; it is
+ * restated rather than imported, for the reason the file header gives — the two must be able to
+ * disagree, or neither is evidence about the other.
+ */
+/**
+ * THE TIER'S YEAR TOKEN STRUCK OUT, AND THE SCHOOL NOUNS WITH IT — AND NOTHING ELSE.
+ *
+ * TWO STRIKES, TWO DIFFERENT MISTAKES THIS RULE MADE BEFORE IT WAS RIGHT, both worth recording
+ * because both are the SAME CONFLATION the doctrine above is about, arriving from new directions.
+ *
+ * THE YEAR TOKEN. The first version deleted the whole tier match, and threw away words that were
+ * not the tier. ECARS writes "4-year UNDERGRADUATE institution" and Challenge Met writes
+ * "2 or 4-year college, TECHNICAL SCHOOL, or university" — the tier regex spans a few filler words
+ * on its way to the school noun, so blanking the match ate the funder's own credential word and
+ * left W12 accusing both records of refusing somebody their sentence admits. Removing only
+ * "4-year" / "2- or 4-year" / "community" / "junior" leaves every other word to be read exactly as
+ * `LEVEL_SAYS` reads it anywhere else. Applied inside tier matches only, which is what keeps
+ * "a four-year DEGREE in engineering" — a credential with no school noun after it, so no tier match
+ * at all — reading as BACH.
+ *
+ * THE SCHOOL NOUN. `LEVEL_SAYS.CERT` contains "technical school", "professional school", "trade".
+ * For W3 that is correct and deliberate: a funder who names a trade school has said a certificate
+ * student is WELCOME, which is a fact about admission. Read as a fact about the applicant's
+ * credential it is the four-year error in miniature, and it produced exactly one false accusation:
+ * the Six Meter Club of Chicago writes "…at a regionally accredited TECHNICAL SCHOOL, community
+ * college, college or university LEADING TO AN UNDERGRADUATE DEGREE", so W12 read CERT as a
+ * credential the funder named and demanded that a certificate student not be refused — against a
+ * clause in the same sentence that refuses them in the funder's own words. A certificate is not an
+ * undergraduate degree. THE SCHOOL IS WHERE YOU ARE; THE DEGREE IS WHAT YOU ARE FOR; this file has
+ * now confused the two in three separate places and each one cost a round.
+ *
+ *
+ * The first version of this deleted the whole tier match, and it was wrong in a way worth
+ * recording, because it is the same class of mistake as the doctrine it was written to fix: it
+ * threw away words that were not the tier. ECARS writes "4-year UNDERGRADUATE institution" and
+ * Challenge Met writes "2 or 4-year college, TECHNICAL SCHOOL, or university" — the tier regex
+ * spans a few filler words on its way to the school noun, so blanking the match ate the funder's
+ * own credential word and left W12 accusing both records of refusing somebody their sentence
+ * admits. Removing only "4-year" / "2- or 4-year" / "community" / "junior" leaves every other word
+ * in the sentence to be read exactly as `LEVEL_SAYS` reads it anywhere else.
+ *
+ * Applied inside tier matches only, which is what keeps "a four-year DEGREE in engineering" — a
+ * credential with no school noun after it, so no tier match at all — reading as BACH.
+ */
+const TIER_YEAR_TOKEN = new RegExp(
+  String.raw`^\s*(?:(?:2|two)\s*-?\s*(?:or\s+(?:4|four)\s*-?\s*)?years?|(?:4|four)\s*-?\s*years?|(?:community|junior))\s*-?\s*`,
+  'i',
+);
+
+/** A school, not a credential. `\btrade\b` alone stays readable — "a trade certificate" is one. */
+const SCHOOL_NOUN_ONLY = /\b(?:trade|vocational|technical|professional)\s+schools?\b/gi;
+
+function withoutTierTokens(rawText: string): string {
+  let sentence = rawText;
+  for (const [tier] of TIER_AWARDS) {
+    sentence = sentence.replace(new RegExp(tier.source, 'gi'), (match) => match.replace(TIER_YEAR_TOKEN, ' '));
+  }
+  return sentence.replace(SCHOOL_NOUN_ONLY, ' ');
+}
+
+function credentialLevelsNamed(rawText: string): string[] {
+  const sentence = withoutTierTokens(rawText);
+  const named = new Set<string>(LEVEL_ORDER.filter((l) => LEVEL_SAYS[l].test(sentence)));
+  if (OR_HIGHER.test(sentence)) {
     const ceiling = Math.max(-1, ...[...named].map((l) => LEVEL_ORDER.indexOf(l)));
     if (ceiling >= 0) for (const level of LEVEL_ORDER.slice(ceiling + 1)) named.add(level);
   }
@@ -601,28 +715,54 @@ describe('W3 — a degree level the level list admits, that the funder never nam
   });
 
   /**
-   * …AND A SCHOOL TIER NAMES THE BAND IT AWARDS, which is the reading the 20 records the round-nine
-   * floor fix corrected turn on. Asserted here as a rule about the sentence, not about those
-   * records, so it goes red if the reading is ever quietly narrowed back.
+   * …AND A SCHOOL TIER ADMITS A BAND AND REFUSES NOBODY, WHICH IS TWO CLAIMS AND USED TO BE ONE.
+   *
+   * The version of this case that stood here asserted a single reading and justified it with
+   * "a certificate is not awarded by a four-year university", which is false — see the note on
+   * `TIER_AWARDS`. The ADMISSION half survived the correction unchanged and is asserted first,
+   * because it is still what stops a spec claiming the funder welcomes a rung they never wrote.
+   * The REFUSAL half is new, and it is the half whose absence cost 1,456 applicants: the same
+   * sentence, read for what it puts OUTSIDE, puts nothing outside.
    */
-  it('…and a named school tier names every credential that school awards, and no other', () => {
+  it('…and a named school tier admits a band of credentials and puts no rung outside', () => {
     const fourYear = 'Accredited 4-year college or university';
-    // The building a graduate student studies in. GRAD is named; the funder wrote the place.
+    // ADMISSION. A bachelor's and a graduate applicant satisfy the sentence without further
+    // argument, so a spec publishing exactly them over-claims nothing.
     expect(levelsNamed(fourYear)).toEqual(['BACH', 'GRAD']);
     expect(levelsUnnamed(institutionAdmitting(['BACH', 'GRAD']), fourYear)).toEqual([]);
-    // …and it reaches no lower. A certificate is not awarded by a four-year university, so a spec
-    // admitting one under this sentence is still the over-claim W3 exists to find.
+    // …and it reaches no further. A spec publishing CERT here claims the funder welcomes a
+    // certificate student whose school is a TRADE school, which this sentence does not say — the
+    // false include that `degreeLevels: []` shipped, and still the over-claim W3 exists to find.
+    // What the certificate student is owed is `unknown`, and `orUnrepresented` is where that
+    // lives; it is not a reason to widen this list.
     expect(levelsUnnamed(institutionAdmitting(['CERT', 'BACH', 'GRAD']), fourYear)).toEqual(['CERT']);
-    // The two-year tier awards downward, not upward: certificates and associate degrees.
+    // REFUSAL, and the assertion the old doctrine made impossible: read for a floor, the tier
+    // yields none, so no rung is below it and no applicant may be refused on this sentence's
+    // credential axis. Before round ten this returned an ASSOC probe and W10 demanded a `fail` on
+    // it. W12 below carries the same claim end-to-end, over the real corpus.
+    expect(credentialLevelsNamed(fourYear)).toEqual([]);
+    expect(levelExcluded(fourYear)).toBeUndefined();
+    // The two-year tier is the same shape in the other direction: it admits certificate and
+    // associate students outright, and does NOT refuse the bachelor's student doing their first
+    // two years at a community college before transferring.
     expect(levelsNamed('Accredited 2-year college')).toEqual(['CERT', 'ASSOC']);
     expect(levelsUnnamed(institutionAdmitting(['ASSOC', 'BACH']), 'Accredited 2-year college')).toEqual(['BACH']);
+    expect(credentialLevelsNamed('Accredited 2-year college')).toEqual([]);
     expect(levelsNamed('a community college')).toEqual(['CERT', 'ASSOC']);
     // Both tiers named is the whole ladder, and that is why those six records bar nobody by
     // credential — see the `KNOWN_TOOTHLESS` note.
     expect(levelsNamed('Any accredited 2- or 4-year college or university')).toEqual(LEVEL_ORDER);
-    // A BARE year-phrase is a credential, not a building, and keeps `LEVEL_SAYS`'s narrow reading:
-    // "a four-year degree" is a bachelor's and says nothing about a master's.
-    expect(levelsNamed("a four-year degree in engineering")).toEqual(['BACH']);
+    expect(credentialLevelsNamed('Any accredited 2- or 4-year college or university')).toEqual([]);
+    // A BARE year-phrase IS a credential, not a building, and keeps `LEVEL_SAYS`'s narrow reading
+    // in both vocabularies: "a four-year degree" is a bachelor's, says nothing about a master's,
+    // and DOES put the associate student outside — that is a funder writing a floor.
+    expect(levelsNamed('a four-year degree in engineering')).toEqual(['BACH']);
+    expect(credentialLevelsNamed('a four-year degree in engineering')).toEqual(['BACH']);
+    expect(levelExcluded('a four-year degree in engineering')?.excluded).toBe('degreeLevel ASSOC');
+    // …and a funder who writes BOTH — the tier and the credential — is read as having written the
+    // credential. Four records in this corpus put them in separate clauses.
+    const both = 'an accredited 2- or 4-year college or university with intent to complete a 4-year degree or higher';
+    expect(credentialLevelsNamed(both)).toEqual(['BACH', 'GRAD']);
   });
 });
 
@@ -1408,20 +1548,28 @@ function placeExcluded(rawText: string): Probe | undefined {
 function levelExcluded(rawText: string): Probe | undefined {
   // DOWNWARD ONLY, and this is W5's doctrine applied to the other ladder in the schema: "the
   // sentence's LOWEST named class is the most generous reading of what the funder asked for".
-  // Upward is not probed at all, and the school-tier note on `levelsNamed` is why the question no
-  // longer even arises: a funder who wrote "4-year college or university" named the building a
-  // graduate student studies in, so GRAD is NAMED rather than arguably-excluded. Reading it the
-  // other way would report a defect on every record whose funder wrote "college" and meant the
-  // whole building, and that cry-wolf is how an exemption gets bolted on — measured, at a 36% rate,
-  // in the ceiling case below.
+  // Upward is not probed at all — the ceiling case below measures why, at a 36% cry-wolf rate.
+  //
+  // AND OFF A CREDENTIAL ONLY, WHICH IS ROUND TEN'S CORRECTION AND THE ONE LINE IN THIS FUNCTION
+  // THAT MATTERS. This read `levelsNamed`, which folds in the band a school TIER admits, so
+  // "Accredited 4-year college or university" computed a floor at BACH and this rule DEMANDED that
+  // the associate student be refused. The product obliged, in `85d6dcf`, and 1,456 applicants were
+  // refused a sentence they satisfy. A tier is not a credential statement in either direction —
+  // see the note on `credentialLevelsNamed` — so it may put no rung outside, and W12 below now
+  // asserts the opposite of what this line used to require. The two rules read one vocabulary each
+  // and no longer contradict each other.
   //
   // Downward is where the false include lives — and only when the sentence leaves a rung below.
-  // "Any accredited 2- or 4-year college or university" names both tiers, whose bands cover the
-  // whole ladder, so there is no such rung and this arm correctly builds no probe from it.
-  const named = levelsNamed(rawText);
+  const named = credentialLevelsNamed(rawText);
   if (named.length === 0) return undefined;
   const floor = Math.min(...named.map((l) => LEVEL_ORDER.indexOf(l)));
   if (floor <= 0) return undefined;
+  // …and a rung a NAMED TIER admits is not outside either, however the credential clause reads.
+  // NEAR-Fest's "Any undergraduate degree or a two-year technical school in radio communications"
+  // puts its floor at ASSOC through "undergraduate" while its second route admits the certificate
+  // student outright. A sentence with two routes is answered by the wider of them.
+  const admitted = new Set(levelsNamed(rawText));
+  if (admitted.has(LEVEL_ORDER[floor - 1])) return undefined;
   const outside = LEVEL_ORDER[floor - 1];
   return {
     profile: { ...ENFORCEMENT_PROBE, degreeLevel: outside as DegreeLevel },
@@ -1639,9 +1787,21 @@ interface EnforcementCensus {
 }
 
 /**
- * THE SENTENCE NAMES A SCHOOL TIER AND THIS RULE STILL BUILDS NO PROBE FROM IT. Two records, and
- * they are here for two different reasons, both named so that a third of either kind is a question
- * asked again rather than a silent arrival:
+ * THE SENTENCE NAMES A SCHOOL TIER AND THIS RULE BUILDS NO PROBE FROM IT. TEN RECORDS.
+ *
+ * EIGHT OF THEM ARE ROUND TEN'S CORRECTION LANDING, and they are the honest form of a hole this
+ * rule used to fill with a wrong answer. Baulch, Bennett, Bendicksen, Cebik, Goldthorpe, Gwinnett,
+ * Laughlin and Morris all state one thing and one thing only — "4-year college or university",
+ * with no accreditation clause and no enrolment clause. Until this round the rule read that as a
+ * credential floor, built an associate-degree applicant from it, and required the product to
+ * refuse them; the product obliged and 1,456 applicants were refused a sentence they satisfy. A
+ * tier is a statement about the SCHOOL and this schema has no field for it, so there is no
+ * applicant to build and NOTHING FOR THIS RULE TO CHECK. Counting them here says exactly that,
+ * which is worth more than a confident wrong answer — but it is a real hole, it is eight records
+ * wide, and the maintainer's note at the end of this file lists it as unguarded.
+ *
+ * THE OTHER TWO ARE OLDER, and they are here for two different reasons, both named so that an
+ * eleventh of either kind is a question asked again rather than a silent arrival:
  *
  *   Tom and Judith Comstock   "Applicant must be a high school senior accepted at a 2 or 4-year
  *                             college or a student currently enrolled at a 2 or 4-year college."
@@ -1722,12 +1882,18 @@ function readEnforcementWidth(all: Array<{ program: Program; c: Constraint }>): 
  *
  * THE 26 CLOSED IN TWO DIFFERENT WAYS, and it matters which, because only one of them is a fix:
  *
- *   20 WERE A REAL DEFECT AND THE PRODUCT FIXED IT. `institution.ts` gained `statesAFourYearFloor`:
- *      a bare four-year school tier, on a sentence where no clause created a level and no lower tier
- *      is named, now publishes `['BACH','GRAD']` instead of `[]`. Measured end-to-end below, on the
- *      Bendicksen record, through `matchProgram`: an associate-degree student who read `eligible`
- *      now reads `ineligible`, and the bachelor's and graduate applicants the funder DID name are
- *      untouched.
+ *   20 WERE A REAL DEFECT AND THE PRODUCT FIXED IT — AND THEN OVERSHOT, AND THE CORRECTED ACCOUNT
+ *      IS HERE BECAUSE THE OVERSHOOT WAS DOCUMENTED IN THIS PARAGRAPH AS A SUCCESS. `institution.ts`
+ *      gained `statesAFourYearFloor`: a bare four-year school tier, on a sentence where no clause
+ *      created a level and no lower tier is named, publishes `['BACH','GRAD']` instead of `[]`.
+ *      What stood here was "an associate-degree student who read `eligible` now reads `ineligible`",
+ *      written as the proof the fix worked. It was the defect: 1,456 applicants refused a sentence
+ *      they satisfy verbatim, because a school tier had been written into the applicant's own
+ *      CREDENTIAL field. The floor stays — it is what stops a certificate student at a TRADE school
+ *      reading `eligible` — and the funder's tier phrase is now recorded beside it in
+ *      `orUnrepresented`, so those two rungs read `unknown`. Measured end-to-end below, on the
+ *      Bendicksen record, through `matchProgram`: `unknown` for the associate and certificate
+ *      student, `eligible` for the bachelor's and graduate applicants the funder DID name.
  *
  *    6 WERE THIS RULE CRYING WOLF, and no product change was needed or made. All six read "…2- or
  *      4-year college or university", and W10 accused them of admitting a CERTIFICATE student the
@@ -1740,13 +1906,20 @@ function readEnforcementWidth(all: Array<{ program: Program; c: Constraint }>): 
  *      rule could not see because it probed one of the institution axis's three enforceable fields.
  *      It now probes all three it can build an applicant for.
  *
- * SO THE PIN IS RETIRED AND THE COVERAGE IS LARGER, which is the only combination worth having:
- * 203 constraints checked -> 238, over 271 probes rather than 203, and W3's own population went
- * 33 -> 53 as the 20 stopped being skipped for holding nothing.
+ * SO THE PIN IS RETIRED, and W3's own population went 33 -> 53 as the 20 stopped being skipped for
+ * holding nothing. THE COVERAGE FIGURE IS NOT THE BOAST IT WAS: round nine recorded "203 checked ->
+ * 238" as the fix's second achievement, and 24 of that rise was this rule demanding the refusal
+ * that IS the overshoot. It reads 214 now. A count of constraints checked measures how much this
+ * rule ASKS, not how much of it is worth asking, and a rise in it is not by itself evidence of
+ * anything. That is the sentence round ten would go back and put in round nine's commit message.
  *
  * IT MAY ONLY EVER GROW BACK THROUGH A RED TEST. An empty equality is the strongest form this
  * assertion has: any record that starts admitting the applicant its own sentence excludes fails
  * here with its own name in the diff, and there is no longer any list to quietly add it to.
+ *
+ * AND IT IS ONLY HALF THE QUESTION. Every rule in this file above W12 measures a spec that admits
+ * TOO MUCH. Nothing in it measured a spec that REFUSES too much until W12, which is how a change
+ * whose whole content was 1,456 new refusals passed this file green.
  */
 const KNOWN_TOOTHLESS: string[] = [];
 
@@ -1804,19 +1977,32 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // Vacuity guard, and these six numbers add to all 652 constraints in the corpus — every one is
     // either checked or in a named bucket, and no constraint falls out of this rule unseen.
     //
-    //   checked        238  the funder named values on an axis this schema holds, and closed them.
-    //                       203 UNTIL ROUND NINE. It rose because the institution arm now builds an
-    //                       applicant from all three enforceable fields of that axis rather than
-    //                       one: 35 constraints state an accreditation or a full-time bar without
-    //                       stating a degree floor, and every one of them was `silent` before.
-    //   probes         260  applicants built, which is the number of chances the rule had to be
-    //                       wrong. It took none.
+    //   checked        214  the funder named values on an axis this schema holds, and closed them.
+    //                       203 BEFORE ROUND NINE, 238 AFTER IT, AND 214 NOW — and the fall is the
+    //                       point of round ten rather than a loss to be regretted. 24 of those 238
+    //                       were the institution arm building an applicant off a SCHOOL TIER and
+    //                       demanding that they be refused; a tier refuses nobody, so the demand
+    //                       was for the 1,456 wrong refusals. See `credentialLevelsNamed`.
+    //   probes         219  applicants built, which is the number of chances the rule had to be
+    //                       wrong. It took none. 260 before the 29 tier-derived level probes went.
     //   opened          36  "etc.", "such as", "or similar" — the funder declining to close a list.
-    //   unrepresented   44  `orUnrepresented` — see the note on it above; this is D3 occurring
+    //   unrepresented   60  `orUnrepresented` — see the note on it above; this is D3 occurring
     //                       naturally, and it is the bucket to watch, because a constraint moving
-    //                       INTO it stops being checked at all.
-    //   typeOnly         2  the sentence bounds the school and this rule builds no applicant from
-    //                       it — Comstock and NEAR-Fest, both named above, for two reasons.
+    //                       INTO it stops being checked at all. 44 before `institution.ts` began
+    //                       recording the tier phrase; +20 in round nine's fix and +4 more in round
+    //                       ten's (Atlanta Radio Club, Buckner, Daze, Ware — the four whose "or
+    //                       graduate program" clause made `levels.size === 0` the wrong question),
+    //                       less the 8 that have no other probe left and are counted below instead.
+    //   typeOnly        10  the sentence bounds the SCHOOL and this rule builds no applicant from
+    //                       it. Comstock and NEAR-Fest are the two named above. The other 8 are the
+    //                       bare-tier records whose sentence says nothing else checkable — Baulch,
+    //                       Bennett, Bendicksen, Cebik, Goldthorpe, Gwinnett, Laughlin, Morris, all
+    //                       "4-year college or university" with no accreditation and no enrolment
+    //                       clause. They are NOT unchecked because a field was set on them; they are
+    //                       unchecked because the funder's sentence contains no statement about the
+    //                       applicant that this schema can test. That is the honest bucket for them
+    //                       and it is the one this rule is blindest in — see the maintainer's note
+    //                       at the end of this file.
     //   silent         332  the sentence names nothing on an axis a sentence can be read against —
     //                       `recommendation`, `financial_need`, `other`, and the many records whose
     //                       rawText is "Any" or a bare place name on an axis about schooling.
@@ -1835,25 +2021,38 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
       unrepresented: census.unrepresented,
       typeOnly: census.typeOnly,
       silent: census.silent,
-    }).toEqual({ checked: 238, probes: 260, opened: 36, unrepresented: 44, typeOnly: 2, silent: 332 });
+    }).toEqual({ checked: 214, probes: 219, opened: 36, unrepresented: 60, typeOnly: 10, silent: 332 });
     expect(
       census.checked + census.opened + census.unrepresented + census.typeOnly + census.silent,
     ).toBe((await everyConstraint()).length);
   });
 
   /**
-   * …AND THE 20 THAT WERE REAL ARE FIXED, read end-to-end rather than off the spec.
-   * `evaluateConstraint` returning `pass` is not by itself a claim about a student; `matchProgram`
-   * returning `eligible` is. This case takes the record the pin named first, hands the whole program
-   * to the matcher, and shows the verdict a community-college student is now actually shown.
+   * …AND THE 20 THAT WERE REAL ARE ANSWERED WITHOUT A VERDICT BEING INVENTED IN EITHER DIRECTION,
+   * read end-to-end rather than off the spec. `evaluateConstraint` returning `pass` is not by itself
+   * a claim about a student; `matchProgram` returning `eligible` is, and returning `ineligible` is a
+   * claim too — the expensive one, because it hides the money silently and forever.
    *
-   * IT IS THE SAME CASE, INVERTED RATHER THAN DELETED. The previous gate agent's instruction was
-   * "WHEN THESE LINES GO RED THE DEFECT IS FIXED: delete this case and the 26 entries above."
-   * Deleting it would leave nothing standing between this corpus and the defect coming back, and a
-   * fix with no test is a fix until the next extractor change. Every line below is the line that was
-   * there, with the expectation moved to what the funder's sentence says.
+   * THIS CASE HAS NOW BEEN WRITTEN THREE TIMES AND ITS EXPECTATION HAS MOVED TWICE, WHICH IS THE
+   * WHOLE HISTORY OF THIS AXIS IN ONE PLACE:
+   *
+   *   round eight   `expect(matchProgram(assoc, alone, NOW).kind).toBe('eligible')`
+   *                 …asserted as a DEFECT, pinned in `KNOWN_TOOTHLESS`. Correct that it was wrong:
+   *                 a certificate student at a trade school is not admitted by "4-year college".
+   *   round nine    `.toBe('ineligible')`, asserted as the fix. 1,456 wrong refusals, and the
+   *                 assertion said so on the line above it — "the axis now refuses an
+   *                 associate-degree student" — without anyone asking whether it should.
+   *   round ten     `.toBe('unknown')`. The sentence names a school and the profile field holds a
+   *                 credential; the two are different questions and this schema has a field for
+   *                 only one of them. `unknown` is not a compromise between the two previous
+   *                 answers, it is the only one of the three that neither hides the award nor
+   *                 spends the applicant's fee on a claim the funder never made.
+   *
+   * BOTH DIRECTIONS ARE ASSERTED HERE, TOGETHER, so that a fourth round cannot move one of them
+   * without the other going red in the same file. That is the discipline whose absence produced
+   * rounds nine and ten.
    */
-  it('…and the false include is closed: the verdict a student one rung below the floor is shown', async () => {
+  it('…and neither verdict is invented: the rungs the sentence settles, and the rungs it does not', async () => {
     const { programs } = await corpus();
     const bendicksen = programs.find((p) => p.name.includes('Bendicksen'));
     if (bendicksen === undefined) throw new Error('The Richard W. Bendicksen Scholarship is missing from the corpus');
@@ -1862,20 +2061,43 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // From the sentence first: change the funder's wording and this line fails before the rest.
     expect(inst.rawText).toContain('4-year college');
     expect(inst.hard).toBe(true);
-    // The four-year tier names the band that school awards, and nothing below it.
+    // The four-year tier ADMITS this band outright, and this is still a hard constraint that
+    // publishes a floor — `degreeLevels: []` is not what replaced the refusal.
     expect(levelsNamed(inst.rawText)).toEqual(['BACH', 'GRAD']);
-    // The axis now refuses an associate-degree student…
-    const assoc = { ...ENFORCEMENT_PROBE, degreeLevel: 'ASSOC' as const };
-    expect(evaluateConstraint(inst.spec, assoc, NOW, inst.rawText).status).toBe('fail');
-    // …and that refusal reaches the verdict, through the whole matcher, on the funder's own program.
+    expect((inst.spec as { degreeLevels?: string[] }).degreeLevels).toEqual(['BACH', 'GRAD']);
+    // …and it puts no rung outside, so the funder's own tier phrase is carried as the route this
+    // schema cannot check. That field is the entire mechanism, so it is asserted verbatim.
+    expect(credentialLevelsNamed(inst.rawText)).toEqual([]);
+    expect(inst.spec.orUnrepresented).toBe('4-year college or university');
+    expect(inst.rawText).toContain(inst.spec.orUnrepresented);
+
+    // DIRECTION ONE — THE RUNGS THE SENTENCE DOES NOT SETTLE ARE NEITHER REFUSED NOR ADMITTED.
+    // An associate- or certificate-seeking student AT a four-year university satisfies this
+    // sentence verbatim; one at a trade school does not; the profile cannot say which. `unknown`
+    // is the answer that costs the applicant nothing and claims nothing on the funder's behalf.
     const alone: Program = { ...bendicksen, constraints: [inst] };
-    expect(matchProgram(assoc, alone, NOW).kind).toBe('ineligible');
-    // A CERTIFICATE student is one further down and must be refused too — the rung this rule probes.
-    expect(matchProgram({ ...ENFORCEMENT_PROBE, degreeLevel: 'CERT' }, alone, NOW).kind).toBe('ineligible');
-    // THE OTHER DIRECTION, and it is the half a fix in this direction can quietly undo: both
-    // applicants the funder DID name are admitted, and the graduate student is the one an over-tight
-    // reading ("4-year" names BACH alone) would have newly refused. Zero false excludes was the
-    // measured state at the start of this round and it is not this round's to spend.
+    const assoc = { ...ENFORCEMENT_PROBE, degreeLevel: 'ASSOC' as const };
+    const cert = { ...ENFORCEMENT_PROBE, degreeLevel: 'CERT' as const };
+    expect(evaluateConstraint(inst.spec, assoc, NOW, inst.rawText).status).toBe('unknown');
+    expect(matchProgram(assoc, alone, NOW).kind).toBe('unknown');
+    expect(matchProgram(cert, alone, NOW).kind).toBe('unknown');
+    // NOT `eligible` — the round-eight state, which told a trade-school certificate student they
+    // qualified for an award whose funder wrote "4-year college or university".
+    for (const p of [assoc, cert]) {
+      expect(matchProgram(p, alone, NOW).kind).not.toBe('eligible');
+      expect(matchProgram(p, alone, NOW).kind).not.toBe('eligible_preferred');
+    }
+    // …and an `unknown` that asks the reader for nothing is the shape this corpus already has a
+    // doctrine for: the funder's sentence is what the reader must go and read. Narrowed on `kind`
+    // rather than read off the union, so this line cannot survive the verdict changing shape.
+    const assocVerdict = matchProgram(assoc, alone, NOW);
+    if (assocVerdict.kind !== 'unknown') throw new Error('the assertion above has already failed');
+    expect(assocVerdict.missingProfileFields).toEqual([]);
+
+    // DIRECTION TWO — AND THE RUNGS IT DOES SETTLE ARE STILL ADMITTED. This is the half a
+    // correction in the other direction quietly undoes, and it is asserted in the same test for
+    // that reason. An over-tight reading ("4-year" names BACH alone) newly refuses the graduate
+    // applicant; a reading that dropped the floor entirely admits both of the two above.
     expect(matchProgram(ENFORCEMENT_PROBE, alone, NOW).kind).toBe('eligible');
     expect(matchProgram({ ...ENFORCEMENT_PROBE, degreeLevel: 'GRAD' }, alone, NOW).kind).toBe('eligible');
   });
@@ -1917,12 +2139,20 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
       institutionAdmitting(['CERT', 'ASSOC', 'BACH', 'GRAD']),
       'Any accredited college, university or trade school',
     ).map((p) => p.excluded)).toEqual(['accredited false']);
-    // A sentence that DOES name a tier is read, and downward only.
+    // …AND NEITHER IS THE FLOOR, WHEN THE ONLY THING NAMING IT IS A SCHOOL TIER. This line read
+    // `['degreeLevel ASSOC', 'accredited false']` for one round, and the first of those two was
+    // this rule requiring the 1,456 refusals — see `credentialLevelsNamed`. The accreditation bar
+    // the funder DID write about the applicant survives, and is the whole of what is left.
     const probes = theApplicantsTheSentenceExcludes(
       institutionAdmitting(['BACH', 'GRAD']),
       'Accredited 4-year college or university',
     );
-    expect(probes.map((p) => p.excluded)).toEqual(['degreeLevel ASSOC', 'accredited false']);
+    expect(probes.map((p) => p.excluded)).toEqual(['accredited false']);
+    // A sentence that states a CREDENTIAL is still read, and downward only.
+    expect(theApplicantsTheSentenceExcludes(
+      institutionAdmitting(['BACH', 'GRAD']),
+      "Accredited institution, bachelor's degree or higher",
+    ).map((p) => p.excluded)).toEqual(['degreeLevel ASSOC', 'accredited false']);
   });
 
   /**
@@ -1940,12 +2170,13 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // given to…", "if no qualified applicant is identified…" — where soft is the right answer and
     // `matchProgram` ordering them is what the funder asked for.
     //
-    // 144 AND 33 UNTIL ROUND NINE. Both rose for the same two reasons W10a's `checked` did: the 20
-    // records that now publish a floor can refuse somebody for the first time, and the accreditation
-    // probe reaches constraints whose sentence states no degree floor at all. Every one of the 60
-    // new arrivals is a hard constraint; the list of requirements stated and not enforced did not
-    // grow by one.
-    expect({ checked: w10b.checked, preferences: w10b.preferences }).toEqual({ checked: 204, preferences: 34 });
+    // 144 AND 33 BEFORE ROUND NINE, 204 AND 34 AFTER IT, 180 AND 34 NOW. The rise was the
+    // accreditation probe reaching constraints whose sentence states no degree floor at all, which
+    // is real coverage and stays; and the 20 records "publishing a floor that can refuse somebody
+    // for the first time", which was the overshoot being counted as an achievement. The 24 that
+    // left are constraints this rule was requiring to refuse an applicant their own sentence
+    // admits. `notedOnly` — the actual finding — did not move by one entry in either direction.
+    expect({ checked: w10b.checked, preferences: w10b.preferences }).toEqual({ checked: 180, preferences: 34 });
   });
 
   /**
@@ -1966,15 +2197,15 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     const w10a = readEnforcementWidth(all);
     const w10b = readEnforcementReach(all);
     expect(w10a.admitsEverybody).toHaveLength(0);
-    expect(w10a.checked).toBe(238);
+    expect(w10a.checked).toBe(214);
     expect(w10b.notedOnly).toHaveLength(KNOWN_NOTED_ONLY.length);
-    expect(w10b.checked).toBe(204);
+    expect(w10b.checked).toBe(180);
 
     // D1 — EVERY HARD CONSTRAINT BECOMES SOFT. Every requirement in the product stops barring
     // anyone: `matchProgram` demotes a soft failure to "preference not met" and returns `eligible`.
-    // W1 through W8 do not move by a single assertion. W10b flags every one of the 204.
+    // W1 through W8 do not move by a single assertion. W10b flags every one of the 180.
     const d1 = readEnforcementReach(mutated((c) => ({ ...c, hard: false })));
-    expect(d1.notedOnly).toHaveLength(204);
+    expect(d1.notedOnly).toHaveLength(180);
     // AND THE PROOF THAT D1 IS INVISIBLE TO A VALUE-WIDTH RULE, made here rather than asserted
     // about W1-W8 from outside them. Every one of those rules reads `c.spec` and `c.rawText` and
     // nothing else; so does `readEnforcementWidth`; so its census is IDENTICAL under D1. Any rule
@@ -1985,14 +2216,14 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
 
     // D2 — EVERY SPEC BECOMES ITS EMPTY FORM, so no tier holds a value to test against. Value-width
     // is untouched in the only sense W1-W8 can measure: an empty list admits no value they can
-    // find, so they skip it at `if (admitted.size === 0) continue`. W10a checks 246 rather than
-    // 238 — an emptied geography tier is `any`, which this rule reads and W1 does not — and flags
+    // find, so they skip it at `if (admitted.size === 0) continue`. W10a checks 222 rather than
+    // 214 — an emptied geography tier is `any`, which this rule reads and W1 does not — and flags
     // every single applicant it can build.
     const d2 = readEnforcementWidth(mutated((c) => ({ ...c, spec: emptied(c.spec) })));
-    expect({ flagged: d2.admitsEverybody.length, checked: d2.checked }).toEqual({ flagged: 268, checked: 246 });
+    expect({ flagged: d2.admitsEverybody.length, checked: d2.checked }).toEqual({ flagged: 227, checked: 222 });
     // Every PROBE the rule can still build is flagged — no survivors, not "most". `emptied` clears
-    // `accreditationRequired` and opens `partTimeOK`, so the two institution bars added this round
-    // are disarmed by D2 as well and this line is what proves it: 268 probes, 268 flags.
+    // `accreditationRequired` and opens `partTimeOK`, so the two institution bars added in round
+    // nine are disarmed by D2 as well and this line is what proves it: 227 probes, 227 flags.
     expect(d2.admitsEverybody).toHaveLength(d2.probes);
 
     // D3 — EVERY CONSTRAINT GAINS `orUnrepresented`, which turns every `fail` into an `unknown`
@@ -2000,14 +2231,14 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     //
     // AND HERE IS THE BLIND SPOT, REPORTED RATHER THAN HIDDEN. W10a exempts that field, for the
     // reason `funderNamedARouteTheSchemaCannotCheck` gives, so its offender list does NOT grow —
-    // it empties. What moves instead is COVERAGE: 238 constraints checked falls to none, and 282
+    // it empties. What moves instead is COVERAGE: 214 constraints checked falls to none, and 274
     // land in a bucket that asks them nothing. A rule with nothing left to say has said something.
     const d3 = readEnforcementWidth(
       mutated((c) => ({ ...c, spec: { ...c.spec, orUnrepresented: 'the funder named another route' } })),
     );
     expect(d3.checked).toBe(0);
     expect(d3.admitsEverybody).toEqual([]);
-    expect(d3.unrepresented).toBe(282);
+    expect(d3.unrepresented).toBe(274);
 
     // D4 — EVERY FIELD LIST IS WIDENED: W9's mechanism, applied corpus-wide. Narrower than D2 by
     // construction, since it reaches only the one axis that has a widening — which is the point of
@@ -2045,7 +2276,7 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     // left to say has said something — the same shape D3 takes for W10a.
     const d1 = readCrossAxisReach(mutatedPrograms((c) => ({ ...c, hard: false })));
     expect(d1.checked).toBe(0);
-    expect(d1.noted).toBe(7);
+    expect(d1.noted).toBe(5);
 
     // D2 — every spec becomes its empty form, so the sentences are untouched and nothing enforces
     // them. This is the mutation that produces the exact shape 20 records were in this round, and
@@ -2306,16 +2537,24 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
     // list is empty, and it is an equality with a diff rather than a silent pass: a record arriving
     // in this state fails here with its own name and the funder's own sentence beside it.
     expect(census.enforcedNowhere).toEqual([]);
-    // Vacuity guard. 21 anchored cross-axis readings in the corpus, in four buckets:
+    // Vacuity guard. 16 anchored cross-axis readings in the corpus, in four buckets:
     //
-    //   checked        7  a hard sentence, closed, whose control the programme really does admit.
-    //                     All seven are the same shape and it is the shape the round was set to
-    //                     find: "Bachelor's degree or higher…" filed under `field_of_study`, and
-    //                     "…4-year college or university" filed under `citizenship` and `gpa`.
-    //                     Every one is refused by its own programme.
+    //   checked        5  a hard sentence, closed, whose control the programme really does admit.
+    //                     All five are one shape and it is the shape the round was set to find:
+    //                     "Bachelor's degree or higher…" filed under `field_of_study`. Every one
+    //                     is refused by its own programme.
+    //                     7 UNTIL ROUND TEN, and the two that left were the tier reading reaching
+    //                     across an axis: Holt K8MJH's "…4-year college or university" carried on a
+    //                     `citizenship` sentence and Ware NN3I's on a `gpa` sentence. A tier states
+    //                     no credential floor on its OWN axis (see `credentialLevelsNamed`), so it
+    //                     cannot state one on somebody else's; a rule that read it as one here
+    //                     while W10 no longer did would be the two halves of this file disagreeing
+    //                     about one sentence again, which is what round ten is for.
     //   unreachable    0  and this number is the one to watch, not the offender list. See below.
-    //   ranked         7  "preference to baccalaureate or higher degree candidates" — the funder
-    //                     ranking rather than barring, exempt exactly as it is in W10b.
+    //   ranked         4  "preference to baccalaureate or higher degree candidates" — the funder
+    //                     ranking rather than barring, exempt exactly as it is in W10b. 7 until the
+    //                     same correction: PPRAA's and Watson's preference clauses named a tier and
+    //                     no credential.
     //   opened         7  "…or related fields", "including but not limited to" — a funder who
     //                     declined to close the sentence the floor was written into.
     //   noted          0  soft constraints, which are W10b's finding by name.
@@ -2325,7 +2564,7 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
       ranked: census.ranked,
       opened: census.opened,
       noted: census.noted,
-    }).toEqual({ checked: 7, unreachable: 0, ranked: 7, opened: 7, noted: 0 });
+    }).toEqual({ checked: 5, unreachable: 0, ranked: 4, opened: 7, noted: 0 });
     // THE ANTI-R6 ASSERTION, and it is the one this block exists to be able to make. A rule whose
     // probes could not reach a yes is a rule that cannot fail, and it reports green forever. So the
     // number of records the rule really read is pinned against the number it could not.
@@ -2424,7 +2663,7 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
     const unanchored = readCrossAxisReach(programs, [{ owner: 'institution', read: levelExcluded }]);
     expect(unanchored.enforcedNowhere).toHaveLength(7);
     expect(readCrossAxisReach(programs).enforcedNowhere).toHaveLength(0);
-    expect(readCrossAxisReach(programs).checked).toBe(7);
+    expect(readCrossAxisReach(programs).checked).toBe(5);
   });
 
   /**
@@ -2447,6 +2686,178 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
     // AND THE OPPOSITE: the record as the funder wrote it is silent, so the rule is not simply
     // flagging everything it is handed.
     expect(readCrossAxisReach([metzger]).enforcedNowhere).toEqual([]);
+  });
+});
+
+// ================================ W12: the other direction, which nothing here ever measured
+
+/**
+ * W12 — A CONSTRAINT THAT REFUSES AN APPLICANT ITS OWN SENTENCE ADMITS.
+ *
+ * EVERY RULE ABOVE THIS ONE MEASURES THE SAME DIRECTION. W1 through W9 ask whether a spec ADMITS a
+ * value the funder never named. W10 and W11 ask whether a spec can REFUSE ANYBODY AT ALL. All of
+ * them are false-include rules: they are satisfied by a spec that is too narrow, and W10 is
+ * actively pleased by one. So a change whose entire content was 1,456 NEW REFUSALS went through
+ * this file green — and better than green, it moved W10's coverage figure UP by 24 and that was
+ * written into the commit message as evidence the fix was working.
+ *
+ * THAT IS THE ASYMMETRY THIS CAMPAIGN OSCILLATED ACROSS FOR NINE ROUNDS. Six rounds hunted false
+ * excludes by hand and by verdict census; one round overshot into false includes; the correction
+ * overshot back. Every correction was checked in the direction it was going and not in the
+ * direction it came from, because THE SUITE ONLY HAD RULES FOR ONE DIRECTION. A guard for the
+ * other one is the only thing that makes the next correction cheap to check.
+ *
+ * WHAT IT ASSERTS, and it is deliberately narrow — the shape there is evidence for, not every
+ * refusal in the corpus:
+ *
+ *   ARM 1, THE RUNGS A SCHOOL TIER LEAVES UNSETTLED. When a sentence's only degree statement is a
+ *   school tier ("4-year college or university", "community college"), the schema holds no field
+ *   that can decide whether the applicant's SCHOOL is that tier — `degreeLevel` is their
+ *   CREDENTIAL, and `institution` is free text no axis reads. So no credential rung may be
+ *   refused. `unknown` is allowed and is what the product produces; `pass` is allowed; `fail` is
+ *   the 1,456.
+ *
+ *   ARM 2, THE RUNGS THE SENTENCE NAMES OUTRIGHT. Whatever else a constraint does, an applicant
+ *   standing on a level the funder's own sentence names must not be refused by it. This is the
+ *   half a fix in the false-include direction spends first: reading "4-year college" as the single
+ *   rung BACH would newly refuse every graduate applicant, and there was no rule that would have
+ *   noticed.
+ *
+ * IT IS NOT A GENERAL "NOTHING MAY BE REFUSED" RULE AND MUST NOT BECOME ONE. A funder who writes
+ * "must hold a bachelor's degree" is entitled to refuse an associate student, and W10 exists to
+ * insist that they can. W12 reads only what the sentence leaves UNSAID on an axis whose field
+ * cannot answer it.
+ */
+interface RefusalCensus {
+  refusesTheAdmitted: string[];
+  tierChecked: number;
+  namedChecked: number;
+  probes: number;
+  silent: number;
+}
+
+function readRefusalReach(all: Array<{ program: Program; c: Constraint }>): RefusalCensus {
+  const census: RefusalCensus = { refusesTheAdmitted: [], tierChecked: 0, namedChecked: 0, probes: 0, silent: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'institution') {
+      census.silent += 1;
+      continue;
+    }
+    const credential = credentialLevelsNamed(c.rawText);
+    const tierOnly = TIER_AWARDS.some(([tier]) => tier.test(c.rawText)) && credential.length === 0;
+    // ARM 1 probes every rung, because a bare tier puts none of them outside. ARM 2 probes only the
+    // rungs the funder named AS A CREDENTIAL — deliberately NOT `levelsNamed`, which folds in the
+    // tier band and would have this rule forbidding a refusal the funder's own credential clause
+    // states. Lippert's "…2- or 4-year college or university …, WITH INTENT TO COMPLETE A 4-YEAR
+    // DEGREE OR HIGHER" is the case: the two-year tier admits a certificate student to the
+    // BUILDING, and the funder then wrote a floor above them. W10 is what insists that refusal is
+    // enforced, and the two rules must not be able to demand opposite things about one sentence.
+    const rungs = tierOnly ? LEVEL_ORDER : credential;
+    if (rungs.length === 0) {
+      census.silent += 1;
+      continue;
+    }
+    if (tierOnly) census.tierChecked += 1;
+    else census.namedChecked += 1;
+    for (const rung of rungs) {
+      census.probes += 1;
+      const profile = { ...ENFORCEMENT_PROBE, degreeLevel: rung as DegreeLevel };
+      const verdict = evaluateConstraint(c.spec, profile, NOW, c.rawText);
+      if (verdict.status === 'fail') {
+        census.refusesTheAdmitted.push(
+          `${program.name} [${tierOnly ? 'tier' : 'named'}] degreeLevel ${rung} -> fail — ` +
+            `${JSON.stringify(c.rawText.slice(0, 90))}`,
+        );
+      }
+    }
+  }
+  census.refusesTheAdmitted.sort();
+  return census;
+}
+
+describe('W12 — a constraint that refuses an applicant its own sentence admits', () => {
+  it('no institution constraint refuses a credential rung its own sentence does not put outside', async () => {
+    const census = readRefusalReach(await everyConstraint());
+    // AN EMPTY EQUALITY, for the reason `KNOWN_TOOTHLESS` gives: there is no list to quietly add a
+    // record to, and a record arriving here fails with its own name and the funder's sentence.
+    expect(census.refusesTheAdmitted).toEqual([]);
+    // Vacuity guard, and it is the whole point of writing this rule as a census.
+    //
+    //   tierChecked    34  the population the 1,456 came from: a sentence that bounds the SCHOOL
+    //                      and says nothing at all about the applicant's credential. All four
+    //                      rungs are probed on each, because such a sentence puts none of them
+    //                      outside. If this number falls the rule has stopped reading the thing it
+    //                      exists for — it is the one to watch, ahead of the offender list.
+    //   namedChecked   35  the funder wrote a credential, and the rungs they wrote must not be
+    //                      refused by the spec that came out of it.
+    //   probes        199  applicants built, which is the number of chances this rule had to be
+    //                      wrong. It took none.
+    //   silent        583  every non-institution constraint, plus the institution sentences that
+    //                      name neither a tier nor a credential ("Any", a bare place name).
+    expect({
+      tierChecked: census.tierChecked,
+      namedChecked: census.namedChecked,
+      probes: census.probes,
+      silent: census.silent,
+    }).toEqual({ tierChecked: 34, namedChecked: 35, probes: 199, silent: 583 });
+    expect(census.tierChecked + census.namedChecked + census.silent).toBe((await everyConstraint()).length);
+  });
+
+  /**
+   * …AND IT GOES RED ON THE CHANGE THAT SHIPPED, WHICH IS THE ONLY EVIDENCE WORTH HAVING ABOUT A
+   * GUARD WRITTEN AFTER THE FACT.
+   *
+   * D5 replays `85d6dcf` exactly: keep the `['BACH','GRAD']` floor a bare school tier produces and
+   * take away the `orUnrepresented` that softens it. That was the shipped state for one round, it
+   * was green on every rule in this file, and it refused 1,456 (applicant, programme) pairs. W12
+   * flags every constraint it touched.
+   */
+  it('goes red when the round-nine state is replayed, on every record it refused', async () => {
+    const all = await everyConstraint();
+    const d5 = readRefusalReach(
+      all.map(({ program, c }) => ({
+        program,
+        c: { ...c, spec: { ...c.spec, orUnrepresented: undefined } },
+      })),
+    );
+    // Two rungs refused on each of the 20 tier constraints that publish a floor: the associate
+    // student and the certificate student, which is exactly who the 1,456 were. The other 14 of
+    // the 34 name a lower tier as well ("2- or 4-year", "or trade school"), publish
+    // `degreeLevels: []`, and refuse nobody by credential under any mutation — which is why the
+    // count is 40 and not 68, and why it is asserted rather than described.
+    expect(d5.refusesTheAdmitted).toHaveLength(40);
+    expect(d5.refusesTheAdmitted.every((o) => o.includes('[tier]'))).toBe(true);
+    expect(d5.refusesTheAdmitted.filter((o) => o.includes('degreeLevel ASSOC'))).toHaveLength(20);
+    expect(d5.refusesTheAdmitted.filter((o) => o.includes('degreeLevel CERT'))).toHaveLength(20);
+    // Named by record, not just counted — Bendicksen is the one round nine's own test case used to
+    // demonstrate the fix working.
+    expect(d5.refusesTheAdmitted.some((o) => o.includes('Bendicksen'))).toBe(true);
+    // AND THE OPPOSITE, so this is not a rule that flags whatever it is handed: the corpus as it
+    // stands is silent, and no rung the funder NAMED is refused under the mutation either — D5
+    // takes nothing away from a bachelor's or a graduate applicant.
+    expect(readRefusalReach(all).refusesTheAdmitted).toEqual([]);
+    expect(d5.refusesTheAdmitted.some((o) => /degreeLevel (?:BACH|GRAD)/.test(o))).toBe(false);
+  });
+
+  /**
+   * …AND THE MIRROR MUTATION, because a rule that only ever moves in one direction is half a rule.
+   * D6 is the OTHER over-tight reading the round-nine commit message worried about out loud and
+   * had no test for: read "4-year college or university" as the single rung BACH. Every graduate
+   * applicant in the corpus is then refused by a sentence naming the building they study in.
+   */
+  it('…and red on the over-tight reading that would have refused every graduate applicant', async () => {
+    const all = await everyConstraint();
+    const d6 = readRefusalReach(
+      all.map(({ program, c }) => ({
+        program,
+        c:
+          c.spec.axis === 'institution' && c.spec.degreeLevels.length > 0
+            ? { ...c, spec: { ...c.spec, degreeLevels: ['BACH' as DegreeLevel], orUnrepresented: undefined } }
+            : c,
+      })),
+    );
+    expect(d6.refusesTheAdmitted.filter((o) => o.includes('degreeLevel GRAD')).length).toBeGreaterThan(0);
+    expect(readRefusalReach(all).refusesTheAdmitted).toEqual([]);
   });
 });
 

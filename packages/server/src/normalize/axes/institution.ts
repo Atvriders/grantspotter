@@ -356,8 +356,46 @@ interface DegreeReading {
   schoolTier?: string;
 }
 
+/**
+ * …AND THE TEST FOR "THE FUNDER STATED A CREDENTIAL" IS WHAT THE BOTTOM OF THE LIST RESTS ON, NOT
+ * WHETHER THE LIST IS EMPTY. Four records in this corpus were still shipping the exact refusal
+ * this whole rule exists to undo, and they escaped it on a technicality:
+ *
+ *   Atlanta Radio Club   "Accredited 4-year college or university, or graduate program."
+ *   Buckner WØVZK        (the same sentence, verbatim)
+ *   Daze N5DD            "Any accredited 4-year college or university, graduate studies permitted"
+ *   Ware NN3I            "Any fully accredited 4-year US college or university or graduate school
+ *                         thereof, and have a GPA of 3.0 or higher out of a 4.0 scale"
+ *
+ * `CREATES` reads "graduate program" / "graduate studies" / "graduate school" and creates GRAD, so
+ * `levels` was not empty, so the tier phrase was never recorded — and `WIDENS` then pulled the
+ * floor down to BACH off the same tier token anyway. Result: `["BACH","GRAD"]` with no
+ * `orUnrepresented`, and an associate- or certificate-seeking student AT one of those four-year
+ * universities read `ineligible` from a sentence they satisfy verbatim. That is the 1,456 defect,
+ * on four more records, measured after the fix above had been declared complete.
+ *
+ * WHAT THOSE FOUR SENTENCES HAVE IN COMMON IS THAT NONE OF THEM STATES A CREDENTIAL AT OR BELOW
+ * THE FLOOR. "or graduate program" is a SECOND SCHOOL — another building, in a list with the first
+ * — not a statement that the applicant must already hold a bachelor's. So the bottom of the list
+ * is still the tier's doing and nothing else's, which is exactly the condition the rule was
+ * written for. `statesItsOwnFloor` asks that question instead of `levels.size === 0`.
+ *
+ * IT STILL ONLY WIDENS AND NEVER NARROWS, and the guard against becoming a reversal is unchanged:
+ * a funder who names a credential AT OR BELOW the four-year rung — "Bachelor's degree in electrical
+ * engineering", "certificate at a 4-year college", "…leading to an undergraduate degree" — has
+ * written their own floor, keeps it hard, and gains no `orUnrepresented`. Only a list whose bottom
+ * rung was put there by a school tier is softened, because only that one refuses on a question the
+ * funder never asked.
+ */
+function statesItsOwnFloor(stated: ReadonlySet<DegreeLevel>): boolean {
+  const bach = LEVEL_ORDER.indexOf('BACH');
+  return [...stated].some((level) => LEVEL_ORDER.indexOf(level) <= bach);
+}
+
 function degreeLevels(clauses: string[]): DegreeReading {
   const levels = new Set<DegreeLevel>();
+  /** What the funder said about the APPLICANT'S OWN CREDENTIAL, before any tier widening. */
+  const stated = new Set<DegreeLevel>();
   for (const clause of clauses) {
     const created = new Set<DegreeLevel>();
     for (const [level, re] of CREATES) if (re.test(clause)) created.add(level);
@@ -366,17 +404,22 @@ function degreeLevels(clauses: string[]): DegreeReading {
       const highest = Math.max(...[...created].map((l) => LEVEL_ORDER.indexOf(l)));
       for (const level of LEVEL_ORDER.slice(highest + 1)) created.add(level);
     }
-    for (const level of created) levels.add(level);
+    for (const level of created) {
+      levels.add(level);
+      stated.add(level);
+    }
   }
   const text = clauses.join(' ');
   let schoolTier: string | undefined;
-  if (levels.size === 0) {
-    // The funder stated no credential of their own. A tier sentence is then the only degree
-    // statement there is, and it is a floor with the tier phrase recorded beside it — see
-    // `fourYearTierNamed`. Silence stays silence for every other wording.
+  if (!statesItsOwnFloor(stated)) {
+    // The funder stated no credential at or below the four-year rung. A tier sentence is then the
+    // only thing putting a bottom on this list, and it is a floor with the tier phrase recorded
+    // beside it — see `fourYearTierNamed`. Silence stays silence for every other wording.
     schoolTier = fourYearTierNamed(clauses);
-    if (schoolTier === undefined) return { levels: [] };
-    for (const level of LEVEL_ORDER.slice(LEVEL_ORDER.indexOf('BACH'))) levels.add(level);
+    if (schoolTier === undefined && levels.size === 0) return { levels: [] };
+    if (schoolTier !== undefined) {
+      for (const level of LEVEL_ORDER.slice(LEVEL_ORDER.indexOf('BACH'))) levels.add(level);
+    }
   }
   for (const [level, re] of WIDENS) if (re.test(text)) levels.add(level);
   if (admitsCertificate(text)) levels.add('CERT');

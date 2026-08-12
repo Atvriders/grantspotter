@@ -277,13 +277,27 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   // every one of those 20 sentences. It moves the two profiles those sentences place outside, and
   // over 51 states x 150 programmes for a bachelor's and for a graduate applicant it moved ZERO
   // pairs in either direction.
-  expect(browse.summary.eligible + browse.summary.preferred).toBe(51);
+  //
+  // AND 52 SINCE THE SAME DAY, `ineligible` STILL UNMOVED AT 51 FOR A THIRD TIME. The ARRL
+  // Foundation Scholarship Program is the one record that moved, `unknown -> eligible`: the demotion
+  // that produced its `unknown` was decided by the record's NEIGHBOURS rather than by the funder's
+  // words — the identical recommendation sentence read `unknown` on 2 of the 12 records that state
+  // one and `eligible` on the other 10 — and it was removed with the extraction that motivated it.
+  //
+  // THE INSTITUTION CHANGE IN THE SAME ROUND MOVES THIS PROFILE BY ZERO, twice over, and that is
+  // the property being asserted here rather than a coincidence. They are a bachelor's student at an
+  // accredited 4-year school, inside every one of those sentences. Measured over 306,300 (profile,
+  // state, programme) pairs — 7 corpus profiles x 4 credential rungs x full/part-time x 51 states
+  // x 150 programmes — the four records that stopped refusing on a school tier moved 928 pairs,
+  // every one `ineligible -> unknown`, all of them CERT and ASSOC applicants. Zero pairs moved INTO
+  // `ineligible`, zero into a positive, zero out of one.
+  expect(browse.summary.eligible + browse.summary.preferred).toBe(52);
   expect(browse.summary).toMatchObject({
     total: 150,
-    eligible: 42,
+    eligible: 43,
     preferred: 9,
     ineligible: 51,
-    unknown: 48,
+    unknown: 47,
   });
   expect(browse.rows).toHaveLength(150);
 
@@ -372,10 +386,11 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
 
   const unknown = browse.rows.filter((r) => r.verdict?.kind === 'unknown');
   // 47 since 2026-08-12: the eleven bounded cascades in the census assertions above. Each is a
-  // question this applicant used to be given an answer to that nobody had written. 48 since the
+  // question this applicant used to be given an answer to that nobody had written. 48 when the
   // ARRL Foundation Scholarship Program joined them the same day, for the same reason on a
-  // different axis — see the ledger above.
-  expect(unknown).toHaveLength(48);
+  // different axis — and back to 47 when the demotion that put it there was removed as a rule
+  // decided by a record's neighbours rather than by its funder's words. See the ledger above.
+  expect(unknown).toHaveLength(47);
 
   /*
    * THERE ARE NOW TWO KINDS OF `unknown` AND THIS TEST HAD ONLY EVER SEEN ONE, WHICH IS WHY IT WENT
@@ -484,23 +499,32 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
   //             Scholarships each open a list the funder wrote as open. Every one of the five was
   //             an `eligible` nobody had written, and is a question now.
   //
-  //   1 record  A FOURTH KIND, AND THE ONE ROW HERE THAT IS A FIX AND NOT A HOLE (2026-08-12). The
-  //             ARRL Foundation Scholarship Program states exactly one hard requirement — a letter
-  //             of recommendation — and `recommendation` is an axis no profile field can ever
-  //             answer, for anybody. `not_evaluable` does not block, which is right and unchanged;
-  //             what was wrong is that it was also the entire verdict, so the record published
-  //             `eligible` without one requirement having been checked, to every individual
-  //             profile including one that has answered nothing at all. It is the same
-  //             `unknown`-that-asks-for-nothing as the rows above, and the letter is a packet item
-  //             rather than something the reader could type, so it names no field. Both the
-  //             sentence and the funder's page are still shown beside it.
+  //   0 records A FOURTH KIND THAT AROSE AND WAS WITHDRAWN WITHIN ONE DAY, RECORDED BECAUSE THE
+  //             WITHDRAWAL IS THE INTERESTING HALF (2026-08-12). The ARRL Foundation Scholarship
+  //             Program was added here that morning: its only hard requirement was a letter of
+  //             recommendation, `recommendation` is an axis no profile field can ever answer, and
+  //             a record whose whole verdict rests on an unanswerable axis was publishing
+  //             `eligible` without one requirement having been checked. The rule written for it
+  //             (`onlyUnanswerableRequirements`) was removed the same day, and correctly: it was
+  //             cleared by whatever ELSE a record happened to hold, so the IDENTICAL funder
+  //             sentence produced `unknown` on 2 of the 12 records that state one and `eligible`
+  //             on the other 10 — a verdict decided by a record's neighbours rather than by its
+  //             funder's words. The sentence itself was re-read instead: "A NUMBER OF scholarships
+  //             require additional documents, SUCH AS a letter of recommendation…" is the funder
+  //             hedging their own list, which this project already reads as an example rather than
+  //             a bar, so the constraint is soft and the record is `eligible` on preferences only.
+  //             WHAT THIS ROW COST, SAID PLAINLY: the record is the deadline owner for 112
+  //             catalogue entries, so the rule moved 663 (profile, state) pairs into `unknown` and
+  //             the withdrawal moved them back. Neither direction was wrong to try; what was
+  //             missing both times was a measurement of the direction being left behind.
+  //             `recordStatesNothing`, which is what the removed rule was defending, is untouched
+  //             and still fires on 28 records.
   //
   // A row joining this list is a corpus regression — a funder's rule silently losing its centre, or
   // a new source publishing no audience — and must fail here rather than disappear into a count.
   expect(unanswerable.map((r) => r.program.name).sort()).toEqual([
     'AMSAT — no grants program',
     'ARRL Collegiate Amateur Radio Initiative (CARI) — not a funding program',
-    'ARRL Foundation Scholarship Program',
     'ARRL Foundation Special Funds',
     'Campus student government / student activity fee funding',
     'Chicago FM Club Scholarship — discontinued',
@@ -547,8 +571,11 @@ test('unknown is a real state, and an unset field never becomes a "no"', async (
     'lon',
   ]);
 
-  // The census can therefore be read as a sentence: 48 of these are questions, not refusals.
-  expect(browse.summary.unknown).toBe(48);
+  // The census can therefore be read as a sentence: 47 of these are questions, not refusals — 12
+  // that name a field this reader can go and fill in, and 35 that name none because what is
+  // missing is a sentence the funder never wrote.
+  expect(browse.summary.unknown).toBe(47);
+  expect(answerable.length + unanswerable.length).toBe(browse.summary.unknown);
   expect(browse.summary.unknown + browse.summary.ineligible).toBeLessThan(browse.summary.total);
 
   // AN INELIGIBLE VERDICT QUOTES THE FUNDER'S OWN WORDS — WHERE THERE ARE ANY, AND ONLY THERE.
@@ -1117,11 +1144,12 @@ test('the completeness meter speaks for the corpus the user can actually reach',
   // as admitting them, which is a claim their `activityKinds` of `club_member` and `on_air` does
   // not support. 42 since the eleven bounded geography cascades stopped admitting an applicant in a
   // state their funders never name — see the census assertions in the journey spec for the ledger.
-  // And one more (48) since the ARRL Foundation Scholarship Program stopped answering "eligible"
-  // out of a requirement — a letter of recommendation — that no profile field can ever resolve.
-  // Like the other unanswerable ones it asks this reader for nothing, which is why the meter
-  // counts it and names no field for it.
-  expect(body.completeness.unknownCount).toBe(48);
+  // It reached 48 when the ARRL Foundation Scholarship Program stopped answering "eligible" out of
+  // a requirement — a letter of recommendation — that no profile field can ever resolve, and is
+  // back to 47 now that that demotion has been removed: it fired on 2 of the 12 records stating the
+  // identical sentence and not on the other 10, so it was reading the record's neighbours. What it
+  // was defending, `recordStatesNothing`, is untouched.
+  expect(body.completeness.unknownCount).toBe(47);
   expect(body.completenessFor).toBe('student');
 
   const me = (await (await request.get('/api/me')).json()) as {

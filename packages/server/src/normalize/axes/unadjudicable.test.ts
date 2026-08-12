@@ -336,6 +336,14 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     // the funder's sentence rather than a refusal that sentence does not state. Every one of the
     // 20 is caught by the rule above — the phrase is a substring of the funder's own wording, and
     // `institution.test.ts` asserts that record by record as well.
-    expect(checked).toBe(86);
+    //
+    // AND 90 SINCE THE ROUND AFTER IT, which found four more records still in the state that fix
+    // was written to end. Atlanta Radio Club, Buckner WØVZK, Daze N5DD and Ware NN3I all write a
+    // bare four-year tier and then name a SECOND SCHOOL — "or graduate program", "graduate studies
+    // permitted", "or graduate school thereof". `CREATES` read "graduate" as the applicant's own
+    // credential, so the record was held to have stated one, kept a hard `["BACH","GRAD"]`, and
+    // refused every associate and certificate applicant. 928 (profile, state, programme) pairs,
+    // every one of them `ineligible -> unknown` and none in the other direction.
+    expect(checked).toBe(90);
   });
 });

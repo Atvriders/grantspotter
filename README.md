@@ -92,6 +92,12 @@ The countermeasures are visible in the UI, not buried in the code:
 - **Stale-mirror warnings** where a third-party aggregator is known to list something that no
   longer exists.
 
+**And a written account of how it can still be wrong.**
+[`docs/how-this-catalogue-can-be-wrong.md`](docs/how-this-catalogue-can-be-wrong.md) lists the ways
+this app has actually told a student something untrue, which guard now covers each one, and — the
+useful half — which are covered by nothing. Every defect in it was invisible to a green test suite
+on the day it shipped. Read it before changing an extractor or the matcher.
+
 ---
 
 ## Verified negatives — things that look like funding and are not

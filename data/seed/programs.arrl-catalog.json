@@ -750,7 +750,8 @@
             ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
-            "accreditationRequired": true
+            "accreditationRequired": true,
+            "orUnrepresented": "4-year college or university"
           }
         },
         {
@@ -1900,7 +1901,8 @@
             ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
-            "accreditationRequired": true
+            "accreditationRequired": true,
+            "orUnrepresented": "4-year college or university"
           }
         },
         {
@@ -3455,7 +3457,8 @@
             ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
-            "accreditationRequired": true
+            "accreditationRequired": true,
+            "orUnrepresented": "4-year college or university"
           }
         },
         {
@@ -13270,7 +13273,8 @@
             ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
-            "accreditationRequired": true
+            "accreditationRequired": true,
+            "orUnrepresented": "4-year US college or university"
           }
         },
         {
