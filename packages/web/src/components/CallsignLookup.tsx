@@ -177,6 +177,56 @@ const KNOWN_STATUSES: ReadonlySet<string> = new Set<LookupStatus>([
 ]);
 
 /**
+ * IS THIS A LOOKUP RESULT AT ALL — asked of the whole answer, before anything reads a field off it.
+ *
+ * `KNOWN_STATUSES.has(result.status)` was the guard, and it assumes the thing it is reading
+ * `status` from is an object. A 200 whose body is `null` is not, and `apiFetch` resolves that body
+ * as `null` deliberately (see its docblock: a deliberate `null` payload means "asked, answered,
+ * nothing there", which is a different event from a body that would not parse). The read threw,
+ * and the throw was caught by the network handler around it and reported as an unreachable API —
+ * measured in Chromium on 2026-08-12; see {@link CallsignLookup.run}. A 204, which `apiFetch`
+ * resolves as `undefined`, is the same shape of answer.
+ */
+function isLookupResult(value: unknown): value is CallsignLookupResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const status: unknown = (value as { status?: unknown }).status;
+  return typeof status === 'string' && KNOWN_STATUSES.has(status);
+}
+
+/** A primitive the wire sent where an object belonged, quoted and capped. */
+function quotedBody(value: unknown): string {
+  const text = JSON.stringify(value);
+  if (text === undefined) return 'a value with no JSON form at all';
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/**
+ * WHAT ARRIVED INSTEAD OF A LOOKUP RESULT, SAID IN THE ANSWER'S OWN TERMS.
+ *
+ * Two things reach here and they are not the same event: a body that is not an object at all (a
+ * `null` payload, a 204's empty answer, a bare string or number) and an object carrying a status
+ * this build cannot read. Both are reported as "the API answered, and not with a lookup result",
+ * because both are true of that and neither is true of "the API could not be reached" — which is
+ * what the first of them said until 2026-08-12.
+ */
+function unusableAnswerNote(answer: unknown): string {
+  const what =
+    answer === undefined
+      ? 'no body arrived with it at all'
+      : typeof answer !== 'object' || answer === null
+        ? `the body was ${quotedBody(answer)}`
+        : 'it carries no status this build can read' +
+          quotedArm((answer as { status?: unknown }).status);
+  return (
+    'The API answered with something that is not a lookup result — ' +
+    `${what} — so nothing is being reported about this callsign. Something other than ` +
+    'GrantSpotter — a proxy, tunnel, or sign-in page — may have answered instead, and a browser ' +
+    'running an older version of GrantSpotter than the server it is talking to looks the same ' +
+    'from here. Nothing on this form was changed.'
+  );
+}
+
+/**
  * THE SAME GUARD, ON THE TWO FIELDS THIS ROUND PUT ON THE WIRE — because the argument for
  * `KNOWN_STATUSES` was never about statuses.
  *
@@ -226,6 +276,73 @@ const REFUSAL_EVIDENCE: ReadonlyMap<string, readonly string[]> = new Map(
   } satisfies Record<NonNullable<CallsignRecord['geocodeRefusal']>['refused'], readonly string[]>),
 );
 
+/**
+ * THE SAME GUARD AGAIN, ON THE FIELDS THE WHOLE PANEL IS ABOUT.
+ *
+ * `KNOWN_STATUSES` and `KNOWN_GEOCODED_FROM` above check what the wire says a thing IS. This
+ * checks the four facts every sentence on this panel is built out of, and it exists because they
+ * were the ones nobody was checking. Measured in Chromium on 2026-08-12 against the built server,
+ * `{"status":"found","record":{"source":"callook.info"}}`:
+ *
+ *   heading                "FCC record for undefined"
+ *   live region            "FCC record for undefined: undefined. This record is for undefined,
+ *                           not the W1AW you asked about."
+ *   the word "undefined"   4 times on screen
+ *   the source line        "Read from callook.info on —"
+ *   and a checkbox reading "Yes, this record is mine — use  in place of W1AW."
+ *
+ * The third line is the serious one. The substitution warning is the most safety-critical claim
+ * this component makes — it is the sentence that tells somebody a record is NOT the one they asked
+ * about, and it is what the confirm checkbox exists to gate — and it was FABRICATED over a record
+ * that stated no callsign at all, because `undefined !== 'W1AW'`. A record with no callsign is not
+ * a different licensee's record; it is not a record.
+ *
+ * So a record is read the way `readPoint` reads a point: all of it, or none of it. The four facts
+ * required are the ones with no honest substitute — WHO the licence belongs to (`callsign`,
+ * `name`), WHICH KIND of licensee that is (`type`, which decides the profile the values land on
+ * and prints "Club station" or "Individual"), and WHERE AND WHEN GrantSpotter read it (`source`,
+ * `fetchedAt`, the provenance every accepted value carries). Everything this panel omits when
+ * absent — an address, a grant date, an FRN — is already conditional below.
+ */
+const KNOWN_RECORD_TYPES: ReadonlySet<string> = new Set<CallsignRecord['type']>([
+  'PERSON',
+  'CLUB',
+]);
+
+/** A `CallsignRecord` stating the four facts every sentence here needs, or `undefined`. */
+function readRecord(value: unknown): CallsignRecord | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const candidate = value as Partial<CallsignRecord>;
+  const stated = (field: unknown): boolean => typeof field === 'string' && field.trim() !== '';
+  if (!stated(candidate.callsign) || !stated(candidate.name)) return undefined;
+  if (typeof candidate.type !== 'string' || !KNOWN_RECORD_TYPES.has(candidate.type)) {
+    return undefined;
+  }
+  if (!stated(candidate.source) || !stated(candidate.fetchedAt)) return undefined;
+  return value as CallsignRecord;
+}
+
+/**
+ * WHY THERE IS NO RECORD ON SCREEN WHEN THE ANSWER SAID ONE WAS FOUND.
+ *
+ * The frame around this is `unavailable`'s — "it may have answered with something GrantSpotter
+ * could not use" — which is exactly what happened, and this is the sentence that says which part
+ * could not be used. Same shape as {@link unreadableGeocodeNote} one layer down, and same reason:
+ * rendering nothing would leave a reader who watched a lookup succeed with no account of where the
+ * record went.
+ */
+function unusableRecordNote(): string {
+  return (
+    'The answer said a record was found, and what arrived is not one this page can read. A licence ' +
+    'record has to name the callsign it is for, the licensee, whether the licence is a person’s or ' +
+    'a club station’s, and where and when GrantSpotter read it; this one did not state all of ' +
+    'that. Nothing from it is shown, because a panel built out of a record that does not say whose ' +
+    'it is would be telling you about somebody nobody named. The usual cause is a browser holding ' +
+    'an older version of GrantSpotter than the server it is talking to: reload the page. Nothing ' +
+    'on this form was changed, and nothing here is required — fill it in yourself if you prefer.'
+  );
+}
+
 /** A `GeocodedPoint` as declared, or `undefined` — the three parts, or nothing at all. */
 function readPoint(value: unknown): GeocodedPoint | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
@@ -257,6 +374,14 @@ interface Attribution {
   marked: string[];
   /** Profile fields written with no mark at all: the applicant's own, however they got there. */
   unmarked: string[];
+  /**
+   * Profile fields the RECORD and the APPLICANT both stated, identically — the callsign of an
+   * ordinary lookup, which is the question asked and the answer given in the same characters.
+   *
+   * Named separately for the reason `unmarkable` is: it carries no mark, and neither of
+   * `unmarked`'s two reasons is why. See `fillFromLookup`'s `restated`.
+   */
+  restated: string[];
   /**
    * Fields the record stated that this profile cannot record a source for — the coordinate. Named
    * separately because the sentence they need is neither of the other two: "callook.info said this
@@ -320,8 +445,28 @@ type Phase =
   | { kind: 'busy' }
   | { kind: 'answered'; result: CallsignLookupResult }
   | { kind: 'accepted'; record: CallsignRecord; attribution: Attribution }
-  /** The request itself did not complete: no answer was received, so none is reported. */
-  | { kind: 'failed'; message: string };
+  /**
+   * NO LOOKUP RESULT, AND WHETHER ANYTHING ANSWERED AT ALL.
+   *
+   * This was `{ kind: 'failed'; message: string }` and its comment read "the request itself did not
+   * complete: no answer was received, so none is reported". That is true of one of the endings that
+   * reach here and false of the rest: a 429 refusal, a 200 whose body is not JSON, and a 200 whose
+   * body is not a lookup result are all answers. The panel headed every one of them "The lookup did
+   * not run", which nothing here knows.
+   *
+   * `reached` is the one bit that decides which of those two sentences is honest, and it is set
+   * from the one fact this component has: an {@link ApiError} carrying a real HTTP status means the
+   * other end answered, and anything else means the request never got one.
+   */
+  | { kind: 'failed'; reached: boolean; message: string };
+
+/**
+ * The heading and the announcement for a lookup that produced no result, which are not the same
+ * sentence for a request that never got an answer and a request that got one nobody can use.
+ */
+function failedHeading(reached: boolean): string {
+  return reached ? 'The lookup did not produce a record' : 'The lookup did not run';
+}
 
 interface Frame {
   heading: string;
@@ -439,7 +584,7 @@ export function frameFor(status: LookupStatus, callsign: string): Frame {
  * stores — a guarantee that the two agree rather than a second opinion.
  */
 export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): Frame {
-  const { marked, unmarked, unmarkable, derived, unfillable, coordinateFrom, replaced } =
+  const { marked, unmarked, restated, unmarkable, derived, unfillable, coordinateFrom, replaced } =
     attribution;
   const one = marked.length === 1;
   const mine =
@@ -448,6 +593,39 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       : ` ${profileFieldLabelList(unmarked, kind)} ${unmarked.length === 1 ? 'carries' : 'carry'} no mark: ` +
         `the record either did not state ${unmarked.length === 1 ? 'it' : 'them'}, or you changed ` +
         `what it said, so ${unmarked.length === 1 ? 'it is yours' : 'they are yours'}.`;
+  /**
+   * THE SENTENCE THE ORDINARY LOOKUP NEEDED AND DID NOT HAVE.
+   *
+   * A person types their own callsign, presses the button, and the record comes back for exactly
+   * it. Until 2026-08-12 the confirmation said "Callsign carries no mark: the record either did not
+   * state it, or you changed what it said, so it is yours" — measured in Chromium, on the most
+   * ordinary path this panel has, with both disjuncts false. There is no mark because the value was
+   * stated twice, and that is a third thing, so it gets a third sentence. See
+   * `fillFromLookup`'s `restated`.
+   */
+  const alsoStated = ((): string => {
+    if (restated.length === 0) return '';
+    const it = restated.length === 1 ? 'it' : 'them';
+    return (
+      ` ${profileFieldLabelList(restated, kind)} ` +
+      // NO CONNECTIVE BACK TO `mine`, deliberately: whether that sentence was printed depends on
+      // what the applicant edited, and "either" or "neither of those reasons" over a paragraph the
+      // reader was never shown is a small lie of the same family as the big one. Stated whole, it
+      // reads correctly in both cases — and beside `mine` the contrast is the point, since the two
+      // sentences give two different reasons for the same missing badge.
+      `${restated.length === 1 ? 'carries no mark' : 'carry no marks'}: ` +
+      `the record stated ${it} and so did you.` +
+      // Only where the callsign is actually in this list. It is the only key that can be, today —
+      // `callsignFromRecord` is the one comparison that answers `'both'` — and a sentence about
+      // "the callsign you asked about" printed over some other field would be this list repeating
+      // the mistake it was split out of `unmarked` to stop.
+      (restated.includes('callsign')
+        ? ' This record is for the callsign you asked about, so nothing was substituted.'
+        : '') +
+      ` Putting callook.info’s name on ${it} would credit the source with an answer you had ` +
+      'already given.'
+    );
+  })();
   /**
    * The third sentence, and the one nobody would think to write. A value the record stated, on a
    * field this profile has, that carries no mark — not because of anything the applicant did but
@@ -516,20 +694,34 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       body:
         `${profileFieldLabelList(marked, kind)} came from the record rather than from you, and ` +
         `${one ? 'the field stays' : 'those fields stay'} marked that way until you edit ` +
-        `${one ? 'it' : 'them'}.${mine}${fetched}${worked}${elsewhere}${overwritten} Nothing has been saved yet.`,
+        `${one ? 'it' : 'them'}.${mine}${alsoStated}${fetched}${worked}${elsewhere}${overwritten} Nothing has been saved yet.`,
     };
   }
+
+  /*
+   * THE CLAIM IN THE SECOND BRANCH IS ABOUT `unmarked`, AND IT IS NOW MADE ONLY WHERE THERE IS AN
+   * `unmarked` TO MAKE IT ABOUT.
+   *
+   * "GrantSpotter puts callook.info's name on a field only where the record itself stated what is
+   * now in it, and that is true of none of these" was unconditional, and "these" was whatever the
+   * reader took it to refer to. On a record that stated nothing but the callsign the applicant
+   * typed, that is a sentence saying the record stated none of the values on screen, printed over
+   * one it had stated in full — the same false claim this branch's heading is careful not to make.
+   */
+  const ownValues =
+    unmarked.length === 0
+      ? ''
+      : `${profileFieldLabelList(unmarked, kind)} went onto the form as ` +
+        `${unmarked.length === 1 ? 'your own value' : 'your own values'}. ` +
+        'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
+        'is now in it, and that is true of none of these — either the record had nothing to state, ' +
+        'or you changed what it said.';
 
   return {
     heading: 'Filled in — none of it attributed to the FCC record',
     body:
-      (unmarked.length === 0
-        ? ''
-        : `${profileFieldLabelList(unmarked, kind)} went onto the form as ` +
-          `${unmarked.length === 1 ? 'your own value' : 'your own values'}. `) +
-      'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
-      'is now in it, and that is true of none of these — either the record had nothing to state, ' +
-      `or you changed what it said.${fetched}${worked}${elsewhere}${overwritten} Nothing has been saved yet.`,
+      `${ownValues}${alsoStated}${fetched}${worked}${elsewhere}${overwritten}`.trim() +
+      ' Nothing has been saved yet.',
   };
 }
 
@@ -833,40 +1025,71 @@ export function CallsignLookup({
   const typed = callsign.trim().toUpperCase();
   const heldValues = held ?? {};
 
+  /**
+   * THE REQUEST IS THE ONLY THING IN THE `try`, AND THAT IS THE FIX FOR A FALSE SENTENCE.
+   *
+   * Measured in Chromium on 2026-08-12 against the built server, with the lookup answered 200 and
+   * the body `null`: the screen read "The lookup did not run. The GrantSpotter API could not be
+   * reached, so the lookup never ran." The API was reached and it answered. `apiFetch` passes a
+   * `null` body through on purpose — "asked, answered, nothing there", in its own words, and a
+   * deliberate `null` payload is not the same event as a body that would not parse — so
+   * `result.status` was a TypeError thrown by THIS function, caught by the block below, found not
+   * to be an `ApiError`, and reported as an unreachable API. The same probe answering `text/html`
+   * names the proxy correctly, because that one arrives as an `ApiError` from `apiFetch`: the
+   * machinery to tell a tunnel's two misbehaviours apart was already here, and this one walked
+   * around it.
+   *
+   * A `catch` around code that reads the answer will always eventually report a bug in the reader
+   * as a fact about the network. So the block covers the request and nothing else, and everything
+   * after it is ordinary control flow over a value that has already arrived.
+   */
   async function run(): Promise<void> {
     setPhase({ kind: 'busy' });
+    let answer: unknown;
     try {
       // The callsign, and nothing else. A `setupToken` was spread in here until 2026-08-12 and the
       // server has refused the key since 2026-08-11 — `{callsign,setupToken}` measured as a 422
       // `unrecognized_keys` against a server started from this tree, `{callsign}` as a 200.
-      const result = await postCallsignLookup({ callsign: typed });
-      setPhase(
-        KNOWN_STATUSES.has(result.status)
-          ? { kind: 'answered', result }
-          : {
-              kind: 'failed',
-              message:
-                'The API answered with something that is not a lookup result, so nothing is ' +
-                'being reported about this callsign. Something other than GrantSpotter — a ' +
-                'proxy, tunnel, or sign-in page — may have answered instead.',
-            },
-      );
+      answer = await postCallsignLookup({ callsign: typed });
     } catch (err) {
       // A refusal or an unreachable API is not an answer about the callsign, and must not be
       // reported as one. The server's sentence is carried through — for a rate limit that
       // sentence is the whole explanation.
+      const reached = err instanceof ApiError && err.status !== 0;
       setPhase({
         kind: 'failed',
-        message:
-          err instanceof ApiError && err.status !== 0
-            ? err.message
-            : 'The GrantSpotter API could not be reached, so the lookup never ran.',
+        reached,
+        message: reached
+          ? (err as ApiError).message
+          : 'The GrantSpotter API could not be reached, so the lookup never ran.',
       });
+      return;
     }
+    setPhase(
+      isLookupResult(answer)
+        ? { kind: 'answered', result: answer }
+        : { kind: 'failed', reached: true, message: unusableAnswerNote(answer) },
+    );
   }
 
   const answered = phase.kind === 'answered' ? phase.result : null;
-  const record = answered?.status === 'found' ? (answered.record ?? null) : null;
+  /**
+   * WHAT THE WIRE PUT UNDER `record`, WHICH THE TYPE CALLS A RECORD AND THE WIRE DOES NOT.
+   *
+   * Read as `unknown` on purpose, because the two things that go wrong here are invisible to the
+   * declaration: `record: null` is not in the type at all (so `?? null` is the only place its
+   * absence was ever handled), and a record missing the fields every sentence is built from
+   * type-checks as a `CallsignRecord` while rendering the word "undefined" four times. One value,
+   * read once, used by the panel and by the live region alike — the announcement built its own from
+   * `phase.result.record` and guarded it with `found === undefined`, so a `null` was a
+   * `TypeError: Cannot read properties of null (reading 'callsign')` during render. The error
+   * boundary around this panel kept the applicant's typing, which is what it is for, and the panel
+   * still died.
+   */
+  const sent: unknown = answered?.status === 'found' ? answered.record : undefined;
+  const record = readRecord(sent) ?? null;
+  /** Something arrived under `record` and it is not a record. See {@link unusableRecordNote}. */
+  const recordUnusable = record === null && sent !== undefined && sent !== null;
 
   /**
    * WHAT THE LIVE REGION SAYS IS WHAT THE PANEL SAYS.
@@ -915,21 +1138,25 @@ export function CallsignLookup({
         );
       }
       case 'failed':
-        return `The lookup did not run. ${phase.message}`;
+        return `${failedHeading(phase.reached)}. ${phase.message}`;
       case 'answered': {
-        const found = phase.result.record;
-        if (found === undefined) {
+        // THE SAME `record` THE PANEL BELOW RENDERS, and not a second reading of the wire. This
+        // built its own from `phase.result.record` and asked `=== undefined`, which is the one
+        // spelling of "no record" that the render path's `?? null` already handled — so the two
+        // disagreed on `null`, and on a record whose fields did not arrive. A live region derived
+        // from anything other than what is on screen will eventually announce something else.
+        if (record === null) {
           return frameFor(
             phase.result.status === 'found' ? 'unavailable' : phase.result.status,
             typed,
           ).heading;
         }
         const substituted =
-          found.callsign === typed
+          record.callsign === typed
             ? ''
-            : ` This record is for ${found.callsign}, not the ${typed} you asked about.`;
+            : ` This record is for ${record.callsign}, not the ${typed} you asked about.`;
         return (
-          `${frameFor('found', found.callsign).heading}: ${found.name}.${substituted}` +
+          `${frameFor('found', record.callsign).heading}: ${record.name}.${substituted}` +
           ' Nothing has been filled in yet.'
         );
       }
@@ -961,7 +1188,7 @@ export function CallsignLookup({
 
       {phase.kind === 'failed' && (
         <section className="callsign-panel callsign-quiet" aria-labelledby={`${baseId}-failed`}>
-          <h2 id={`${baseId}-failed`}>The lookup did not run</h2>
+          <h2 id={`${baseId}-failed`}>{failedHeading(phase.reached)}</h2>
           <p className="callsign-note">
             Nothing on this form was changed, and GrantSpotter is not saying anything about this
             callsign either way. {phase.message}
@@ -979,9 +1206,12 @@ export function CallsignLookup({
           id={`${baseId}-status`}
           /* `found` with no record is a malformed answer, and it is framed as
              `unavailable` — which is what it is from here: no record was received, so
-             there is nothing to show and nothing is claimed about the callsign. */
+             there is nothing to show and nothing is claimed about the callsign. A record
+             that arrived without the facts every sentence here is built from is the same
+             thing with one more sentence to it, and gets that sentence in place of the
+             server's — the server's `message` is `undefined` on a `found` anyway. */
           frame={frameFor(answered.status === 'found' ? 'unavailable' : answered.status, typed)}
-          message={answered.message}
+          message={recordUnusable ? unusableRecordNote() : answered.message}
           onClose={() => setPhase({ kind: 'idle' })}
         />
       )}
@@ -1009,6 +1239,7 @@ export function CallsignLookup({
               attribution: {
                 marked: Object.keys(fill.fieldSources),
                 unmarked: fill.unmarked,
+                restated: fill.restated,
                 unmarkable: fill.unmarkable,
                 derived: fill.derived,
                 unfillable: fill.unfillable,

@@ -27,7 +27,10 @@ const PROVENANCE = {
 
 function accepted(over: Partial<AcceptedCallsign> = {}): AcceptedCallsign {
   return {
-    callsign: { value: 'W8UM', origin: 'user' },
+    // Exactly what the panel emits for the ordinary lookup — a record found under the callsign the
+    // applicant typed — rather than a hand-written `'user'`, which is a shape `callsignFromRecord`
+    // cannot produce and which is what made the ordinary path's confirmation false for a week.
+    callsign: callsignFromRecord('W8UM', 'W8UM'),
     type: 'PERSON',
     provenance: PROVENANCE,
     ...over,
@@ -54,9 +57,23 @@ describe('labelling a value with who stated it', () => {
     }
   });
 
-  it('reads the callsign the other way round, because the callsign is the question', () => {
-    expect(callsignFromRecord('W8UM', 'W8UM')).toEqual({ value: 'W8UM', origin: 'user' });
-    // callook answered a superseded call with the licensee's current record: this one is an answer.
+  /**
+   * THE CALLSIGN IS THE QUESTION, AND ON THE ORDINARY PATH IT IS ALSO THE ANSWER.
+   *
+   * This returned `'user'` for the matching case until 2026-08-12 — deliberately, on the reasoning
+   * that a record answering with the callsign it was asked about has told the applicant nothing new.
+   * True, and not what `'user'` means: `'user'` puts the value in `unmarked`, whose sentence is "the
+   * record either did not state it, or you changed what it said, so it is yours". Measured in
+   * Chromium against the built server on a lookup of W1MX answered by W1MX's own record with nothing
+   * edited, the confirmation read exactly that, with both disjuncts false. Two people stated this
+   * value, so it is labelled as what it is.
+   */
+  it('says the record and the applicant both stated a callsign that came back unchanged', () => {
+    expect(callsignFromRecord('W8UM', 'W8UM')).toEqual({ value: 'W8UM', origin: 'both' });
+    // The label that made the confirmation say the record had not stated it.
+    expect(callsignFromRecord('W8UM', 'W8UM').origin).not.toBe('user');
+    // callook answered a superseded call with the licensee's current record: this one is an answer,
+    // and the applicant never typed it.
     expect(callsignFromRecord('W5NEW', 'K9OLD')).toEqual({ value: 'W5NEW', origin: 'source' });
   });
 });
@@ -89,8 +106,16 @@ describe('building the values and the markers a host writes', () => {
       state: { ...PROVENANCE, value: 'MI' },
       licenseClass: { ...PROVENANCE, value: 'GENERAL' },
     });
-    // The callsign the user typed is theirs, and the record agreeing with it changes nothing.
-    expect(fill.unmarked).toEqual(['callsign']);
+    /**
+     * THE CALLSIGN IS IN NEITHER OF THE OTHER LISTS, and that is the whole of the 2026-08-12 fix.
+     * It carries no marker, exactly as before — crediting callook.info with the answer to a
+     * question asked in those same characters would make the badge mean less everywhere it appears
+     * — but `unmarked` means "the record did not state it, or you changed what it said, so it is
+     * yours", and the record stated it and nothing was changed.
+     */
+    expect(fill.restated).toEqual(['callsign']);
+    expect(fill.unmarked).toEqual([]);
+    expect(fill.fieldSources).not.toHaveProperty('callsign');
     // Nobody stated the district: not the source, not the applicant. It is arithmetic, in its own
     // list, so a host cannot describe it as either.
     expect(fill.derived).toEqual(['callDistrict']);
@@ -149,7 +174,8 @@ describe('building the values and the markers a host writes', () => {
 
     expect(fill.values.lat).toBe('41.714707');
     expect(fill.unmarkable).toEqual(['lat', 'lon']);
-    expect(fill.unmarked).toEqual(['callsign']);
+    expect(fill.unmarked).toEqual([]);
+    expect(fill.restated).toEqual(['callsign']);
     expect(fill.unfillable).toEqual([]);
     // The rule that makes this list necessary: no marker, because the server would strip it.
     expect(fill.fieldSources).not.toHaveProperty('lat');
@@ -161,8 +187,9 @@ describe('building the values and the markers a host writes', () => {
       accepted({ lat: { value: '42.0', origin: 'user' }, lon: { value: '-71.0', origin: 'source' } }),
       'organization',
     );
-    expect(fill.unmarked).toEqual(['callsign', 'lat']);
+    expect(fill.unmarked).toEqual(['lat']);
     expect(fill.unmarkable).toEqual(['lon']);
+    expect(fill.restated).toEqual(['callsign']);
   });
 
   /**
@@ -326,8 +353,10 @@ describe('building the values and the markers a host writes', () => {
       'organization',
     );
 
-    // Theirs: a field this profile has, holding what they typed.
-    expect(fill.unmarked).toEqual(['callsign', 'state']);
+    // Theirs: a field this profile has, holding what they typed. The callsign is not one of them —
+    // the record stated it too, and it is in `restated`.
+    expect(fill.unmarked).toEqual(['state']);
+    expect(fill.restated).toEqual(['callsign']);
     // callook.info stated this one in full. What is missing is anywhere on an organisation profile
     // to record that — a different fact, and no longer reported as the same one.
     expect(fill.unfillable).toEqual(['licenseClass']);
@@ -356,7 +385,11 @@ describe('building the values and the markers a host writes', () => {
       );
       const fillable = callsignFillableFields(kind);
 
-      for (const key of [...fill.unmarked, ...Object.keys(fill.fieldSources)]) {
+      for (const key of [
+        ...fill.unmarked,
+        ...fill.restated,
+        ...Object.keys(fill.fieldSources),
+      ]) {
         expect(fillable, `${kind} names ${key} as its own`).toContain(key);
       }
       // Vacuity guard: this accepted value carries a field of the OTHER kind either way round.
@@ -364,15 +397,17 @@ describe('building the values and the markers a host writes', () => {
       for (const key of fill.unfillable) expect(fillable, `${kind}: ${key}`).not.toContain(key);
       /**
        * Every key written is accounted for exactly once, whichever list it lands in — and there
-       * are now five lists rather than three. `unmarkable` and `derived` were added on 2026-08-11
-       * with the coordinate and the call district, and this sum is what makes a sixth case
-       * impossible to add silently: a key that lands in no list, or in two, fails here rather than
-       * going unnamed on a confirmation the applicant reads.
+       * are now SIX lists rather than three. `unmarkable` and `derived` were added on 2026-08-11
+       * with the coordinate and the call district, `restated` on 2026-08-12 with the callsign of an
+       * ordinary lookup, and this sum is what makes a seventh case impossible to add silently: a
+       * key that lands in no list, or in two, fails here rather than going unnamed on a
+       * confirmation the applicant reads.
        */
       expect(
         [
           ...Object.keys(fill.fieldSources),
           ...fill.unmarked,
+          ...fill.restated,
           ...fill.unmarkable,
           ...fill.derived,
           ...fill.unfillable,

@@ -208,8 +208,89 @@ describe('the six statuses, each answered in its own words', () => {
     renderLookup();
     await lookUp();
 
-    const panel = await screen.findByRole('region', { name: /did not run/i });
+    // "The lookup did not run" is what this panel said about every ending that reaches it, and it
+    // is a claim nobody here can make about an answer that arrived: something on the other end
+    // replied. The heading now says only what is known — no record came of it.
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
     expect(panel).toHaveTextContent(/not a lookup result/i);
+    // The evidence, rather than a category: what the answer actually carried.
+    expect(panel).toHaveTextContent(/no status this build can read \("teapot"\)/i);
+    expect(panel.textContent ?? '').not.toMatch(/could not be reached|did not run/i);
+  });
+
+  /**
+   * A 200 WHOSE BODY IS `null`, WHICH IS A TUNNEL MISBEHAVING AND NOT A TUNNEL THAT IS DOWN.
+   *
+   * Measured in Chromium on 2026-08-12 against the built server, with the lookup answered 200 and
+   * the body `null`: "The lookup did not run. The GrantSpotter API could not be reached, so the
+   * lookup never ran." It was reached, and it answered. `apiFetch` resolves a `null` payload as
+   * `null` on purpose, so `result.status` threw inside this component and the throw was caught by
+   * the handler written for a network failure. The same probe with `text/html` named the proxy
+   * correctly, which is the proof the distinction was already available and this case missed it.
+   */
+  it('does not call an API that answered unreachable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({ ok: true, status: 200, json: async () => null } as unknown as Response),
+      ),
+    );
+    const { container } = renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
+    expect(panel).toHaveTextContent(/not a lookup result/i);
+    expect(panel).toHaveTextContent(/the body was null/i);
+    expect(panel).toHaveTextContent(/may have answered instead/i);
+    // The sentence that was measured, about an API that had just answered.
+    expect(panel.textContent ?? '').not.toMatch(/could not be reached|the lookup never ran/i);
+    expect(liveRegion(container).textContent ?? '').not.toMatch(/could not be reached/i);
+  });
+
+  /** The 204 of the same family: an answer with no body at all, reported as the answer it is. */
+  it('does not call an API that answered with no body unreachable either', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 204,
+          json: async () => undefined,
+        } as unknown as Response),
+      ),
+    );
+    renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
+    expect(panel).toHaveTextContent(/no body arrived with it at all/i);
+    expect(panel.textContent ?? '').not.toMatch(/could not be reached/i);
+  });
+
+  /**
+   * THE OTHER HALF OF THE PAIR, KEPT HONEST IN THE OTHER DIRECTION. A 200 that is not JSON already
+   * named the proxy; what is asserted here is that it goes on doing so, and that the two tunnel
+   * misbehaviours now get two sentences that are both true rather than one of each.
+   */
+  it('names the proxy for a 200 that is not JSON, and does not say the API was unreachable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token < in JSON at position 0');
+          },
+        } as unknown as Response),
+      ),
+    );
+    renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
+    expect(panel).toHaveTextContent(/answered 200 with a body that is not JSON/i);
+    expect(panel.textContent ?? '').not.toMatch(/could not be reached/i);
   });
 
   it('says the source is mid-import rather than that the callsign is missing', async () => {
@@ -271,19 +352,27 @@ describe('the six statuses, each answered in its own words', () => {
     renderLookup();
     await lookUp();
 
-    const panel = await screen.findByRole('region', { name: /did not run/i });
+    // A 429 is an ANSWER — the server took the request, read it, and refused it — so the heading
+    // reserved for a request that never got one does not belong over it.
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
     expect(panel).toHaveTextContent(/more callsign lookups than one person makes/i);
     expect(panel).toHaveTextContent(/nothing on this form was changed/i);
+    expect(panel.textContent ?? '').not.toMatch(/did not run|could not be reached/i);
   });
 
+  /**
+   * THE ONE ENDING "THE LOOKUP DID NOT RUN" IS TRUE OF, and the reason the heading is now computed:
+   * `fetch` itself rejected, so nothing answered and nothing on the other end saw the request.
+   */
   it('does not blame the callsign when the API is unreachable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
-    renderLookup();
+    const { container } = renderLookup();
     await lookUp();
 
     expect(await screen.findByRole('region', { name: /did not run/i })).toHaveTextContent(
       /could not be reached/i,
     );
+    expect(liveRegion(container)).toHaveTextContent(/The lookup did not run/i);
   });
 });
 
@@ -296,8 +385,11 @@ describe('accept, edit, dismiss', () => {
 
     expect(onAccept).toHaveBeenCalledWith({
       // Every value carries WHO STATED IT. The state and the class are the record's own, untouched;
-      // the callsign is what the user typed, and the record merely agreed with it.
-      callsign: { value: 'W8UM', origin: 'user' },
+      // the callsign was stated TWICE — the applicant typed it to ask the question and the record
+      // came back for exactly it — which is `'both'` and is neither of the other two. It was
+      // labelled `'user'` until 2026-08-12, and the confirmation then told the applicant the record
+      // had either not stated it or been overruled by them. See `callsignFromRecord`.
+      callsign: { value: 'W8UM', origin: 'both' },
       type: 'PERSON',
       state: { value: 'MI', origin: 'source' },
       licenseClass: { value: 'GENERAL', origin: 'source' },
@@ -1064,9 +1156,20 @@ describe('what the confirmation claims was filled in', () => {
 
     const panel = await screen.findByRole('region', { name: /filled in from the FCC record/i });
     expect(panel).toHaveTextContent(/State and License class came from the record/i);
-    // The callsign is the question the applicant asked, so the record agreeing with it attributes
-    // nothing — and the panel says so rather than sweeping it in with the other two.
-    expect(panel).toHaveTextContent(/Callsign carries no mark/i);
+    // THE ORDINARY PATH, AND THE SENTENCE IT USED TO GET WRONG. The callsign is the question the
+    // applicant asked and the record came back for exactly it, so no mark is put on it — and the
+    // reason given has to be that one. Measured in Chromium on 2026-08-12, this read "Callsign
+    // carries no mark: the record either did not state it, or you changed what it said, so it is
+    // yours" on every successful lookup somebody makes of their own callsign. The record stated it
+    // and nothing was changed, so both halves were false.
+    expect(panel).toHaveTextContent(/Callsign carries no mark: the record stated it and so did you/i);
+    expect(panel).toHaveTextContent(
+      /This record is for the callsign you asked about, so nothing was substituted/i,
+    );
+    expect(panel).toHaveTextContent(/would credit the source with an answer you had already given/i);
+    // The two claims that were being made about it, neither of which was true.
+    expect(panel.textContent ?? '').not.toMatch(/Callsign[^.]*either did not state it/i);
+    expect(panel.textContent ?? '').not.toMatch(/Callsign[^.]*so it is yours/i);
     expect(liveRegion(container)).toHaveTextContent(/Filled in from the FCC record/i);
   });
 
@@ -1081,10 +1184,11 @@ describe('what the confirmation claims was filled in', () => {
     await userEvent.selectOptions(screen.getByLabelText(/license class to fill in/i), 'EXTRA');
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
 
-    // Every value that left is the applicant's: a state they corrected, a class they picked for a
-    // record whose ADVANCED maps onto none of GrantSpotter's four, and the callsign they typed.
+    // Two of the three values that left are the applicant's: a state they corrected and a class
+    // they picked for a record whose ADVANCED maps onto none of GrantSpotter's four. The callsign
+    // is not one of them — they typed it AND the record came back for it.
     expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
-      callsign: { value: 'W8UM', origin: 'user' },
+      callsign: { value: 'W8UM', origin: 'both' },
       state: { value: 'OH', origin: 'user' },
       licenseClass: { value: 'EXTRA', origin: 'user' },
     });
@@ -1094,9 +1198,15 @@ describe('what the confirmation claims was filled in', () => {
     ).not.toBeInTheDocument();
     const panel = await screen.findByRole('region', { name: /none of it attributed/i });
     expect(panel).toHaveTextContent(
-      /Callsign, State and License class went onto the form as your own values/i,
+      /State and License class went onto the form as your own values/i,
     );
     expect(panel).toHaveTextContent(/only where the record itself stated what is now in it/i);
+    // AND THE CALLSIGN IS NOT SWEPT IN WITH THEM. "Callsign … went onto the form as your own
+    // values" followed by "the record itself stated" none of them was printed here until
+    // 2026-08-12, over a record whose whole subject is the callsign W8UM.
+    expect(panel).toHaveTextContent(/Callsign carries no mark: the record stated it and so did you/i);
+    expect(panel).toHaveTextContent(/nothing was substituted/i);
+    expect(panel.textContent ?? '').not.toMatch(/Callsign, State and License class went onto/i);
     // The record is still named and still linkable — it was read, and the applicant may want to
     // check it. What is gone is the claim that it filled these in.
     expect(panel).toHaveTextContent(/callook\.info/i);
@@ -1117,7 +1227,10 @@ describe('what the confirmation claims was filled in', () => {
     const one = acceptedFrame(
       {
         marked: ['state'],
-        unmarked: ['callsign'],
+        unmarked: [],
+        // What the panel actually produces for a record found under the callsign that was typed:
+        // stated by the record AND by the applicant. See `callsignFromRecord`.
+        restated: ['callsign'],
         unmarkable: [],
         derived: [],
         unfillable: ['licenseClass'],
@@ -1126,7 +1239,7 @@ describe('what the confirmation claims was filled in', () => {
       'organization',
     );
     expect(one.body).toContain('State came from the record');
-    expect(one.body).toContain('Callsign carries no mark');
+    expect(one.body).toContain('Callsign carries no mark: the record stated it and so did you');
     expect(one.body).toContain(
       'License class is not a field this profile has, so nothing was recorded for it and no ' +
         'source is named for it.',
@@ -1139,6 +1252,7 @@ describe('what the confirmation claims was filled in', () => {
       {
         marked: [],
         unmarked: [],
+        restated: [],
         unmarkable: [],
         derived: [],
         unfillable: ['licenseClass', 'orgName'],
@@ -1166,7 +1280,8 @@ describe('what the confirmation claims was filled in', () => {
     const frame = acceptedFrame(
       {
         marked: ['state'],
-        unmarked: ['callsign'],
+        unmarked: [],
+        restated: ['callsign'],
         unmarkable: ['lat', 'lon'],
         derived: ['callDistrict'],
         unfillable: [],
@@ -1200,6 +1315,7 @@ describe('what the confirmation claims was filled in', () => {
     const base = {
       marked: ['state'],
       unmarked: [],
+      restated: ['callsign'],
       unmarkable: ['lat', 'lon'],
       derived: [],
       unfillable: [],
@@ -1225,6 +1341,7 @@ describe('what the confirmation claims was filled in', () => {
       {
         marked: ['state'],
         unmarked: [],
+        restated: ['callsign'],
         unmarkable: ['lat'],
         derived: [],
         unfillable: [],
@@ -1273,7 +1390,7 @@ describe('a club station, which is what a collegiate club holds', () => {
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
     expect(onAccept).toHaveBeenCalledWith(
       expect.objectContaining({
-        callsign: { value: 'W8UM', origin: 'user' },
+        callsign: { value: 'W8UM', origin: 'both' },
         type: 'CLUB',
         state: { value: 'MI', origin: 'source' },
         orgName: {
@@ -1457,16 +1574,89 @@ describe('a record found under a different callsign', () => {
     expect(live.textContent ?? '').not.toMatch(/FCC record for K9OLD/i);
   });
 
-  it('does not announce a record when none was received', async () => {
+  /**
+   * BOTH SPELLINGS OF "NO RECORD", BECAUSE THE PANEL AND THE LIVE REGION READ THE ANSWER TWICE AND
+   * DISAGREED ABOUT ONE OF THEM.
+   *
+   * This case was covered by `{status:'found'}` alone — the ABSENT record, which is the spelling
+   * that worked. The render path used `answered.record ?? null` and the announcement asked
+   * `found === undefined`, so `{"status":"found","record":null}` walked past the guard and threw
+   * `TypeError: Cannot read properties of null (reading 'callsign')` during render. Measured in
+   * Chromium on 2026-08-12 against the built server: the panel's error boundary caught it, the page
+   * and the applicant's unsaved typing survived (21 inputs, the latitude intact), and the whole
+   * lookup panel — live region included — was replaced by "The callsign lookup stopped working".
+   * `null` is not in the declared type, which is exactly why only the wire can produce it and only
+   * a test that writes it can catch it. A test that picks the passing spelling of two proves the
+   * spelling, not the guard.
+   */
+  it.each([
+    ['the key is absent', { status: 'found' } as CallsignLookupResult],
+    ['the key is null', JSON.parse('{"status":"found","record":null}') as CallsignLookupResult],
+  ])('does not announce a record when none was received: %s', async (_spelling, result) => {
     // `found` with no record is framed on screen as `unavailable` — nothing was received, so
     // nothing is claimed. The announcement has to say the same thing the panel does.
-    stubResult({ status: 'found' });
+    stubResult(result);
     const { container } = renderLookup({ callsign: 'W8UM' });
     await lookUp();
 
     await screen.findByRole('region', { name: /nothing was filled in for W8UM/i });
     expect(liveRegion(container)).toHaveTextContent(/nothing was filled in for W8UM/i);
     expect(liveRegion(container).textContent ?? '').not.toMatch(/FCC record for/i);
+    // The panel is still here, which is the half the error boundary could not give back.
+    expect(screen.getByRole('button', { name: /look up this callsign/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * A RECORD THAT DOES NOT SAY WHOSE IT IS.
+ *
+ * `KNOWN_STATUSES` guards the status against the wire, `KNOWN_GEOCODED_FROM` guards the geocode arm,
+ * and the two fields the entire panel is written about were read straight out of the answer.
+ * Measured in Chromium on 2026-08-12 against the built server, with
+ * `{"status":"found","record":{"source":"callook.info"}}` over a lookup of W1AW: the heading read
+ * "FCC record for undefined", the live region read "FCC record for undefined: undefined. This record
+ * is for undefined, not the W1AW you asked about.", the word appeared four times on screen, and the
+ * source line read "Read from callook.info on —".
+ *
+ * The live region is the serious one. The substitution warning is the most safety-critical sentence
+ * this component has — it is what tells somebody a record is NOT theirs, and what the confirm
+ * checkbox gates — and it was FABRICATED over a record that stated no callsign at all, because
+ * `undefined !== 'W1AW'`.
+ */
+describe('a record whose own fields did not arrive', () => {
+  it.each([
+    ['nothing but a source', { source: 'callook.info' }],
+    ['no callsign', { ...PERSON, callsign: undefined }],
+    ['no licensee name', { ...PERSON, name: '' }],
+    ['a licensee kind this build does not know', { ...PERSON, type: 'GOVERNMENT' }],
+    ['no fetch time', { ...PERSON, fetchedAt: undefined }],
+  ])('says so rather than rendering a panel about nobody: %s', async (_what, record) => {
+    stubResult({ status: 'found', record } as unknown as CallsignLookupResult);
+    const { container } = renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /nothing was filled in for W1AW/i });
+    expect(panel).toHaveTextContent(/not one this page can read/i);
+    expect(panel).toHaveTextContent(/reload the page/i);
+    // Not one occurrence, anywhere the applicant can read.
+    expect(container.textContent ?? '').not.toMatch(/undefined/);
+    // AND NO FABRICATED SUBSTITUTION. Nothing may claim the record is for a different callsign
+    // when the record named no callsign at all.
+    expect(container.textContent ?? '').not.toMatch(/you asked about/i);
+    expect(screen.queryByLabelText(/this record is mine/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /use these values/i })).not.toBeInTheDocument();
+    // The live region says what the panel says.
+    expect(liveRegion(container)).toHaveTextContent(/nothing was filled in for W1AW/i);
+    expect(liveRegion(container).textContent ?? '').not.toMatch(/undefined|FCC record for/i);
+  });
+
+  it('still shows a record that states all four of them', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    const { container } = renderLookup({ callsign: 'W8UM' });
+    await lookUp();
+
+    expect(await screen.findByRole('heading', { name: /FCC record for W8UM/i })).toBeInTheDocument();
+    expect(container.textContent ?? '').not.toMatch(/not one this page can read/i);
   });
 });
 

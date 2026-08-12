@@ -55,8 +55,20 @@ export interface CallsignProvenance {
  * means the person typed it, picked it from a select, or had already supplied it — their own
  * assertion, which is the strongest thing this tool ever holds and the one thing it must never
  * attribute to somebody else.
+ *
+ * `'both'` MEANS BOTH OF THEM SAID IT, and it exists because the two labels above were being made
+ * to describe three situations. Only {@link callsignFromRecord} produces it today: the callsign is
+ * the QUESTION, so a record answering with the same one has been stated twice — once by the person
+ * who typed it into the field and once by callook, which returned a record for exactly it. That was
+ * labelled `'user'`, which put it in {@link CallsignFill.unmarked}, whose sentence is "the record
+ * either did not state it, or you changed what it said, so it is yours". Measured in Chromium on
+ * 2026-08-12 against the built server, on a lookup of W1MX answered by W1MX's own record with
+ * nothing edited, the confirmation read exactly that. Both disjuncts are false: the record stated
+ * it, and the applicant changed nothing. It is the same defect that split `unfillable` and
+ * `unmarkable` out of `unmarked` — one list standing for several unrelated reasons, described as
+ * whichever of them the sentence happened to be written about.
  */
-export type ValueOrigin = 'source' | 'user';
+export type ValueOrigin = 'source' | 'user' | 'both';
 
 export interface AcceptedValue<T extends string = string> {
   value: T;
@@ -220,14 +232,22 @@ export function fromSource<T extends string>(
 /**
  * The callsign the record is for, labelled against the callsign the user ASKED about.
  *
- * Inverted from {@link fromSource}, and deliberately: the callsign is the question, so a record
- * that answers with the same one has told the user nothing they did not already state. It becomes
- * the source's answer only when it DIFFERS — callook answers a lookup of a superseded callsign
- * with the licensee's current record, so "K9OLD" can come back as "W5NEW" — and that is precisely
- * the case where the field must not read like something the applicant typed.
+ * Not {@link fromSource}, and for a reason peculiar to this one field: the callsign is the
+ * QUESTION. A record that answers with a DIFFERENT one is the source's answer and nothing else —
+ * callook answers a lookup of a superseded callsign with the licensee's current record, so "K9OLD"
+ * can come back as "W5NEW", and that value must not read like something the applicant typed. A
+ * record that answers with the SAME one has been stated twice over, by the record and by the person
+ * who typed it, and that is `'both'`.
+ *
+ * IT RETURNED `'user'` FOR THE MATCHING CASE UNTIL 2026-08-12, which is the ordinary path — every
+ * successful lookup of the callsign somebody actually holds — and it made the confirmation say "the
+ * record either did not state it, or you changed what it said, so it is yours" about a value the
+ * record had stated in full and the applicant had not touched. See {@link ValueOrigin} for the
+ * measurement. The label is not a matter of taste: it decides which sentence a person reads about
+ * their own form, and there was no label for what had actually happened.
  */
 export function callsignFromRecord(recordCallsign: string, typed: string): AcceptedValue {
-  return { value: recordCallsign, origin: recordCallsign === typed ? 'user' : 'source' };
+  return { value: recordCallsign, origin: recordCallsign === typed ? 'both' : 'source' };
 }
 
 export interface CallsignFill {
@@ -261,8 +281,26 @@ export interface CallsignFill {
    * said, so it is yours" — about a value callook.info had stated in full, on a field an
    * organisation profile does not have, that the applicant had never seen. A list that means two
    * things gets described as one of them, and the description is wrong half the time.
+   *
+   * IT MEANT ONE MORE THING UNTIL 2026-08-12 — see {@link restated}, which is the same split made
+   * a third time, on the field the ordinary lookup always writes.
    */
   unmarked: string[];
+  /**
+   * A FIELD OF THIS PROFILE THAT THE RECORD AND THE APPLICANT BOTH STATED, IDENTICALLY.
+   *
+   * The callsign, today, and only it: a lookup of W1MX answered by W1MX's record puts back exactly
+   * what the person typed to ask the question. It carries no marker, which is unchanged and
+   * deliberate — crediting callook.info with the answer to a question the applicant asked in those
+   * same characters would make the badge mean less everywhere it appears.
+   *
+   * What changed is that it is no longer counted among {@link unmarked}. That list means "yours:
+   * the record did not state it, or you changed what it said", and both halves of that are false
+   * here — the record stated it, and nothing was changed. Measured on 2026-08-12, that sentence was
+   * printed over the callsign on every successful lookup a person makes of their own callsign,
+   * which is the most reachable false sentence this module has produced.
+   */
+  restated: string[];
   /**
    * A FIELD OF THIS PROFILE, HOLDING WHAT THE RECORD STATED, THAT NOTHING CAN RECORD THAT ABOUT.
    *
@@ -397,16 +435,17 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
   const values: Record<string, string> = {};
   const fieldSources: Record<string, ProfileFieldSource> = {};
   const unmarked: string[] = [];
+  const restated: string[] = [];
   const unmarkable: string[] = [];
   const unfillable: string[] = [];
 
   for (const [key, entry] of acceptedValues(accepted)) {
     values[key] = entry.value;
     // THREE INDEPENDENT QUESTIONS, ASKED IN THIS ORDER, AND NEVER COLLAPSED INTO ONE CONDITION.
-    // "Does this profile have the field", "can it record where the value came from", and "did the
-    // record state it" have three different answers and three different sentences, and every time
-    // two of them have been folded together this module has told somebody something false about
-    // their own form. Asking them separately is what makes each list mean exactly one thing.
+    // "Does this profile have the field", "can it record where the value came from", and "who
+    // stated it" have three different answers and three different sentences, and every time two of
+    // them have been folded together this module has told somebody something false about their own
+    // form. Asking them separately is what makes each list mean exactly one thing.
     if (!onThisProfile.has(key)) {
       unfillable.push(key);
       continue;
@@ -415,8 +454,17 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
       // The profile has the box and nothing can mark it. A value the applicant edited inside the
       // panel is still theirs, though, and saying "the record stated this" about it would be the
       // original defect wearing a new list — so origin still decides which sentence they get.
-      if (entry.origin === 'source') unmarkable.push(key);
-      else unmarked.push(key);
+      // `'both'` sits with `'source'` here rather than with `'user'`: the record did state it, and
+      // that is the half of the sentence this list is about.
+      if (entry.origin === 'user') unmarked.push(key);
+      else unmarkable.push(key);
+      continue;
+    }
+    // BOTH OF THEM SAID IT, WHICH IS NEITHER OF THE OTHER TWO SENTENCES. No marker, exactly as
+    // before — see `restated`, which is what that refusal MEANS rather than what it leaves behind,
+    // the same distinction `unmarkable` draws one branch up.
+    if (entry.origin === 'both') {
+      restated.push(key);
       continue;
     }
     if (entry.origin !== 'source') {
@@ -447,5 +495,14 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
       ? { coordinateFrom: accepted.statedCoordinateFrom }
       : {};
 
-  return { values, fieldSources, unmarked, unmarkable, derived, unfillable, ...coordinateFrom };
+  return {
+    values,
+    fieldSources,
+    unmarked,
+    restated,
+    unmarkable,
+    derived,
+    unfillable,
+    ...coordinateFrom,
+  };
 }

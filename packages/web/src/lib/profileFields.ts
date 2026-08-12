@@ -153,7 +153,9 @@ export const PROFILE_FIELDS: ProfileFieldMeta[] = [
   // accepting a record found for K9OLD writes W5NEW here. That value came from the source and the
   // applicant never typed it, so it must be storable as one — see `StudentFieldSources.callsign`.
   // A record whose callsign IS the one they typed carries no marker: `fillFromLookup` marks only
-  // values whose origin is `'source'`, and `callsignFromRecord` labels that case `'user'`.
+  // values whose origin is `'source'`, and `callsignFromRecord` labels that case `'both'` — the
+  // record stated it and so did the applicant, which is its own list (`restated`) and its own
+  // sentence on the confirmation, because it is neither of theirs alone.
   { key: 'callsign', kind: 'student', label: 'Callsign', help: 'Your FCC-issued station identifier, for example W8UM. Funders use it to confirm you hold a licence.', callsignFill: { kind: 'fills' }, usedInMatching: true },
   // The help text said "110 of the 111 ARRL catalog entries gate on it". Two things were wrong
   // with that. It was a census in copy nobody re-measures, which is the defect

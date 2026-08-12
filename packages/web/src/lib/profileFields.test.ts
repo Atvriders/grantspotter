@@ -176,7 +176,8 @@ describe('what a callsign lookup may fill', () => {
     // W5NEW into this field. That value is the source's answer and the applicant never typed it,
     // so it needs somewhere to be recorded as one, and `StudentFieldSources.callsign` is it. The
     // ordinary case is unaffected: `fillFromLookup` marks only values whose origin is `'source'`,
-    // and a record for the callsign the user typed is labelled `'user'` by `callsignFromRecord`.
+    // and a record for the callsign the user typed is labelled `'both'` by `callsignFromRecord` —
+    // stated by the record and by the applicant, which gets no marker and its own sentence.
     expect(callsignFillableFields('student')).toEqual(['callsign', 'licenseClass', 'state']);
     expect(callsignFillableFields('organization')).toEqual(['orgName', 'callsign', 'state']);
   });
