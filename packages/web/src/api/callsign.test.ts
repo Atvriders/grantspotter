@@ -26,9 +26,28 @@ import { describe, expect, it } from 'vitest';
  * declarations compared. That also catches the case a structural check would miss — a field
  * present in both but with a different shape.
  *
- * WHAT IS DELIBERATELY NOT COMPARED: doc comments (stripped), field ORDER, and optionality
- * markers on `CallsignRecord`, whose `?` positions are asserted separately below so a required
- * field cannot quietly become optional in one copy only.
+ * WHAT IS DELIBERATELY NOT COMPARED: doc comments (stripped) and field ORDER. Everything else about
+ * a member — its name, its `?`, and the TYPE TEXT after the colon — is compared, in both
+ * directions, because equality is symmetric and a mirror has two ways to go wrong.
+ *
+ * IT COMPARED ONLY THE NAMES UNTIL 2026-08-11, AND THAT IS THE DEFECT THIS HEADER HAD BEEN
+ * CLAIMING TO CATCH. `members()` builds a name→type map and the `CallsignRecord` assertion called
+ * `.keys()` on it and threw the types away — so the largest declaration in the file, the one the
+ * server actually sends, was checked for the presence of fields and for nothing about them.
+ * Measured by breaking it, before the fix, with `npx vitest run packages/web/src/api/callsign.test.ts`
+ * after each edit:
+ *
+ *   web `isPoBox: boolean` → `string`                     NOT CAUGHT
+ *   web `type: 'PERSON' | 'CLUB'` → `… | 'MILITARY'`      NOT CAUGHT
+ *   web `source: 'callook.info'` → `string`               NOT CAUGHT
+ *   web `record?: CallsignRecord` → `record:` (required)  NOT CAUGHT — never compared at all
+ *   SERVER `type` widened, web left alone                 NOT CAUGHT
+ *
+ * The last is the direction that matters, and it is the one the header promised. The technique was
+ * already in this file — the `GeocodedPoint` assertion compares `[...members(...)]`, entries and
+ * all, and catches every one of those — and was simply not applied to the declaration that needed
+ * it. So the entry comparison is now the rule rather than one case's flourish, and
+ * `CallsignLookupResult` is compared too.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -109,12 +128,54 @@ describe('the web mirror of the server callsign types', () => {
     expect(unionLiterals(typeBody(web, 'CallsignLookupStatus')).sort()).toEqual([...expected].sort());
   });
 
-  it('declares every field of CallsignRecord, with the same optionality', () => {
-    const expected = [...members(interfaceBody(server, 'CallsignRecord')).keys()].sort();
+  /** `[name?, type]` pairs, sorted by name, so field ORDER is free to differ and nothing else is. */
+  function sortedMembers(source: string, name: string): Array<[string, string]> {
+    return [...members(interfaceBody(source, name))].sort((a, b) => a[0].localeCompare(b[0]));
+  }
+
+  it('declares every field of CallsignRecord, with the same optionality AND the same type', () => {
+    const expected = sortedMembers(server, 'CallsignRecord');
+    const names = expected.map(([name]) => name);
     // Vacuity guard: this assertion is worthless if the parse above found nothing.
-    expect(expected).toContain('mailingGeocode?');
-    expect(expected).toContain('isPoBox');
-    expect([...members(interfaceBody(web, 'CallsignRecord')).keys()].sort()).toEqual(expected);
+    expect(names).toContain('mailingGeocode?');
+    expect(names).toContain('geocodeRefusal?');
+    expect(names).toContain('isPoBox');
+    // And a guard on the half that was missing: the map has to carry types, not just names.
+    expect(Object.fromEntries(expected).isPoBox).toBe('boolean');
+    expect(sortedMembers(web, 'CallsignRecord')).toEqual(expected);
+  });
+
+  it('declares the result envelope the same way, record and message optional in both', () => {
+    // Never compared until 2026-08-11, so `record?` becoming required in one copy — which is what
+    // decides whether the browser has to check before reading it — was invisible.
+    const expected = sortedMembers(server, 'CallsignLookupResult');
+    expect(expected).toEqual([
+      ['message?', 'string'],
+      ['record?', 'CallsignRecord'],
+      ['status', 'CallsignLookupStatus'],
+    ]);
+    expect(sortedMembers(web, 'CallsignLookupResult')).toEqual(expected);
+  });
+
+  it('states the same reasons for refusing a location, with the same evidence on each', () => {
+    // `GeocodeRefusal` is the second shape of the coordinate answer, and it is the one the panel
+    // reads to explain an empty box. An arm the browser cannot see is a reason the reader is not
+    // given — which is the whole defect that put this type on the wire.
+    const arms = (source: string): string[] =>
+      [...typeBody(source, 'GeocodeRefusal').matchAll(/refused:\s*'([a-z_]+)'([^}]*)/g)].map(
+        (m) =>
+          `${m[1] ?? ''}(${[...(m[2] ?? '').matchAll(/(\w+)\??:\s*(\w+)/g)]
+            .map((f) => `${f[1] ?? ''}:${f[2] ?? ''}`)
+            .join(',')})`,
+      );
+    expect(arms(server)).toEqual([
+      'contradicted(gridsquare:string,containingLocator:string)',
+      'unreadable_locator(gridsquare:string,because:string)',
+      'locator_too_coarse(gridsquare:string)',
+      'placeholder()',
+      'incomplete()',
+    ]);
+    expect(arms(web)).toEqual(arms(server));
   });
 
   it('declares the same three things a coordinate can be a geocode of', () => {

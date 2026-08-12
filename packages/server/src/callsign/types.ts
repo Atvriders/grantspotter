@@ -111,6 +111,62 @@ export type MailingGeocode =
   | { geocodedFrom: 'po_box'; poBox: GeocodedPoint }
   | { geocodedFrom: 'address_not_stated'; unattributed: GeocodedPoint };
 
+/**
+ * THE RECORD STATED A LOCATION AND NONE OF IT IS BEING PASSED ON — AND THAT FACT IS ITSELF NEWS.
+ *
+ * WHY THIS IS NOT THE "MARK IT AND PASS IT ON" OPTION `statedPoint` REJECTS, which is the first
+ * thing to check when reading it. That option was to send the COORDINATE with a flag beside it, and
+ * the argument against it stands: no consumer can choose a half when nothing says which half is
+ * wrong, every exhaustive `switch` downstream grows a case whose body is "do what you do when there
+ * is nothing", and a flag is a thing a consumer can forget to read. Nothing here sends a
+ * coordinate. There is no {@link MailingGeocode} to narrow, no `latitude` to reach, and the
+ * invariant that gained — the PRESENCE of a `MailingGeocode` means the record agreed with itself —
+ * is untouched.
+ *
+ * WHAT IT SENDS IS THE REASON THE BOXES ARE EMPTY. Measured on 2026-08-11 against a running server:
+ * a body stating latitude 10, longitude 10 and gridsquare `FN31pr` came back as
+ * `{"status":"found","record":{…}}` with no `mailingGeocode` key, no log line and nothing on
+ * screen — indistinguishable, from the browser, from `person-no-address.json`, whose `location` is
+ * three empty strings. Those are not the same event and the profile editor was asserting they were:
+ * its address note read "What is kept is the state … and nothing else from these lines", which is
+ * false about a record that stated a coordinate and had it refused. Silence about a refusal is a
+ * claim that there was nothing to refuse.
+ *
+ * The reasons are separate values rather than one `'refused'` because they are separate upstream
+ * defects with separate sentences, on the same principle that split `malformed` out of `not_us`:
+ * "these two halves of your record disagree" and "GrantSpotter could not read the grid square" are
+ * different things to be told, and only one of them is a fault in the record.
+ */
+export type GeocodeRefusal =
+  /**
+   * The stated coordinate falls outside the stated grid square. Two statements about one station,
+   * disagreeing, with nothing in the response to say which is wrong.
+   */
+  | {
+      refused: 'contradicted';
+      /** The locator the record stated, exactly as it printed it. */
+      gridsquare: string;
+      /** The locator the stated coordinate actually falls in, at the same precision. */
+      containingLocator: string;
+    }
+  /** The grid square could not be read as a locator at all, so nothing corroborates the pair. */
+  | { refused: 'unreadable_locator'; gridsquare: string; because: string }
+  /**
+   * A two-character locator: a box 10° by 20°, too coarse to check a coordinate against. See
+   * `MINIMUM_LOCATOR_PRECISION`.
+   */
+  | { refused: 'locator_too_coarse'; gridsquare: string }
+  /**
+   * `0.0 / 0.0 / JJ00aa` — null island, which is an absence written in the shape of an answer. The
+   * two halves corroborate each other perfectly, because both were computed from the same absence.
+   */
+  | { refused: 'placeholder' }
+  /**
+   * Some of the three parts arrived and some did not, or one of them was not a number this parser
+   * would accept. All three or none, which is this file's rule for every compound field.
+   */
+  | { refused: 'incomplete' };
+
 export interface CallsignRecord {
   callsign: string;              // normalised, upper case
   type: 'PERSON' | 'CLUB';
@@ -128,6 +184,13 @@ export interface CallsignRecord {
    * {@link GeocodedFrom}, which is the paragraph to read before using any of these numbers.
    */
   mailingGeocode?: MailingGeocode;
+  /**
+   * The record stated a location and it was not kept — never set beside a `mailingGeocode`, and
+   * never set for a record that stated no location at all. See {@link GeocodeRefusal}, which is
+   * about telling a person why their coordinate boxes are empty rather than about handing anything
+   * a coordinate.
+   */
+  geocodeRefusal?: GeocodeRefusal;
   grantDate?: string;            // ISO. This is NOT "first licensed" — see below.
   expiryDate?: string;
   frn?: string;

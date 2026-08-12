@@ -414,6 +414,10 @@ describe('lookupCallsign: where the mail goes', () => {
 
     expect(result.status).toBe('found');
     expect(result.record).not.toHaveProperty('mailingGeocode');
+    // AND NO REFUSAL EITHER. Three empty strings is a record that said nothing, and saying "a
+    // location was refused" about one would be an over-claim in the other direction — the same
+    // mistake as the one `geocodeRefusal` exists to correct, pointed the other way.
+    expect(result.record).not.toHaveProperty('geocodeRefusal');
   });
 
   /**
@@ -603,6 +607,89 @@ describe('lookupCallsign: a record that contradicts itself', () => {
     expect(result.record?.name).toBe('ARRL HQ OPERATORS CLUB');
     expect(result.record?.city).toBe('NEWINGTON');
     expect(result.record?.state).toBe('CT');
+  });
+
+  /**
+   * AND THE REFUSAL IS ITSELF NEWS, WHICH IS WHAT WAS MISSING.
+   *
+   * Measured in a browser against a running server on 2026-08-11, before this field existed: this
+   * exact body came off the wire as `{"status":"found","record":{…}}` with no `mailingGeocode`
+   * key, no server log line, no panel section and no live-region mention — indistinguishable from
+   * `person-no-address.json`, whose location is three empty strings. Two different events, one
+   * silence, and the panel then asserted that the state was "the only thing kept from these
+   * lines" over a record that had also stated a coordinate.
+   *
+   * WHAT IS NOT REOPENED: the decision that a contradictory record costs the WHOLE field. There is
+   * no coordinate on this object, no `MailingGeocode` to narrow, and every exhaustive `switch`
+   * downstream is untouched — the argument `readLocation` makes against "mark it and pass it on"
+   * was about passing the NUMBERS, and no number is passed.
+   */
+  it('says WHY it kept nothing, without handing anybody the coordinate', async () => {
+    const { deps } = serve(
+      mutate('00-callook-info-w1aw-json.json', (body) => {
+        body.location = { latitude: '10.0', longitude: '10.0', gridsquare: 'FN31pr' };
+      }),
+    );
+    const result = await lookupCallsign('W1AW', deps);
+
+    expect(result.record?.geocodeRefusal).toEqual({
+      refused: 'contradicted',
+      gridsquare: 'FN31pr',
+      // Core's answer, at the stated locator's own precision — the evidence for the disagreement.
+      containingLocator: 'JK50aa',
+    });
+    expect(result.record).not.toHaveProperty('mailingGeocode');
+    // No latitude anywhere on the record, under any key. The reason travels; the numbers do not.
+    expect(JSON.stringify(result.record)).not.toContain('latitude');
+  });
+
+  /**
+   * ONE REASON PER UPSTREAM DEFECT, on the same principle that split `malformed` out of `not_us`:
+   * "your record's two halves disagree" and "GrantSpotter could not read the grid square" are
+   * different things to be told, and only one of them is a fault in the record.
+   */
+  it.each([
+    [
+      'an unreadable locator',
+      { gridsquare: 'FN42l' },
+      { refused: 'unreadable_locator', gridsquare: 'FN42l' },
+    ],
+    [
+      'a two-character locator, too coarse to check anything against',
+      { gridsquare: 'FN' },
+      { refused: 'locator_too_coarse', gridsquare: 'FN' },
+    ],
+    ['a latitude that is not a number', { latitude: '42.34991837N' }, { refused: 'incomplete' }],
+    ['half a location', { gridsquare: '' }, { refused: 'incomplete' }],
+    [
+      'the null-island placeholder',
+      { latitude: '0.0', longitude: '0.0', gridsquare: 'JJ00aa' },
+      { refused: 'placeholder' },
+    ],
+  ])('reports %s as its own kind of refusal', async (_what, edit, expected) => {
+    const { deps } = serve(
+      mutate('01-callook-info-w1mx-json.json', (body) => {
+        Object.assign(body.location, edit);
+      }),
+    );
+    const result = await lookupCallsign('W1MX', deps);
+
+    expect(result.record, _what).not.toHaveProperty('mailingGeocode');
+    expect(result.record?.geocodeRefusal, _what).toMatchObject(expected);
+  });
+
+  /** A record that agrees with itself carries no refusal — the half that would otherwise rot. */
+  it('sets no refusal on any of the three real captures', async () => {
+    for (const [file, callsign] of [
+      ['00-callook-info-w1aw-json.json', 'W1AW'],
+      ['01-callook-info-w1mx-json.json', 'W1MX'],
+      ['02-callook-info-k2cc-json.json', 'K2CC'],
+    ] as const) {
+      const { deps } = serveFixture(file);
+      const result = await lookupCallsign(callsign, deps);
+      expect(result.record?.mailingGeocode, file).toBeDefined();
+      expect(result.record, file).not.toHaveProperty('geocodeRefusal');
+    }
   });
 
   /**

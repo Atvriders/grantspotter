@@ -17,12 +17,14 @@ export type ProfileFieldKind = 'student' | 'organization';
  * great deal to do with:
  *
  *   - `lat`/`lon`. callook states a coordinate on every successful lookup, and this product threw
- *     it away for months. It CAN be filled. What it cannot be is MARKED: core's
- *     `StudentFieldSources` and `OrgFieldSources` declare three keys apiece and `z.object` strips
- *     the rest, so a `ProfileFieldSource` for a coordinate is dropped by the server on the way in.
- *     A badge that shows on screen and vanishes on reload is worse than no badge at all (the rule
+ *     it away for months. It CAN hold a value the record stated — that is why it is not a
+ *     `'refused'` — but never one the software chose to put there: see
+ *     {@link LOOKUP_FILLS_COORDINATE}. What it cannot be is MARKED: core's `StudentFieldSources`
+ *     and `OrgFieldSources` declare three keys apiece and `z.object` strips the rest, so a
+ *     `ProfileFieldSource` for a coordinate is dropped by the server on the way in. A badge that
+ *     shows on screen and vanishes on reload is worse than no badge at all (the rule
  *     `fillFromLookup` already enforces), so the honest annotation is `'fills_unattributed'`: this
- *     gets filled, and the profile cannot afterwards say who said it.
+ *     can get filled from a record, and the profile cannot afterwards say who said it.
  *   - `callDistrict`. Nothing states it. It is ARITHMETIC on a field of this same profile, which
  *     is a third thing entirely from "a source said so" — and core says so out loud in
  *     `StudentFieldSources`: attributing it to callook.info "would credit a source for this tool's
@@ -80,22 +82,50 @@ export interface ProfileFieldMeta {
  * happened to be listed first. Four entries sharing one constant makes that true by construction
  * rather than by four copies staying in step.
  *
- * WHAT IT HAS TO SAY, AND WHY BOTH HALVES ARE IN IT. The first half is the PO box: callook's
- * coordinate is a geocode of the licensee's mailing address, so for a club that files a box number
- * it is a post office. The second half is the one this profile cannot fix — there is no key for a
- * coordinate in `StudentFieldSources` or `OrgFieldSources`, so the marker every other filled field
- * carries cannot exist here, and after one save nothing distinguishes a coordinate GrantSpotter
- * fetched from one the applicant measured.
+ * IT HAS TO BE TRUE WITH A NUMBER IN THE BOX AND WITH THE BOX EMPTY, WHICH IT WAS NOT.
+ *
+ * This sentence is attached to the FIELD, permanently, not to an event — so it is read beside
+ * whatever the field currently holds. Until 2026-08-11 it said the lookup "will show it without
+ * filling it in", and it was measured rendering beside a Latitude box holding `42.34991837`, the
+ * post office callook geocoded for W1MX. A permanent caveat contradicting the value it is attached
+ * to is worse than no caveat: it teaches the reader that the sentence is boilerplate. The comment
+ * on {@link callsignFillRefusal} had already named this exact failure — the split between refusal
+ * and caveat exists to stop '"GrantSpotter will never fill this in" being printed over a field it
+ * has just filled in' — and the caveat then went and did the same thing one word softer.
+ *
+ * The sentence did not get weakened to fit the behaviour. THE BEHAVIOUR CHANGED to the one the
+ * sentence was already describing, because it is the right one: no arm of a lookup puts a
+ * coordinate in these boxes any more, street address included. See `describeGeocode` in
+ * `components/CallsignLookup.tsx` for that argument, whose short form is that the ONE thing a
+ * coordinate does in this product is decide a radius rule, that it is the only value a lookup
+ * writes which the profile can never afterwards attribute to anybody, and that a hard INELIGIBLE
+ * verdict resting on a number nobody typed is the failure this product exists to refuse.
+ *
+ * WHAT IT HAS TO SAY, AND WHY ALL THREE PARTS ARE IN IT. What the number IS — callook's geocode of
+ * the mailing address on the licence, which for a club filing a box number is a post office. What
+ * GrantSpotter does with it — shows it, names it, and leaves the box alone. And the part this
+ * profile cannot fix: there is no key for a coordinate in `StudentFieldSources` or
+ * `OrgFieldSources`, so the marker every other filled field carries cannot exist here, and after
+ * one save nothing distinguishes a coordinate GrantSpotter fetched from one the applicant measured.
  */
 const LOOKUP_FILLS_COORDINATE: CallsignFill = {
   kind: 'fills_unattributed',
   because:
-    'A callsign lookup can fill this in, but only from a street address. callook’s coordinate is a ' +
-    'geocode of the mailing address on the licence, so for a PO box it is a post office rather ' +
-    'than a station, and the lookup will show it without filling it in. GrantSpotter also has ' +
-    'nowhere to record that a coordinate was read rather than stated — the profile can mark a ' +
-    'callsign, a state, a licence class and an organisation name that way, and not a number — so ' +
-    'once this is saved it reads exactly like a coordinate you typed.',
+    'A callsign lookup will not fill this in for you. callook states a coordinate on every record ' +
+    'it answers with, but it is a geocode of the mailing address on the licence — a post office ' +
+    'where that address is a PO box, and where the post goes rather than where the station is ' +
+    'even when it is a street — so GrantSpotter shows you the number, says what it is a geocode ' +
+    // "…AND LEAVES THIS BOX EMPTY" WAS THE FIRST DRAFT OF THIS CLAUSE AND WAS PULLED, because it
+    // is a claim about the box's CURRENT state and this sentence is permanent: measured beside a
+    // Latitude box holding a coordinate the applicant had chosen in an earlier session, it read as
+    // a contradiction even though nothing untrue had happened. What is invariant is who put the
+    // number there, so that is what it says.
+    'of, and never writes it into this box itself. Anything in this box is in it because you put ' +
+    'it there. It also has nowhere to record ' +
+    'that a coordinate was read rather than stated: the profile can mark a callsign, a state, a ' +
+    'licence class and an organisation name that way, and not a number. So once this is saved it ' +
+    'reads exactly like a coordinate you typed — which is the other reason it has to be your ' +
+    'choice and not ours.',
 };
 
 /**
@@ -305,10 +335,13 @@ export function callsignFillableFields(kind: ProfileFieldKind): string[] {
  * where the record holds something adjacent and wrong are annotated, and `profileFields.test.ts`
  * pins which ones those are.
  *
- * STRICTLY THE REFUSALS. `lat`/`lon` are annotated too and are NOT refusals — a lookup does fill
- * them — so they answer `undefined` here and carry their sentence through
- * {@link callsignFillCaveat}. Keeping the two questions apart is what stops "GrantSpotter will
- * never fill this in" being printed over a field it has just filled in.
+ * STRICTLY THE REFUSALS. `lat`/`lon` are annotated too and are NOT refusals — the record states a
+ * coordinate, the applicant can put it in the box, and it lands there as a value the record stated
+ * — so they answer `undefined` here and carry their sentence through {@link callsignFillCaveat}.
+ * Keeping the two questions apart is what stops "GrantSpotter will never fill this in" being
+ * printed over a field it has just filled in. That is a rule about the WORDS as much as about the
+ * function: see {@link LOOKUP_FILLS_COORDINATE}, whose caveat broke it in 2026-08-11's measurement
+ * while this function was answering correctly.
  */
 export function callsignFillRefusal(key: string, kind?: ProfileFieldKind): string | undefined {
   const fill = lookup(key, kind)?.callsignFill;

@@ -1176,6 +1176,61 @@ describe('filling the profile from the FCC record', () => {
     await screen.findByRole('button', { name: /use these values/i });
     expect(auditA11y(container)).toEqual([]);
   });
+
+  /**
+   * WHAT A REPLACEMENT OWES THE APPLICANT, given the codebase had already decided what an ERASURE
+   * owes them.
+   *
+   * The sentence above this one calls an emptied field "a change they are owed a sentence about".
+   * Overwriting one said nothing at all until 2026-08-11: measured in a browser, a profile holding
+   * a typed `OH` accepted W8UM's record, ended up with `MI`, and the only thing said about it was
+   * that MI "came from the record rather than from you" — true about the new value and silent
+   * about the one that is gone. The old value is QUOTED, which is the difference between a warning
+   * and a way to put it back.
+   */
+  it('says what it replaced, and what the replaced value was', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/^state$/i));
+    await userEvent.type(screen.getByLabelText(/^state$/i), 'OH');
+
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /A value you had stated was replaced by this record: State was OH/i,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /Type it back if the record is wrong about you/i,
+    );
+  });
+
+  /**
+   * AND THE TWO KINDS ARE TOLD APART. A value the PREVIOUS record put there being replaced by this
+   * one is the two-people-on-one-profile rule working as designed and costs the applicant nothing
+   * of their own; telling them they had "stated" it would be the misattribution this whole module
+   * exists to prevent.
+   */
+  it('does not call a previous record’s answer something the applicant stated', async () => {
+    stubFetch({
+      lookups: [
+        { status: 'found', record: PERSON_RECORD },
+        { status: 'found', record: { ...PERSON_RECORD, callsign: 'W8UM', state: 'OH' } },
+      ],
+    });
+    await renderLoaded();
+    await lookUpAndAccept();
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
+
+    await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^state$/i)).toHaveValue('OH');
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(
+      /State now holds this record’s answer in place of the one read before it/i,
+    );
+    expect(status).not.toHaveTextContent(/a value you had stated/i);
+  });
 });
 
 /**
@@ -1214,20 +1269,58 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
     await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
   }
 
-  it('fills the coordinate from a street address, and says it can never mark it', async () => {
-    const fetchMock = stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
+  /**
+   * The press that puts the record's coordinate in the panel's boxes, which is now the ONLY way
+   * one gets onto this form. It used to happen for `street_address` without anybody pressing
+   * anything; see `describeGeocode` for why that arm is gone.
+   */
+  async function lookUpTakeCoordinateAndAccept(): Promise<void> {
+    await userEvent.click(screen.getByRole('button', { name: /look up this callsign/i }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /use this coordinate anyway/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+  }
+
+  /**
+   * THIS ASSERTION IS INVERTED FROM THE ONE IT REPLACED, AND THE DESIGN IS WHAT CHANGED.
+   *
+   * It read `it('fills the coordinate from a street address, …')` and required 42.2808 to be in
+   * the Latitude box after two presses and no typing. Measured in a browser on 2026-08-11, that is
+   * exactly the path by which a W8UM student profile went from `{"kind":"unknown"}` to a HARD
+   * `{"kind":"ineligible","reasons":[{"hard":true,"rawText":"Residence within 250 miles of
+   * Seaford, Delaware"}]}` — a verdict resting entirely on a number the applicant never stated and
+   * cannot, after one save, tell apart from one they measured. The rule is now the one this
+   * component already keeps for a legacy licence class: where a value from a source can decide a
+   * verdict and cannot afterwards be attributed, the software does not choose it.
+   *
+   * Nothing about the ATTRIBUTION half is weakened: taking the coordinate still names the source,
+   * the day, and now what the number is a geocode of.
+   */
+  it('does not put a street-address coordinate on the form until the applicant asks for it', async () => {
+    stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
     await renderLoaded();
     await lookUpAndAccept();
+
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
+    expect(screen.getByLabelText(/^longitude$/i)).toHaveValue(null);
+  });
+
+  it('names the source, the day and what the number is once the applicant does ask', async () => {
+    const fetchMock = stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
+    await renderLoaded();
+    await lookUpTakeCoordinateAndAccept();
 
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
     expect(screen.getByLabelText(/^longitude$/i)).toHaveValue(-83.743);
     // Named as fetched WHILE THIS SESSION LASTS, and honest about what happens after it. One per
     // coordinate: the latitude and the longitude are two fields and each explains itself.
-    const notes = screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i);
+    const notes = screen.getAllByText(/It carries no mark, because GrantSpotter cannot record/i);
     expect(notes).toHaveLength(2);
     const note = notes[0] as HTMLElement;
     expect(note).toHaveTextContent('callook.info');
     expect(note).toHaveTextContent('2026-08-04');
+    expect(note).toHaveTextContent(/geocode of the street address on the licence/i);
     expect(note).toHaveTextContent(/reads exactly like a value you stated/i);
 
     // The value is saved as a number like any other, and NO marker is sent for it: one would be
@@ -1247,8 +1340,31 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
 
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
     expect(screen.getByLabelText(/^longitude$/i)).toHaveValue(null);
-    // The standing caveat from the registry, which says why an empty box is an empty box.
-    expect(screen.getAllByText(/only from a street address/i).length).toBeGreaterThan(0);
+    // The standing caveat from the registry, which says why an empty box is an empty box — and
+    // which, since 2026-08-11, is true whether the box is empty or full. It said "the lookup will
+    // show it without filling it in" while sitting beside a Latitude box holding the post office.
+    expect(screen.getAllByText(/will not fill this in for you/i).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * THE WORDS "POST OFFICE" HAVE TO SURVIVE THE PANEL, which is the whole of finding 2. Measured
+   * on 2026-08-11: after accepting W1MX's PO-box coordinate the note beside Latitude was
+   * byte-identical to the note beside W1AW's street coordinate, and the entire PO-box argument
+   * lived inside a panel with a Close button on it.
+   */
+  it('says a post office is a post office on the form, not only inside the panel', async () => {
+    stubFetch({ lookup: { status: 'found', record: PO_BOX_RECORD } });
+    await renderLoaded();
+    await lookUpTakeCoordinateAndAccept();
+
+    const notes = screen.getAllByText(/It carries no mark, because GrantSpotter cannot record/i);
+    expect(notes).toHaveLength(2);
+    expect(notes[0] as HTMLElement).toHaveTextContent(/POST OFFICE/);
+    expect(notes[0] as HTMLElement).toHaveTextContent(
+      /not the station, not the antenna and not the campus/i,
+    );
+    // And it is not the sentence a street address gets.
+    expect(notes[0] as HTMLElement).not.toHaveTextContent(/street address on the licence/i);
   });
 
   it('derives the call district from the callsign and says who worked it out', async () => {
@@ -1323,7 +1439,7 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
       ],
     });
     await renderLoaded();
-    await lookUpAndAccept();
+    await lookUpTakeCoordinateAndAccept();
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
 
     await lookUpAndAccept();
@@ -1349,10 +1465,10 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
       ],
     });
     await renderLoaded();
-    await lookUpAndAccept();
+    await lookUpTakeCoordinateAndAccept();
     await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
     await screen.findByText(/profile saved/i);
-    expect(screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+    expect(screen.getAllByText(/It carries no mark, because GrantSpotter cannot record/i))
       .toHaveLength(2);
 
     await lookUpAndAccept();
@@ -1367,7 +1483,7 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
       ],
     });
     await renderLoaded();
-    await lookUpAndAccept();
+    await lookUpTakeCoordinateAndAccept();
 
     await userEvent.clear(screen.getByLabelText(/^latitude$/i));
     await userEvent.type(screen.getByLabelText(/^latitude$/i), '40');
@@ -1379,8 +1495,8 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
   it('stops claiming a coordinate was read for this applicant once the callsign is somebody else’s', async () => {
     stubFetch({ lookup: { status: 'found', record: STREET_RECORD } });
     await renderLoaded();
-    await lookUpAndAccept();
-    expect(screen.getAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+    await lookUpTakeCoordinateAndAccept();
+    expect(screen.getAllByText(/It carries no mark, because GrantSpotter cannot record/i))
       .toHaveLength(2);
 
     await userEvent.clear(screen.getByLabelText(/callsign/i));
@@ -1389,7 +1505,7 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
     // The number stays — it is on screen and the applicant may have meant to keep it — and the
     // claim about whose record it came from does not, exactly as a marker's does not.
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
-    expect(screen.queryAllByText(/carrying no mark, because GrantSpotter cannot record/i))
+    expect(screen.queryAllByText(/It carries no mark, because GrantSpotter cannot record/i))
       .toHaveLength(0);
   });
 });

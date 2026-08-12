@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { profileValueOrigin, pruneFieldSources, type StudentProfile } from '@grantspotter/core';
 import {
   callsignFromRecord,
+  coordinateSubjectLabel,
+  coordinateSubjectPhrase,
   fillFromLookup,
   fromSource,
   type AcceptedCallsign,
@@ -161,6 +163,56 @@ describe('building the values and the markers a host writes', () => {
     );
     expect(fill.unmarked).toEqual(['callsign', 'lat']);
     expect(fill.unmarkable).toEqual(['lon']);
+  });
+
+  /**
+   * WHAT THE NUMBER IS, CARRIED TO THE SURFACES THAT HAVE TO SAY IT.
+   *
+   * Measured on 2026-08-11: after accepting W1MX's PO-box coordinate, the note beside Latitude on
+   * the editor was byte-identical to the one beside W1AW's street coordinate, and the words "post
+   * office" survived nowhere past the lookup panel — not the field note, not the confirmation, not
+   * the live region. A caveat that only exists inside a dismissible panel is not a caveat.
+   */
+  it('carries what a fetched coordinate is a geocode of, and only for a fetched one', () => {
+    const fetched = fillFromLookup(
+      accepted({
+        lat: { value: '42.34991837', origin: 'source' },
+        lon: { value: '-71.0538559', origin: 'source' },
+        statedCoordinateFrom: 'po_box',
+      }),
+      'organization',
+    );
+    expect(fetched.unmarkable).toEqual(['lat', 'lon']);
+    expect(fetched.coordinateFrom).toBe('po_box');
+
+    // The applicant's own number is a geocode of nothing, and describing it as a post office would
+    // be this module's own defect wearing the newest hat.
+    const typedIn = fillFromLookup(
+      accepted({
+        lat: { value: '42.3601', origin: 'user' },
+        lon: { value: '-71.0942', origin: 'user' },
+        statedCoordinateFrom: 'po_box',
+      }),
+      'organization',
+    );
+    expect(typedIn.unmarkable).toEqual([]);
+    expect(typedIn.coordinateFrom).toBeUndefined();
+
+    // And a record with no coordinate at all says nothing about one.
+    expect(fillFromLookup(accepted({}), 'student').coordinateFrom).toBeUndefined();
+  });
+
+  /** One phrase per arm, and no two arms describe the same thing. */
+  it('describes the three subjects differently, and names a PO box as a post office', () => {
+    const phrases = (['street_address', 'po_box', 'address_not_stated'] as const).map(
+      coordinateSubjectPhrase,
+    );
+    expect(new Set(phrases).size).toBe(3);
+    expect(coordinateSubjectPhrase('po_box')).toMatch(/POST OFFICE/);
+    expect(coordinateSubjectPhrase('street_address')).toMatch(/street address on the licence/i);
+    expect(coordinateSubjectPhrase('street_address')).not.toMatch(/POST OFFICE/);
+    expect(coordinateSubjectPhrase('address_not_stated')).toMatch(/no address beside it at all/i);
+    expect(coordinateSubjectLabel('po_box')).toBe('a post office');
   });
 
   /**

@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { acceptedFrame, CallsignLookup, type CallsignTarget } from './CallsignLookup.js';
+import {
+  acceptedFrame,
+  CallsignLookup,
+  type CallsignTarget,
+  type HeldProfileValues,
+} from './CallsignLookup.js';
 import type { CallsignLookupResult, CallsignRecord } from '../api/callsign.js';
 import { auditA11y } from '../test/a11y.js';
 
@@ -77,13 +82,20 @@ function stubError(status: number, code: string, message: string): ReturnType<ty
 }
 
 function renderLookup(
-  options: { callsign?: string; target?: CallsignTarget; setupToken?: string } = {},
+  options: {
+    callsign?: string;
+    target?: CallsignTarget;
+    setupToken?: string;
+    /** What the form behind the panel already holds. Omitted means an empty form. */
+    held?: HeldProfileValues;
+  } = {},
 ) {
   const onAccept = vi.fn();
   const view = render(
     <CallsignLookup
       callsign={options.callsign ?? 'w8um'}
       target={options.target ?? 'student'}
+      {...(options.held === undefined ? {} : { held: options.held })}
       onAccept={onAccept}
       {...(options.setupToken === undefined ? {} : { setupToken: options.setupToken })}
       clubNotice="Club details belong on the organization profile."
@@ -422,21 +434,56 @@ const NO_ADDRESS: CallsignRecord = {
 };
 
 describe('the coordinate, and what it is a geocode of', () => {
-  it('opens with a street address geocode in the boxes', async () => {
+  /**
+   * THE ASSERTION THIS TEST MAKES IS THE OPPOSITE OF THE ONE IT MADE ON 2026-08-11, AND THE DESIGN
+   * IS WHAT CHANGED RATHER THAN THE STANDARD.
+   *
+   * It used to be `it('opens with a street address geocode in the boxes')` and required
+   * `41.714707` to be sitting in the Latitude input before the applicant had typed anything. That
+   * arm is gone: `describeGeocode` now withholds on every arm, and the argument is in its header.
+   * The short form is the trace that was measured in a browser — a W8UM profile went from
+   * `{"kind":"unknown"}` to a HARD `{"kind":"ineligible"}` against the Chick Allen Memorial
+   * Scholarship on two button presses and no typing — plus the margin that makes it not academic:
+   * W1AW's own STREET coordinate is 261.23 miles from Seaford, Delaware against a 250-mile rule,
+   * so the arm that was trusted to prefill is 11.23 miles from flipping a hard verdict on its own.
+   *
+   * What is NOT weakened: the number is still on screen, the record is still credited when the
+   * applicant takes it, and `origin: 'source'` is still what a taken coordinate carries. Only the
+   * software choosing it for them is gone.
+   */
+  it('shows a street-address coordinate and still does not put it in the boxes', async () => {
     stubResult({ status: 'found', record: W1AW_STREET });
     const { onAccept } = renderLookup({ callsign: 'W1AW' });
     await lookUp();
 
-    expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('41.714707');
-    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('-72.728411');
-    // Still the MAIL and not the station, and the panel says so rather than implying a survey.
+    expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('');
+    // Withholding is not hiding: the number and what it is a geocode of are both on screen.
+    expect(screen.getByText(/41\.714707/)).toBeInTheDocument();
     expect(screen.getByText(/where the licence receives post/i)).toBeInTheDocument();
 
+    // The press is there, and still credits the record for what the record said.
+    await userEvent.click(screen.getByRole('button', { name: /use this coordinate anyway/i }));
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
     expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
       lat: { value: '41.714707', origin: 'source' },
       lon: { value: '-72.728411', origin: 'source' },
+      statedCoordinateFrom: 'street_address',
     });
+  });
+
+  /**
+   * The half of the same rule that matters most: NOT pressing it is a real option, and it leaves
+   * the radius rules unanswered rather than answered from a mailing address.
+   */
+  it('sends no coordinate at all when the street-address offer is left alone', async () => {
+    stubResult({ status: 'found', record: W1AW_STREET });
+    const { onAccept } = renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lat');
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lon');
   });
 
   /**
@@ -454,7 +501,7 @@ describe('the coordinate, and what it is a geocode of', () => {
     expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('');
     // The number is on screen — withholding the value is not the same as hiding it.
     expect(screen.getByText(/42\.34991837/)).toBeInTheDocument();
-    expect(screen.getByText(/this coordinate is a POST OFFICE/i)).toBeInTheDocument();
+    expect(screen.getByText(/POST OFFICE/)).toBeInTheDocument();
     // And the reason it matters, in terms of the only thing that reads a coordinate here.
     expect(screen.getByText(/within 70 miles of Schenectady/i)).toBeInTheDocument();
 
@@ -462,6 +509,105 @@ describe('the coordinate, and what it is a geocode of', () => {
     await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
     expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lat');
     expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lon');
+  });
+
+  /**
+   * THE MORE ACCURATE VALUE HERE IS OFTEN THE APPLICANT'S, and until 2026-08-11 the panel destroyed
+   * it without showing it. Measured: an MIT student holding the campus coordinate 42.3601,
+   * -71.0942 accepted W1MX and ended up with the post office 2.18 miles away, with the panel
+   * containing no occurrence of "replace", "overwrit" or "already".
+   */
+  it('shows what the applicant already stated before offering to replace it', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { onAccept } = renderLookup({
+      callsign: 'W1MX',
+      target: 'organization',
+      held: { lat: '42.3601', lon: '-71.0942' },
+    });
+    await lookUp();
+
+    // Their own numbers, on screen, before anything is pressed.
+    expect(await screen.findByText(/already stated a position on this profile/i)).toHaveTextContent(
+      /42\.3601, -71\.0942/,
+    );
+
+    // Taking it says so, in the panel, before the confirmation and before anything is saved.
+    await userEvent.click(
+      screen.getByRole('button', { name: /use this coordinate anyway, in place of mine/i }),
+    );
+    const warning = await screen.findByText(/replaces things you have already stated/i);
+    expect(warning).toHaveTextContent(
+      /Latitude is 42\.3601 on your profile and would become 42\.34991837/,
+    );
+    expect(warning).toHaveTextContent(
+      /Longitude is -71\.0942 on your profile and would become -71\.0538559/,
+    );
+
+    // And the confirmation carries it past the panel, quoting what is gone.
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      lat: { value: '42.34991837', origin: 'source' },
+      statedCoordinateFrom: 'po_box',
+    });
+    expect(await screen.findByText(/Latitude was 42\.3601/)).toBeInTheDocument();
+  });
+
+  /**
+   * THE LIVE REGION GETS BOTH FACTS, because it is the whole of the panel for one reader.
+   *
+   * Measured on 2026-08-11 it announced exactly "Filled in from the FCC record. Nothing has been
+   * saved yet." over an acceptance that had put a post office into a radius-deciding field and
+   * overwritten a coordinate the applicant had typed. Neither of those is in a heading.
+   */
+  it('announces what the coordinate is and what it replaced, not only the heading', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { container } = renderLookup({
+      callsign: 'W1MX',
+      target: 'organization',
+      held: { lat: '42.3601', lon: '-71.0942' },
+    });
+    await lookUp();
+    await userEvent.click(
+      await screen.findByRole('button', { name: /use this coordinate anyway/i }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+
+    const live = liveRegion(container);
+    expect(live).toHaveTextContent(/The coordinate came from the record and is a post office/i);
+    expect(live).toHaveTextContent(
+      /Latitude and Longitude were values you had already stated, and the record has replaced them/i,
+    );
+    expect(live).toHaveTextContent(/Nothing has been saved yet/i);
+  });
+
+  /** Declining leaves the boxes empty, which leaves what the applicant stated exactly alone. */
+  it('emits no coordinate when the applicant keeps their own', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { onAccept } = renderLookup({
+      callsign: 'W1MX',
+      target: 'organization',
+      held: { lat: '42.3601', lon: '-71.0942' },
+    });
+    await lookUp();
+
+    await userEvent.click(await screen.findByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lat');
+    expect(onAccept.mock.calls[0]?.[0]).not.toHaveProperty('lon');
+  });
+
+  /** A record that merely restates what the applicant holds has replaced nothing, and says nothing. */
+  it('does not call an identical value a replacement', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    renderLookup({
+      callsign: 'W1MX',
+      target: 'organization',
+      held: { state: 'MA', orgName: 'M I T RADIO SOCIETY' },
+    });
+    await lookUp();
+
+    await screen.findByLabelText(/state to fill in/i);
+    expect(screen.queryByText(/replaces something you have already stated/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/replaces things you have already stated/i)).not.toBeInTheDocument();
   });
 
   it('fills it in on the second press, and still says the record stated it', async () => {
@@ -486,7 +632,9 @@ describe('the coordinate, and what it is a geocode of', () => {
     await lookUp();
 
     expect(await screen.findByLabelText(/latitude to fill in/i)).toHaveValue('');
-    expect(screen.getByText(/states a coordinate and no address at all/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/states with no address beside it at all/i),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use this coordinate anyway/i })).toBeInTheDocument();
   });
 
@@ -518,6 +666,75 @@ describe('the coordinate, and what it is a geocode of', () => {
     expect(
       screen.queryByRole('button', { name: /use this coordinate anyway/i }),
     ).not.toBeInTheDocument();
+    // AND THE NUMBERS ARE NOT QUOTED, which is a change of 2026-08-11 and is deliberate: the panel
+    // has just called this pair untrustworthy, and printing it anyway is an invitation to type it
+    // in by hand. The grid squares ARE named, because they are the evidence for the disagreement.
+    expect(screen.queryByText(/\b10, 10\b/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * THE SAME REFUSAL, ARRIVING FROM THE SERVER RATHER THAN BEING NOTICED HERE — which is how it
+   * actually reaches a reader.
+   *
+   * Measured on 2026-08-11, before `geocodeRefusal` existed: a body stating latitude 10, longitude
+   * 10 and gridsquare FN31pr came off a running server as `{"status":"found","record":{…}}` with no
+   * `mailingGeocode` key, no server log line, no panel section and no live-region mention — a
+   * refusal nobody was told about, indistinguishable from a record that stated no location at all.
+   * `describeGeocode`'s contradicted copy was therefore unreachable from a healthy server: dead
+   * copy describing a state the user could never be shown. Both routes now produce the same
+   * sentence, and this is the one that is reachable in production.
+   */
+  it('says why the boxes are empty when the SERVER refused the location', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...W1AW_STREET,
+        mailingGeocode: undefined,
+        geocodeRefusal: {
+          refused: 'contradicted',
+          gridsquare: 'FN31pr',
+          containingLocator: 'JK50aa',
+        },
+      },
+    });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    const note = await screen.findByText(/contradicts itself/i);
+    expect(note).toHaveTextContent(/states the grid square FN31pr/);
+    expect(note).toHaveTextContent(/falls in JK50aa instead/);
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(
+      screen.queryByRole('button', { name: /use this coordinate anyway/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * AND THE ADDRESS NOTE STOPS ASSERTING WHAT IT CANNOT KNOW. "What is kept is the state … and
+   * nothing else from these lines" was measured being printed over a record that had also stated a
+   * coordinate — a positive claim, and false. The three cases now read differently.
+   */
+  it('does not claim the state was all the record said about these lines', async () => {
+    stubResult({
+      status: 'found',
+      record: { ...W1AW_STREET, mailingGeocode: undefined, geocodeRefusal: { refused: 'placeholder' } },
+    });
+    renderLookup({ callsign: 'W1AW' });
+    await lookUp();
+
+    expect(await screen.findByText(/This record did state a position for these lines/i)).toBeInTheDocument();
+    expect(screen.getByText(/Gulf of Guinea/i)).toBeInTheDocument();
+    // The old sentence, which is still correct for `PERSON` and must not appear here.
+    expect(screen.queryByText(/and nothing else from these lines\./i)).not.toBeInTheDocument();
+  });
+
+  /** A record that genuinely stated nothing gets the old sentence, unchanged. */
+  it('still says nothing else was kept when the record stated no location', async () => {
+    stubResult({ status: 'found', record: PERSON });
+    renderLookup();
+    await lookUp();
+
+    expect(await screen.findByText(/and nothing else from these lines\./i)).toBeInTheDocument();
   });
 
   it('offers the boxes even for a record that states no coordinate at all', async () => {
@@ -677,6 +894,7 @@ describe('what the confirmation claims was filled in', () => {
         unmarkable: [],
         derived: [],
         unfillable: ['licenseClass'],
+        replaced: [],
       },
       'organization',
     );
@@ -697,6 +915,7 @@ describe('what the confirmation claims was filled in', () => {
         unmarkable: [],
         derived: [],
         unfillable: ['licenseClass', 'orgName'],
+        replaced: [],
       },
       'student',
     );
@@ -724,10 +943,17 @@ describe('what the confirmation claims was filled in', () => {
         unmarkable: ['lat', 'lon'],
         derived: ['callDistrict'],
         unfillable: [],
+        coordinateFrom: 'po_box',
+        replaced: [],
       },
       'student',
     );
     expect(frame.body).toContain('Latitude and Longitude came from the record too');
+    // WHAT THE NUMBER IS, IN THE CONFIRMATION AND NOT ONLY IN THE PANEL. Added 2026-08-11: the
+    // words "post office" survived nowhere past the panel, so the strongest fact about a value
+    // that decides a radius verdict was readable only until the reader pressed Close.
+    expect(frame.body).toMatch(/POST OFFICE/);
+    expect(frame.body).toMatch(/That is what a radius rule would be answered with/i);
     // The consequence, said at the moment it is created rather than discovered on the next reload.
     expect(frame.body).toMatch(/nowhere to record that about a coordinate/i);
     expect(frame.body).toMatch(/read exactly like values you stated/i);
@@ -736,6 +962,57 @@ describe('what the confirmation claims was filled in', () => {
     // And the arithmetic is credited to nobody.
     expect(frame.body).toContain('Call district was worked out from the callsign rather than read');
     expect(frame.body).toMatch(/no source is credited for arithmetic/i);
+  });
+
+  /**
+   * A STREET ADDRESS AND A POST OFFICE DO NOT GET THE SAME SENTENCE, which is the shortest
+   * statement of the defect measured on 2026-08-11: every surface past the panel described the two
+   * with identical bytes, so the entire PO-box argument lived inside a dismissible dialog.
+   */
+  it('describes a street-address coordinate differently from a post office', () => {
+    const base = {
+      marked: ['state'],
+      unmarked: [],
+      unmarkable: ['lat', 'lon'],
+      derived: [],
+      unfillable: [],
+      replaced: [],
+    };
+    const street = acceptedFrame({ ...base, coordinateFrom: 'street_address' as const }, 'student');
+    const box = acceptedFrame({ ...base, coordinateFrom: 'po_box' as const }, 'student');
+    expect(street.body).not.toEqual(box.body);
+    expect(box.body).toMatch(/POST OFFICE/);
+    expect(street.body).not.toMatch(/POST OFFICE/);
+    expect(street.body).toMatch(/where the licence receives post/i);
+  });
+
+  /**
+   * WHAT A REPLACEMENT OWES THE READER, given the codebase had already decided what an ERASURE
+   * owes them. `applyLookup` calls an emptied field "a change they are owed a sentence about"; a
+   * field that ends up holding somebody else's answer said nothing at all until 2026-08-11. The
+   * old value is QUOTED rather than counted, because that is the difference between a warning and
+   * a way to put it back.
+   */
+  it('names what it replaced, and what the replaced value was', () => {
+    const frame = acceptedFrame(
+      {
+        marked: ['state'],
+        unmarked: [],
+        unmarkable: ['lat'],
+        derived: [],
+        unfillable: [],
+        coordinateFrom: 'po_box',
+        replaced: [
+          { key: 'state', was: 'OH' },
+          { key: 'lat', was: '42.3601' },
+        ],
+      },
+      'student',
+    );
+    expect(frame.body).toMatch(/Values you had already stated were replaced/i);
+    expect(frame.body).toContain('State was OH');
+    expect(frame.body).toContain('Latitude was 42.3601');
+    expect(frame.body).toMatch(/Put them back by hand if the record is wrong about you/i);
   });
 
   it('names an organisation profile’s own fields, on the tab that has them', async () => {
@@ -974,6 +1251,47 @@ describe('accessibility', () => {
     );
     await lookUp();
     await screen.findByRole('heading', { name: /FCC record for W8UM/i });
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  /** The three sections added on 2026-08-11: the offer, the replacement warning, the refusal. */
+  it('has no violations with the coordinate offer and its replacement warning on screen', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { container } = render(
+      <>
+        <h1>Profile</h1>
+        <CallsignLookup
+          callsign="W1MX"
+          target="organization"
+          held={{ state: 'OH', lat: '42.3601', lon: '-71.0942' }}
+          onAccept={() => undefined}
+        />
+      </>,
+    );
+    await lookUp();
+    await userEvent.click(
+      await screen.findByRole('button', { name: /use this coordinate anyway, in place of mine/i }),
+    );
+    await screen.findByText(/replaces things you have already stated/i);
+    expect(auditA11y(container)).toEqual([]);
+  });
+
+  it('has no violations with a refused location on screen', async () => {
+    stubResult({
+      status: 'found',
+      record: {
+        ...PERSON,
+        geocodeRefusal: { refused: 'unreadable_locator', gridsquare: 'FN42l', because: 'odd length' },
+      },
+    });
+    const { container } = render(
+      <>
+        <h1>Profile</h1>
+        <CallsignLookup callsign="W8UM" target="student" onAccept={() => undefined} />
+      </>,
+    );
+    await lookUp();
+    await screen.findByText(/could not read as one/i);
     expect(auditA11y(container)).toEqual([]);
   });
 

@@ -13,15 +13,18 @@ import {
   callsignFillableFields,
   callsignFillCaveat,
   callsignFillDerivation,
+  profileFieldLabel,
   profileFieldLabelList,
   PROFILE_FIELDS,
   type ProfileFieldMeta,
 } from '../lib/profileFields.js';
 import {
+  coordinateSubjectPhrase,
   derivedProfileValues,
   fillFromLookup,
   type AcceptedCallsign,
 } from '../lib/callsignFill.js';
+import type { GeocodedFrom } from '../api/callsign.js';
 import {
   profileValueOrigin,
   pruneFieldSources,
@@ -258,6 +261,18 @@ interface TabSources {
    */
   unattributed: Record<string, string>;
   /**
+   * WHAT THE COORDINATE IN `unattributed` IS A GEOCODE OF — a post office, a street address, or
+   * nothing the record was willing to name.
+   *
+   * Carried for exactly the reason the values above are: it is knowledge this browser has and the
+   * database has nowhere to keep. Measured on 2026-08-11, before it existed: after accepting
+   * W1MX's PO-box coordinate the note beside Latitude was byte-identical to the one beside W1AW's
+   * street coordinate, and the words "post office" appeared nowhere outside the panel the reader
+   * had just closed. The strongest fact about the number feeding a radius verdict lived only in a
+   * dismissible dialog.
+   */
+  coordinateFrom?: GeocodedFrom;
+  /**
    * Who stated the values in `unattributed`, and when — the half a `ProfileFieldSource` would have
    * carried if one could exist for these fields.
    *
@@ -439,6 +454,9 @@ export function Profile(): JSX.Element {
    * where it came from goes.
    */
   const liveUnattributed = forThisCallsign ? sources[kind].unattributed : {};
+  /** The subject dies with the claim it qualifies: a number no longer said to be read for this
+   *  callsign is not said to be that callsign's post office either. */
+  const liveCoordinateFrom = forThisCallsign ? sources[kind].coordinateFrom : undefined;
 
   function setValue(key: string, value: string): void {
     setDrafts((current) => {
@@ -495,7 +513,7 @@ export function Profile(): JSX.Element {
    * is back) or somebody else's.
    */
   function applyLookup(accepted: AcceptedCallsign): void {
-    const { values, fieldSources, unmarkable } = fillFromLookup(accepted, kind);
+    const { values, fieldSources, unmarkable, coordinateFrom } = fillFromLookup(accepted, kind);
     const held = sources[kind].marks;
     const heldUnattributed = sources[kind].unattributed;
     const draft = drafts[kind];
@@ -537,18 +555,69 @@ export function Profile(): JSX.Element {
       if ((draft[key] ?? '') === previous) vacated[key] = '';
     }
 
+    /**
+     * AND THE SAME SENTENCE FOR A VALUE THAT WAS REPLACED RATHER THAN EMPTIED.
+     *
+     * Emptying a field the applicant can see is "a change they are owed a sentence about" — that
+     * was already written down here, and the sentence below it was already written. Overwriting one
+     * is the same change with a new value on top, and it said nothing at all until 2026-08-11:
+     * measured, a profile holding a typed `OH`, `42.2936` and `-83.7100` accepted W8UM's record,
+     * lost all three, and was told only that "State and License class came from the record rather
+     * than from you". A rule that a moved value is announced cannot hold for the case where the box
+     * ends up empty and not for the case where it ends up holding somebody else's answer.
+     *
+     * THE TWO KINDS ARE TOLD APART, because they are not the same news. A value the PREVIOUS record
+     * put there being replaced by this one is `vacated`'s own rule working — one licensee's facts
+     * off, the next licensee's on — and the applicant lost nothing of their own. A value the
+     * APPLICANT stated is a loss, and the old value is quoted so they can put it back.
+     *
+     * `callsign` is deliberately not among these. It is the one replacement this product already
+     * refuses to make quietly: a record found under a different callsign is named twice in the
+     * panel and gated behind a checkbox, so listing it here as something that happened to the
+     * applicant would describe a decision they made as an accident.
+     */
+    const replacedFromYou: Array<[string, string]> = [];
+    const replacedFromRecord: string[] = [];
+    for (const [key, value] of Object.entries(values)) {
+      if (key === 'callsign') continue;
+      const before = draft[key] ?? '';
+      if (before === '' || before === value) continue;
+      const mark = held[key];
+      const wasTheRecordBefore =
+        (mark !== undefined && profileValueOrigin(before, mark) === 'looked_up') ||
+        heldUnattributed[key] === before;
+      if (wasTheRecordBefore) replacedFromRecord.push(key);
+      else replacedFromYou.push([key, before]);
+    }
+
     // Emptying a field the applicant can see is a change they are owed a sentence about, in the
     // live region this form already keeps mounted. Silence here would be the same defect as the
     // one above pointed the other way: a value that moves without the person being told.
     const emptied = Object.keys(vacated);
-    setStatus(
+    const emptiedSentence =
       emptied.length === 0
         ? ''
         : `The record you accepted does not state ${profileFieldLabelList(emptied, kind)}, so ` +
-            `${emptied.length === 1 ? 'that field is' : 'those fields are'} now empty. What was ` +
-            `in ${emptied.length === 1 ? 'it' : 'them'} came from the record read before it, not ` +
-            'from you. Nothing has been saved yet.',
-    );
+          `${emptied.length === 1 ? 'that field is' : 'those fields are'} now empty. What was ` +
+          `in ${emptied.length === 1 ? 'it' : 'them'} came from the record read before it, not ` +
+          'from you.';
+    const yoursSentence =
+      replacedFromYou.length === 0
+        ? ''
+        : `${replacedFromYou.length === 1 ? 'A value you had stated was' : 'Values you had stated were'} ` +
+          `replaced by this record: ${replacedFromYou
+            .map(([key, was]) => `${profileFieldLabel(key, kind)} was ${was}`)
+            .join(', ')}. Type ${replacedFromYou.length === 1 ? 'it' : 'them'} back if the record ` +
+          'is wrong about you.';
+    const previousSentence =
+      replacedFromRecord.length === 0
+        ? ''
+        : `${profileFieldLabelList(replacedFromRecord, kind)} now ` +
+          `${replacedFromRecord.length === 1 ? 'holds this record’s answer' : 'hold this record’s answers'} ` +
+          `in place of the one read before ${replacedFromRecord.length === 1 ? 'it' : 'them'}, ` +
+          'which was another licensee’s.';
+    const moved = [emptiedSentence, yoursSentence, previousSentence].filter((part) => part !== '');
+    setStatus(moved.length === 0 ? '' : `${moved.join(' ')} Nothing has been saved yet.`);
 
     setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...vacated, ...values } }));
     setSources((current) => ({
@@ -560,6 +629,7 @@ export function Profile(): JSX.Element {
         // fact about the licensee whose record was just accepted, and keeping the previous one's
         // alongside is two people's coordinates on one profile.
         unattributed: Object.fromEntries(unmarkable.map((key) => [key, values[key] ?? ''])),
+        ...(coordinateFrom === undefined ? {} : { coordinateFrom }),
         readFrom: {
           source: accepted.provenance.source,
           fetchedAt: accepted.provenance.fetchedAt,
@@ -640,6 +710,9 @@ export function Profile(): JSX.Element {
            * — the schema is what decides, and `z.object` strips everything it does not declare.
            */
           unattributed: current[kind].unattributed,
+          ...(current[kind].coordinateFrom === undefined
+            ? {}
+            : { coordinateFrom: current[kind].coordinateFrom }),
           ...(current[kind].readFrom === undefined ? {} : { readFrom: current[kind].readFrom }),
         },
       }));
@@ -833,9 +906,20 @@ export function Profile(): JSX.Element {
               mark !== undefined
                 ? `Read from ${mark.source} — not a value you stated. Edit it and it becomes yours.`
                 : isFetched && readFrom !== undefined
-                  ? `Read from ${readFrom.source} on ${formatDate(readFrom.fetchedAt)}, and ` +
-                    'carrying no mark, because GrantSpotter cannot record where a coordinate came ' +
-                    'from. Once you save, this reads exactly like a value you stated.'
+                  ? /**
+                     * WHAT THE NUMBER IS, NOT MERELY THAT IT WAS READ. This sentence was
+                     * byte-identical for a post office and a street address until 2026-08-11 —
+                     * measured on W1MX and W1AW, the two real captures that differ on exactly
+                     * this — so the panel's whole PO-box argument died the moment the panel
+                     * closed. The clause comes from `coordinateSubjectPhrase`, which is the same
+                     * string the panel, the confirmation and the live region use.
+                     */
+                    `Read from ${readFrom.source} on ${formatDate(readFrom.fetchedAt)}. ` +
+                    (liveCoordinateFrom === undefined
+                      ? ''
+                      : `It is ${coordinateSubjectPhrase(liveCoordinateFrom)}. `) +
+                    'It carries no mark, because GrantSpotter cannot record where a coordinate ' +
+                    'came from. Once you save, this reads exactly like a value you stated.'
                   : derivation !== undefined
                     ? derivation.because
                     : caveat;
@@ -975,6 +1059,19 @@ export function Profile(): JSX.Element {
                 {field.key === 'callsign' && (
                   <CallsignLookup
                     callsign={value}
+                    /* WHAT THE FORM ALREADY HOLDS, so the panel can say what accepting costs.
+                       Read straight off the open tab's draft — not off the SAVED profile — because
+                       the applicant may have typed a coordinate two seconds ago and not pressed
+                       Save, and it is precisely that value the panel was measured destroying in
+                       silence. `?? ''` rather than omitting the key: an absent field and an empty
+                       one mean the same thing here, which is "nothing to lose". */
+                    held={{
+                      state: drafts[kind].state ?? '',
+                      licenseClass: drafts[kind].licenseClass ?? '',
+                      orgName: drafts[kind].orgName ?? '',
+                      lat: drafts[kind].lat ?? '',
+                      lon: drafts[kind].lon ?? '',
+                    }}
                     target={kind}
                     onAccept={applyLookup}
                     clubNotice={

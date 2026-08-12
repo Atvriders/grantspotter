@@ -1,5 +1,5 @@
 import { callDistrictFromCallsign, type LicenseClass, type ProfileFieldSource } from '@grantspotter/core';
-import type { CallsignRecord } from '../api/callsign.js';
+import type { CallsignRecord, GeocodedFrom } from '../api/callsign.js';
 import {
   callsignFillableFields,
   callsignFillDerivation,
@@ -103,7 +103,67 @@ export interface AcceptedCallsign {
    */
   lat?: AcceptedValue;
   lon?: AcceptedValue;
+  /**
+   * WHAT THE RECORD'S COORDINATE IS A GEOCODE OF, CARRIED PAST THE PANEL THE USER PRESSES CLOSE ON.
+   *
+   * Present whenever the record stated a usable coordinate, whatever the applicant then did with
+   * it. The two numbers above are strings by the time they get here and a string cannot say whether
+   * it is a post office; this can, and every surface downstream needs it to.
+   *
+   * IT DID NOT EXIST UNTIL 2026-08-11, AND THE MEASUREMENT THAT PUT IT HERE IS WORTH KEEPING. After
+   * accepting W1MX's PO-box coordinate, the note beside Latitude read — byte-identical to the note
+   * beside W1AW's street coordinate — "Read from callook.info on …, and carrying no mark, because
+   * GrantSpotter cannot record where a coordinate came from." The words "post office" appeared
+   * nowhere past the panel: not in the field note, not in the confirmation, not in the live region.
+   * The entire PO-box argument lived inside a panel with a Close button on it. A caveat that only
+   * exists inside a dismissible panel is not a caveat.
+   */
+  statedCoordinateFrom?: GeocodedFrom;
   provenance: CallsignProvenance;
+}
+
+/**
+ * WHAT A FETCHED COORDINATE IS, IN ONE PHRASE, FOR EVERY SURFACE THAT NAMES ONE.
+ *
+ * Four surfaces say this now — the lookup panel, the acceptance confirmation, the live region and
+ * the note beside the field on the editor — and three of them said nothing at all until this
+ * existed. One function rather than four strings, for the same reason `profileFieldLabelList` is
+ * one function: the applicant reads two of these within a second of each other, and two copies
+ * eventually describe one number two ways.
+ *
+ * Written to slot after a noun ("this coordinate is …", "Latitude holds …"), so every caller gets
+ * the same clause in the same grammar.
+ */
+export function coordinateSubjectPhrase(from: GeocodedFrom): string {
+  switch (from) {
+    case 'street_address':
+      return (
+        'callook’s geocode of the street address on the licence — where the licence receives ' +
+        'post, which is not necessarily where the station or the antenna is'
+      );
+    case 'po_box':
+      return (
+        'callook’s geocode of the PO box on the licence, which makes it a POST OFFICE — not the ' +
+        'station, not the antenna and not the campus'
+      );
+    case 'address_not_stated':
+      return (
+        'a coordinate this record states with no address beside it at all, so nothing here says ' +
+        'what it is a geocode of'
+      );
+  }
+}
+
+/** Two or three words for the same thing, where a whole clause will not fit. */
+export function coordinateSubjectLabel(from: GeocodedFrom): string {
+  switch (from) {
+    case 'street_address':
+      return 'a street address';
+    case 'po_box':
+      return 'a post office';
+    case 'address_not_stated':
+      return 'an unattributed point';
+  }
 }
 
 /**
@@ -218,6 +278,17 @@ export interface CallsignFill {
    * here.
    */
   unfillable: string[];
+  /**
+   * What the coordinate in {@link unmarkable} is a geocode of, or `undefined` when no coordinate
+   * the record stated was accepted.
+   *
+   * Set only alongside a non-empty `unmarkable`, which is the same condition as "a number the
+   * RECORD stated went into a box this profile cannot mark". A coordinate the applicant typed
+   * themselves lands in `unmarked` and gets none of this: nothing was geocoded from anything, and
+   * telling somebody their own measurement is a post office would be the misattribution this
+   * module exists to prevent, wearing the newest hat.
+   */
+  coordinateFrom?: GeocodedFrom;
 }
 
 /**
@@ -335,5 +406,13 @@ export function fillFromLookup(accepted: AcceptedCallsign, kind: ProfileFieldKin
     derived.push(key);
   }
 
-  return { values, fieldSources, unmarked, unmarkable, derived, unfillable };
+  // The subject travels exactly as far as the number it describes does, and no further: it is
+  // attached where a value the RECORD stated landed in a box nothing can mark, which is the only
+  // case in which any surface has something to explain.
+  const coordinateFrom =
+    unmarkable.length > 0 && accepted.statedCoordinateFrom !== undefined
+      ? { coordinateFrom: accepted.statedCoordinateFrom }
+      : {};
+
+  return { values, fieldSources, unmarked, unmarkable, derived, unfillable, ...coordinateFrom };
 }

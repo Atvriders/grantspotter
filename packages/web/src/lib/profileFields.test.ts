@@ -262,10 +262,30 @@ describe('what a callsign lookup may fill', () => {
       }
       // A lookup fills it, so "GrantSpotter will never fill this in" must NOT be what is shown.
       expect(callsignFillRefusal(key)).toBeUndefined();
-      // The caveat says both halves: the PO box, and that no marker can be stored for a number.
+      // The caveat says all three: what the number is, what GrantSpotter does with it, and that
+      // no marker can be stored for a number.
       const caveat = callsignFillCaveat(key) ?? '';
       expect(caveat, key).toMatch(/PO box/i);
       expect(caveat, key).toMatch(/nowhere to record|reads exactly like a coordinate you typed/i);
+      /**
+       * AND IT IS TRUE WITH A NUMBER IN THE BOX. This caveat is attached to the FIELD, not to an
+       * event, so it is read beside whatever the field currently holds — and on 2026-08-11 it was
+       * measured saying the lookup "will show it without filling it in" beside a Latitude box
+       * holding 42.34991837, the post office callook geocoded for W1MX. The behaviour was changed
+       * to the one the sentence described rather than the sentence weakened to fit: no arm of a
+       * lookup puts a coordinate in these boxes. So the caveat must go on stating a refusal to
+       * fill, and must NOT read as a conditional promise about which kind of address gets filled
+       * in — the phrasing that made the old one false.
+       */
+      expect(caveat, key).toMatch(/will not fill this in for you/i);
+      expect(caveat, key).toMatch(/never writes it into this box itself/i);
+      expect(caveat, key).toMatch(/in it because you put it there/i);
+      expect(caveat, key).not.toMatch(/can fill this in/i);
+      expect(caveat, key).not.toMatch(/only from a street address/i);
+      // NO CLAIM ABOUT THE BOX'S CURRENT CONTENTS, which is what makes a permanent sentence safe
+      // beside a value: this caveat is read beside an empty box AND beside a coordinate the
+      // applicant chose in an earlier session, and it has to be true of both.
+      expect(caveat, key).not.toMatch(/leaves this box empty|this box is empty|without filling it/i);
     }
   });
 

@@ -5,15 +5,18 @@ import {
   postCallsignLookup,
   type CallsignLookupResult,
   type CallsignRecord,
+  type GeocodedFrom,
   type GeocodedPoint,
 } from '../api/callsign.js';
 import {
   callsignFromRecord,
+  coordinateSubjectLabel,
+  coordinateSubjectPhrase,
   fillFromLookup,
   fromSource,
   type AcceptedCallsign,
 } from '../lib/callsignFill.js';
-import { profileFieldLabelList } from '../lib/profileFields.js';
+import { profileFieldLabel, profileFieldLabelList } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
 import './callsign.css';
 
@@ -50,22 +53,50 @@ import './callsign.css';
  *     `licensedSince` feeds `heldMonthsMin` in the matcher, where a wrong value becomes a
  *     confident, wrong eligibility verdict. The date is shown, labelled for what it is,
  *     and goes no further.
- *  7. IT WILL NOT PRE-FILL A POST OFFICE AS A LOCATION. Every successful lookup carries a
- *     latitude, a longitude and a grid square, and every one of them is callook's geocode of
- *     the licensee's MAILING ADDRESS. Where that address is a street the panel opens with the
- *     coordinate in the boxes; where it is a PO box — which is what two of the three real
- *     captures are, both of them collegiate clubs — the boxes open EMPTY, the coordinate is
- *     shown for what it is, and filling it in takes a second, separate press. The reasoning is
- *     the same as rule 5's, and so is the shape: the source stated something, it does not mean
- *     what a reader would take it to mean, so the software declines to choose and says why.
- *     See {@link describeGeocode}, which is where that decision is written down.
+ *  7. IT NEVER PUTS A COORDINATE IN A BOX. Every successful lookup carries a latitude, a
+ *     longitude and a grid square, and every one of them is callook's geocode of the licensee's
+ *     MAILING ADDRESS — a post office where that address is a PO box, which is what two of the
+ *     three real captures are, both of them collegiate clubs. The boxes open EMPTY on every arm,
+ *     the coordinate is shown for what it is, and putting it in takes a second, separate press.
+ *     The reasoning is the same as rule 5's and rule 6's, and so is the shape: a value from a
+ *     source that can decide a verdict, and that this profile can never afterwards attribute to
+ *     anybody, is not one the software chooses. See {@link describeGeocode}, which is where that
+ *     decision and the measurement behind it are written down.
+ *  8. IT SAYS WHAT IT IS ABOUT TO REPLACE. This panel opens on the RECORD's values, and the form
+ *     behind it may already hold the applicant's own — a state they typed, a coordinate they
+ *     measured on the campus rather than at the post office. Accepting overwrites them. Until
+ *     2026-08-11 it did so silently and the word "replace" appeared nowhere on the screen; the
+ *     codebase had already decided what an ERASURE owes the reader (`applyLookup` announces one),
+ *     and a replacement owes them the same sentence.
  */
 
 export type CallsignTarget = 'student' | 'organization';
 
+/**
+ * WHAT THE FORM BEHIND THIS PANEL ALREADY HOLDS, so the panel can say what accepting would cost.
+ *
+ * Keyed by profile field, and every one of them a string, because that is what the editor's drafts
+ * are and comparing anything else would need a second notion of equality. Absent or empty means
+ * the applicant has not answered that field, which is the common case and the one with nothing to
+ * warn about.
+ *
+ * OPTIONAL, and honestly so: the first-run screen this component is also written for has no saved
+ * profile behind it, so "nothing is held" is the truth there rather than a default standing in for
+ * one.
+ */
+export interface HeldProfileValues {
+  state?: string;
+  licenseClass?: string;
+  orgName?: string;
+  lat?: string;
+  lon?: string;
+}
+
 export interface CallsignLookupProps {
   /** The callsign currently typed in the field this control sits beside. */
   callsign: string;
+  /** What the form behind this panel already holds. See {@link HeldProfileValues}. */
+  held?: HeldProfileValues;
   /**
    * Which profile the accepted values would land on. It decides which fields this panel
    * offers: an organisation profile has no licence class, and a person has no orgName.
@@ -151,6 +182,47 @@ interface Attribution {
    * counted as one of the applicant's own and named to them as a field of the profile they are on.
    */
   unfillable: string[];
+  /**
+   * What the coordinate in `unmarkable` is a geocode of. `undefined` when no coordinate the record
+   * stated was accepted — including when the applicant typed one of their own, which is not a
+   * geocode of anything and must not be described as one.
+   */
+  coordinateFrom?: GeocodedFrom;
+  /**
+   * WHAT THE FORM HELD THAT THESE VALUES HAVE JUST OVERWRITTEN, and what it held.
+   *
+   * The fifth list, and the one that is not about attribution at all: every other list here answers
+   * "who stated the value that is now in the box", and this one answers "what was in the box
+   * before". A profile with `state: OH` typed into it accepts a record stating MI and ends up with
+   * MI, and until 2026-08-11 the confirmation's only word on the subject was that MI "came from the
+   * record rather than from you" — true, complete about the new value, and silent about the one
+   * that is gone.
+   */
+  replaced: Array<{ key: string; was: string }>;
+}
+
+/**
+ * WHAT THIS ACCEPTANCE OVERWRITES: a field the form already holds an answer in, whose answer this
+ * record is about to change.
+ *
+ * Equality against the held string, exactly as {@link fromSource} compares against the record's —
+ * a value the record merely restates is not a replacement, and a field the applicant left empty
+ * had nothing to lose. `values` is the map the host is about to write, so a key absent from it (a
+ * coordinate the applicant declined to use, a licence class the panel would not guess) names a
+ * field this acceptance does not touch and therefore cannot replace.
+ */
+function replacedBy(
+  values: Record<string, string>,
+  held: HeldProfileValues,
+): Array<{ key: string; was: string }> {
+  const out: Array<{ key: string; was: string }> = [];
+  for (const [key, was] of Object.entries(held)) {
+    if (was === undefined || was === '') continue;
+    const now = values[key];
+    if (now === undefined || now === was) continue;
+    out.push({ key, was });
+  }
+  return out;
 }
 
 type Phase =
@@ -277,7 +349,8 @@ export function frameFor(status: LookupStatus, callsign: string): Frame {
  * stores — a guarantee that the two agree rather than a second opinion.
  */
 export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): Frame {
-  const { marked, unmarked, unmarkable, derived, unfillable } = attribution;
+  const { marked, unmarked, unmarkable, derived, unfillable, coordinateFrom, replaced } =
+    attribution;
   const one = marked.length === 1;
   const mine =
     unmarked.length === 0
@@ -296,10 +369,36 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
     unmarkable.length === 0
       ? ''
       : ` ${profileFieldLabelList(unmarkable, kind)} came from the record too, and ` +
-        `${unmarkable.length === 1 ? 'carries no mark' : 'carry no marks'}: GrantSpotter can ` +
-        'record where a callsign, a state or a licence class came from, and has nowhere to record ' +
-        `that about a coordinate. Once saved, ${unmarkable.length === 1 ? 'it reads' : 'they read'} ` +
+        // WHAT THE NUMBER IS, BEFORE WHAT CANNOT BE RECORDED ABOUT IT. The old sentence went
+        // straight to the marker problem, so the strongest fact about a PO-box coordinate — that
+        // it is a post office — was stated only inside the panel the reader then closes.
+        (coordinateFrom === undefined
+          ? ''
+          : `${unmarkable.length === 1 ? 'is' : 'are'} ${coordinateSubjectPhrase(coordinateFrom)}. ` +
+            'That is what a radius rule would be answered with. ') +
+        `${unmarkable.length === 1 ? 'It carries no mark' : 'They carry no marks'}: GrantSpotter ` +
+        'can record where a callsign, a state or a licence class came from, and has nowhere to ' +
+        `record that about a coordinate. Once saved, ${unmarkable.length === 1 ? 'it reads' : 'they read'} ` +
         `exactly like ${unmarkable.length === 1 ? 'a value' : 'values'} you stated.`;
+  /**
+   * THE SENTENCE FOR A VALUE THAT IS GONE, which the codebase already writes for an ERASURE.
+   *
+   * `applyLookup` calls an emptied field "a change they are owed a sentence about". A replacement
+   * is the same change with something on top of it, and it went unremarked: measured on 2026-08-11,
+   * a profile holding a typed `OH`, `42.2936` and `-83.7100` accepted W8UM's record and lost all
+   * three, and the confirmation's only word was that State and License class "came from the record
+   * rather than from you". The old values are quoted rather than merely counted, because that is
+   * the difference between a warning and a way to put them back.
+   */
+  const overwritten =
+    replaced.length === 0
+      ? ''
+      : ' ' +
+        `${replaced.length === 1 ? 'One value you had already stated was' : 'Values you had already stated were'} ` +
+        `replaced: ${replaced
+          .map((entry) => `${profileFieldLabel(entry.key, kind)} was ${entry.was}`)
+          .join(', ')}. Put ${replaced.length === 1 ? 'it' : 'them'} back by hand if the record is ` +
+        'wrong about you — nothing here is saved until you press Save.';
   const worked =
     derived.length === 0
       ? ''
@@ -327,7 +426,7 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
       body:
         `${profileFieldLabelList(marked, kind)} came from the record rather than from you, and ` +
         `${one ? 'the field stays' : 'those fields stay'} marked that way until you edit ` +
-        `${one ? 'it' : 'them'}.${mine}${fetched}${worked}${elsewhere} Nothing has been saved yet.`,
+        `${one ? 'it' : 'them'}.${mine}${fetched}${worked}${elsewhere}${overwritten} Nothing has been saved yet.`,
     };
   }
 
@@ -340,136 +439,186 @@ export function acceptedFrame(attribution: Attribution, kind: CallsignTarget): F
           `${unmarked.length === 1 ? 'your own value' : 'your own values'}. `) +
       'GrantSpotter puts callook.info’s name on a field only where the record itself stated what ' +
       'is now in it, and that is true of none of these — either the record had nothing to state, ' +
-      `or you changed what it said.${fetched}${worked}${elsewhere} Nothing has been saved yet.`,
+      `or you changed what it said.${fetched}${worked}${elsewhere}${overwritten} Nothing has been saved yet.`,
   };
 }
 
 /**
- * WHETHER A COORDINATE MAY OPEN IN THE BOX, AND WHAT THE PERSON IS TOLD ABOUT IT.
+ * WHAT THE RECORD SAID ABOUT WHERE THE MAIL GOES, AND WHAT THE PERSON IS TOLD ABOUT IT.
  *
- * THE DECISION, AND THE ARGUMENT FOR IT.
+ * NOTHING PUTS A COORDINATE IN THESE BOXES EXCEPT THE PERSON. That is the decision, it applies to
+ * every arm, and it changed on 2026-08-11 — `street_address` used to open pre-filled.
  *
- * callook geocodes ONE thing: the address on the licence, which is where the licensee's post goes.
- * `matcher` reads latitude and longitude for exactly one purpose — radius eligibility — so the
- * only consequence a coordinate has in this product is a verdict about the place it names. Two of
- * the three real captures in `fixtures/callook/` resolve to `po_box`, and both are collegiate
- * clubs: M I T Radio Society files P.O. BOX 51421, BOSTON, and callook answers with a point in
- * Boston, to eight decimal places, while the club is across the river in Cambridge.
+ * THE ARGUMENT THE OLD SPLIT WAS MISSING. callook geocodes ONE thing: the address on the licence,
+ * which is where the licensee's post goes. `matcher` reads latitude and longitude for exactly one
+ * purpose — radius eligibility — so the only consequence a coordinate has in this product is a
+ * verdict about the place it names. The old rule reasoned per-arm about how GOOD each coordinate
+ * was, and a street address won that argument fairly: it is a place rather than a mail drop, and
+ * the applicant is looking at both the address and the number before anything is written.
  *
- * The three options were: never fill it, fill it with a caveat, or fill it and exclude it from
- * radius matching. The third is not available honestly and saying why matters more than the
- * choice: excluding it would have to happen in `matcher`, the stored profile has nowhere to record
- * that a coordinate is a mail drop (`StudentProfile.lat` is a bare number and the zod schema
- * strips anything else), and a browser-side flag would be gone by the next page load while the
- * number stayed. A caveat alone fails for the same reason — the caveat is not stored either, and
- * after one save the post office is indistinguishable from a measured position.
+ * But "how good is this number" was the wrong question, and the right one was answered by
+ * measurement. Traced end to end in a browser on 2026-08-11: a student profile holding W8UM, MI and
+ * GENERAL with no coordinate reports `{"kind":"unknown","missingProfileFields":["citizenship",
+ * "fieldOfStudy","lat","lon","stage"]}` against the Chick Allen Memorial Scholarship. Two button
+ * presses and ZERO typing later — "Look up this callsign", then "Use these values" — the same
+ * profile reports `{"kind":"ineligible","reasons":[{"hard":true,"rawText":"Residence within 250
+ * miles of Seaford, Delaware"}]}`, and the screen reads "Ineligible · 1". A HARD ineligible verdict,
+ * resting entirely on a number the applicant never stated, never looked at, and — after one save —
+ * cannot tell from one they measured themselves, because `StudentFieldSources` has no key for a
+ * coordinate and the marker is stripped on the way in.
  *
- * So the answer is per-arm, and it is a DIFFERENCE THE PERSON CAN SEE:
+ * AND THE MARGINS ARE NOT ACADEMIC, which is what turns the argument. Measured with this
+ * repository's own `haversineMiles` against the radius centres in the seed corpus: W1AW's own
+ * STREET-address coordinate is 261.23 miles from Seaford, Delaware, against a 250-mile rule — 11.23
+ * miles outside. The good arm is eleven miles from flipping a hard verdict. A mailing address in the
+ * next town over is the same order of magnitude as that margin, so "it is a place rather than a mail
+ * drop" does not survive contact with the one thing the number is used for.
  *
- *   street_address     the boxes open with the coordinate in them. It is still the mail rather
- *                      than the station, and the panel says so, but a street address is a
- *                      defensible answer to "roughly where are you" and the applicant is looking
- *                      at both the address and the number before anything is written.
- *   po_box             the boxes open EMPTY and the coordinate is shown beside a sentence naming
- *                      it as a post office. A second, separate press fills it in. Refusing
- *                      outright was the other candidate and was rejected: this is the median
- *                      user, radius rules are the only thing lat/lon feed, and a club that knows
- *                      its post office is three miles from its shack is better served by an
- *                      informed yes than by a blanket no. What it must not be is silent.
- *   address_not_stated the same withholding, for a stronger reason — the record carried no
- *                      address at all, so nothing here says what the point is a geocode OF.
+ * So the same rule this component already keeps for a legacy licence class (rule 5 in the header,
+ * `operClass` left UNSET rather than rounded upward) and for `licensedSince` (refused outright,
+ * because it feeds `heldMonthsMin`) now covers the coordinate too: WHERE A VALUE FROM A SOURCE CAN
+ * DECIDE A VERDICT AND CANNOT AFTERWARDS BE ATTRIBUTED, THE SOFTWARE DOES NOT CHOOSE IT. It shows
+ * the number, says what it is a geocode of, and waits. Refusing outright was rejected for the reason
+ * it always was: this is the median user, a club that knows its post office is three miles from its
+ * shack is better served by an informed yes than by a blanket no, and radius rules left unanswered
+ * are unanswered rather than answered against you. What it must not be is silent, and what it must
+ * not be is automatic.
  *
- * AND THE MARGINS ARE NOT ACADEMIC. Measured with this repository's own `haversineMiles` against
- * the radius centres in the seed corpus: W1AW's own street-address coordinate is 261.23 miles from
- * Seaford, Delaware, against a 250-mile rule — 11.23 miles outside. A mail drop in the next town
- * is the same order of magnitude as that margin.
- *
- * THE RECORD IS ALSO CHECKED AGAINST ITSELF, HERE, EVEN THOUGH THE SERVER NOW DOES IT TOO. A
- * callook `location` carries a coordinate AND a grid square, which are two independent statements
- * about one station, and `checkCoordinateAgainstLocator` in core is what compares them. Since
- * `5d411a4` the server's parser asks the same question and emits no `mailingGeocode` at all when
- * the two halves disagree, so this branch is unreachable from a healthy GrantSpotter server — and
- * it stays, for the reason `KNOWN_STATUSES` stays a few lines up. `api/callsign.ts` is a HAND COPY
- * of a type on the other side of a process boundary; what actually arrives is whatever JSON the
- * connection produces, and this app is served behind a tunnel where a proxy, a stale build or a
- * captive portal can answer 200 with something else. The cost of asking is one function call over
- * numbers already in memory. The cost of not asking, if the invariant ever stops holding, is a
- * confident radius verdict computed from a coordinate 2,900 miles from where the same record says
- * the station is. Its copy is exercised in `CallsignLookup.test.tsx` rather than merely present.
+ * THE RECORD IS CHECKED AGAINST ITSELF HERE TOO, EVEN THOUGH THE SERVER DOES IT. A callook
+ * `location` carries a coordinate AND a grid square, which are two independent statements about one
+ * station, and `checkCoordinateAgainstLocator` in core is what compares them. Since `5d411a4` the
+ * server's parser asks the same question and sends no coordinate when the halves disagree — it now
+ * sends a {@link GeocodeRefusal} saying so, which is where this copy is normally reached from. The
+ * local check stays for the reason `KNOWN_STATUSES` stays: `api/callsign.ts` is a HAND COPY of a
+ * type on the other side of a process boundary, this app is served behind a tunnel, and a proxy, a
+ * stale build or a captive portal can answer 200 with anything. The cost of asking is one function
+ * call over numbers already in memory. The cost of not asking is a confident radius verdict computed
+ * from a coordinate 2,900 miles from where the same record says the station is. Both routes produce
+ * the SAME sentence — {@link contradictedNote} — so the copy is no longer a paragraph only a broken
+ * server could show anybody.
  */
 export type GeocodeOffer =
-  /** In the boxes when the panel opens. */
-  | { kind: 'prefill'; point: GeocodedPoint; note: string }
-  /** Shown, not filled. One press puts it in the boxes. */
-  | { kind: 'withheld'; point: GeocodedPoint; note: string }
-  /** Shown as a fault in the record. No press fills it. */
-  | { kind: 'contradicted'; point: GeocodedPoint; note: string };
+  /**
+   * A coordinate the record stated, on screen and NOT in the boxes. One press puts it there.
+   * `from` travels with it because every surface past this panel needs to say what it is.
+   */
+  | { kind: 'offered'; point: GeocodedPoint; from: GeocodedFrom; note: string }
+  /**
+   * The record stated a location and none of it is being offered. No press fills anything, and no
+   * number is quoted: quoting a value this panel has just called untrustworthy invites the reader
+   * to type it in by hand, which is the outcome the refusal exists to prevent.
+   */
+  | { kind: 'refused'; note: string };
+
+/** One sentence for a self-contradictory record, whichever side of the wire noticed it. */
+function contradictedNote(gridsquare: string, containingLocator: string): string {
+  return (
+    `This record contradicts itself: it states the grid square ${gridsquare}, and the coordinate ` +
+    `beside it falls in ${containingLocator} instead. Those are two statements about one station ` +
+    'and they disagree, so GrantSpotter is not offering either of them — there is no honest way ' +
+    'to pick the right one. Type a location in yourself if you need radius rules answered.'
+  );
+}
+
+/**
+ * WHY THE BOXES ARE EMPTY WHEN THE RECORD DID STATE SOMETHING.
+ *
+ * The server refuses a location it cannot vouch for and sends the reason rather than the numbers.
+ * Before 2026-08-11 it sent neither, so a contradictory record and a record with no location at all
+ * arrived identical — and the address note below then told the reader that the state was the only
+ * thing kept from those lines, over a record that had also stated a coordinate. Every arm here is a
+ * different upstream defect and gets a different sentence, for the same reason the six lookup
+ * statuses do.
+ */
+function refusalNote(refusal: NonNullable<CallsignRecord['geocodeRefusal']>): string {
+  switch (refusal.refused) {
+    case 'contradicted':
+      return contradictedNote(refusal.gridsquare, refusal.containingLocator);
+    case 'unreadable_locator':
+      return (
+        `This record states a coordinate beside a grid square, ${JSON.stringify(refusal.gridsquare)}, ` +
+        'that GrantSpotter could not read as one — so there was nothing to check the coordinate ' +
+        'against, and a coordinate nothing corroborates is not something to fill a form in with. ' +
+        `(${refusal.because}.) Type a location in yourself if you need radius rules answered.`
+      );
+    case 'locator_too_coarse':
+      return (
+        `This record states a coordinate beside the grid square ${refusal.gridsquare}, which names ` +
+        'a box roughly ten degrees by twenty — hundreds of miles across, and far too coarse to ' +
+        'tell whether the coordinate belongs in it. GrantSpotter keeps the two halves of a ' +
+        'location only where they can check each other, so neither is offered here.'
+      );
+    case 'placeholder':
+      return (
+        'This record states its position as 0, 0 — a point in the Gulf of Guinea, thousands of ' +
+        'miles from any US licence, and what this data carries where a geocode is missing. It is ' +
+        'an absence written in the shape of an answer, so GrantSpotter is not passing it on. Type ' +
+        'a location in yourself if you need radius rules answered.'
+      );
+    case 'incomplete':
+      return (
+        'This record states part of a position and not the whole of it. A latitude, a longitude ' +
+        'and a grid square are kept together or not at all — half a location cannot be checked ' +
+        'against itself — so nothing from it is offered here.'
+      );
+  }
+}
 
 export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefined {
   const geocode = record.mailingGeocode;
-  if (geocode === undefined) return undefined;
+  if (geocode === undefined) {
+    // The two shapes of one answer. A record that stated no location at all reaches neither.
+    return record.geocodeRefusal === undefined
+      ? undefined
+      : { kind: 'refused', note: refusalNote(record.geocodeRefusal) };
+  }
 
   // The exhaustive switch is the point of the type: there is no way to reach the numbers without
   // first saying which of the three things they are, so the paragraph above cannot be skipped by
   // somebody who only wanted a latitude.
-  const [point, note]: [GeocodedPoint, string] = ((): [GeocodedPoint, string] => {
+  const point: GeocodedPoint = ((): GeocodedPoint => {
     switch (geocode.geocodedFrom) {
       case 'street_address':
-        return [
-          geocode.mailingAddress,
-          'callook geocoded the street address above. That is where the licence receives post, ' +
-            'which is not necessarily where the station or the antenna is — but it is a place ' +
-            'rather than a mail drop, so it is offered here filled in. Change it or clear it if ' +
-            'it is not where you want radius rules answered about.',
-        ];
+        return geocode.mailingAddress;
       case 'po_box':
-        return [
-          geocode.poBox,
-          'The address on this licence is a PO box, so this coordinate is a POST OFFICE — not the ' +
-            'station, not the antenna, and not the campus. GrantSpotter has left the boxes empty ' +
-            'rather than fill them with it. Latitude and longitude are read for one thing only: ' +
-            'rules of the form “within 70 miles of Schenectady”, and a post office can be on the ' +
-            'other side of that line from the club it serves. Use it if it is close enough for ' +
-            'you to be happy answering those with it.',
-        ];
+        return geocode.poBox;
       case 'address_not_stated':
-        return [
-          geocode.unattributed,
-          'This record states a coordinate and no address at all, so nothing here says what the ' +
-            'point is a geocode of. GrantSpotter is not going to fill in a location it cannot ' +
-            'attribute to anything; the number is here because the record contains it, and the ' +
-            'judgement about whether it is yours is yours to make.',
-        ];
+        return geocode.unattributed;
     }
   })();
 
   const agreement = checkCoordinateAgainstLocator(point.latitude, point.longitude, point.gridsquare);
   if (agreement.status === 'outside') {
-    return {
-      kind: 'contradicted',
-      point,
-      note:
-        `This record contradicts itself: it states the grid square ${point.gridsquare}, and the ` +
-        `coordinate beside it falls in ${agreement.containingLocator} instead. Those are two ` +
-        'statements about one station and they disagree, so GrantSpotter is not offering either ' +
-        'of them — there is no honest way to pick the right one. Type a location in yourself if ' +
-        'you need radius rules answered.',
-    };
+    return { kind: 'refused', note: contradictedNote(point.gridsquare, agreement.containingLocator) };
   }
   if (agreement.status === 'unknown') {
     return {
-      kind: 'contradicted',
-      point,
-      note:
-        `GrantSpotter could not read ${JSON.stringify(point.gridsquare)} as a grid square, so the ` +
-        'coordinate in this record could not be checked against it — and a coordinate nothing ' +
-        'corroborates is not something to fill a form in with. ' +
-        `(${agreement.rejection.message}.) Type a location in yourself if you need radius rules ` +
-        'answered.',
+      kind: 'refused',
+      note: refusalNote({
+        refused: 'unreadable_locator',
+        gridsquare: point.gridsquare,
+        because: agreement.rejection.message,
+      }),
     };
   }
 
-  return { kind: geocode.geocodedFrom === 'street_address' ? 'prefill' : 'withheld', point, note };
+  /**
+   * ONE NOTE PER ARM, AND IT NO LONGER DIFFERS IN WHAT IT PROMISES — only in what the number IS.
+   * The clause naming the subject is `coordinateSubjectPhrase`, shared with the confirmation, the
+   * live region and the note beside the field on the editor, because those three said nothing at
+   * all about a post office until 2026-08-11 and one string is what keeps four surfaces honest.
+   */
+  return {
+    kind: 'offered',
+    point,
+    from: geocode.geocodedFrom,
+    note:
+      `This coordinate is ${coordinateSubjectPhrase(geocode.geocodedFrom)}. GrantSpotter has left ` +
+      'the boxes empty rather than fill them with it: latitude and longitude are read for one ' +
+      'thing only, rules of the form “within 70 miles of Schenectady”, and that is a verdict about ' +
+      'you which this software will not compute from a number you did not choose. Use it if it is ' +
+      'close enough that you are happy answering those rules with it.',
+  };
 }
 
 /** The record's own words for its operator class, or the truth about a club licence. */
@@ -482,6 +631,7 @@ function operatorClassText(record: CallsignRecord): string {
 
 export function CallsignLookup({
   callsign,
+  held,
   target,
   onAccept,
   setupToken,
@@ -491,6 +641,7 @@ export function CallsignLookup({
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
 
   const typed = callsign.trim().toUpperCase();
+  const heldValues = held ?? {};
 
   async function run(): Promise<void> {
     setPhase({ kind: 'busy' });
@@ -547,10 +698,32 @@ export function CallsignLookup({
         return '';
       case 'busy':
         return `Looking up ${typed}…`;
-      case 'accepted':
+      case 'accepted': {
         // The same heading the panel below shows, so the one user who cannot see it is not told
         // that a record filled in values the record stated none of.
-        return `${acceptedFrame(phase.attribution, target).heading}. Nothing has been saved yet.`;
+        //
+        // AND THE TWO FACTS A HEADING CANNOT CARRY. Measured on 2026-08-11, this said exactly
+        // "Filled in from the FCC record. Nothing has been saved yet." over an acceptance that had
+        // just put a post office into a radius-deciding field and overwritten a coordinate the
+        // applicant had typed. Both are on the visible panel; a live region that announces only
+        // the heading tells the one user who cannot read that panel the least of what happened.
+        const { coordinateFrom, replaced } = phase.attribution;
+        return (
+          `${acceptedFrame(phase.attribution, target).heading}.` +
+          (coordinateFrom === undefined
+            ? ''
+            : ` The coordinate came from the record and is ${coordinateSubjectLabel(coordinateFrom)}.`) +
+          (replaced.length === 0
+            ? ''
+            : ` ${profileFieldLabelList(
+                replaced.map((entry) => entry.key),
+                target,
+              )} ${replaced.length === 1 ? 'was a value' : 'were values'} you had already stated, ` +
+              'and the record has replaced ' +
+              `${replaced.length === 1 ? 'it' : 'them'}.`) +
+          ' Nothing has been saved yet.'
+        );
+      }
       case 'failed':
         return `The lookup did not run. ${phase.message}`;
       case 'answered': {
@@ -631,6 +804,7 @@ export function CallsignLookup({
           baseId={baseId}
           record={record}
           typed={typed}
+          held={heldValues}
           target={target}
           clubNotice={clubNotice}
           onUse={(values) => {
@@ -648,6 +822,10 @@ export function CallsignLookup({
                 unmarkable: fill.unmarkable,
                 derived: fill.derived,
                 unfillable: fill.unfillable,
+                ...(fill.coordinateFrom === undefined ? {} : { coordinateFrom: fill.coordinateFrom }),
+                // Computed from the SAME `values` map the host is about to write, so the sentence
+                // cannot name a replacement that did not happen or miss one that did.
+                replaced: replacedBy(fill.values, heldValues),
               },
             });
           }}
@@ -740,6 +918,7 @@ function FoundPanel({
   baseId,
   record,
   typed,
+  held,
   target,
   clubNotice,
   onUse,
@@ -749,6 +928,8 @@ function FoundPanel({
   record: CallsignRecord;
   /** What the user asked about, normalised — which is not always what the record is for. */
   typed: string;
+  /** What the form behind this panel already holds, so the panel can say what it would cost. */
+  held: HeldProfileValues;
   target: CallsignTarget;
   clubNotice?: ReactNode;
   onUse: (values: AcceptedCallsign) => void;
@@ -761,18 +942,23 @@ function FoundPanel({
   const [licenseClass, setLicenseClass] = useState<string>(record.operClass ?? '');
   const [orgName, setOrgName] = useState(record.type === 'CLUB' ? record.name : '');
   /**
-   * The coordinate boxes, seeded by {@link describeGeocode} and by nothing else. `'prefill'` is
-   * the only arm that opens with a value in it — the same one-line expression of a rule as the
-   * licence-class seed above, and for the same reason: an empty box is what makes the person the
-   * one who decides.
+   * The coordinate boxes, which open EMPTY on every arm and are seeded by nothing at all.
+   *
+   * The same one-line expression of a rule as the licence-class seed above, and for the same
+   * reason: an empty box is what makes the person the one who decides. It read
+   * `geocode?.kind === 'prefill' ? …` until 2026-08-11, and the argument for retiring that arm is
+   * at {@link describeGeocode}.
+   *
+   * THEY DO NOT OPEN ON THE APPLICANT'S OWN HELD COORDINATE EITHER, which looks friendlier and is
+   * not safe: a coordinate the form holds may be one a PREVIOUS record put there, and seeding it
+   * here would re-emit it through `fromSource` as the applicant's own — laundering the previous
+   * licensee's post office into "a value you stated" and defeating `applyLookup`'s `vacated` rule.
+   * An empty box leaves the held value untouched in the form, which is the correct outcome, and
+   * what the applicant holds is stated below instead of being editable here.
    */
   const geocode = describeGeocode(record);
-  const [lat, setLat] = useState(
-    geocode?.kind === 'prefill' ? String(geocode.point.latitude) : '',
-  );
-  const [lon, setLon] = useState(
-    geocode?.kind === 'prefill' ? String(geocode.point.longitude) : '',
-  );
+  const [lat, setLat] = useState('');
+  const [lon, setLon] = useState('');
   /**
    * The record found is for a callsign the user did not type. callook answers a lookup of a
    * SUPERSEDED callsign with the licensee's current record, so this is usually the same person
@@ -794,6 +980,30 @@ function FoundPanel({
   ].filter((line): line is string => line !== undefined && line !== '');
 
   /**
+   * EXACTLY WHAT PRESSING "USE THESE VALUES" WOULD WRITE, computed once per render and read twice:
+   * by {@link use}, which sends it, and by the warning below, which says what it costs.
+   *
+   * One expression rather than two, for the reason `acceptedFrame` calls `fillFromLookup` rather
+   * than guessing at it: a warning derived from a second reading of the same inputs is a warning
+   * that eventually describes a different acceptance from the one the button performs.
+   */
+  const trimmedState = state.trim().toUpperCase();
+  const trimmedOrg = orgName.trim();
+  const latText = lat.trim();
+  const lonText = lon.trim();
+  const pending: Record<string, string> = {
+    ...(trimmedState === '' ? {} : { state: trimmedState }),
+    ...(offersLicenseClass && licenseClass !== '' && isLicenseClass(licenseClass)
+      ? { licenseClass }
+      : {}),
+    ...(offersOrgName && trimmedOrg !== '' ? { orgName: trimmedOrg } : {}),
+    ...(latText === '' ? {} : { lat: latText }),
+    ...(lonText === '' ? {} : { lon: lonText }),
+  };
+  const heldCoordinate = { lat: (held.lat ?? '').trim(), lon: (held.lon ?? '').trim() };
+  const wouldReplace = replacedBy(pending, held);
+
+  /**
    * The values, each labelled with WHO STATED IT.
    *
    * `fromSource` compares what is in the input against what the record returned, which is the
@@ -806,14 +1016,14 @@ function FoundPanel({
   function use(): void {
     // The same condition the button is disabled on, enforced where it cannot be clicked around.
     if (substituted && !confirmed) return;
-    const trimmedState = state.trim().toUpperCase();
-    const trimmedOrg = orgName.trim();
-    const latText = lat.trim();
-    const lonText = lon.trim();
     // What the RECORD said, whatever the panel decided to do with it — `undefined` when there was
-    // no coordinate, so anything the applicant types is theirs by `fromSource`'s comparison.
-    const statedLat = geocode === undefined ? undefined : String(geocode.point.latitude);
-    const statedLon = geocode === undefined ? undefined : String(geocode.point.longitude);
+    // no coordinate to offer, so anything the applicant types is theirs by `fromSource`'s
+    // comparison. A refused location states nothing here: the point is deliberately not carried on
+    // a `'refused'` offer, so a number typed into these boxes beside one is the applicant's, which
+    // is exactly what it is.
+    const stated = geocode?.kind === 'offered' ? geocode.point : undefined;
+    const statedLat = stated === undefined ? undefined : String(stated.latitude);
+    const statedLon = stated === undefined ? undefined : String(stated.longitude);
     onUse({
       callsign: callsignFromRecord(record.callsign, typed),
       type: record.type,
@@ -847,6 +1057,10 @@ function FoundPanel({
        */
       ...(latText === '' ? {} : { lat: fromSource(statedLat, latText) }),
       ...(lonText === '' ? {} : { lon: fromSource(statedLon, lonText) }),
+      // WHAT THE NUMBER IS, TRAVELLING WITH IT. Sent whenever the record stated an offerable
+      // coordinate, whether or not the applicant took it: `fillFromLookup` attaches it only where
+      // a value the record stated actually landed, so this is the fact and that is the judgement.
+      ...(geocode?.kind === 'offered' ? { statedCoordinateFrom: geocode.from } : {}),
       provenance: {
         source: record.source,
         fetchedAt: record.fetchedAt,
@@ -921,11 +1135,20 @@ function FoundPanel({
             GrantSpotter does not store it: there is no field for a street address and nothing in
             the product reads one. What is kept is the state — eligibility rules are written in
             terms of states, ARRL Divisions and ARRL Sections —{' '}
+            {/* THE THIRD BRANCH EXISTS BECAUSE THE FIRST ONE WAS LYING. "Nothing else from these
+                lines" was printed over every record whose coordinate the server had refused, which
+                from here looked identical to a record that stated none: measured on 2026-08-11
+                against a contradictory body, which came back with no coordinate, no reason and no
+                mention of either. A record that stated a location and had it refused is now told
+                apart, because the server sends the reason. */}
             {geocode === undefined
               ? 'and nothing else from these lines.'
-              : 'and, if you use it below, callook’s coordinate for these lines. That coordinate ' +
-                'is derived from this address and points back at it, which is worth knowing ' +
-                'before you keep it.'}
+              : geocode.kind === 'offered'
+                ? 'and, if you choose to use it below, callook’s coordinate for these lines. That ' +
+                  'coordinate is derived from this address and points back at it, which is worth ' +
+                  'knowing before you keep it.'
+                : 'and nothing else. This record did state a position for these lines, and ' +
+                  'GrantSpotter is not passing it on — the reason is below.'}
           </p>
         </div>
       )}
@@ -941,6 +1164,32 @@ function FoundPanel({
           Check these before you use them, and change anything that is wrong. They are the only
           values that leave this panel.
         </p>
+
+        {/* WHAT IS ALREADY ON THE FORM, AND WHAT WOULD HAPPEN TO IT.
+            This panel opens on the RECORD's answers, which is the offer it exists to make — and
+            the form behind it may already hold the applicant's own. Measured on 2026-08-11: a
+            profile holding a typed OH, 42.2936 and -83.7100 opened this panel on MI / 42.2808 /
+            -83.743, never showed the applicant a single one of their own three values, contained
+            no occurrence of "replace", "overwrit" or "already", and lost all three on one press.
+            Recomputed from `pending` on every render, so editing a box back to what you had makes
+            the warning go away rather than leaving a sentence about a loss that is no longer
+            going to happen. */}
+        {wouldReplace.length > 0 && (
+          <p className="callsign-choose">
+            {wouldReplace.length === 1
+              ? 'Using these values replaces something you have already stated: '
+              : 'Using these values replaces things you have already stated: '}
+            {wouldReplace.map((entry, index) => (
+              <span key={entry.key}>
+                {index === 0 ? '' : '; '}
+                {profileFieldLabel(entry.key, target)} is <strong>{entry.was}</strong> on your
+                profile and would become <strong>{pending[entry.key]}</strong>
+              </span>
+            ))}
+            . Clear a box to leave that field exactly as you have it. Nothing is saved until you
+            press Save on the form itself.
+          </p>
+        )}
 
         <div className="callsign-fill-field">
           <label htmlFor={`${baseId}-state`}>State to fill in</label>
@@ -1003,31 +1252,52 @@ function FoundPanel({
             measured. */}
         {geocode !== undefined && (
           <div>
-            <p className="callsign-note">
-              This record states the position{' '}
-              <strong>
-                {geocode.point.latitude}, {geocode.point.longitude}
-              </strong>{' '}
-              and the grid square <strong>{geocode.point.gridsquare}</strong>. The grid square is
-              the more honest half — it names a box a few miles across rather than a point — and
-              GrantSpotter has no field for one, so only the numbers can be kept.
-            </p>
-            <p className={geocode.kind === 'prefill' ? 'callsign-note' : 'callsign-choose'}>
-              {geocode.note}
-            </p>
-            {geocode.kind === 'withheld' && (
-              <div className="callsign-actions">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    setLat(String(geocode.point.latitude));
-                    setLon(String(geocode.point.longitude));
-                  }}
-                >
-                  Use this coordinate anyway
-                </button>
-              </div>
+            {geocode.kind === 'offered' && (
+              <p className="callsign-note">
+                This record states the position{' '}
+                <strong>
+                  {geocode.point.latitude}, {geocode.point.longitude}
+                </strong>{' '}
+                and the grid square <strong>{geocode.point.gridsquare}</strong>. The grid square is
+                the more honest half — it names a box a few miles across rather than a point — and
+                GrantSpotter has no field for one, so only the numbers can be kept.
+              </p>
+            )}
+            <p className="callsign-choose">{geocode.note}</p>
+            {geocode.kind === 'offered' && (
+              <>
+                {/* THE PRESS THAT REPLACES SOMETHING SAYS SO BEFORE IT IS PRESSED, and it names
+                    both numbers, because the more accurate value here is very often the
+                    applicant's: measured on 2026-08-11, an MIT student holding the campus
+                    coordinate 42.3601, -71.0942 had it silently replaced by W1MX's post office
+                    2.18 miles away — the record's number is not better, it is just the record's. */}
+                {(heldCoordinate.lat !== '' || heldCoordinate.lon !== '') && (
+                  <p className="callsign-choose">
+                    You have already stated a position on this profile:{' '}
+                    <strong>
+                      {heldCoordinate.lat === '' ? '—' : heldCoordinate.lat},{' '}
+                      {heldCoordinate.lon === '' ? '—' : heldCoordinate.lon}
+                    </strong>
+                    . Using the record&rsquo;s coordinate replaces it with{' '}
+                    {coordinateSubjectLabel(geocode.from)}. Leave the boxes below empty and what you
+                    stated stays exactly as it is.
+                  </p>
+                )}
+                <div className="callsign-actions">
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      setLat(String(geocode.point.latitude));
+                      setLon(String(geocode.point.longitude));
+                    }}
+                  >
+                    {heldCoordinate.lat === '' && heldCoordinate.lon === ''
+                      ? 'Use this coordinate anyway'
+                      : 'Use this coordinate anyway, in place of mine'}
+                  </button>
+                </div>
+              </>
             )}
           </div>
         )}

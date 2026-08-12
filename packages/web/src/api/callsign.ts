@@ -68,6 +68,23 @@ export type MailingGeocode =
   | { geocodedFrom: 'po_box'; poBox: GeocodedPoint }
   | { geocodedFrom: 'address_not_stated'; unattributed: GeocodedPoint };
 
+/**
+ * THE RECORD STATED A LOCATION AND THE SERVER KEPT NONE OF IT — sent so the browser can say so.
+ *
+ * The full argument is in the server's `types.ts`. What the browser has to act on is that this and
+ * `mailingGeocode` are the two shapes of one answer and never both: there is no coordinate here to
+ * reach, and the reason this arrives at all is that "the record stated no location" and "the record
+ * stated a location that contradicted itself" were indistinguishable from here until 2026-08-11 —
+ * so the panel asserted the state was the only thing kept from the address, over a record that had
+ * also stated a coordinate.
+ */
+export type GeocodeRefusal =
+  | { refused: 'contradicted'; gridsquare: string; containingLocator: string }
+  | { refused: 'unreadable_locator'; gridsquare: string; because: string }
+  | { refused: 'locator_too_coarse'; gridsquare: string }
+  | { refused: 'placeholder' }
+  | { refused: 'incomplete' };
+
 export interface CallsignRecord {
   callsign: string;
   type: 'PERSON' | 'CLUB';
@@ -90,6 +107,11 @@ export interface CallsignRecord {
    * record stated a whole readable point. See {@link GeocodedFrom} before using any of it.
    */
   mailingGeocode?: MailingGeocode;
+  /**
+   * Why there is no coordinate, when the record stated one and the server refused it. Never set
+   * beside a `mailingGeocode`, and never set for a record that stated no location at all.
+   */
+  geocodeRefusal?: GeocodeRefusal;
   /**
    * When the CURRENT licence was granted. It is NOT "first licensed": it resets on every
    * renewal and on every vanity callsign change. Nothing here may feed `licensedSince`.

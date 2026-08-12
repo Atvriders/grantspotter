@@ -15,6 +15,7 @@ import type {
   CallsignRecord,
   GeocodedFrom,
   GeocodedPoint,
+  GeocodeRefusal,
   MailingGeocode,
 } from './types.js';
 
@@ -498,26 +499,73 @@ function decimalDegrees(value: unknown, limit: number): number | undefined {
  * down. A record whose halves disagree is refused here even though each half, taken alone, is a
  * perfectly plausible coordinate and a perfectly good locator. Neither rule can be dropped in
  * favour of the other. All three real captures pass both, checked in code now rather than by hand.
+ *
+ * WHAT CHANGED ON 2026-08-11, AND IT IS NOT THE DECISION ABOVE. Every refusal here used to be one
+ * `undefined`, which the record then carried as an absent `mailingGeocode` — the same absence a
+ * record that stated no location at all produces. Measured in a browser against a running server:
+ * the contradictory body in the paragraph above came back as `{"status":"found","record":{…}}` with
+ * no `mailingGeocode`, and the panel then told the reader that the state was "the only thing kept
+ * from these lines", which is a claim about a record that had also stated a coordinate. So the
+ * REASON now travels, as {@link GeocodeRefusal}, while the coordinate still does not — see the
+ * header of that type, which is where the difference between the two is argued. `silent` is the
+ * fourth answer and the common one: `person-no-address.json` states three empty strings, and a
+ * record that said nothing has had nothing refused.
  */
-function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefined {
+type LocationReading =
+  /** The record stated a whole point and its two halves agree. */
+  | { kind: 'point'; point: GeocodedPoint }
+  /** The record stated something and none of it is being passed on. */
+  | { kind: 'refused'; refusal: GeocodeRefusal }
+  /** The record stated no location at all, so there is nothing to refuse and nothing to say. */
+  | { kind: 'silent' };
+
+function readLocation(location: Record<string, unknown>): LocationReading {
+  const rawLatitude = text(location.latitude);
+  const rawLongitude = text(location.longitude);
+  const rawGridsquare = text(location.gridsquare);
+  // Not one of the three fields carries anything. This is the ~1.3% shape, and it is silence
+  // rather than a refusal: saying "a location was refused" about a record that stated none would
+  // be the same over-claim, pointed the other way, as the one this reading exists to stop.
+  if (rawLatitude === undefined && rawLongitude === undefined && rawGridsquare === undefined) {
+    return { kind: 'silent' };
+  }
+
   const latitude = decimalDegrees(location.latitude, 90);
   const longitude = decimalDegrees(location.longitude, 180);
-  const gridsquare = text(location.gridsquare);
+  const gridsquare = rawGridsquare;
   if (latitude === undefined || longitude === undefined || gridsquare === undefined) {
-    return undefined;
+    return { kind: 'refused', refusal: { refused: 'incomplete' } };
   }
 
   const agreement = checkCoordinateAgainstLocator(latitude, longitude, gridsquare);
   // `unknown` means core could not read the locator. It also covers a coordinate core will not
   // accept, which `decimalDegrees` has already made unreachable — and the two need not be told
   // apart, because the answer to both is the same: nothing here is checkable, so nothing is kept.
-  if (agreement.status === 'unknown') return undefined;
-  if (agreement.box.precision < MINIMUM_LOCATOR_PRECISION) return undefined;
+  if (agreement.status === 'unknown') {
+    return {
+      kind: 'refused',
+      refusal: {
+        refused: 'unreadable_locator',
+        gridsquare,
+        because: agreement.rejection.message,
+      },
+    };
+  }
+  if (agreement.box.precision < MINIMUM_LOCATOR_PRECISION) {
+    return { kind: 'refused', refusal: { refused: 'locator_too_coarse', gridsquare } };
+  }
   if (
     agreement.status === 'outside' &&
     !(agreement.latOffsetDeg === 0 && agreement.lonOffsetDeg === 0)
   ) {
-    return undefined;
+    return {
+      kind: 'refused',
+      refusal: {
+        refused: 'contradicted',
+        gridsquare,
+        containingLocator: agreement.containingLocator,
+      },
+    };
   }
 
   /*
@@ -542,9 +590,11 @@ function statedPoint(location: Record<string, unknown>): GeocodedPoint | undefin
    * are plausible rather than on which values the source actually stated. That zero still has to
    * agree with the locator beside it, which is a different question and is asked above.
    */
-  if (latitude === 0 && longitude === 0) return undefined;
+  if (latitude === 0 && longitude === 0) {
+    return { kind: 'refused', refusal: { refused: 'placeholder' } };
+  }
 
-  return { latitude, longitude, gridsquare };
+  return { kind: 'point', point: { latitude, longitude, gridsquare } };
 }
 
 /**
@@ -695,9 +745,22 @@ function toRecord(body: Record<string, unknown>, fetchedAt: string): CallsignLoo
    * to attribute it to" is a shape this module must have an answer for, and the answer is to keep
    * the value and withhold the claim, exactly as `operClassRaw` does beside an undefined
    * `operClass`.
+   *
+   * A REFUSAL IS SET WHERE A POINT IS NOT, AND NEVER BOTH. The two fields are one answer with two
+   * shapes — `readLocation` returns exactly one of them — and an exhaustive `switch` is what keeps
+   * a fourth reading from arriving downstream under whichever key was nearest.
    */
-  const point = statedPoint(record(body.location));
-  if (point !== undefined) result.mailingGeocode = attributePoint(point, geocodedFrom);
+  const location = readLocation(record(body.location));
+  switch (location.kind) {
+    case 'point':
+      result.mailingGeocode = attributePoint(location.point, geocodedFrom);
+      break;
+    case 'refused':
+      result.geocodeRefusal = location.refusal;
+      break;
+    case 'silent':
+      break;
+  }
 
   const grantDate = isoDate(other.grantDate);
   if (grantDate !== undefined) result.grantDate = grantDate;
