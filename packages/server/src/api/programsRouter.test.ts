@@ -444,8 +444,12 @@ describe('GET /api/programs', () => {
     const s = res.body.summary;
     expect(s.eligible + s.preferred + s.ineligible + s.unknown).toBe(s.total);
     expect(s.total).toBe(5);
-    expect(s.eligible).toBe(3);
+    // Two eligible, not three. `chicago-fm-club-scholarship` is a discontinued record carrying no
+    // constraints at all, and round eight stopped reading an empty constraint list as "you meet
+    // every requirement this record states" — it is the `unknown` below, with nothing to fill in.
+    expect(s.eligible).toBe(2);
     expect(s.ineligible).toBe(2);
+    expect(s.unknown).toBe(1);
   });
 
   /**
@@ -487,14 +491,18 @@ describe('GET /api/programs', () => {
     expect(res.body.total).toBe(2);
     // The census still describes the whole filtered corpus, not just this slice.
     expect(res.body.summary.total).toBe(5);
-    expect(res.body.summary.eligible).toBe(3);
+    expect(res.body.summary.eligible).toBe(2);
   });
 
   it('accepts more than one verdict kind at once', async () => {
     seedStudentProfile(db);
     const res = await request(buildApp(db)).get('/api/programs?verdict=eligible,unknown');
     expect(res.body.total).toBe(3);
-    for (const row of res.body.rows) expect(row.verdict.kind).toBe('eligible');
+    // BOTH kinds, which is the point of the comma — and the assertion used to say `eligible` for
+    // every row only because nothing in this corpus was unknown for this applicant. One record
+    // states no requirement at all now, so the filter is doing visible work.
+    const kinds = res.body.rows.map((r: { verdict: { kind: string } }) => r.verdict.kind).sort();
+    expect(kinds).toEqual(['eligible', 'eligible', 'unknown']);
   });
 
   /**
@@ -616,7 +624,7 @@ describe('GET /api/programs', () => {
       .not.toContain('ardc-past-award-2024');
     expect(res.body.total).toBe(5);
     expect(res.body.summary.total).toBe(5);
-    expect(res.body.summary.eligible).toBe(3);
+    expect(res.body.summary.eligible).toBe(2);
     // …and it is still stored. Suppression hides it; it does not destroy evidence.
     expect(createProgramRepo(db).get('ardc-past-award-2024')).toBeDefined();
   });
@@ -697,7 +705,7 @@ describe('GET /api/programs — an organization profile', () => {
     seedClubProfile(db);
     const asStudent = await request(buildApp(db)).get('/api/programs');
     expect(asStudent.body.profileApplied).toBe('student');
-    expect(asStudent.body.summary.eligible).toBe(3);
+    expect(asStudent.body.summary.eligible).toBe(2);
 
     const asClub = await request(buildApp(db)).get('/api/programs?profile=organization');
     expect(asClub.body.profileApplied).toBe('organization');
@@ -755,7 +763,10 @@ describe('GET /api/programs — verdicts a fuller profile would resolve', () => 
    */
   it('ranks the profile fields that would resolve the most unknown verdicts', async () => {
     const res = await request(buildApp(db)).get('/api/programs');
-    expect(res.body.summary.unknown).toBe(3);
+    // Four unresolved: three waiting on a field the applicant could supply, plus the record that
+    // states no requirement at all — counted, and deliberately absent from `unknownByField`
+    // because there is no answer that would settle it.
+    expect(res.body.summary.unknown).toBe(4);
     expect(res.body.summary.unknownByField).toEqual([
       { field: 'licenseClass', count: 2 },
       { field: 'degreeLevel', count: 1 },
@@ -768,7 +779,7 @@ describe('GET /api/programs — verdicts a fuller profile would resolve', () => 
 
   it('names the missing fields on the row itself, not only in the census', async () => {
     const res = await request(buildApp(db)).get('/api/programs?verdict=unknown');
-    expect(res.body.total).toBe(3);
+    expect(res.body.total).toBe(4);
     const row = res.body.rows.find(
       (r: { program: { id: string } }) => r.program.id === 'zeta-license-gated-award',
     );
@@ -815,7 +826,7 @@ describe('GET /api/programs — a preference the applicant meets', () => {
     const res = await request(buildApp(db)).get('/api/programs');
     expect(res.body.summary.total).toBe(6);
     expect(res.body.summary.preferred).toBe(1);
-    expect(res.body.summary.eligible).toBe(3);
+    expect(res.body.summary.eligible).toBe(2);
     expect(res.body.summary.ineligible).toBe(2);
     expect(
       res.body.summary.eligible +
@@ -913,7 +924,7 @@ describe('GET /api/programs on a database that has only ever been migrated', () 
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(4);
     expect(res.body.summary.total).toBe(4);
-    expect(res.body.summary.eligible).toBe(2);
+    expect(res.body.summary.eligible).toBe(1);
     expect(res.body.rows.map((r: { program: { id: string } }) => r.program.id))
       .not.toContain('arrl-foundation-scholarship');
   });

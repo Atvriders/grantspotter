@@ -24,7 +24,7 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateConstraint, matchProgram } from '../src/matcher.js';
 import { constraintSchema, constraintSpecSchema } from '../src/schema.js';
-import type { ConstraintSpec, Profile, StudentProfile } from '../src/types.js';
+import type { ConstraintSpec, ConstraintTier, Profile, StudentProfile } from '../src/types.js';
 import { makeProgram, makeStudent } from './fixtures.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
@@ -58,16 +58,23 @@ describe('a disjunction can only ever widen', () => {
       student({ state: 'FL', county: 'Brevard', fieldOfStudy: 'electronics', stage: 'HS_SENIOR' }),
       student({ state: 'GA', county: 'Fulton', fieldOfStudy: 'Music', stage: 'GRAD', gpa: 2.0 }),
     ];
-    // A deliberately unhelpful alternative: it matches almost nobody, so if `anyOf` could narrow,
-    // it would.
-    const useless: ConstraintSpec['anyOf'] = [
-      { axis: 'gender', allowed: ['female'] },
-      { axis: 'gpa', min: 4.0 },
-    ];
+    // A deliberately unhelpful alternative FOR EACH AXIS: it matches almost nobody, so if `anyOf`
+    // could narrow, it would. One per axis rather than one list for all of them, because an
+    // alternative is now the same axis as its base by construction — see the same-axis block at
+    // the end of this file for why that stopped being a matter of extractor discipline.
+    const useless: Record<string, ConstraintTier[]> = {
+      license: [{ axis: 'license', licenseMin: 'EXTRA', heldMonthsMin: 600 }],
+      geography: [{ axis: 'geography', geo: { type: 'county', values: ['Nowhere'] } }],
+      field_of_study: [{ axis: 'field_of_study', fields: ['Sanskrit'], excludedFields: [] }],
+      age_stage: [{ axis: 'age_stage', stages: ['HS_SENIOR'], ageMax: 3 }],
+      gpa: [{ axis: 'gpa', min: 4.5 }],
+      citizenship: [{ axis: 'citizenship', allowed: ['US_CITIZEN'] }],
+      ham_activity: [{ axis: 'ham_activity', activityKinds: ['teaching'], cwProficiencyWpmMin: 99, proofRequired: true }],
+    };
     for (const base of bases) {
       for (const profile of profiles) {
         const before = status(base, profile);
-        const after = status({ ...base, anyOf: useless }, profile);
+        const after = status({ ...base, anyOf: useless[base.axis] } as ConstraintSpec, profile);
         if (before !== 'fail') {
           expect(after, `${base.axis} went ${before} -> ${after}`).not.toBe('fail');
         }
@@ -285,7 +292,18 @@ describe('the funder who says their own list is illustrative', () => {
     expect(status(cwops, student({ activityKinds: ['on_air'], cwWpm: 20 }), open)).toBe('pass');
   });
 
-  it('field_of_study keeps the behaviour it already had, word for word', () => {
+  /**
+   * ONE SIGNAL, ONE ANSWER — the two axes that read `funderOpenedTheList` now agree, and this is
+   * the case where they used to differ.
+   *
+   * `field_of_study` read an opened list as a PASS for one round, on the argument that the
+   * applicant HAS named a field, so the funder had invited a judgement of adjacency the applicant
+   * could make off the verbatim sentence. Measured over the corpus, what that produced was
+   * `eligible` on eight non-empty lists for majors the sentences do not point at — a Music
+   * Performance graduate student admitted to a healing-arts award. Naming a field is what makes
+   * the question ASKABLE; it is not evidence of adjacency to a list the field shares no word with.
+   */
+  it('field_of_study reads an opened list exactly as ham_activity does', () => {
     const marco: ConstraintSpec = {
       axis: 'field_of_study',
       fields: ['healing arts', 'Medicine', 'Nursing'],
@@ -295,8 +313,136 @@ describe('the funder who says their own list is illustrative', () => {
       'Field of study must be leading to a career in the healing arts, including, but not ' +
       'necessarily leading to Medicine, Dentistry, Veterinary Medicine, Nursing, Pharmacy, EMT, ' +
       'or Radiology technician.';
-    expect(status(marco, student({ fieldOfStudy: 'Physical Therapy' }), raw)).toBe('pass');
+    // Was `fail` before the widening existed, and is not a refusal any more.
+    expect(status(marco, student({ fieldOfStudy: 'Physical Therapy' }), raw)).toBe('unknown');
+    // …but neither is it a yes, and the applicant nothing in the sentence points at gets the same
+    // answer rather than an eligibility.
+    expect(status(marco, student({ fieldOfStudy: 'Music Performance' }), raw)).toBe('unknown');
+    expect(evaluateConstraint(marco, student({ fieldOfStudy: 'Music Performance' }), NOW, raw).missing).toEqual([]);
+    // THE QUESTION IS STILL ASKED, because a field the funder listed is still a pass.
+    expect(evaluateConstraint(marco, student({}), NOW, raw)).toEqual({
+      status: 'unknown',
+      missing: ['fieldOfStudy'],
+    });
+    expect(status(marco, student({ fieldOfStudy: 'Nursing' }), raw)).toBe('pass');
+    // Close the list and the same applicant is refused: the marker is doing the work.
     expect(status(marco, student({ fieldOfStudy: 'Physical Therapy' }), 'Medicine or Nursing.')).toBe('fail');
+  });
+});
+
+// ---------------------------------------------------------------- the same-axis rule
+
+/**
+ * `anyOf` IS THE ONE MECHANISM HERE THAT CAN TURN A REFUSAL INTO AN ADMISSION, and until this
+ * round its entire safety argument rested on a rule nothing checked.
+ *
+ * The rule is that alternatives are TIERS OF THE SAME AXIS — a disjunction is only "the funder's
+ * other route" while both routes answer the same question. It was written down three times (in
+ * `ConstraintAlternatives`, in `schema.ts`, in `evaluateConstraint`) as a request to extractors,
+ * and the file it protects said out loud that nothing enforced it. Measured against the real
+ * `evaluateConstraint` on the day it was found:
+ *
+ *   {axis:'field_of_study', fields:['Engineering']} + anyOf:[{axis:'geography', geo:{type:'any'}}]
+ *     -> PASS for a Basket Weaving major.
+ *
+ * All six `anyOf` constraints in the committed corpus are same-axis and every route in them is
+ * named in the funder's own sentence, so nothing shipped wrong. "No extractor has done it yet" is
+ * not a property.
+ */
+describe('an alternative can only ever be another tier of the same question', () => {
+  const basketWeaver = student({ fieldOfStudy: 'Basket Weaving', state: 'TX' });
+  const engineeringOnly: ConstraintSpec = {
+    axis: 'field_of_study',
+    fields: ['Engineering'],
+    excludedFields: [],
+  };
+
+  it('is a compile error at the extractor', () => {
+    // @ts-expect-error a geography tier is not an alternative to a field-of-study tier
+    const crossAxis: ConstraintSpec = { ...engineeringOnly, anyOf: [{ axis: 'geography', geo: { type: 'any', values: [] } }] };
+    // The same literal, written the way a well-formed record does, compiles.
+    const sameAxis: ConstraintSpec = {
+      ...engineeringOnly,
+      anyOf: [{ axis: 'field_of_study', fields: ['Basket Weaving'], excludedFields: [] }],
+    };
+    expect(status(sameAxis, basketWeaver)).toBe('pass');
+    expect(crossAxis.axis).toBe('field_of_study');
+  });
+
+  it('is refused by the schema, so the JSON column cannot smuggle one past the type', () => {
+    // `constraints.spec` is TEXT-containing-JSON and `listForProgram` re-parses every stored row.
+    // A cross-axis alternative arriving from there has never been near a type checker.
+    expect(() =>
+      constraintSpecSchema.parse({
+        axis: 'field_of_study',
+        fields: ['Engineering'],
+        excludedFields: [],
+        anyOf: [{ axis: 'geography', geo: { type: 'any', values: [] } }],
+      }),
+    ).toThrow();
+    // ...and the same shape with the right axis still round-trips.
+    expect(
+      constraintSpecSchema.parse({
+        axis: 'field_of_study',
+        fields: ['Engineering'],
+        excludedFields: [],
+        anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: [] }],
+      }),
+    ).toMatchObject({ anyOf: [{ axis: 'field_of_study' }] });
+  });
+
+  it('is ignored by the matcher, so a corrupt row cannot invent an admission either', () => {
+    // The exact spec from the finding, forced past both guards the way a bad migration would.
+    const crossAxis = {
+      ...engineeringOnly,
+      anyOf: [{ axis: 'geography', geo: { type: 'any', values: [] } }],
+    } as unknown as ConstraintSpec;
+    expect(status(crossAxis, basketWeaver)).toBe('fail');
+    // Dropped, not read as a refusal: the base tier's own answer is what stands, so corrupt data
+    // can never hide money either.
+    expect(status(crossAxis, student({ fieldOfStudy: 'Engineering' }))).toBe('pass');
+    expect(evaluateConstraint(crossAxis, student({}), NOW)).toEqual({
+      status: 'unknown',
+      missing: ['fieldOfStudy'],
+    });
+  });
+});
+
+/**
+ * A ROUTE THE FUNDER CLOSED BY NAME IS NOT A ROUTE A DISJUNCTION MAY REOPEN.
+ *
+ * `excludedFields` is the corpus's only such route — "Any, except for Liberal Arts" (The Rick
+ * Hughes, K4BYT, Memorial Scholarship) — and it is a REQUIREMENT riding on every tier, never a
+ * tier of its own. Both extractors knew that and both said so in prose: `fieldOfStudy.ts` copies
+ * the exclusion onto the alternative it mints, and declines to mint `orUnrepresented` at all when
+ * a record carries one. That made a funder's own bar depend on two extractors remembering, in two
+ * places, forever — and a sibling that forgot turned the refusal into a `pass`.
+ */
+describe('an exclusion is a requirement, not a tier', () => {
+  const liberalArts = student({ fieldOfStudy: 'Liberal Arts' });
+
+  it('survives a sibling tier that forgot it', () => {
+    const forgetful: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['engineering'],
+      excludedFields: ['Liberal Arts'],
+      anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: [] }],
+    };
+    expect(status(forgetful, liberalArts)).toBe('fail');
+    // ...while the alternative still does its own job for everybody the funder did not bar.
+    expect(status(forgetful, student({ fieldOfStudy: 'Biology' }))).toBe('pass');
+  });
+
+  it('survives an orUnrepresented beside it', () => {
+    const softened: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['engineering'],
+      excludedFields: ['Liberal Arts'],
+      orUnrepresented: 'or a related field',
+    };
+    expect(status(softened, liberalArts)).toBe('fail');
+    // The route the funder named for everyone else is still softened, exactly as before.
+    expect(status(softened, student({ fieldOfStudy: 'Biology' }))).toBe('unknown');
   });
 });
 

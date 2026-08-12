@@ -100,13 +100,19 @@ describe('MARCO and York: a recommendation is not a requirement', () => {
       const program = programNamed(programs, needle);
       const verdict = verdictFor(programs, program);
       // The whole point: before this fix both were `ineligible`, and the ONLY reason was the
-      // ham_activity constraint built out of "should".
-      expect(verdict.kind, `${needle}: ${JSON.stringify(verdict)}`).toMatch(
-        /^eligible(_preferred)?$/,
-      );
+      // ham_activity constraint built out of "should". This is a claim about REACHABILITY, so it
+      // is asserted as one — the axis this file owns must not produce a refusal.
+      expect(verdict.kind, `${needle}: ${JSON.stringify(verdict)}`).not.toBe('ineligible');
       if (verdict.kind === 'ineligible') {
         expect(verdict.reasons.map((r) => r.spec.axis)).not.toContain('ham_activity');
       }
+      // ...and what it IS, is a different axis's answer to a different question. This applicant
+      // studies Electrical Engineering and both awards are for the healing arts, under a sentence
+      // that opens its own list ("including but not limited to"). Round eight stopped that reading
+      // as a yes: it is the funder declining to close the list, which is `unknown` and not a bar.
+      // Nothing here is a `ham_activity` verdict either way.
+      expect(verdict.kind, needle).toBe('unknown');
+      if (verdict.kind === 'unknown') expect(verdict.missingProfileFields, needle).toEqual([]);
     }
   });
 

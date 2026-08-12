@@ -8,11 +8,13 @@ import {
   isApplicantEntityConstraint,
   matchAll,
   matchProgram,
+  statesARequirement,
 } from '../src/matcher.js';
 import type {
   ApplicantEntity,
   Constraint,
   ConstraintSpec,
+  ConstraintTier,
   DegreeLevel,
   Stage,
   StudentProfile,
@@ -41,12 +43,52 @@ function describeOther(constraint: Constraint): string {
 }
 
 describe('matchProgram — baseline', () => {
-  it('is eligible when a program has no constraints', () => {
-    expect(matchProgram(makeStudent(), makeProgram(), NOW)).toEqual({ kind: 'eligible' });
+  /**
+   * SILENCE IS NOT PERMISSION — and this test used to assert that it was.
+   *
+   * `eligible` means "you meet every requirement this record states". Over an EMPTY constraint list
+   * that is vacuously true, and it reads to the person acting on it as "you may apply". Measured
+   * over the 150 publishable programmes the committed fixtures produce, 28 carry no constraints at
+   * all, and the nine of those with a recorded audience produced 27 `eligible` verdicts across the
+   * seven shipped profiles — among them NASA's CubeSat Launch Initiative, the NTIA Public Wireless
+   * Supply Chain Innovation Fund, the ARRL Club Grant Program and the Yaesu DR-2X Repeater Program.
+   * All four are real money with real published rules that nobody has parsed.
+   *
+   * The answer is the one `matchProgram` already gives an unrecorded AUDIENCE (round five) and an
+   * unmeasurable radius: unresolved, with nothing the reader could fill in. Never `ineligible` —
+   * that would hide a live route to money over a gap in our own data.
+   */
+  it('does not turn a record that states nothing into an eligibility', () => {
+    expect(makeProgram().constraints).toEqual([]);
+    expect(matchProgram(makeStudent(), makeProgram(), NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
+  });
+
+  /**
+   * AN EMPTY LIST IS NOT AN "ANY", and the distinction is the whole width of the rule above. 136
+   * constraints in this corpus test nothing while quoting a funder who wrote "Any" / "None" /
+   * "All" / "No geographic requirements" — that is the funder ANSWERING the question, and the
+   * North Fulton Amateur Radio League Scholarship is made of exactly those. Reading a stated
+   * "no restriction" as undecided would be a false exclude with a researched record behind it.
+   */
+  it('still says eligible when the funder answered the question with "no restriction"', () => {
+    const answered = makeProgram({
+      constraints: [
+        makeConstraint({ axis: 'field_of_study', fields: [], excludedFields: [] }, { rawText: 'Any' }),
+        makeConstraint({ axis: 'license', licenseMin: 'NONE' }, { rawText: 'None' }),
+        makeConstraint({ axis: 'geography', geo: { type: 'any', values: [] } }, { rawText: 'Any' }),
+      ],
+    });
+    expect(matchProgram(makeStudent(), answered, NOW)).toEqual({ kind: 'eligible' });
   });
 
   it('works without an explicit clock', () => {
-    expect(matchProgram(makeStudent(), makeProgram()).kind).toBe('eligible');
+    const stated = makeProgram({
+      constraints: [makeConstraint({ axis: 'citizenship', allowed: ['ANY'] }, { rawText: 'Any' })],
+    });
+    expect(matchProgram(makeStudent(), stated).kind).toBe('eligible');
   });
 });
 
@@ -71,6 +113,9 @@ describe('matchProgram — the applicant-entity gate', () => {
     const ardc = makeProgram({
       id: 'ardc-grants',
       applicantEntities: ['club_via_fiscal_sponsor', 'university', 'school_lea'],
+      // A stated requirement, so that the applicant this gate LETS THROUGH reaches a real
+      // `eligible` rather than the "nothing was recorded" `unknown` of the baseline block above.
+      constraints: [makeConstraint({ axis: 'citizenship', allowed: ['ANY'] }, { rawText: 'Any' })],
     });
     expect(matchProgram(makeOrg({ entity: 'club_501c3' }), ardc, NOW).kind).toBe('ineligible');
     expect(matchProgram(makeOrg({ entity: 'university' }), ardc, NOW).kind).toBe('eligible');
@@ -381,6 +426,105 @@ describe('matchProgram — the preference cascade', () => {
     });
   });
 
+  /**
+   * A PREFERENCE MET BY NOBODY DOING ANYTHING.
+   *
+   * `eligible_preferred` is the top of the ranking this product sorts by, and `rank` is the number
+   * a student uses to decide what to spend an application fee and a transcript on. Both records
+   * below are verbatim from the committed corpus, and in both the promotion came out of a spec with
+   * no content in it at all.
+   */
+  it('does not award a preference for a spec that tests nothing', () => {
+    // 10-10 International: `fields: []`, and the funder's sentence is the words "No preference."
+    // (The extractor files it soft because the word "preference" is in it — which would not matter
+    // at all if a vacuous pass were not being counted as an achievement.)
+    const tenTen = makeProgram({
+      constraints: [
+        makeConstraint(
+          { axis: 'field_of_study', fields: [], excludedFields: [] },
+          { id: 'no-preference', hard: false, fallbackRank: 0, rawText: 'No preference.' },
+        ),
+      ],
+    });
+    expect(matchProgram(makeStudent({ fieldOfStudy: 'Electrical Engineering' }), tenTen, NOW)).toEqual({
+      kind: 'eligible',
+    });
+    // The Free Family: three institution fields, none of them set, under a sentence naming two
+    // universities by name — which `ConstraintTier.institution` has nowhere to put. The applicant
+    // was promoted for attending neither.
+    const freeFamily = makeProgram({
+      constraints: [
+        makeConstraint(
+          {
+            axis: 'institution',
+            degreeLevels: [],
+            tradeSchoolOK: false,
+            partTimeOK: true,
+            accreditationRequired: false,
+          },
+          {
+            id: 'rice-and-vt',
+            hard: false,
+            fallbackRank: 0,
+            rawText:
+              'Preference will be given to qualified applicants, regardless of residency, ' +
+              'attending Rice University in Houston, TX and Virginia Tech in Blacksburg, VA',
+          },
+        ),
+      ],
+    });
+    expect(matchProgram(makeStudent({ degreeLevel: 'BACH', partTime: false }), freeFamily, NOW)).toEqual({
+      kind: 'eligible',
+    });
+  });
+
+  /**
+   * ...AND THE SAME EMPTY FIELDS STILL PASS AS A HARD CONSTRAINT. The rule is about crediting an
+   * applicant with an achievement, not about what an empty tier means: 136 constraints in this
+   * corpus test nothing while quoting a funder who wrote "Any" or "None", and reading those as
+   * anything but a pass would refuse people the funder has just admitted.
+   */
+  it('leaves a hard tier that tests nothing passing, as the funder\'s "Any" says', () => {
+    const anyField = makeProgram({
+      constraints: [
+        makeConstraint(
+          { axis: 'field_of_study', fields: [], excludedFields: [] },
+          { id: 'any-field', hard: true, rawText: 'Any' },
+        ),
+      ],
+    });
+    expect(matchProgram(makeStudent({ fieldOfStudy: 'Music Performance' }), anyField, NOW)).toEqual({
+      kind: 'eligible',
+    });
+  });
+
+  /**
+   * The true negative for the rule above: a preference that really does test something still
+   * promotes, and still carries its rank. This is what stops "does not award a preference for an
+   * empty spec" quietly becoming "does not award preferences".
+   */
+  it('still promotes on a preference with content in it', () => {
+    const attendingHere = makeProgram({
+      constraints: [
+        makeConstraint(
+          {
+            axis: 'institution',
+            degreeLevels: ['BACH'],
+            tradeSchoolOK: false,
+            partTimeOK: true,
+            accreditationRequired: false,
+          },
+          { id: 'bachelors-preferred', hard: false, fallbackRank: 2 },
+        ),
+      ],
+    });
+    expect(matchProgram(makeStudent({ degreeLevel: 'BACH' }), attendingHere, NOW)).toEqual({
+      kind: 'eligible_preferred',
+      rank: 2,
+      met: ['bachelors-preferred'],
+    });
+  });
+
   it('never excludes on financial need even when the constraint is marked hard', () => {
     const program = makeProgram({
       constraints: [
@@ -566,12 +710,36 @@ describe('field_of_study — free-text corpus values', () => {
     expect(status(fos(["Bachelor's degree", 'higher in electrical engineering']), 'electrical engineering')).toBe('pass');
   });
 
-  it('takes the funder at their word when they say "or related field"', () => {
-    // The widening is the funder's own; relatedness is not ours to adjudicate,
-    // and the applicant reads their verbatim wording (Constraint.rawText) anyway.
-    expect(status(fos(['Electronics', 'communications', 'related fields']), 'physics')).toBe('pass');
-    expect(status(fos(['engineering', 'or a related technical field']), 'industrial design')).toBe('pass');
-    expect(status(fos(['engineering', 'sciences', 'similar field']), 'industrial design')).toBe('pass');
+  /**
+   * "OR RELATED FIELD" WITHDRAWS THE REFUSAL. IT DOES NOT ISSUE AN ADMISSION.
+   *
+   * This test asserted `pass` for a round, on the reasoning that relatedness is not ours to
+   * adjudicate and the applicant reads the verbatim wording anyway. The first half is right and is
+   * why none of these is a `fail`. The second half was doing the adjudicating it disclaimed: a
+   * `pass` IS an answer, printed as "you are eligible", and nothing in "electronics,
+   * communications, or related fields" says industrial design is one of them.
+   *
+   * `unknown` is the honest third answer, and it costs the applicant nothing — the door stays open,
+   * the funder's sentence is on the screen, and no application fee is spent on a claim the funder
+   * never made. Same rule, same reasoning, as the `ham_activity` opened list.
+   */
+  it('reads "or related field" as the funder declining to close their list', () => {
+    expect(status(fos(['Electronics', 'communications', 'related fields']), 'physics')).toBe('unknown');
+    expect(status(fos(['engineering', 'or a related technical field']), 'industrial design')).toBe('unknown');
+    expect(status(fos(['engineering', 'sciences', 'similar field']), 'industrial design')).toBe('unknown');
+    // ...and it is an `unknown` with NOTHING to fill in: the applicant has already answered the
+    // only question this axis asks.
+    expect(
+      evaluateConstraint(
+        fos(['Electronics', 'communications', 'related fields']),
+        makeStudent({ fieldOfStudy: 'physics' }),
+        NOW,
+      ),
+    ).toEqual({ status: 'unknown', missing: [] });
+    // The route the funder named FIRST is untouched — an applicant on the list is eligible, not
+    // uncertain, and that is what stops this being a blanket softening of the axis.
+    expect(status(fos(['Electronics', 'communications', 'related fields']), 'communications')).toBe('pass');
+    expect(status(fos(['engineering', 'sciences', 'similar field']), 'chemical engineering')).toBe('pass');
     // Without the widening, the same list is a real bar.
     expect(status(fos(['Electronics', 'communications']), 'industrial design')).toBe('fail');
     // "Technology-related field" / "a Health Care-related field" still NAME a
@@ -624,7 +792,12 @@ describe('field_of_study — free-text corpus values', () => {
     // Nothing to decide: do not make an undeclared high-school senior answer.
     expect(status(fos(['None']))).toBe('pass');
     expect(status(fos(["Bachelor's degree", 'higher']))).toBe('pass');
-    expect(status(fos(['Electronics', 'communications', 'related fields']))).toBe('pass');
+    // A WIDENED LIST IS STILL A LIST, so the question is worth asking: naming one of the fields
+    // the funder actually wrote is a pass on the funder's own words. This used to be a `pass` for
+    // an applicant who had said nothing at all — an eligibility asserted over two blanks.
+    expect(
+      evaluateConstraint(fos(['Electronics', 'communications', 'related fields']), makeStudent(), NOW),
+    ).toEqual({ status: 'unknown', missing: ['fieldOfStudy'] });
     // An answer that normalizes to nothing is no answer, not a field that matches nothing.
     expect(status(fos(['Engineering']), '—')).toBe('unknown');
   });
@@ -742,23 +915,59 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
     'Biology (pre-med)',
   ];
 
-  it('MARCO admits all seven majors its "including, but not necessarily" list invites', () => {
+  /**
+   * WHAT AN OPENED LIST BUYS THE SEVEN, AND WHAT IT DOES NOT.
+   *
+   * All seven were a hard `ineligible` before the widening existed, under a sentence that invites
+   * them in so many words. That is over and stays over — none of them is refused here.
+   *
+   * For one round they were `eligible` instead, and this test asserted it. That was the widening
+   * answering the applicant's question for them: `matcher.ts` matches by stemmed word overlap and
+   * has no taxonomy, so it did not decide that Respiratory Therapy is one of the healing arts — it
+   * decided nothing and printed a yes. The proof is the pair of assertions below: the SAME rule
+   * that made Respiratory Therapy `eligible` made a Music Performance graduate student `eligible`
+   * for a healing-arts award, and eight records in the corpus did it (MARCO, York, Kupferschmid,
+   * Magnolia, Lawson, Indianapolis, McDaniel, FRC).
+   *
+   * `unknown` is what both of them get now, and it is not a fudge: the record itself says so.
+   * `fieldOfStudy.ts` mints `orUnrepresented` for MARCO's own list, which is the schema's way of
+   * saying "the funder named a route this cannot check". The applicant reads the funder's sentence
+   * — which every read surface renders verbatim — and decides for themselves.
+   */
+  it('MARCO stops refusing the seven, and stops admitting them on our say-so', () => {
     expect(MARCO_RAW).toContain('including, but not necessarily leading to');
     for (const fieldOfStudy of THE_SEVEN) {
       expect([fieldOfStudy, matchProgram(makeStudent({ fieldOfStudy }), marco, NOW)]).toEqual([
         fieldOfStudy,
-        { kind: 'eligible' },
+        { kind: 'unknown', missingProfileFields: [] },
       ]);
     }
   });
 
-  it('York admits all seven majors its "including but not limited to" list invites', () => {
+  it('York does the same, with the other phrasing of the same qualifier', () => {
     expect(YORK_RAW).toContain('including but not limited to');
     for (const fieldOfStudy of THE_SEVEN) {
       expect([fieldOfStudy, matchProgram(makeStudent({ fieldOfStudy }), york, NOW)]).toEqual([
         fieldOfStudy,
-        { kind: 'eligible' },
+        { kind: 'unknown', missingProfileFields: [] },
       ]);
+    }
+  });
+
+  /**
+   * THE MEASURED COST OF THE ROUND THAT READ THE WIDENING AS A PASS. A healing-arts award, an
+   * opened list, and two applicants with nothing to do with healing arts — both `eligible` until
+   * this rule changed, one of them the profile the corpus profiler ships as `grad-nontechnical`.
+   */
+  it('and never admits the applicant nothing in the sentence points at', () => {
+    for (const program of [marco, york]) {
+      for (const fieldOfStudy of ['Music Performance', 'Basket Weaving', 'Electrical Engineering']) {
+        expect([program.id, fieldOfStudy, matchProgram(makeStudent({ fieldOfStudy }), program, NOW)]).toEqual([
+          program.id,
+          fieldOfStudy,
+          { kind: 'unknown', missingProfileFields: [] },
+        ]);
+      }
     }
   });
 
@@ -773,13 +982,20 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
   });
 
   /**
-   * An open list makes the question unanswerable-in-a-useful-way, not unanswered: every reply
-   * passes, so demanding one would show a locked door where there is none. Same treatment the
-   * "or a related field" widening has always had.
+   * AND THE QUESTION IS STILL ASKED — the sentence `ham_activity` already carried, now true of
+   * both axes that read an opened list.
+   *
+   * While the widening was a `pass`, no reply could change anything, so this asserted that the
+   * undeclared applicant was not asked. Now naming one of the fields the funder DID write is a
+   * pass on the funder's own words, so the answer is worth having, and the prompt is the honest
+   * fillable one rather than an eligibility asserted over a blank.
    */
-  it('stops asking an undeclared applicant a question that cannot change the answer', () => {
+  it('asks the undeclared applicant, because a listed field is still a pass', () => {
     for (const program of [marco, york]) {
-      expect(matchProgram(makeStudent(), program, NOW)).toEqual({ kind: 'eligible' });
+      expect(matchProgram(makeStudent(), program, NOW)).toEqual({
+        kind: 'unknown',
+        missingProfileFields: ['fieldOfStudy'],
+      });
     }
   });
 
@@ -848,17 +1064,18 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
       'Engineering, physics, etc.',
       'This list of eligible majors is not exhaustive: engineering, physics',
     ];
+    const spec: ConstraintSpec = { axis: 'field_of_study', fields: ['Engineering', 'physics'], excludedFields: [] };
+    const against = (fieldOfStudy: string, rawText: string): string =>
+      evaluateConstraint(spec, makeStudent({ fieldOfStudy }), NOW, rawText).status;
     for (const rawText of open) {
-      expect([
-        rawText,
-        evaluateConstraint(
-          { axis: 'field_of_study', fields: ['Engineering', 'physics'], excludedFields: [] },
-          makeStudent({ fieldOfStudy: 'Music Performance' }),
-          NOW,
-          rawText,
-        ).status,
-      ]).toEqual([rawText, 'pass']);
+      // Each marker is recognised: the closed list would REFUSE a music major, and none of these
+      // does. (Was `pass` for one round — see the MARCO/York block above for why it is not.)
+      expect([rawText, against('Music Performance', rawText)]).toEqual([rawText, 'unknown']);
+      // ...and recognising the marker never costs the applicant the funder DID name.
+      expect([rawText, against('physics', rawText)]).toEqual([rawText, 'pass']);
     }
+    // The control: the same list, the same applicant, no marker in the sentence.
+    expect(against('Music Performance', 'Engineering and physics')).toBe('fail');
   });
 
   /**
@@ -971,11 +1188,13 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
   });
 
   /**
-   * NON-REGRESSION: the "or a related field" widening predates this rule, reads `fields[]` rather
-   * than `rawText`, and must keep working with no rawText at all — every existing three-argument
-   * call to `evaluateConstraint` still means exactly what it did.
+   * NON-REGRESSION: the "or a related field" widening reads `fields[]` rather than `rawText`, and
+   * must keep working with no rawText at all — every existing three-argument call to
+   * `evaluateConstraint` still means exactly what it did, INCLUDING the two ways it can mean
+   * something. The two idioms — a widening member of `fields[]`, and a qualifier in the funder's
+   * sentence — reach the same answer, which is the point of reading both.
    */
-  it('leaves the existing "or a related field" widening exactly as it was', () => {
+  it('reaches the same answer whichever way the funder opened the list', () => {
     const relatedness = (fields: string[], fieldOfStudy: string, rawText?: string): string =>
       evaluateConstraint(
         { axis: 'field_of_study', fields, excludedFields: [] },
@@ -984,9 +1203,9 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
         rawText,
       ).status;
     // No rawText argument at all — the old three-argument call.
-    expect(relatedness(['Electronics', 'communications', 'related fields'], 'physics')).toBe('pass');
-    expect(relatedness(['engineering', 'or a related technical field'], 'industrial design')).toBe('pass');
-    expect(relatedness(['engineering', 'sciences', 'similar field'], 'industrial design')).toBe('pass');
+    expect(relatedness(['Electronics', 'communications', 'related fields'], 'physics')).toBe('unknown');
+    expect(relatedness(['engineering', 'or a related technical field'], 'industrial design')).toBe('unknown');
+    expect(relatedness(['engineering', 'sciences', 'similar field'], 'industrial design')).toBe('unknown');
     expect(relatedness(['Electronics', 'communications'], 'industrial design')).toBe('fail');
     // ...and with the funder's real sentence supplied, the verdicts are unchanged.
     expect(
@@ -995,8 +1214,10 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
         'physics',
         'Electronics, communications, or related fields',
       ),
-    ).toBe('pass');
+    ).toBe('unknown');
     expect(relatedness(['Electronics', 'communications'], 'industrial design', 'Electronics, communications')).toBe('fail');
+    // Both idioms still leave the funder's own list intact.
+    expect(relatedness(['Electronics', 'communications', 'related fields'], 'electronics')).toBe('pass');
   });
 
   /**
@@ -1005,21 +1226,25 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
    * audience — so this asserts the widening is real rather than incidental.
    */
   it('honours Kupferschmid\'s "including but not limited to" as well', () => {
-    const status = evaluateConstraint(
-      {
-        axis: 'field_of_study',
-        fields: [
-          'Applied sciences', 'technology', 'engineering', 'mathematics', 'astronomy',
-          'communications', 'computers', 'electronics', 'physics',
-        ],
-        excludedFields: [],
-      },
-      makeStudent({ fieldOfStudy: 'Music Performance' }),
-      NOW,
+    const spec: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: [
+        'Applied sciences', 'technology', 'engineering', 'mathematics', 'astronomy',
+        'communications', 'computers', 'electronics', 'physics',
+      ],
+      excludedFields: [],
+    };
+    const raw =
       'Applied sciences, technology, engineering, and\nmathematics, including but not limited ' +
-        'to astronomy, communications,\ncomputers, electronics, and physics.',
-    ).status;
-    expect(status).toBe('pass');
+      'to astronomy, communications,\ncomputers, electronics, and physics.';
+    const against = (fieldOfStudy: string): string =>
+      evaluateConstraint(spec, makeStudent({ fieldOfStudy }), NOW, raw).status;
+    // The marker is read: this nine-item list, closed, would refuse a music major outright.
+    expect(evaluateConstraint(spec, makeStudent({ fieldOfStudy: 'Music Performance' }), NOW, '').status).toBe('fail');
+    expect(against('Music Performance')).toBe('unknown');
+    // ...and the nine fields the funder wrote are still nine passes, not nine questions.
+    expect(against('Astronomy')).toBe('pass');
+    expect(against('Electronics')).toBe('pass');
   });
 });
 
@@ -1175,9 +1400,76 @@ describe('age_stage — stages that overlap in reality', () => {
   });
 });
 
+/**
+ * THE PREDICATE ITSELF, AXIS BY AXIS — pinned exhaustively, because it decides whether an applicant
+ * is credited with meeting a preference, and a thirteenth axis added to CONTRACT §3 without a
+ * ruling here would silently pick one.
+ *
+ * Each pair is the SAME axis twice: the shape an extractor writes when the funder stated nothing
+ * (which `evaluateTier` passes vacuously), and the shape it writes when the funder stated the
+ * smallest real requirement on that axis.
+ */
+describe('statesARequirement — what counts as the funder having asked for something', () => {
+  const empty: ConstraintTier[] = [
+    { axis: 'license', licenseMin: 'NONE' },
+    { axis: 'geography', geo: { type: 'any', values: [] } },
+    { axis: 'field_of_study', fields: [], excludedFields: [] },
+    { axis: 'institution', degreeLevels: [], tradeSchoolOK: false, partTimeOK: true, accreditationRequired: false },
+    { axis: 'gpa' },
+    { axis: 'arrl_membership', required: false, minYears: 0 },
+    { axis: 'recommendation', recommenderType: 'none', count: 0 },
+    { axis: 'citizenship', allowed: ['ANY'] },
+    { axis: 'age_stage', stages: [] },
+    { axis: 'ham_activity', activityKinds: [], proofRequired: false },
+    { axis: 'gender', allowed: ['any'] },
+    { axis: 'other', note: '   ' },
+  ];
+  const stated: ConstraintTier[] = [
+    { axis: 'license', licenseMin: 'TECH' },
+    { axis: 'geography', geo: { type: 'state', values: ['LA'] } },
+    { axis: 'field_of_study', fields: [], excludedFields: ['Liberal Arts'] },
+    { axis: 'institution', degreeLevels: [], tradeSchoolOK: false, partTimeOK: false, accreditationRequired: false },
+    { axis: 'gpa', classRankTopPct: 10 },
+    { axis: 'arrl_membership', required: true, minYears: 0 },
+    { axis: 'recommendation', recommenderType: 'teacher', count: 0 },
+    { axis: 'citizenship', allowed: ['US_CITIZEN'] },
+    { axis: 'age_stage', ageMax: 25, stages: [] },
+    { axis: 'ham_activity', activityKinds: [], proofRequired: true },
+    { axis: 'gender', allowed: ['female'] },
+    { axis: 'other', note: 'Student must be full time' },
+    // Weighted need is a preference somebody really meets: `evaluateTier` passes only an applicant
+    // who stated they have it, so it belongs on this side and has no vacuous shape.
+    { axis: 'financial_need', weighted: true },
+  ];
+
+  it('says no to every axis a funder left blank', () => {
+    for (const spec of empty) expect([spec.axis, statesARequirement(spec)]).toEqual([spec.axis, false]);
+  });
+
+  it('says yes to the smallest real requirement on every axis', () => {
+    for (const spec of stated) expect([spec.axis, statesARequirement(spec)]).toEqual([spec.axis, true]);
+  });
+
+  it('covers all thirteen axes, so a fourteenth cannot arrive unclassified', () => {
+    const covered = new Set([...empty, ...stated].map((s) => s.axis));
+    expect([...covered].sort()).toEqual([
+      'age_stage', 'arrl_membership', 'citizenship', 'field_of_study', 'financial_need', 'gender',
+      'gpa', 'ham_activity', 'institution', 'license', 'other', 'recommendation',
+    ].concat('geography').sort());
+    expect(covered.size).toBe(13);
+  });
+});
+
 describe('matchAll', () => {
   it('keys verdicts by program id and preserves input order', () => {
-    const open = makeProgram({ id: 'open' });
+    const open = makeProgram({
+      id: 'open',
+      // The funder ANSWERED "anywhere" — an empty constraint list would be the record saying
+      // nothing, which is an `unknown` (see the baseline block).
+      constraints: [
+        makeConstraint({ axis: 'geography', geo: { type: 'any', values: [] } }, { id: 'any', rawText: 'Any' }),
+      ],
+    });
     const texanOnly = makeProgram({
       id: 'texan',
       constraints: [

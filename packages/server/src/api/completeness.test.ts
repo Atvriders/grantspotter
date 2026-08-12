@@ -13,6 +13,22 @@ import { computeCompleteness } from './completeness.js';
 
 const sparse: StudentProfile = { kind: 'student' };
 
+/**
+ * UNKNOWNS NO PROFILE COULD EVER RESOLVE, in the fixture corpus.
+ *
+ * `matchProgram` refuses to read an EMPTY constraint list as an eligibility (round eight): a record
+ * that states no requirement has not said the applicant qualifies, so the verdict is `unknown` with
+ * nothing to fill in — the same answer an unrecorded audience and an unmeasurable radius already
+ * produce. `chicagoFmScholarship` is such a record: a discontinued programme kept as a negative
+ * result, with no eligibility rules on it at all.
+ *
+ * The meter counts it, exactly as it already counts those other two shapes, because the score is
+ * the share of the corpus that yields a real verdict and this one does not. What it must NOT do is
+ * name a field for it — there is nothing the applicant could type — and that is what these tests
+ * assert alongside the count, so "fully judged" keeps meaning "nothing is waiting on YOU".
+ */
+const UNRESOLVABLE_BY_ANY_PROFILE = 1;
+
 const rich: StudentProfile = {
   kind: 'student',
   callsign: 'W8UM',
@@ -45,11 +61,18 @@ describe('computeCompleteness', () => {
     }
   });
 
-  it('reports zero remaining unknowns for a profile the corpus can fully judge', () => {
+  it('reports nothing left for the applicant to fill in, for a profile the corpus can fully judge', () => {
     const report = computeCompleteness(rich, fixturePrograms);
-    expect(report.unknownCount).toBe(0);
+    // The claim this test exists to make: no verdict is waiting on this applicant.
     expect(report.fields).toEqual([]);
-    expect(report.score).toBe(100);
+    // What is left is the record that states nothing, which no answer can settle.
+    expect(report.unknownCount).toBe(UNRESOLVABLE_BY_ANY_PROFILE);
+    expect(fixturePrograms.filter((p) => p.constraints.length === 0)).toHaveLength(
+      UNRESOLVABLE_BY_ANY_PROFILE,
+    );
+    expect(report.score).toBe(
+      Math.round(((report.total - UNRESOLVABLE_BY_ANY_PROFILE) / report.total) * 100),
+    );
   });
 
   it('expresses the score as the share of the corpus that yields a real verdict', () => {
@@ -197,7 +220,9 @@ describe('the applicant shapes the corpus has to serve', () => {
       stage: 'UNDERGRAD',
       gpa: 3.8,
     };
-    expect(computeCompleteness(undergrad, fixturePrograms, NOW).unknownCount).toBe(0);
+    const report = computeCompleteness(undergrad, fixturePrograms, NOW);
+    expect(report.fields).toEqual([]);
+    expect(report.unknownCount).toBe(UNRESOLVABLE_BY_ANY_PROFILE);
   });
 
   it('reads an unlicensed high-school senior as ineligible, not as an unanswered question', () => {
@@ -213,7 +238,9 @@ describe('the applicant shapes the corpus has to serve', () => {
     // The ARRL catalog needs any class of licence; this applicant has stated they
     // hold none. That is a fact, so it is a bar, and nothing is left unanswered.
     expect(verdicts.get('arrl-foundation-scholarship')?.kind).toBe('ineligible');
-    expect(computeCompleteness(senior, fixturePrograms, NOW).unknownCount).toBe(0);
+    const report = computeCompleteness(senior, fixturePrograms, NOW);
+    expect(report.fields).toEqual([]);
+    expect(report.unknownCount).toBe(UNRESOLVABLE_BY_ANY_PROFILE);
   });
 
   it('fully judges a licensed graduate student in a non-technical major', () => {
@@ -226,7 +253,9 @@ describe('the applicant shapes the corpus has to serve', () => {
       partTime: false,
       stage: 'GRAD',
     };
-    expect(computeCompleteness(grad, fixturePrograms, NOW).unknownCount).toBe(0);
+    const report = computeCompleteness(grad, fixturePrograms, NOW);
+    expect(report.fields).toEqual([]);
+    expect(report.unknownCount).toBe(UNRESOLVABLE_BY_ANY_PROFILE);
   });
 
   it('admits a licensed adult returning part-time where the funder says part-time is fine', () => {
@@ -346,9 +375,11 @@ describe('what the meter actually promises', () => {
       { field: 'degreeLevel', resolves: 1 },
       { field: 'licenseClass', resolves: 1 },
     ]);
-    expect(report.unknownCount).toBe(2);
+    // Two verdicts waiting on a field, plus the one record that states no requirement at all and
+    // that no answer could settle.
+    expect(report.unknownCount).toBe(2 + UNRESOLVABLE_BY_ANY_PROFILE);
     expect(report.total).toBe(5);
-    expect(report.score).toBe(60);
+    expect(report.score).toBe(40);
   });
 
   it('counts a program once per field even when several constraints ask for the same one', () => {

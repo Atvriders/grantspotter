@@ -197,7 +197,7 @@ export type ConstraintTier =
  * An extractor bug in either direction therefore costs an applicant a page-read, never an award.
  * "A false exclude hides the money forever, silently" — matcher.ts.
  */
-export interface ConstraintAlternatives {
+export interface ConstraintAlternatives<Base extends ConstraintTier = ConstraintTier> {
   /**
    * OTHER TIERS OF THE SAME AXIS THE FUNDER NAMED. Any ONE of them satisfies the constraint, as
    * does the tier they hang off: the whole thing is an OR.
@@ -206,12 +206,26 @@ export interface ConstraintAlternatives {
    * `geo: county[Brevard]` + `anyOf: [geo state[FL]]`, `GENERAL+24mo` + `anyOf: [EXTRA]`. It is
    * NOT for language a parser cannot close; see `orUnrepresented`.
    *
-   * Each entry is the same axis as its base. Nothing enforces that in the type (a union of 13 arms
-   * cannot be self-referentially narrowed without generics nobody would thank us for), but a
-   * cross-axis entry would be evaluated against the wrong profile fields, so extractors keep to
-   * their own axis and the matcher's per-tier evaluation is the only thing that reads these.
+   * SAME AXIS AS ITS BASE, AND THAT IS NOW THE TYPE RATHER THAN A REQUEST. It used to be a comment
+   * — "nothing enforces that in the type … extractors keep to their own axis" — and the whole
+   * safety argument for `anyOf` rested on it, because a disjunction is only "the funder's other
+   * route" while both routes answer the SAME question. Measured against the real `evaluateConstraint`
+   * before this changed:
+   *
+   *   {axis:'field_of_study', fields:['Engineering']} + anyOf:[{axis:'geography', geo:{type:'any'}}]
+   *     -> PASS for a Basket Weaving major. The geography tier answers "are you anywhere?", which
+   *        everybody is, so an unrelated axis ADMITTED an applicant the field list refuses.
+   *
+   * That is `anyOf` doing the one thing this comment block swore it could not — inventing an
+   * admission — and no test, schema or type stood between an extractor and it. `Base` closes it:
+   * {@link ConstraintSpec} distributes over the thirteen tiers, so each arm's `anyOf` accepts only
+   * tiers carrying its OWN `axis`, and the line above is a compile error rather than a verdict.
+   *
+   * The type is the first of two guards, not the only one. `constraints.spec` is a JSON column and
+   * a stored row is data, not a checked literal, so `evaluateConstraint` ALSO ignores an alternative
+   * whose axis differs from its base at run time. See its comment for why both are needed.
    */
-  anyOf?: ConstraintTier[];
+  anyOf?: Array<Extract<ConstraintTier, { axis: Base['axis'] }>>;
 
   /**
    * THE FUNDER NAMED A ROUTE THIS SCHEMA CANNOT DESCRIBE — verbatim, in the funder's own words.
@@ -237,12 +251,33 @@ export interface ConstraintAlternatives {
 /**
  * What a constraint requires: one tier, plus whatever else the funder offered.
  *
- * An intersection rather than 13 hand-edited arms so that the two optional fields cannot drift
- * between axes, and so `switch (spec.axis)` still narrows exactly as before — `(A | B) & C`
- * distributes to `(A & C) | (B & C)`, and every existing exhaustive switch over the axes still
- * compiles and is still checked for exhaustiveness.
+ * A DISTRIBUTED intersection rather than 13 hand-edited arms, so that the two optional fields
+ * cannot drift between axes, and so `switch (spec.axis)` still narrows exactly as before — the
+ * conditional type distributes over the union, giving `(A & Alt<A>) | (B & Alt<B>) | …`, and every
+ * existing exhaustive switch over the axes still compiles and is still checked for exhaustiveness.
+ *
+ * The distribution is what carries each arm's own `axis` into its `anyOf` (see
+ * {@link ConstraintAlternatives.anyOf}). A plain `ConstraintTier & ConstraintAlternatives` cannot:
+ * the intersection is computed once, over the whole union, so `Base['axis']` there would be all
+ * thirteen axes at once — which is exactly the hole that let a `geography` alternative admit an
+ * applicant a `field_of_study` list refuses.
  */
-export type ConstraintSpec = ConstraintTier & ConstraintAlternatives;
+export type ConstraintSpec = ConstraintTier extends infer Base
+  ? Base extends ConstraintTier
+    ? Base & ConstraintAlternatives<Base>
+    : never
+  : never;
+
+/**
+ * ONE ARM of {@link ConstraintSpec}, named — `ConstraintSpecFor<'field_of_study'>`.
+ *
+ * An extractor that builds its spec by SPREADING (`{ ...fieldSpec(…), ...(alts ? { anyOf } : {}) }`)
+ * has to hold the arm, not the union: spread a `ConstraintSpec` and TypeScript keeps thirteen
+ * possible `anyOf` element types beside one concrete `axis`, so the correlation the same-axis rule
+ * is made of is lost and the assignment fails. Annotating with this restores it and is the reason
+ * the failure is a compile error at the extractor rather than a wrong verdict at the matcher.
+ */
+export type ConstraintSpecFor<Axis extends ConstraintAxis> = Extract<ConstraintSpec, { axis: Axis }>;
 
 export interface Constraint {
   id: string;

@@ -19,7 +19,13 @@ import { makeCycle, makeFunder, makeProgram, makeSuppressedProgram } from './tes
  * into refusals.
  *
  * So the four verdicts below are produced by the REAL matcher from real constraints:
- *   - eligible            — a programme with no constraints at all;
+ *   - eligible            — a hard licence floor this Technician clears. It used to be "a
+ *                           programme with no constraints at all", which stopped being an
+ *                           eligibility in round eight: `matchProgram` will not read an EMPTY
+ *                           constraint list as "you meet every requirement this record states",
+ *                           because that is a claim made out of a blank. A record that says
+ *                           nothing now answers `unknown`, so this fixture states the smallest
+ *                           real requirement instead and means what its id says;
  *   - eligible_preferred  — a SOFT constraint that passes (soft constraints rank, never exclude);
  *   - ineligible          — a hard licence bar the profile provably fails (TECH < GENERAL);
  *   - unknown             — a hard GPA floor and a profile with no `gpa` recorded.
@@ -40,7 +46,13 @@ const PROGRAMS = [
     id: 'p-eligible',
     name: 'Eligible Program',
     applicantEntities: ['individual'],
-    constraints: [],
+    constraints: [
+      constraint({
+        id: 'c-any-licence',
+        rawText: 'Applicant must hold any class of amateur radio licence.',
+        spec: { axis: 'license', licenseMin: 'TECH' },
+      }),
+    ],
   }),
   makeProgram({
     id: 'p-preferred',

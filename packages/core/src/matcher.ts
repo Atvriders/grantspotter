@@ -22,10 +22,32 @@ export interface AxisResult {
   status: AxisStatus;
   /** Profile fields that would resolve an `unknown`. Empty otherwise. */
   missing: string[];
+  /**
+   * THIS `fail` IS A BAR THE FUNDER WROTE, not "you are not on the list" — and no other route may
+   * lift it. Only ever set beside `status: 'fail'`; absent everywhere else, so a reader that only
+   * knows about `status` behaves exactly as it did.
+   *
+   * `evaluateConstraint` composes tiers with OR, and both of its widening mechanisms exist for the
+   * same shape: the funder named a SECOND ROUTE IN, and the schema had room for one. Neither is a
+   * licence to walk past a route the funder named OUT. `excludedFields` is the corpus's only such
+   * route — "Any, except for Liberal Arts" (The Rick Hughes, K4BYT, Memorial Scholarship) — and it
+   * is a REQUIREMENT that rides on every tier, never a tier of its own.
+   *
+   * Both extractors already knew that and said so in prose: `fieldOfStudy.ts` copies
+   * `excludedFields` onto the alternative it mints ("an alternative that forgot the exclusion would
+   * be a route around it") and refuses to mint `orUnrepresented` at all when the record carries
+   * one. Measured, a sibling that did forget — `anyOf: [{ fields: [], excludedFields: [] }]`, the
+   * shape the IRARC record mints for real — turns the Liberal Arts refusal into a PASS. That made
+   * the bar depend on two extractors remembering, in two places, forever. It is checked here now,
+   * where the composition happens, so an extractor that forgets costs nothing.
+   */
+  barred?: true;
 }
 
 const PASS: AxisResult = { status: 'pass', missing: [] };
 const FAIL: AxisResult = { status: 'fail', missing: [] };
+/** A `fail` on a route the funder closed by name. See {@link AxisResult.barred}. */
+const BARRED: AxisResult = { status: 'fail', missing: [], barred: true };
 const NOT_EVALUABLE: AxisResult = { status: 'not_evaluable', missing: [] };
 
 function unknown(...fields: string[]): AxisResult {
@@ -333,18 +355,24 @@ function isFieldWideningMarker(value: string): boolean {
 // `field_of_study`, which had it, and `ham_activity`, which is where the ninth
 // instance was already sitting.
 //
-// ONE SIGNAL, TWO ANSWERS, AND THE DIFFERENCE IS THE EVIDENCE EACH AXIS HOLDS.
+// ONE SIGNAL, ONE ANSWER, AND IT TOOK TWO ROUNDS TO GET THERE.
 // `funderOpenedTheList` answers exactly one question — "did the funder say this
 // list is illustrative?" — and it is never on its own an answer about the
-// APPLICANT. What each axis does with it differs, and deliberately:
-//   - `field_of_study` reads it as a `pass`, because the applicant HAS named a
-//     field and an opened list plus a named field is a judgement of ADJACENCY
-//     ("is Physical Therapy one of the healing arts?") that the funder invited
-//     and the applicant can make for themselves off the verbatim sentence.
-//   - `ham_activity` reads it as `unknown`, because it does not: the seven
-//     `ActivityKind` values are a checklist, an applicant on none of them has
-//     said "none of these", and turning that into "yes, you qualify" asserts
-//     participation nobody recorded. See the case block for the measurement.
+// APPLICANT. Both axes that ask it now read it the same way: an opened list
+// STOPS THE LIST REFUSING, and does not admit anybody.
+//   - `ham_activity` reached that first. The seven `ActivityKind` values are a
+//     checklist, an applicant on none of them has said "none of these", and
+//     turning that into "yes, you qualify" asserts participation nobody
+//     recorded.
+//   - `field_of_study` read it as a `pass` for one round, on the argument that
+//     the applicant HAS named a field, so an opened list plus a named field is
+//     a judgement of ADJACENCY the funder invited. Measured, the invitation was
+//     accepted on the applicant's behalf: a Music Performance graduate student
+//     passed "a career in the healing arts, including but not limited to
+//     Medicine, Nursing, …" and seven other non-empty lists. Naming a field is
+//     what makes the question ASKABLE; it is not evidence of adjacency to a
+//     list that field shares no word with. See the case block for the full
+//     measurement and the eight records.
 // Both keep the withdrawal of the false excludes; neither is licence for the
 // next axis to pick whichever answer is more convenient.
 //
@@ -552,7 +580,16 @@ function readFieldRequirement(
     .flatMap(splitFieldAlternatives)
     .map(analyzeFieldPhrase)
     .filter((phrase) => phrase.words.length > 0);
-  if (informative.length === 0 && !widened) unrestricted = true;
+  // A WIDENING OPENS A LIST, AND WITH NO LIST THERE IS NOTHING TO OPEN. "Or a related field" and
+  // "including but not limited to" both qualify an enumeration; a record that names no field at all
+  // has stated no field requirement, whatever else its sentence says, and reading the marker as a
+  // live widening there would make an unrestricted award undecidable for everybody. Same answer
+  // this reached before, by the same reasoning, now stated once instead of falling out of two
+  // downstream branches.
+  if (informative.length === 0) {
+    unrestricted = true;
+    widened = false;
+  }
   return { informative, unrestricted, widened, excluded };
 }
 
@@ -693,8 +730,9 @@ function evaluateTier(
       // Nothing here can decide anything: no field list worth the name and no
       // exclusion. Answering "what do you study?" could not change the outcome,
       // so do not make the applicant answer it — a wasted `unknown` reads to the
-      // user exactly like a locked door.
-      const decidable = required.excluded.length > 0 || (!required.unrestricted && !required.widened);
+      // user exactly like a locked door. A WIDENED list is decidable: naming a
+      // field the funder listed is still a pass on the funder's own words.
+      const decidable = required.excluded.length > 0 || !required.unrestricted;
       const mine =
         profile.fieldOfStudy === undefined ? undefined : analyzeFieldPhrase(profile.fieldOfStudy);
       // A profile field that survives normalization as nothing ("-", "undeclared")
@@ -703,16 +741,53 @@ function evaluateTier(
       if (mine === undefined || mine.words.length === 0) {
         return decidable ? unknown('fieldOfStudy') : PASS;
       }
-      if (required.excluded.some((phrase) => fieldPhraseExcluded(mine, phrase))) return FAIL;
+      // A route the funder closed by name. No widening, no sibling tier and no
+      // `orUnrepresented` may reopen it — see `AxisResult.barred`.
+      if (required.excluded.some((phrase) => fieldPhraseExcluded(mine, phrase))) return BARRED;
       if (required.unrestricted) return PASS;
       if (required.informative.some((phrase) => fieldPhrasesOverlap(mine, phrase))) return PASS;
-      // The funder widened the list themselves — "or a related field" among the
+      // AN OPENED LIST IS AN OPENED QUESTION, NOT A YES — the same rule, and now
+      // literally the same sentence, as the `ham_activity` case below.
+      //
+      // The funder widened their own list: "or a related field" among the
       // alternatives, or "including but not limited to" / "such as" qualifying
-      // the whole list in their own sentence. Neither relatedness nor "what else
-      // did they have in mind" is something this matcher can adjudicate, so
-      // include, and let the applicant read the funder's own wording
-      // (Constraint.rawText, which Plan 3 renders) to judge the fit.
-      if (required.widened) return PASS;
+      // the whole list in their own words. That withdraws the REFUSAL — this
+      // applicant may well be one of the funder's "and similar" — and the round
+      // that established it was right about that half.
+      //
+      // It read the widening as a PASS, and the argument for the asymmetry with
+      // `ham_activity` was that the applicant HAS named a field, so an opened
+      // list plus a named field is a judgement of ADJACENCY the funder invited.
+      // Measured against the corpus, that argument does not survive its own
+      // cases. What "invited" produced was:
+      //
+      //   MARCO / John C. York   "…a career in the HEALING ARTS, including but
+      //                          not limited to Medicine, Nursing, Dentistry,
+      //                          Pharmacy, EMT, or Radiology"
+      //                          -> eligible for an Electrical Engineering
+      //                             undergraduate and for a Music Performance
+      //                             graduate student. Neither is adjacent to
+      //                             anything on that list; nobody adjudicated
+      //                             anything; the pass was ours, not the
+      //                             funder's.
+      //   Kupferschmid, Magnolia, Lawson, Indianapolis, FRC, McDaniel
+      //                          -> the same shape, "or related field(s)", the
+      //                             same music major.
+      //
+      // Naming a field is not evidence of adjacency to a list that field shares
+      // no word with. It is what makes the question ASKABLE, which is why the
+      // branch above still asks it, and it is exactly what `ham_activity` says
+      // about an applicant who has answered and is on none of the listed kinds.
+      // So the two rules are one rule now, and it is `unknown` — nothing is
+      // refused that the sentence does not refuse, and nothing is claimed that
+      // the funder never said. The applicant reads the funder's own wording
+      // (`Constraint.rawText`, which every read surface renders) and judges the
+      // fit themselves, which is what "adjacency is not ours to adjudicate"
+      // meant all along.
+      //
+      // Nothing here is listable: the applicant has already answered the only
+      // question this axis has. See `unlistableUnknown` in `matchProgram`.
+      if (required.widened) return unknown();
       return FAIL;
     }
 
@@ -907,6 +982,41 @@ function evaluateTier(
 }
 
 /**
+ * THE ALTERNATIVES THAT ANSWER THE SAME QUESTION AS THEIR BASE — which, in a well-formed record, is
+ * all of them.
+ *
+ * `anyOf` is the one mechanism in this file that can turn a refusal into an admission, and its
+ * entire safety argument is that a disjunction is only "the funder's other route" while both routes
+ * are tiers OF THE SAME AXIS. `types.ts` says so, `schema.ts` refuses to parse anything else, and
+ * for one round neither of them did: the rule was a sentence in a doc comment asking extractors to
+ * behave. Measured against this function on the day it was written down —
+ *
+ *   { axis: 'field_of_study', fields: ['Engineering'], excludedFields: [],
+ *     anyOf: [{ axis: 'geography', geo: { type: 'any', values: [] } }] }
+ *
+ * — PASSES a Basket Weaving major. The geography tier asks "are you anywhere?", everybody is, and
+ * an axis with nothing to say about what anyone studies admitted an applicant the funder's field
+ * list refuses. Nothing in the corpus does this (all six `anyOf` constraints are same-axis, and
+ * every route in them is named in the funder's own sentence) — but "no extractor has done it yet"
+ * is not a property, and this file is the one place that reads these.
+ *
+ * SO WHY BOTH, when the type already makes it a compile error? Because a spec is not always a
+ * literal. `constraints.spec` is a JSON column; `createConstraintRepo.listForProgram` re-parses
+ * every stored row, and the day a migration, a hand-edited record or a schema drift puts a foreign
+ * tier in that column, the type has already been checked and cannot help. The typed guard stops an
+ * extractor; this one stops the database.
+ *
+ * IGNORED, NOT FAILED. A foreign tier is nonsense, not a refusal: it says nothing about the
+ * applicant either way, so it is dropped and the constraint evaluates as if the extractor had never
+ * written it. Reading it as a `fail` would let corrupt data hide money, which is the one direction
+ * this codebase does not trade in.
+ */
+function sameAxisAlternatives(spec: ConstraintSpec): ConstraintTier[] {
+  const alternatives: ConstraintTier[] = spec.anyOf ?? [];
+  return alternatives.filter((tier) => tier.axis === spec.axis);
+}
+
+/**
  * THE WHOLE CONSTRAINT: the tier the funder named first, OR any other tier they
  * named, OR — if all of those fail — an admission that they named a route this
  * schema cannot check.
@@ -933,6 +1043,10 @@ function evaluateTier(
  *                          `ConstraintAlternatives.orUnrepresented`.
  *   otherwise            -> `fail`, exactly as before.
  *
+ * `barred` short-circuits on the base tier, BEFORE either widening: a `fail` on
+ * a route the funder closed by name is the one refusal an alternative may not
+ * lift and `orUnrepresented` may not soften. See `AxisResult.barred`.
+ *
  * `not_evaluable` short-circuits on the base tier: an axis that cannot be
  * evaluated for this profile kind (a `field_of_study` tier against an
  * organisation) cannot be evaluated by its siblings either, since they are the
@@ -951,7 +1065,11 @@ export function evaluateConstraint(
 ): AxisResult {
   const base = evaluateTier(spec, profile, nowISO, rawText);
   if (base.status === 'pass' || base.status === 'not_evaluable') return base;
-  const alternatives = spec.anyOf ?? [];
+  // A ROUTE THE FUNDER CLOSED BY NAME IS NOT A ROUTE THIS FUNCTION MAY REOPEN. Both mechanisms
+  // below exist for the funder's OTHER WAY IN; neither is an exception to a way out that the funder
+  // wrote down. See `AxisResult.barred`.
+  if (base.barred === true) return base;
+  const alternatives = sameAxisAlternatives(spec);
   if (alternatives.length === 0 && spec.orUnrepresented === undefined) return base;
 
   const results: AxisResult[] = [base];
@@ -964,6 +1082,92 @@ export function evaluateConstraint(
   // cannot, the honest answer is that we do not know — never `ineligible`.
   if (spec.orUnrepresented !== undefined) return unknown();
   return FAIL;
+}
+
+/**
+ * DOES THIS TIER TEST ANYTHING AT ALL? — asked of a PREFERENCE, before `matchProgram` credits the
+ * applicant with meeting it.
+ *
+ * A spec that cannot fail is not a met preference. It is a question nobody asked, and answering it
+ * in the applicant's favour is a claim about them made out of an empty field:
+ *
+ *   10-10 International  soft `field_of_study`, `fields: []`, rawText literally "No preference."
+ *                        The record says there is no preference and the product awarded one, on
+ *                        every profile that got as far as this axis. (The constraint is soft
+ *                        because `preference.ts` reads the word "preference" in "No preference." —
+ *                        which is the extractor's business, and would not matter at all if a
+ *                        vacuous pass were not being counted.)
+ *   The Free Family      soft `institution`, `degreeLevels: []`, `partTimeOK: true`,
+ *                        `accreditationRequired: false` — three fields, none of them set, under
+ *                        "Preference … attending RICE UNIVERSITY … and VIRGINIA TECH", which
+ *                        `ConstraintTier.institution` has no field to hold. The applicant was
+ *                        promoted for attending neither.
+ *
+ * BOTH ARE `eligible_preferred` OVER A SPEC WITH NO CONTENT, and `eligible_preferred` is not
+ * decoration: it is the top of the ranking this product sorts by, and `rank` is the number a
+ * student uses to decide what to spend a transcript fee on. This is the class the last round closed
+ * for MMARSI (an opened `ham_activity` list read as a met preference) arriving through a different
+ * door — a spec that is vacuously TRUE rather than one that should have become `unknown`.
+ *
+ * AND IT IS ONLY ASKED OF PREFERENCES, deliberately. A HARD vacuous tier is a different statement
+ * and must keep passing: 136 of them are in the corpus and their rawText is "Any", "None", "All",
+ * "No geographic requirements" — the funder ANSWERING the question with "there is no restriction".
+ * That is a fact about the award, and reading it as anything but a pass would refuse people the
+ * funder just admitted. The defect is not that these tiers are empty; it is that an empty tier was
+ * being read as an applicant's achievement.
+ *
+ * WHY NOT `orUnrepresented` FOR THE FREE FAMILY, whose sentence really does name a route the schema
+ * cannot hold: `evaluateConstraint` consults `orUnrepresented` only once every representable route
+ * has FAILED, and a vacuous tier never fails, so it would be a claim in the record that nothing
+ * reads. Dropping the constraint instead would take the funder's sentence off the eligibility
+ * report, which is the one thing this product promises to show. The tier is honest — it holds
+ * everything about that sentence this schema can hold, which is nothing — and the fix belongs where
+ * the wrong claim was made.
+ *
+ * `anyOf` is not consulted: alternatives only ever widen, so a vacuous base already passes and what
+ * hangs off it cannot make the constraint test more.
+ */
+export function statesARequirement(spec: ConstraintTier): boolean {
+  switch (spec.axis) {
+    case 'license':
+      // `licenseMin: 'NONE'` is the default the extractor writes when a funder says nothing, and
+      // `evaluateTier` already skips the check at that value.
+      return spec.licenseMin !== 'NONE' || (spec.heldMonthsMin ?? 0) > 0;
+    case 'geography':
+      return spec.geo.type !== 'any';
+    case 'field_of_study':
+      // Not `widened`: a widening with no list to open is inert (see `readFieldRequirement`), and
+      // one with a list needs `fields` to be non-empty anyway.
+      return spec.fields.length > 0 || spec.excludedFields.length > 0;
+    case 'institution':
+      // `tradeSchoolOK` is informational — no profile field answers it — so it can neither pass nor
+      // fail anybody and cannot make this tier a test.
+      return spec.degreeLevels.length > 0 || spec.accreditationRequired || !spec.partTimeOK;
+    case 'gpa':
+      return spec.min !== undefined || spec.classRankTopPct !== undefined;
+    case 'arrl_membership':
+      return spec.required;
+    case 'recommendation':
+      return spec.count > 0 || spec.recommenderType !== 'none';
+    case 'citizenship':
+      return spec.allowed.length > 0 && !spec.allowed.includes('ANY');
+    case 'age_stage':
+      return spec.stages.length > 0 || spec.ageMin !== undefined || spec.ageMax !== undefined;
+    case 'ham_activity':
+      return (
+        spec.activityKinds.length > 0 ||
+        spec.cwProficiencyWpmMin !== undefined ||
+        spec.proofRequired
+      );
+    case 'financial_need':
+      // The funder declared they weight need, and `evaluateTier` passes only an applicant who
+      // stated they have it. That is a preference somebody really meets.
+      return true;
+    case 'gender':
+      return !spec.allowed.includes('any');
+    case 'other':
+      return spec.note.trim() !== '';
+  }
 }
 
 export const APPLICANT_ENTITY_CONSTRAINT_SUFFIX = ':applicant-entity';
@@ -1126,9 +1330,11 @@ function applicantEntityConstraint(program: Program, applyingAs: ApplicantEntity
  *    false, so `ineligible` beats `unknown` when both are present.
  * 3. Any hard `unknown` -> `unknown`. Nothing is definitely wrong, but the
  *    axis can't be decided without more profile data.
- * 4. Any soft `pass` -> `eligible_preferred`. Soft constraints never
- *    exclude (rule stated in the brief and enforced below); they only
- *    promote a candidate that is otherwise fully eligible.
+ * 4. Any soft `pass` ON A SPEC THAT TESTS SOMETHING -> `eligible_preferred`.
+ *    Soft constraints never exclude (rule stated in the brief and enforced
+ *    below); they only promote a candidate that is otherwise fully eligible,
+ *    and a spec with no content in it has not promoted anybody — see
+ *    `statesARequirement`.
  * 5. Otherwise -> `eligible`.
  *
  * Hard `not_evaluable` is treated as a pass (it cannot block — there is no
@@ -1188,6 +1394,40 @@ export function matchProgram(
     return { kind: 'ineligible', reasons: [applicantEntityConstraint(program, applyingAs)] };
   }
 
+  /**
+   * A RECORD THAT STATES NO REQUIREMENT CANNOT STATE AN ELIGIBILITY — the rule immediately above,
+   * applied to the other half of the record.
+   *
+   * `eligible` means "you meet every requirement this record states". Over an EMPTY constraint list
+   * that sentence is vacuously true and reads, to the person acting on it, as "you may apply" —
+   * which is silence-as-permission, the same shape `applicantEntitiesUnrecorded` refuses one line
+   * up, and the same shape `ENTITIES_UNKNOWN_BY_SOURCE` and `costShareRequired` were fixed for.
+   *
+   * Measured over the 150 publishable programs the committed fixtures produce: 28 carry NO
+   * constraints at all, and the 9 of those with a recorded audience produced 27 `eligible` verdicts
+   * across the seven shipped profiles — from no recorded requirement whatsoever. They are not
+   * marginal records. NASA CubeSat Launch Initiative and the NTIA Public Wireless Supply Chain
+   * Innovation Fund are federal money with published, unparsed eligibility rules; the ARRL Club
+   * Grant Program and the Yaesu DR-2X Repeater Program are the two the org-facing profiles exist to
+   * find. Every one of them told a club it was eligible on the strength of a blank.
+   *
+   * AN EMPTY LIST IS NOT AN "ANY". This is the distinction the rule turns on, and it is why the
+   * test is the LIST and not the specs in it. 136 constraints in this corpus state nothing testable
+   * while quoting a funder who wrote "Any", "None", "All", "No geographic requirements" — the
+   * funder ANSWERING. The North Fulton Amateur Radio League Scholarship is made of exactly those
+   * (hard `license` "None", hard `institution` "Any", plus preferences) and is a fully researched
+   * record; calling it undecided would be its own lie, in the direction that hides money. So a
+   * record that says "no restriction" keeps producing `eligible`, and only a record that says
+   * NOTHING produces the question.
+   *
+   * IT IS THE SAME `unknown` AS THE OTHER TWO: unresolved, with an EMPTY `missingProfileFields` —
+   * "something could not be worked out, and there is no input you could fill in to change that".
+   * Not `ineligible`, which would hide a live route to money over a gap in OUR data and is the
+   * worse error by far; not `eligible`, which is the claim being withdrawn. `VerdictBadge` already
+   * renders it ("It is not a 'no'."), and the funder's page is one click away.
+   */
+  const recordStatesNothing = program.constraints.length === 0;
+
   const hardFailures: Constraint[] = [];
   const missingFields = new Set<string>();
   const metPreferences: Constraint[] = [];
@@ -1198,7 +1438,7 @@ export function matchProgram(
    * anything unresolved?" and "what could the reader do about it?" — and collapsing them into one
    * set is what let an unanswerable axis read as `eligible`.
    */
-  let unlistableUnknown = applicantEntitiesUnrecorded;
+  let unlistableUnknown = applicantEntitiesUnrecorded || recordStatesNothing;
 
   for (const constraint of program.constraints) {
     // Financial need is always a weighting, never a bar (spec §4.5 rule 11),
@@ -1207,7 +1447,10 @@ export function matchProgram(
     const result = evaluateConstraint(constraint.spec, profile, nowISO, constraint.rawText);
 
     if (isSoft) {
-      if (result.status === 'pass') metPreferences.push(constraint);
+      // A spec that cannot fail is not a met preference — see `statesARequirement`.
+      if (result.status === 'pass' && statesARequirement(constraint.spec)) {
+        metPreferences.push(constraint);
+      }
       continue;
     }
     if (result.status === 'fail') {

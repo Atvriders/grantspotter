@@ -236,26 +236,40 @@ export const constraintTierSchema = z.discriminatedUnion('axis', [
  * `constraintSchema.parse` — and a zod object STRIPS keys it does not know. Adding `anyOf` to the
  * TypeScript type alone would have left every disjunction working in the extractor, working in
  * `npm test`, and silently deleted on the way out of SQLite, which is where the product reads them.
+ *
+ * AND THE ALTERNATIVES ARE THE SAME AXIS AS THE TIER THEY HANG OFF — each arm below extends itself,
+ * not the whole thirteen-arm union. `anyOf` is the one mechanism in this schema that can turn a
+ * refusal into an admission, and its entire safety argument is that both routes answer the same
+ * question; a `{axis:'geography', geo:{type:'any'}}` sitting in a `field_of_study` constraint
+ * answers "are you anywhere?", which everybody is, and so PASSES a Basket Weaving major an
+ * Engineering list refuses (measured against the real `evaluateConstraint`).
+ *
+ * `types.ts` now says so in the type, but a stored row is JSON rather than a checked literal: it
+ * arrives from `constraints.spec` and this parse is the only thing standing between the column and
+ * the matcher. So the rule is enforced HERE too, and enforced by REJECTING rather than stripping —
+ * a cross-axis alternative is a corrupt record, and silently dropping half of a disjunction would
+ * turn it into a narrower requirement than the funder wrote, which is the false-exclude direction.
  */
-const alternatives = {
-  anyOf: z.array(constraintTierSchema).optional(),
-  orUnrepresented: z.string().optional(),
-};
+const withAlternatives = <Shape extends z.ZodRawShape>(tier: z.ZodObject<Shape>) =>
+  tier.extend({
+    anyOf: z.array(tier).optional(),
+    orUnrepresented: z.string().optional(),
+  });
 
 export const constraintSpecSchema = z.discriminatedUnion('axis', [
-  licenseTier.extend(alternatives),
-  geographyTier.extend(alternatives),
-  fieldOfStudyTier.extend(alternatives),
-  institutionTier.extend(alternatives),
-  gpaTier.extend(alternatives),
-  arrlMembershipTier.extend(alternatives),
-  recommendationTier.extend(alternatives),
-  citizenshipTier.extend(alternatives),
-  ageStageTier.extend(alternatives),
-  hamActivityTier.extend(alternatives),
-  financialNeedTier.extend(alternatives),
-  genderTier.extend(alternatives),
-  otherTier.extend(alternatives),
+  withAlternatives(licenseTier),
+  withAlternatives(geographyTier),
+  withAlternatives(fieldOfStudyTier),
+  withAlternatives(institutionTier),
+  withAlternatives(gpaTier),
+  withAlternatives(arrlMembershipTier),
+  withAlternatives(recommendationTier),
+  withAlternatives(citizenshipTier),
+  withAlternatives(ageStageTier),
+  withAlternatives(hamActivityTier),
+  withAlternatives(financialNeedTier),
+  withAlternatives(genderTier),
+  withAlternatives(otherTier),
 ]);
 
 export const constraintSchema = z.object({

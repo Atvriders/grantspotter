@@ -299,10 +299,14 @@ describe('profiles API, beyond the brief', () => {
     const res = await request(buildApp(db))
       .put('/api/profiles/student')
       .send({ kind: 'student', callsign: 'K5UTD' });
+    // Two verdicts are waiting on a field the applicant can supply, and `fields` names both. The
+    // third unknown is the fixture corpus's discontinued record, which states no requirement at
+    // all: round eight stopped reading an empty constraint list as an eligibility, and no answer
+    // this applicant could type would settle it — so it is counted and NOT named.
     expect(res.body.completeness).toEqual({
       total: 5,
-      unknownCount: 2,
-      score: 60,
+      unknownCount: 3,
+      score: 40,
       fields: [
         { field: 'degreeLevel', resolves: 1 },
         { field: 'licenseClass', resolves: 1 },
@@ -323,8 +327,10 @@ describe('profiles API, beyond the brief', () => {
     });
     expect(put.status).toBe(200);
     expect(put.body.profile.partTime).toBe(true);
-    // Stated part-time study is a fact, so the corpus can judge every record.
-    expect(put.body.completeness.unknownCount).toBe(0);
+    // Stated part-time study is a fact, so the corpus can judge every record it has rules for.
+    // What is left is the one record that states none — see the sparse-student case above.
+    expect(put.body.completeness.unknownCount).toBe(1);
+    expect(put.body.completeness.fields).toEqual([]);
     const get = await request(app).get('/api/profiles');
     expect(get.body.student.stage).toBe('RETRAINING_ADULT');
   });
@@ -386,7 +392,7 @@ describe('profiles API, beyond the brief', () => {
     const me = await request(app).get('/api/me');
     expect(me.body.hasStudentProfile).toBe(true);
     expect(me.body.hasOrgProfile).toBe(true);
-    expect(me.body.completeness.score).toBe(60);
+    expect(me.body.completeness.score).toBe(40);
   });
 
   /**
@@ -464,7 +470,7 @@ describe('profiles API, beyond the brief', () => {
       const byDefault = await request(app).get('/api/profiles');
       expect(byDefault.status).toBe(200);
       expect(byDefault.body.completenessFor).toBe('student');
-      expect(byDefault.body.completeness.score).toBe(60);
+      expect(byDefault.body.completeness.score).toBe(40);
       // Held, but not the one the meter speaks for — a client can say so.
       expect(byDefault.body.organization).not.toBeNull();
 
@@ -504,7 +510,7 @@ describe('profiles API, beyond the brief', () => {
       await seedBoth(app);
       const res = await request(app).get('/api/profiles');
       expect(res.body.completenessFor).toBe('student');
-      expect(res.body.completeness.score).toBe(60);
+      expect(res.body.completeness.score).toBe(40);
       expect(res.body.student).not.toBeNull();
       expect(res.body.organization).not.toBeNull();
     });

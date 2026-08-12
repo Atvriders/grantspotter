@@ -1,4 +1,4 @@
-import type { Constraint, ConstraintSpec, RawOpportunity } from '@grantspotter/core';
+import type { Constraint, ConstraintSpecFor, RawOpportunity } from '@grantspotter/core';
 import { sentenceEndBoundaries } from './clauses.js';
 import {
   isPreferenceText,
@@ -529,7 +529,7 @@ function unadjudicableDomains(fields: string[], excludedFields: string[]): strin
   return domains.length > 0 ? domains.join(', ') : undefined;
 }
 
-function fieldSpec(fields: string[], excludedFields: string[]): ConstraintSpec {
+function fieldSpec(fields: string[], excludedFields: string[]): ConstraintSpecFor<'field_of_study'> {
   const orUnrepresented = unadjudicableDomains(fields, excludedFields);
   return {
     axis: 'field_of_study',

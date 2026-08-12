@@ -211,11 +211,26 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     // to `unknown` across this corpus, and a `not.toBe('ineligible')` over a set that happened to
     // include one of them would have gone on passing while the claim it guards became false.
     // Measured: all six are `eligible`, so the assertion can say what the comment says.
+    //
+    // MOVED AGAIN 2026-08-12, and the paragraph above is why it had to. "None of these records
+    // carries either constraint" was true and understated: none of them carries ANY constraint,
+    // and `eligible` was therefore being read out of an empty list — the record stating no
+    // requirement, and the product answering "you meet them all". Round eight made that the same
+    // `unknown` an unrecorded AUDIENCE already produced: unresolved, with nothing the reader could
+    // fill in, and never a refusal. The gate — which is what this test is about — is unmoved, and
+    // the assertion stays an exact equality rather than the `not.toBe('ineligible')` it was
+    // strengthened away from, so a future change still cannot slip past it.
     for (const program of open) {
-      expect(matchProgram(club, program, PROFILE_NOW_ISO), program.name).toEqual({
-        kind: 'eligible',
-      });
+      const verdict = matchProgram(club, program, PROFILE_NOW_ISO);
+      expect(verdict.kind, program.name).not.toBe('ineligible');
+      expect(verdict, program.name).toEqual(
+        program.constraints.length === 0
+          ? { kind: 'unknown', missingProfileFields: [] }
+          : { kind: 'eligible' },
+      );
     }
+    // ...and the reason is the record, not the club: all six state nothing at all.
+    expect(open.filter((p) => p.constraints.length > 0)).toEqual([]);
   });
 
   it('school-org (school_lea) can see ARISS, which never accepts an individual applicant', async () => {
@@ -237,7 +252,14 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     const school = findProfile('school-org').profile;
     expect(school).toMatchObject({ kind: 'organization', entity: 'school_lea' });
     // Same strengthening as above: `not.toBe('ineligible')` also admits `unknown`, and the point
-    // of this test is that the school CAN see it.
-    expect(matchProgram(school, ariss, PROFILE_NOW_ISO)).toEqual({ kind: 'eligible' });
+    // of this test is that the school CAN see it — so the exact verdict is asserted, and the
+    // exact verdict is now the "nothing was recorded" `unknown`. ARISS publishes real eligibility
+    // rules and this record holds none of them; the school is not refused, and is not told it
+    // qualifies either.
+    expect(ariss.constraints).toEqual([]);
+    expect(matchProgram(school, ariss, PROFILE_NOW_ISO)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
   });
 });
