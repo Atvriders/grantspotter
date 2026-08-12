@@ -561,23 +561,49 @@ const OFF_LIST_APPLICANT: StudentProfile = {
   activityKinds: ['public_service'], cwWpm: 60, financialNeed: true, gender: 'female',
 };
 
+/**
+ * THREE WAYS TO BE OFF THE LIST, AND THE FIXTURE ABOVE IS ONLY ONE OF THEM.
+ *
+ * `OFF_LIST_APPLICANT` carries `activityKinds: ['public_service']` — somebody who answered the
+ * question, with something. The two applicants round seven's over-claim actually reached were the
+ * one whose `activityKinds` is `[]` ("none of these") and the one who was never asked, and neither
+ * was in this rule's reach: R6 probed one profile, so the empty and unset cases — the ones that
+ * came out `eligible` — were never run against a single corpus record.
+ *
+ * A rule whose fixture cannot reach the failure it exists to catch is the defect class this
+ * project has now found seven times. The sweep below runs all three, so the rule has 60 chances to
+ * be wrong instead of 20. The MIRROR of this claim — that none of the three may come out `pass`
+ * either — is in `sentence-vs-spec.test.ts`, which is where the widening direction lives.
+ */
+const OFF_LIST_APPLICANTS: Array<{ label: string; profile: StudentProfile }> = [
+  { label: 'stated an activity, none of them listed', profile: OFF_LIST_APPLICANT },
+  { label: 'answered "none of these"', profile: { ...OFF_LIST_APPLICANT, activityKinds: [] } },
+  { label: 'never asked', profile: { ...OFF_LIST_APPLICANT, activityKinds: undefined } },
+];
+
 describe('R6 — the funder called their own list illustrative, and it refused somebody anyway', () => {
   it('no constraint whose sentence opens its own list can produce a refusal', async () => {
     const offenders: string[] = [];
     let checked = 0;
+    let probes = 0;
     for (const { program, c } of await everyConstraint()) {
       const eligibleHalf = c.rawText.split(EXCLUSION_INTRO)[0];
       if (!ILLUSTRATIVE.test(eligibleHalf)) continue;
       // A funder who opened their list AND wrote an exclusion still means the exclusion.
       if (c.spec.axis === 'field_of_study' && c.spec.excludedFields.length > 0) continue;
       checked += 1;
-      if (evaluateConstraint(c.spec, OFF_LIST_APPLICANT, NOW, c.rawText).status === 'fail') {
-        offenders.push(`${program.name} [${c.spec.axis}]: ${JSON.stringify(c.rawText.slice(0, 140))}`);
+      for (const { label, profile } of OFF_LIST_APPLICANTS) {
+        probes += 1;
+        if (evaluateConstraint(c.spec, profile, NOW, c.rawText).status === 'fail') {
+          offenders.push(`${program.name} [${c.spec.axis}] (${label}): ${JSON.stringify(c.rawText.slice(0, 140))}`);
+        }
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard: 20 constraints in the corpus carry the funder's own widening.
+    // Vacuity guard: 20 constraints in the corpus carry the funder's own widening…
     expect(checked).toBe(20);
+    // …and each is asked by all three off-list applicants, not just the one that has an answer.
+    expect(probes).toBe(60);
   });
 
   it('…and it catches the two activity lists that were hardened, on the sentences they came from', () => {
