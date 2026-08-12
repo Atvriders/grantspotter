@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      Three forms of one mark, from packages/web/public (Vite copies that directory to the root of
+      the bundle, and the server serves the bundle, so these are the URLs in production too).
+
+      The .ico is listed FIRST and is not redundant. Browsers request /favicon.ico on their own
+      whether or not it is linked; without the file that request lands on the SPA's history
+      fallback, which answers HTML with a 200 and leaves the tab showing the blank-page glyph while
+      nothing anywhere reports a 404. Linking it also names it explicitly for the browsers that
+      ignore SVG icons rather than leaving them to guess.
+
+      Every href is root-absolute. A relative one resolves against the current URL, and this same
+      shell is served for /browse and /o/<slug>, where "favicon.svg" would mean "/o/favicon.svg".
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>GrantSpotter</title>
   </head>
   <body>

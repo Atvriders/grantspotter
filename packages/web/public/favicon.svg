@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>GrantSpotter</title>
+  <!--
+    A slice of spectrum: three low blips of noise floor and one tall carrier, third from the left.
+    That is the product in one picture — a quiet band and the one signal worth working — and it is
+    the only idea from the ham vocabulary (callsigns, QSL cards, Morse, antennas, the ARRL diamond)
+    that survives at 16px, where four upright bars are the same construction as a phone's signal
+    meter. A centred dot above a chevron was drawn first and abandoned: at 128px it reads as a
+    human figure, arms out.
+
+    ONE COLOURWAY, DELIBERATELY: there is no prefers-color-scheme block here, and not because the
+    query fails — it was tested in Chromium and it works. It is because favicon.ico and
+    apple-touch-icon.png are rasters and cannot follow one, so a dark-adapted SVG would leave the
+    same machine showing two different icons. The plate is the product's own accent token, measured
+    against both tab strips rather than assumed. The numbers, the experiment and the alternatives
+    that were tried and rejected are in packages/server/src/deploy/appIcons.test.ts.
+
+    THIS FILE IS THE GEOMETRY OF RECORD. favicon.ico and apple-touch-icon.png are rasterised from
+    these five rectangles — that test parses them out of this file, re-renders, and fails if the
+    committed pixels have drifted. Change a number here and regenerate; the header of that file
+    says how.
+  -->
+  <rect width="32" height="32" rx="7" fill="#0f6f7a"/>
+  <rect x="4.25" y="19.5" width="4" height="7" rx="2" fill="#f7f8fa"/>
+  <rect x="10.75" y="21" width="4" height="5.5" rx="2" fill="#f7f8fa"/>
+  <rect x="17.25" y="5.5" width="4" height="21" rx="2" fill="#e5b567"/>
+  <rect x="23.75" y="20.5" width="4" height="6" rx="2" fill="#f7f8fa"/>
+</svg>
