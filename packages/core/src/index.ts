@@ -72,3 +72,32 @@ export {
   MEASURED_GUESSES_PER_DAY,
   normalizeEnrollmentCode,
 } from './enrollmentCode.js';
+
+// Maidenhead locators. Deliberately NOT folded into the geography block above: `geo.ts` answers
+// "does this location satisfy this rule", while a locator is a BOX and the three questions asked
+// of it (centre, bounds, contains) have to stay distinguishable at the call site.
+// `checkCoordinateAgainstLocator` is the one that earns its keep — callook states a coordinate
+// AND a grid square, and a coordinate outside its own square means the record disagrees with
+// itself.
+export {
+  boxContainsCoordinate,
+  boxRepresentativePoint,
+  canonicalMaidenhead,
+  checkCoordinateAgainstLocator,
+  coordinateToLocator,
+  MAIDENHEAD_PRECISIONS,
+  MAIDENHEAD_SPAN_DEG,
+  maidenheadBox,
+  maidenheadRepresentativePoint,
+  parseMaidenhead,
+  wrapLongitudeDeg,
+} from './maidenhead.js';
+export type {
+  CoordinateRejection,
+  LocatorAgreement,
+  MaidenheadBox,
+  MaidenheadParse,
+  MaidenheadPrecision,
+  MaidenheadRejection,
+  MaidenheadRepresentativePoint,
+} from './maidenhead.js';
