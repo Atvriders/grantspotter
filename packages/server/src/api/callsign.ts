@@ -255,11 +255,29 @@ export function createCallsignRouter(deps: CallsignRouterDeps): Router {
         if (!decision.allowed) {
           // Retry-After is a transport header; the body stays the one error envelope.
           res.set('Retry-After', String(decision.retryAfterSec));
+          /*
+           * NOT ONE WORD ABOUT HOW LONG, and that is the 2026-08-12 correction rather than an
+           * oversight — the same correction `api/auth.ts` made to its registration refusals and
+           * for the same reason, quoted here because this route missed it: "There is one number,
+           * it is `retryAfterSec`, and these sentences say what happened rather than when to come
+           * back."
+           *
+           * This sentence ended "Try again shortly, or type your licence details in yourself"
+           * while `retryAfterSec` travelled beside it in `details`. The window is ten minutes
+           * (`LOOKUP_WINDOW_MS`) and the limiter frees on the oldest of eight, so a member who
+           * spent them in one burst is told "shortly" about a wait of up to ten minutes — and the
+           * browser, which had the real number in its hands, printed the phrase and dropped the
+           * number. Two statements of when, from two sources, one of them made up.
+           *
+           * What is left is what the server knows: what happened, why it is rationed, and the
+           * thing the reader can do RIGHT NOW instead of waiting. `components/CallsignLookup.tsx`
+           * appends the wait from `retryAfterSec`.
+           */
           throw new AppError(
             'rate_limited',
             'That is more callsign lookups than one person filling in a form makes. callook.info ' +
-              'answers these for free; GrantSpotter asks it politely. Try again shortly, or type ' +
-              'your licence details in yourself.',
+              'answers these for free; GrantSpotter asks it politely. You can type your licence ' +
+              'details in yourself in the meantime — nothing here is required.',
             { retryAfterSec: decision.retryAfterSec },
           );
         }

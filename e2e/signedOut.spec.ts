@@ -51,6 +51,7 @@
  */
 import { rmSync } from 'node:fs';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { armRenderedHoleSweep, expectNoRenderedHoles } from './renderedHoles.js';
 import {
   bootShippedServer,
   bootstrapAdmin,
@@ -346,6 +347,7 @@ async function touchSweep(
       hasTouch: true,
       isMobile: true,
     });
+    await armRenderedHoleSweep(touch);
     const page = await touch.newPage();
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await reach(page);
@@ -361,6 +363,7 @@ async function touchSweep(
         ...(await page.evaluate(measureSignedOut)),
       });
     }
+    await expectNoRenderedHoles(page);
     await page.close();
     await touch.close();
   }
@@ -378,6 +381,9 @@ test.beforeAll(async ({ browser }) => {
     baseURL: BASE_URL,
     viewport: { width: 1440, height: VIEWPORT_HEIGHT },
   });
+  // This file's pages come from contexts it opens itself, not from the `page` fixture, so the
+  // sweep is armed on each context rather than installed per test. See e2e/renderedHoles.ts.
+  await armRenderedHoleSweep(context);
 
   // ---- 1. FIRST RUN, on a deployment with no accounts. ----
   const page = await context.newPage();
@@ -438,6 +444,9 @@ test.beforeAll(async ({ browser }) => {
     await touchPage.getByRole('heading', { name: /create your account/i }).waitFor();
   });
 
+  // The three signed-out screens, at every width and both themes, read for holes before the page
+  // that visited them is thrown away.
+  await expectNoRenderedHoles(page);
   await page.close();
 });
 

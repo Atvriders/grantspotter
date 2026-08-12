@@ -51,6 +51,11 @@
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, programIdByName } from './helpers.js';
+import { installRenderedHoleSweep } from './renderedHoles.js';
+
+// Every state every journey below passes through is swept for a rendered `undefined`/`null`/
+// `NaN`/`[object Object]`. See e2e/renderedHoles.ts.
+installRenderedHoleSweep();
 
 /**
  * The ARDC programme, by name rather than by id — `e2e/seed.ts` mints ids from the source record,

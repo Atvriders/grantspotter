@@ -265,8 +265,33 @@ describe('FirstRun form', () => {
     await fillForm('a-long-enough-password', 'a-long-enough-passwerd');
     await submitForm();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i);
+    // The WHOLE sentence, not `/do not match/`: this screen has several refusals and a fragment
+    // that short is satisfied by any of them, which is how a sentence comes to be "covered" by a
+    // test that would pass if it were replaced.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/the two passwords do not match\./i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The one sentence on this screen that is a claim about what is happening RIGHT NOW. It is also
+   * the disabled state of the only control, so an operator who pressed and saw nothing change has
+   * this and nothing else to tell them the press landed.
+   */
+  it('says the account is being created while the request is in flight, and not before', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<never>(() => undefined)),
+    );
+    renderForm();
+
+    const button = screen.getByRole('button', { name: /create administrator/i });
+    expect(button).toBeEnabled();
+
+    await fillForm();
+    await submitForm();
+
+    const busy = await screen.findByRole('button', { name: /creating administrator/i });
+    expect(busy).toBeDisabled();
   });
 
   it('names the token as the problem when the server rejects it', async () => {
@@ -287,6 +312,83 @@ describe('FirstRun form', () => {
     expect(alert).toHaveTextContent(/setup token was not accepted/i);
     expect(alert).toHaveTextContent(/every restart/i);
     expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ROUND ONE'S DEFECT, ON THE SCREEN WHERE IT IS MOST EXPENSIVE.
+   *
+   * `api/auth.ts`'s bootstrap handler runs `users.create(...)` and then `startSession(...)`. A
+   * fault in the second answers 500 with the administrator row already written and the one-time
+   * setup token already consumed — and this screen said "No administrator account was created."
+   * The operator's next attempt then gets 409 "An administrator account already exists" with a
+   * spent token, and a container restart is the only way back in.
+   *
+   * Nothing asserted this sentence before 2026-08-12. There were twenty-four tests in this file.
+   */
+  it('does not tell the operator no account was created when the server did not say so', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(errorResponse(500, 'internal', 'Something went wrong.')),
+    );
+    renderForm();
+    await fillForm();
+    await submitForm();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent ?? '').not.toMatch(/no administrator account was created/i);
+    expect(alert).toHaveTextContent(/did not say whether the administrator account was created/i);
+    // The check the reader can actually make, and the reason it is true: this page is shown only
+    // while `GET /api/auth/bootstrap-status` answers `required: true`.
+    expect(alert).toHaveTextContent(/if setup is still being offered, it was not/i);
+  });
+
+  /**
+   * The 429 arm. `POST /api/auth/bootstrap` has no limiter, so this cannot happen against today's
+   * server — which is exactly why the arm had gone unexamined and still carried round one's "Wait
+   * a minute and try again" over a wait nobody had measured. It now prints the server's own
+   * sentence and the server's own number, like every other client of a `rate_limited` envelope.
+   */
+  it('prints the server sentence and the server number if the route is ever rationed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({
+          error: {
+            code: 'rate_limited',
+            message: 'Too many setup attempts on this GrantSpotter.',
+            details: { retryAfterSec: 900 },
+          },
+          requestId: 'req-test-429',
+        }),
+      }),
+    );
+    renderForm();
+    await fillForm();
+    await submitForm();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/too many setup attempts on this grantspotter\./i);
+    expect(alert).toHaveTextContent(/try again in 15 minutes\./i);
+    expect(alert.textContent ?? '').not.toMatch(/wait a minute/i);
+  });
+
+  /** No usable number means nothing is said about time, rather than a figure being invented. */
+  it('says nothing about when to return if the refusal carried no number', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(errorResponse(429, 'rate_limited', 'Too many setup attempts.')),
+    );
+    renderForm();
+    await fillForm();
+    await submitForm();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/too many setup attempts\./i);
+    expect(alert.textContent ?? '').not.toMatch(/try again in|wait a|shortly|a moment/i);
   });
 
   it('quotes the server when it refuses the password, rather than inventing a rule', async () => {

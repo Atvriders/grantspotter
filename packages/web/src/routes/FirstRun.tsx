@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, getBootstrapStatus, postBootstrap } from '../api/client.js';
 import { MIN_PASSWORD_LENGTH, meetsPasswordFloor } from '../lib/passwordPolicy.js';
+import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
 import { Enroll } from './Enroll.js';
 import { Login, SignedOutPage } from './Login.js';
 import '../components/signedOut.css';
@@ -51,12 +52,56 @@ function messageForBootstrap(err: unknown): string {
       // The server's own words. For the password floor that is a plain sentence naming the
       // minimum; for a malformed email it is generic, which the field hints already cover.
       return err.message;
-    case 'rate_limited':
-      return 'Too many attempts. Wait a minute and try again.';
+    /*
+      THE SERVER'S SENTENCE AND THE SERVER'S NUMBER, ON A ROUTE THAT CANNOT PRODUCE EITHER TODAY.
+
+      This arm returned a hardcoded "Too many attempts. Wait a minute and try again." until
+      2026-08-12. `POST /api/auth/bootstrap` has no limiter and does not go through `hashUnderGate`
+      — it calls `hashPassword` directly — so nothing on that route answers 429 and this branch has
+      never executed. It is written the only way that could be true anyway, for two reasons.
+
+      The first is that "wait a minute" is the exact sentence round one found on the sign-up screen
+      over a fifteen-minute lockout, and dead copy is where a defect waits: the gate is one line
+      away, this file would not be reopened when it lands, and the reader would be told sixty
+      seconds over whatever the ladder actually decided.
+
+      The second is that there is nothing to invent. `api/auth.ts`: "There is one number, it is
+      `retryAfterSec`, and these sentences say what happened rather than when to come back."
+      `lib/retryAfter.ts` returns `null` when no usable number arrived, and this then says nothing
+      about time at all — which is the correct behaviour for a 429 from a route whose refusals
+      nobody has written yet.
+    */
+    case 'rate_limited': {
+      const wait = retryAfterSecOf(err.details);
+      const suffix = wait === null ? '' : ` Try again in ${humanRetryAfter(wait)}.`;
+      return `${err.message}${suffix}`;
+    }
     default:
+      /*
+        "NO ADMINISTRATOR ACCOUNT WAS CREATED" IS GONE (2026-08-12), BECAUSE THIS SCREEN DOES NOT
+        KNOW THAT, AND ON THIS ROUTE IT IS THE MOST EXPENSIVE THING IT COULD GET WRONG.
+
+        `api/auth.ts`'s bootstrap handler runs `users.create(...)` and THEN `startSession(req, res,
+        user.id)`. A fault in the second — a session write that fails, anything the error handler
+        turns into `internal` — answers 500 with the administrator account already in the database
+        and the one-time setup token already consumed. The operator was then told nothing had been
+        created, retried, and got 409 "An administrator account already exists on this deployment"
+        with a token that no longer works. The route's own comment explains at length why a
+        rejected body must not spend the token; this sentence spent the operator's next attempt
+        instead. It is round one's "No account has been created" over two hundred created rows,
+        on the one screen where the reader cannot simply try again.
+
+        What replaces it is a fact this screen can check and the reader can act on: whether setup
+        is still being offered IS whether the account exists. `App.tsx` shows this page only while
+        `GET /api/auth/bootstrap-status` answers `required: true`, and `users.create` is what makes
+        it stop.
+      */
       return err.status === 0
         ? 'The GrantSpotter API could not be reached. Check that the server is running.'
-        : `Setup failed: the server answered ${err.status}. No administrator account was created.`;
+        : `Setup failed: the server answered ${String(err.status)}, which is a fault on the ` +
+            'server rather than anything you can fix here. It did not say whether the ' +
+            'administrator account was created, so reload this page before trying again: if ' +
+            'setup is still being offered, it was not.';
   }
 }
 

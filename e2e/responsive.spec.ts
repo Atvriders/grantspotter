@@ -58,6 +58,7 @@
  */
 import { rmSync } from 'node:fs';
 import { expect, test, type BrowserContext } from '@playwright/test';
+import { armRenderedHoleSweep, expectNoRenderedHoles } from './renderedHoles.js';
 import {
   bootShippedServer,
   bootstrapAdmin,
@@ -331,6 +332,9 @@ test.beforeAll(async ({ browser }) => {
     baseURL: RESPONSIVE_BASE_URL,
     viewport: { width: WIDTHS[WIDTHS.length - 1] ?? 1440, height: VIEWPORT_HEIGHT },
   });
+  // This file's pages come from a context it opens in `beforeAll`, not from the `page` fixture, so
+  // the sweep is armed on the context rather than installed per test. See e2e/renderedHoles.ts.
+  await armRenderedHoleSweep(context);
 
   // Signed in over the API rather than through the form. The sign-in SCREEN is `flow.spec.ts`'s
   // subject; here it is a precondition, and 16 page loads should not each wait on a form.
@@ -369,6 +373,9 @@ test.beforeAll(async ({ browser }) => {
       }
     }
   }
+  // Every opportunity page in the sample, at every width, in both themes — read for holes before
+  // the one page this sweep uses is thrown away.
+  await expectNoRenderedHoles(page);
   await page.close();
 });
 

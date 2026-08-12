@@ -8,6 +8,7 @@ import {
   type GeocodedFrom,
   type GeocodedPoint,
 } from '../api/callsign.js';
+import { humanRetryAfter, retryAfterSecOf } from '../lib/retryAfter.js';
 import {
   callsignFromRecord,
   coordinateSubjectLabel,
@@ -193,11 +194,23 @@ function isLookupResult(value: unknown): value is CallsignLookupResult {
   return typeof status === 'string' && KNOWN_STATUSES.has(status);
 }
 
-/** A primitive the wire sent where an object belonged, quoted and capped. */
+/**
+ * A primitive the wire sent where an object belonged, quoted and capped.
+ *
+ * THE QUOTATION MARKS ARE LOAD-BEARING and were added on 2026-08-12. `JSON.stringify(null)` is the
+ * five characters `null`, and this sentence used to read "the body was null" — a paragraph in
+ * which the JavaScript name of nothing appears as an ordinary word. That is the one place in this
+ * product where printing that word is honest, because it is naming what arrived rather than
+ * failing to name something; every other occurrence of it on a screen is the "FCC record for
+ * undefined" defect. Curly quotes are how the reader, and `packages/web/src/test/setup.ts`'s
+ * after-every-test sweep for rendered holes, can tell the two apart. A JSON string already carries
+ * its own quotes and is not double-wrapped.
+ */
 function quotedBody(value: unknown): string {
   const text = JSON.stringify(value);
   if (text === undefined) return 'a value with no JSON form at all';
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  const shown = text.length > 40 ? `${text.slice(0, 40)}…` : text;
+  return shown.startsWith('"') ? shown : `“${shown}”`;
 }
 
 /**
@@ -529,10 +542,14 @@ export function frameFor(status: LookupStatus, callsign: string): Frame {
     case 'updating':
       return {
         heading: 'callook.info is re-importing the FCC database right now',
+        // "unreadable for a few minutes. Try again shortly" until 2026-08-12. Neither figure came
+        // from anywhere: callook.info says it is re-importing, not how long its import takes, and
+        // nobody here has measured one. Two invented durations in one sentence, on a screen whose
+        // sibling 429 arm goes to the trouble of printing the number the server actually computed.
         body:
           'The source rebuilds itself from the FCC once a day and cannot answer while it does. ' +
-          'This says nothing about your callsign — it is not missing, it is unreadable for a few ' +
-          'minutes. Try again shortly, or fill the form in yourself.',
+          'This says nothing about your callsign — it is not missing, it is unreadable until that ' +
+          'import finishes. Try again later, or fill the form in yourself.',
       };
     /*
      * THE ONE STATUS THAT IS NOT ONE THING, SO ITS FRAME MAY NOT CLAIM TO BE.
@@ -1054,13 +1071,26 @@ export function CallsignLookup({
     } catch (err) {
       // A refusal or an unreachable API is not an answer about the callsign, and must not be
       // reported as one. The server's sentence is carried through — for a rate limit that
-      // sentence is the whole explanation.
+      // sentence is the explanation, and `retryAfterSec` is the when.
       const reached = err instanceof ApiError && err.status !== 0;
+      /*
+       * THE SERVER'S NUMBER, ADDED 2026-08-12, AND THE SERVER'S PHRASE REMOVED IN THE SAME BREATH.
+       *
+       * `api/callsign.ts` attaches `details.retryAfterSec` to its 429 and this component threw it
+       * away, printing only the message — which used to end "Try again shortly" and now, correctly,
+       * says nothing about time. Dropping the number without dropping the phrase would have left a
+       * refusal with no when at all; dropping the phrase without printing the number would have
+       * left the same. `lib/retryAfter.ts` is the one renderer for this, shared with `Login.tsx`,
+       * `Enroll.tsx`, `FirstRun.tsx` and `VerifyButton.tsx`, and it says nothing when the envelope
+       * carried no usable number rather than inventing a figure.
+       */
+      const wait = err instanceof ApiError ? retryAfterSecOf(err.details) : null;
+      const when = wait === null ? '' : ` Try again in ${humanRetryAfter(wait)}.`;
       setPhase({
         kind: 'failed',
         reached,
         message: reached
-          ? (err as ApiError).message
+          ? `${(err as ApiError).message}${when}`
           : 'The GrantSpotter API could not be reached, so the lookup never ran.',
       });
       return;

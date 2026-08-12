@@ -78,10 +78,13 @@ const NOT_SET_UP =
  */
 function messageForEnroll(err: unknown): string {
   if (!(err instanceof ApiError)) {
+    // "Wait a moment and" stood at the front of the second sentence until 2026-08-12. Nothing here
+    // knows how long a network the request never crossed will take to come back, and this file's
+    // own `rate_limited` arm exists because a duration nobody measured is worse than none — see
+    // `lib/retryAfter.ts`: "if it did not send one, say nothing about time at all".
     return (
-      'GrantSpotter could not be reached, so this browser never got an answer. Wait a moment and ' +
-      'try again — and if the account was created after all, signing in with this email and ' +
-      'password will work.'
+      'GrantSpotter could not be reached, so this browser never got an answer. Try again — and ' +
+      'if the account was created after all, signing in with this email and password will work.'
     );
   }
 
@@ -138,10 +141,14 @@ function messageForEnroll(err: unknown): string {
       return `${err.message}${suffix}`;
     }
     default:
+      // "Try again in a moment." is gone (2026-08-12) for the reason the `rate_limited` arm above
+      // spells out at length: a 5xx carries no `retryAfterSec`, so nothing on this screen knows
+      // when the fault clears, and one arm of one function may not invent what the arm beside it
+      // refuses to invent.
       return err.status === 0
         ? 'The GrantSpotter API could not be reached, so nothing was sent.'
         : `Sign-up failed: the server answered ${String(err.status)}, which is a fault on the ` +
-            'server rather than anything you can fix here. Try again in a moment.';
+            'server rather than anything you can fix here.';
   }
 }
 

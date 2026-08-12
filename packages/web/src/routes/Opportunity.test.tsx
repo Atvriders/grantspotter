@@ -411,7 +411,17 @@ describe('Opportunity detail', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderDetail();
     await userEvent.click(await screen.findByRole('button', { name: /verify now/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/already verified this recently/i);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/already verified this programme recently/i);
+    /*
+      THE STUB ALREADY SENT `retryAfterSec: 1800` AND THIS TEST DID NOT READ IT (until 2026-08-12).
+      The fixture was written with the number in it; the assertion stopped at the first clause; and
+      `VerifyButton` printed "Try again in about an hour" over a wait the server had computed as
+      thirty minutes. A fixture that carries a field no assertion looks at is the shape of every
+      defect this round is about — see `components/VerifyButton.test.tsx` for the rest of them.
+    */
+    expect(alert).toHaveTextContent(/try again in 30 minutes\./i);
+    expect(alert.textContent ?? '').not.toMatch(/about an hour|shortly/i);
   });
 
   it('stars and unstars the program', async () => {

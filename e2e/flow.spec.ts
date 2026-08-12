@@ -36,6 +36,15 @@ import {
   NEWCOMER_PASSWORD,
   programIdByName,
 } from './helpers.js';
+import {
+  drainRenderedHoles,
+  injectHoleForSelfTest,
+  installRenderedHoleSweep,
+} from './renderedHoles.js';
+
+// Every state every journey below passes through is swept for a rendered `undefined`/`null`/
+// `NaN`/`[object Object]`. See e2e/renderedHoles.ts.
+installRenderedHoleSweep();
 
 /**
  * The ARDC record the writing desk binds an overlay to — the same one `writing.spec.ts` names.
@@ -89,6 +98,34 @@ async function signIn(page: Page, email: string, password: string): Promise<void
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 }
+
+/**
+ * THE SWEEP, DEMONSTRATED CATCHING ONE.
+ *
+ * Every other spec in this suite passes the sweep by not tripping it, and a check that has never
+ * been watched failing is indistinguishable from a check that matches nothing: an `addInitScript`
+ * that threw, a `MutationObserver` that never armed because `document.body` was still null, a
+ * regex mangled by one round of string escaping. All three are silent, and all three leave 53
+ * green tests and no guard. `contactUrlEntryPointContract.test.ts` was walked past three separate
+ * ways for exactly this reason, and each hole was found only by writing an offender.
+ *
+ * So this writes the offender — round two's own sentence — into the real page in the real browser,
+ * and reads it back out of the observer. `drainRenderedHoles` clears as it reads, so the per-test
+ * check that follows finds the page clean again.
+ */
+test('the rendered-hole sweep is armed, and sees a hole when there is one', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#root')).toBeAttached();
+
+  expect(await drainRenderedHoles(page), 'the signed-out screen must be clean').toEqual([]);
+
+  await page.evaluate(injectHoleForSelfTest);
+  const seen = await drainRenderedHoles(page);
+
+  expect(seen.length, 'the observer saw nothing — it is not armed').toBeGreaterThan(0);
+  expect(seen.join('\n')).toMatch(/printed "undefined"/);
+  expect(seen.join('\n')).toMatch(/FCC record for/);
+});
 
 test('GET / is in exactly one of the two states this suite knows about', async ({ request }) => {
   const response = await request.get('/');

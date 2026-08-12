@@ -37,6 +37,11 @@ import {
   shippedUserRowFor,
   type BootedServer,
 } from './shippedSeed.js';
+import { installRenderedHoleSweep } from './renderedHoles.js';
+
+// Every state every journey below passes through is swept for a rendered `undefined`/`null`/
+// `NaN`/`[object Object]`. See e2e/renderedHoles.ts.
+installRenderedHoleSweep();
 
 // Every spec in this file talks to the fresh-install server, not the fixture one on 3131.
 test.use({ baseURL: SHIPPED_BASE_URL });

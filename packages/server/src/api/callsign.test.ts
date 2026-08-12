@@ -205,6 +205,24 @@ describe('POST /api/callsign/lookup — rate limit', () => {
 
     // The refused attempt never became a request to callook.info — which is the point of it.
     expect(transport).toHaveBeenCalledTimes(LOOKUP_MAX_PER_WINDOW);
+
+    /*
+      THE SENTENCE SAYS WHAT HAPPENED; `retryAfterSec` SAYS WHEN. ONE OF THEM, NOT BOTH.
+
+      This message ended "Try again shortly, or type your licence details in yourself" until
+      2026-08-12, while the number beside it was computed from the limiter's ledger over a
+      ten-minute window — so a burst of eight was told "shortly" about a wait of up to ten minutes,
+      and the browser printed the phrase and dropped the number. `api/auth.ts` had already removed
+      exactly this from its registration refusals and written down why: "There is one number, it is
+      `retryAfterSec`, and these sentences say what happened rather than when to come back." This
+      route had not been brought to it. Nothing asserted the wording either way.
+    */
+    const said = String(refused.body.error.message);
+    expect(said).toMatch(/callook\.info answers these for free/i);
+    expect(said).toMatch(/type your licence details in yourself/i);
+    expect(said).not.toMatch(/shortly|in a moment|a few minutes|in about|try again in/i);
+    // …and nothing anywhere in the envelope's prose states a duration; the number is the number.
+    expect(said).not.toMatch(/\b\d+\s*(second|minute|hour)/i);
   });
 
   it('counts per caller, so one user cannot spend another user’s allowance', async () => {

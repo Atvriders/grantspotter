@@ -240,7 +240,10 @@ describe('the six statuses, each answered in its own words', () => {
 
     const panel = await screen.findByRole('region', { name: /did not produce a record/i });
     expect(panel).toHaveTextContent(/not a lookup result/i);
-    expect(panel).toHaveTextContent(/the body was null/i);
+    // Quoted, and the quotation marks are asserted: "the body was null" is a paragraph in which
+    // the JavaScript name of nothing reads as an ordinary word, and telling that apart from a
+    // rendered hole is what `packages/web/src/test/setup.ts` sweeps for after every test.
+    expect(panel).toHaveTextContent(/the body was “null”/i);
     expect(panel).toHaveTextContent(/may have answered instead/i);
     // The sentence that was measured, about an API that had just answered.
     expect(panel.textContent ?? '').not.toMatch(/could not be reached|the lookup never ran/i);
@@ -358,6 +361,50 @@ describe('the six statuses, each answered in its own words', () => {
     expect(panel).toHaveTextContent(/more callsign lookups than one person makes/i);
     expect(panel).toHaveTextContent(/nothing on this form was changed/i);
     expect(panel.textContent ?? '').not.toMatch(/did not run|could not be reached/i);
+  });
+
+  /**
+   * THE WAIT, AND WHERE IT COMES FROM. `api/callsign.ts` rations lookups over a ten-minute window
+   * and attaches `details.retryAfterSec` computed from the limiter's own ledger. Until 2026-08-12
+   * this panel dropped that number and printed the server's phrase "Try again shortly", which was
+   * the same statement of when from a source that had not measured it — the defect `api/auth.ts`
+   * describes at length and had already removed from its own refusals. The server's sentence now
+   * says what happened; this appends the only number anybody measured.
+   */
+  it('quotes the wait the server measured, not a phrase either side made up', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          ok: false,
+          status: 429,
+          json: async () => ({
+            error: {
+              code: 'rate_limited',
+              message: 'That is more callsign lookups than one person filling in a form makes.',
+              details: { retryAfterSec: 420 },
+            },
+            requestId: 'req-429',
+          }),
+        } as unknown as Response),
+      ),
+    );
+    renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
+    expect(panel).toHaveTextContent(/try again in 7 minutes\./i);
+    expect(panel.textContent ?? '').not.toMatch(/shortly|in a moment|about an hour/i);
+  });
+
+  /** No usable number, no claim about time — never a default and never a phrase. */
+  it('says nothing about when to return if the refusal carried no number', async () => {
+    stubError(429, 'rate_limited', 'That is more callsign lookups than one person makes.');
+    renderLookup();
+    await lookUp();
+
+    const panel = await screen.findByRole('region', { name: /did not produce a record/i });
+    expect(panel.textContent ?? '').not.toMatch(/try again in|shortly|in a moment/i);
   });
 
   /**
