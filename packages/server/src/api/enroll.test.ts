@@ -466,11 +466,11 @@ describe('what the ladder must never do to the people it is not aimed at', () =>
  *
  * These run the SHIPPED numbers rather than an injected small one, for the reason the old file gave
  * and which has not changed: a limiter tested at a ceiling of three proves that a limiter works,
- * not that this deployment's limiter is set where its comment says. Sixty-one requests is cheap
- * because the refused ones cost no argon2id — that is the property, not an accident of the test.
+ * not that this deployment's limiter is set where its comment says. The refused requests cost no
+ * argon2id — that is the property, not an accident of the test.
  */
 describe('the ceiling on how many accounts one caller can make', () => {
-  it('creates sixty from one connection and then says how long to wait', async () => {
+  it('creates the whole connection ceiling and then says what has happened', async () => {
     const server = build();
     const statuses: number[] = [];
     for (let i = 0; i < REGISTRATION_MAX_PER_CONNECTION + 1; i += 1) {
@@ -484,10 +484,24 @@ describe('the ceiling on how many accounts one caller can make', () => {
         expect(res.body.error.details.retryAfterSec).toBeLessThanOrEqual(
           REGISTRATION_WINDOW_MS / 1000,
         );
+        // Retry-After, in the place the protocol puts it and not only in the envelope. Every other
+        // rate-limited route in this server sets it; these two did not until 2026-08-12.
+        expect(Number(res.headers['retry-after'])).toBe(res.body.error.details.retryAfterSec);
         // The three things this sentence has to say to somebody who is not the attacker.
         expect(res.body.error.message).toMatch(/nothing is wrong with your details/i);
-        expect(res.body.error.message).toMatch(/wait a few minutes/i);
         expect(res.body.error.message).toMatch(/signing in is not affected/i);
+        /*
+          AND IT MUST NOT SAY WHEN. `/wait a few minutes/i` was required here and is DELETED rather
+          than reworded, because the design changed underneath it: the server's sentence no longer
+          carries a duration at all. `retryAfterSec` is the single statement of when, `Enroll.tsx`
+          appends it as "Try again in <n>", and a duration in the prose is a second statement of the
+          same fact from a different source. MEASURED against the built server with 130 students
+          behind one campus NAT, that is exactly what it was: "… wait a moment and try again. Try
+          again in 15 minutes." So the assertion is inverted — no unit of time may appear in the
+          message — which is the only form that can catch one being put back.
+        */
+        expect(res.body.error.message).not.toMatch(/\bwait\b/i);
+        expect(res.body.error.message).not.toMatch(/try again/i);
         /**
          * AND THE FOURTH THING, WHICH IS THAT IT IS TRUE.
          *
@@ -508,6 +522,67 @@ describe('the ceiling on how many accounts one caller can make', () => {
   }, 300_000);
 
   /**
+   * THE SENTENCE THE BURST BRANCH PRODUCES, WHICH NOTHING ASSERTED FOR THE DAY IT WAS WRONG.
+   *
+   * `registrationRefusal` has three sentences and the branch between them is the whole defect this
+   * test exists for. It used to be `recorded >= rung.max`, where `recorded` was a SECOND read of
+   * `RateLimiter.count` — recorded-only — while the budget is closed by recorded PLUS in-flight. So
+   * a spent window with one registration still running produced "GrantSpotter is already making as
+   * many accounts at once as it will … wait a moment" beside `"retryAfterSec":900`. MEASURED
+   * against the built server, 130 students behind one campus NAT: 37 of 70 refusals read that.
+   *
+   * The rule this pins is one line: WHATEVER THE SENTENCE CLAIMS ABOUT ACCOUNTS MUST MATCH THE
+   * DATABASE, and the wait beside it must match the claim. It is asserted over a burst — every
+   * request in flight at once, which is the state that produced the defect — rather than over the
+   * sequential loop above, which can only ever reach the third sentence.
+   */
+  it('never tells a burst that nothing has been created while rows exist', async () => {
+    const server = build();
+    const responses = await Promise.all(
+      Array.from({ length: REGISTRATION_MAX_PER_CONNECTION + 40 }, (_unused, i) =>
+        request(server)
+          .post('/api/auth/enroll')
+          .send({ email: `burst-${String(i)}@example.org`, password: GOOD_PASSWORD }),
+      ),
+    );
+
+    const refusals = responses.filter((r) => r.status === 429);
+    expect(refusals.length).toBeGreaterThan(0);
+    const created = memberCount();
+
+    /*
+      THE PAIRING IS THE ASSERTION, not the sentence on its own, because the sentence is a claim
+      about the instant it was written and this test reads the database afterwards. A request
+      refused while the whole budget was held by hashes still running truthfully said nothing had
+      been created — and two hundred accounts existed a moment later. What can never be true at any
+      instant is the combination that shipped: "nothing has been created" carrying the fifteen-minute
+      wait, which is the number the limiter only produces when something HAS been recorded.
+    */
+    for (const res of refusals) {
+      const message = res.body.error.message as string;
+      const wait = res.body.error.details.retryAfterSec as number;
+      if (/no account has been created/i.test(message)) {
+        expect(wait, `"nothing created" beside a ${String(wait)}s wait: ${message}`).toBe(1);
+      } else {
+        const quoted = /^(\d+) accounts have been created/.exec(message)?.[1];
+        expect(quoted, `no count in: ${message}`).toBeTruthy();
+        // A count the database can back: rows recorded in this window still exist at the end of it.
+        expect(Number(quoted)).toBeLessThanOrEqual(created);
+        expect(wait).toBeGreaterThan(1);
+      }
+    }
+
+    // And once the burst has settled there is nothing in flight, so the next caller gets the third
+    // sentence and its number is the one an operator would count in the users table.
+    const after = await request(server)
+      .post('/api/auth/enroll')
+      .send({ email: 'burst-after@example.org', password: GOOD_PASSWORD });
+    expect(after.status).toBe(429);
+    expect(after.body.error.message).toContain(`${String(created)} accounts have been created`);
+    expect(after.body.error.details.retryAfterSec).toBeGreaterThan(1);
+  }, 300_000);
+
+  /**
    * A REFUSAL CHARGES NOTHING, which is the arithmetic the whole ladder rests on: one network can
    * only ever put its own ceiling into the deployment-wide counter, so closing that one takes at
    * least two networks acting together.
@@ -517,12 +592,11 @@ describe('the ceiling on how many accounts one caller can make', () => {
    * times, and none of those twenty may appear in the network's total. If a refusal charged, a
    * caller could spend the whole network rung by knocking at a door that was already shut.
    *
-   * IT TAKES FOUR CONNECTIONS TO SPEND THE NETWORK RUNG NOW, and that is the 2026-08-12 change
-   * showing through rather than a complication. The rung moved from 120 to 240 because behind the
-   * operator's tunnel it IS the deployment ceiling and 120 was exactly the design load; the
-   * connection rung stayed at 60, so the arithmetic that used to need two connections needs four.
-   * The loop below walks them, which is also the closest a test gets to the measured shape — four
-   * connections, sixty each, one peer.
+   * IT TAKES TWO CONNECTIONS TO SPEND THE NETWORK RUNG, which is the ratio rather than an accident
+   * of the numbers: the network rung is deliberately exactly twice the connection rung, so one
+   * building can never close sign-up for a second building behind the same tunnel. It has been
+   * 2:1 (120/60), then 4:1 (240/60), and is 2:1 again (400/200) now that the connection rung is
+   * sized in people-in-a-room rather than in committee-members-doubled-for-retries.
    */
   it('does not charge a refused request to the rungs below it', async () => {
     const server = build();

@@ -308,22 +308,39 @@ describe('every way signing up fails has its own words', () => {
    * would otherwise have to guess at — that nothing is wrong with the person's details.
    */
   it('repeats what the server said about the ladder, and how long it asked for', async () => {
+    /*
+      THE BODY BELOW IS THE ONE THE SHIPPED SERVER SENDS, copied from `registrationRefusal` in
+      `packages/server/src/api/auth.ts`, and it is worth keeping in step by hand for one reason: the
+      defect this test now guards was a composition of the two halves, so a stand-in that says
+      something the server never says cannot see it. The server's sentence carries no duration; this
+      screen appends the one number the server sent. Both halves in one paragraph, once each.
+    */
     const alert = await failWith(
       errorResponse(
         429,
         'rate_limited',
-        'Too many accounts have been created from this connection in the last few minutes, so ' +
-          'GrantSpotter is not making another one right now. Nothing is wrong with your details ' +
-          'and nothing has been used up — wait a few minutes and try again. If you already have ' +
-          'an account, signing in is not affected by this.',
+        '200 accounts have been created from this connection in the last fifteen minutes, which ' +
+          'is as many as GrantSpotter will make in that time, so it is not making another one ' +
+          'yet. Nothing is wrong with your details, and the accounts already created are fine. ' +
+          'If you already have an account, signing in is not affected by this.',
         { retryAfterSec: 900 },
       ),
     );
-    expect(alert).toHaveTextContent(/too many accounts have been created from this connection/i);
+    expect(alert).toHaveTextContent(/200 accounts have been created from this connection/i);
     expect(alert).toHaveTextContent(/nothing is wrong with your details/i);
     expect(alert).toHaveTextContent(/signing in is not affected/i);
     // The number the server actually sent, not a made-up minute.
     expect(alert).toHaveTextContent(/try again in 15 minutes/i);
+    /*
+      AND EXACTLY ONE STATEMENT OF WHEN. MEASURED against the built server, 130 students behind one
+      campus NAT: the paragraph read "… so it is not starting another one this second. Nothing is
+      wrong with your details — wait a moment and try again. … Try again in 15 minutes." Two
+      durations from two sources, disagreeing by three orders of magnitude. The server stopped
+      saying when; this asserts that this screen says it once and that nothing reintroduces a second.
+    */
+    const shown = alert.textContent ?? '';
+    expect(shown.match(/try again/gi) ?? []).toHaveLength(1);
+    expect(shown).not.toMatch(/wait a (moment|minute|few)/i);
   });
 
   it('says nothing about time when the server named no number', async () => {

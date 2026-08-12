@@ -988,15 +988,24 @@ describe('README: sign-up is open, and says what that does and does not give awa
     ).toBe(false);
     expect(readme).toMatch(/closing\s+that\s+one\s+takes\s+at\s+least\s+two\s+networks\s+acting\s+together/i);
     /*
-     * BOTH DAILY FIGURES, BECAUSE ONE OF THEM IS THE OLD NUMBER. `23,040 a day` was the whole
-     * deployment's ceiling when the server-wide rung was 240; at 480 it is what the network rung
-     * allows, which is what an operator behind a tunnel actually faces. Asserting only `23,040`
-     * would therefore have gone on passing against a README that had never been updated — the
-     * precise failure mode this file exists to prevent — so the deployment-wide figure is required
-     * too, and the tunnel figure is required to say that is what it is.
+     * BOTH DAILY FIGURES, AND THEY ARE COMPUTED RATHER THAN TRANSCRIBED — which is the whole point
+     * of this test and was the one place it broke its own rule. They were the literals `46,080 a
+     * day` and `23,040 a day behind the tunnel`, so the moment the rungs moved, this gate failed on
+     * the numbers rather than on the honesty, and the fix would have been to retype two constants
+     * in two files and hope they agreed. A daily figure is the window figure times the number of
+     * windows in a day; deriving it here means a README that quotes the wrong one can never pass,
+     * whatever the rungs are set to next.
+     *
+     * The two are asserted separately because they say different things: the first is the whole
+     * deployment's ceiling, the second is what an operator BEHIND A TUNNEL actually faces, where the
+     * network rung is the real limit and the server-wide rung is unreachable. Asserting only one
+     * would let a README that had gone stale on the other keep passing.
      */
-    expect(readme).toMatch(/46,080 a day/);
-    expect(readme).toMatch(/23,040 a day behind the tunnel/i);
+    const WINDOWS_PER_DAY = (24 * 60) / Number(windowMin);
+    const perDay = (perWindow: string | undefined): string =>
+      (Number(perWindow) * WINDOWS_PER_DAY).toLocaleString('en-US');
+    expect(readme).toContain(`${perDay(perServer)} a day`);
+    expect(readme).toMatch(new RegExp(`${perDay(perNetwork)} a day behind the tunnel`, 'i'));
     // The change of subject, said rather than left for a reader to infer from the absence of the
     // old promise.
     expect(readme).toMatch(/on\s+the\s+path\s+of\s+every\s+legitimate\s+registration/i);

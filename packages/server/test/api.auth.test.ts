@@ -598,25 +598,56 @@ describe('what the gate sheds when it is full', () => {
  * measured on 2026-08-09 produced zero rows in `audit_log`.
  */
 describe('threshold notice', () => {
-  it('is true exactly once, on the event that reaches the threshold', () => {
+  /**
+   * REWRITTEN ON 2026-08-12 BECAUSE THE DESIGN CHANGED, AND THE ASSERTION THAT WENT IS NAMED.
+   *
+   * This block used to require `crossed` to be true EXACTLY ONCE per window and false for every
+   * event after it — "a caller who keeps going writes no further rows, so the trail cannot be used
+   * to bury itself". That was a true description of the primitive and it was the wrong contract, in
+   * a way only a measurement showed: a boolean can say nothing but "at least the threshold", so
+   * both audit rows built on it printed the threshold CONSTANT, and 4,000 probes measured against
+   * the built server produced one row saying `"answers":20`. Silence past the threshold IS the
+   * bound on the trail, but total silence throws the magnitude away, and the magnitude is the whole
+   * signal.
+   *
+   * So the contract is now: announce at the threshold, then at each DOUBLING of it, and answer with
+   * the count rather than with a boolean. The anti-flood property the old assertion protected is
+   * kept and asserted below in the form that survives — logarithmic, not constant.
+   */
+  it('answers with the count at the threshold, and says nothing in between', () => {
     const notice = createThresholdNotice({ windowMs: 1000, threshold: 3 });
-    expect(notice.crossed('k', 0)).toBe(false);
-    expect(notice.crossed('k', 10)).toBe(false);
-    expect(notice.crossed('k', 20)).toBe(true);
-    // A caller who keeps going writes no further rows, so the trail cannot be used to bury itself.
-    expect(notice.crossed('k', 30)).toBe(false);
-    expect(notice.crossed('k', 40)).toBe(false);
+    expect(notice.announce('k', 0)).toBe(0);
+    expect(notice.announce('k', 10)).toBe(0);
+    expect(notice.announce('k', 20)).toBe(3);
+    // Silent until the count doubles, so a caller who keeps going cannot buy a row per request.
+    expect(notice.announce('k', 30)).toBe(0);
+    expect(notice.announce('k', 40)).toBe(0);
+    expect(notice.announce('k', 50)).toBe(6);
+    expect(notice.announce('k', 60)).toBe(0);
+  });
+
+  it('reports the magnitude of a flood in a logarithmic number of rows', () => {
+    const notice = createThresholdNotice({ windowMs: 900_000, threshold: 20 });
+    const announced: number[] = [];
+    for (let i = 0; i < 4000; i += 1) {
+      const n = notice.announce('one-source', i);
+      if (n > 0) announced.push(n);
+    }
+    // The measured 4,000 probes: eight rows, the last of which says 2,560 — an operator can tell
+    // this from a club intake, which is the one thing `{"answers":20}` could never do.
+    expect(announced).toEqual([20, 40, 80, 160, 320, 640, 1280, 2560]);
   });
 
   it('counts each key separately and starts again in the next window', () => {
     const notice = createThresholdNotice({ windowMs: 1000, threshold: 2 });
-    expect(notice.crossed('a', 0)).toBe(false);
-    expect(notice.crossed('b', 0)).toBe(false);
-    expect(notice.crossed('a', 1)).toBe(true);
-    expect(notice.crossed('b', 1)).toBe(true);
-    // Same key, next window: the count restarts, so a sustained flood is reported once a window.
-    expect(notice.crossed('a', 1001)).toBe(false);
-    expect(notice.crossed('a', 1002)).toBe(true);
+    expect(notice.announce('a', 0)).toBe(0);
+    expect(notice.announce('b', 0)).toBe(0);
+    expect(notice.announce('a', 1)).toBe(2);
+    expect(notice.announce('b', 1)).toBe(2);
+    // Same key, next window: the count restarts, so a sustained flood is reported from the
+    // threshold again rather than carrying on up the doubling ladder for the life of the process.
+    expect(notice.announce('a', 1001)).toBe(0);
+    expect(notice.announce('a', 1002)).toBe(2);
   });
 });
 
@@ -868,14 +899,64 @@ describe('login, me and logout', () => {
     expect(wrongPassword.body.error.message).toBe('Incorrect email or password.');
   });
 
-  it('refuses a disabled account', async () => {
+  /**
+   * A DISABLED ACCOUNT IS THE ONE 401 ON THIS ROUTE THAT MUST NOT BE THE GENERIC ONE.
+   *
+   * The test above requires a wrong password and an unknown address to be answered identically, and
+   * that is the anti-enumeration property this route is built around. This one is its boundary:
+   * MEASURED against the built server on 2026-08-12 — enrol, sign in 200, `UPDATE users SET
+   * disabled=1`, then the SAME correct password — the answer was "Incorrect email or password.",
+   * byte for byte the wrong-password answer. The reader is the account's owner, an administrator
+   * has just switched them off, and the product's only password reset is "ask an administrator", so
+   * that sentence sends the one person who can do nothing to ask the one person who already
+   * decided. The anti-enumeration argument cannot reach this state: getting here requires the
+   * correct password, which is proof of ownership rather than a probe.
+   */
+  it('tells a disabled member the truth instead of blaming their password', async () => {
     const { app, bootstrap } = build();
     await seedAdmin(app, bootstrap);
     harness.db.prepare('UPDATE users SET disabled = 1').run();
-    const res = await request(app)
+
+    const correct = await request(app)
       .post('/api/auth/login')
       .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
-    expect(res.status).toBe(401);
+    const wrong = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.org', password: 'a-different-password' });
+
+    expect(correct.status).toBe(401);
+    // The whole point: it is NOT the sentence a wrong password gets.
+    expect(correct.body.error.message).not.toBe(wrong.body.error.message);
+    expect(correct.body.error.message).toMatch(/switched off by an administrator/i);
+    // And it says the thing that stops them chasing a password that is fine.
+    expect(correct.body.error.message).toMatch(/your password is correct/i);
+    // A wrong password on the same disabled account is still the generic answer: this branch must
+    // not become a way to test passwords against a known-disabled address with a clearer oracle.
+    expect(wrong.body.error.message).toBe('Incorrect email or password.');
+  });
+
+  /**
+   * WHAT AN HTTP CLIENT READS, WHICH IS NOT THE ENVELOPE. MEASURED 2026-08-12: every 429 from both
+   * unauthenticated routes answered `retry-after: undefined`, alone among this server's
+   * rate-limited routes — `verifyRouter.ts`, `exports.ts` and `callsign.ts` all set it.
+   */
+  it('puts Retry-After on a sign-in 429, not only in the error details', async () => {
+    const { app, bootstrap } = build();
+    await seedAdmin(app, bootstrap);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'admin@example.org', password: 'wrong-password-here' });
+    }
+    const blocked = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'admin@example.org', password: GOOD_PASSWORD });
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers['retry-after']).toBeDefined();
+    expect(Number(blocked.headers['retry-after'])).toBe(blocked.body.error.details.retryAfterSec);
+    expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
   });
 
   it('rate-limits repeated failures and clears the counter on success', async () => {

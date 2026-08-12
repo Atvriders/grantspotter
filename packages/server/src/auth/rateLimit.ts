@@ -1,6 +1,26 @@
 export interface RateLimitDecision {
   allowed: boolean;
+  /**
+   * How long until a slot frees, and it answers TWO different questions depending on `recorded`.
+   *
+   * When something is recorded it is the remaining life of the oldest recorded entry — the window,
+   * near enough, because a sliding window empties from the front. When NOTHING is recorded it is 1:
+   * the budget is held entirely by attempts that are still running, and the honest answer to
+   * somebody standing behind a queue that drains in milliseconds is "a second", not "fifteen
+   * minutes". A caller that turns this number into a sentence must branch on the same value it is
+   * about to print — see `RateLimitAttempt`, which is where a caller printed one and stated the
+   * other.
+   */
   retryAfterSec: number;
+  /**
+   * HOW MANY FAILURES WERE ALREADY RECORDED AGAINST THE KEY at the instant this decision was made,
+   * NOT counting the attempts still in flight that may also be holding the budget shut.
+   *
+   * Read in the same synchronous breath as `allowed` and `retryAfterSec`, which is the point of it
+   * being here rather than on a second call to `count`: the three have to describe one instant, or
+   * a caller composing them into a sentence is quoting two different moments at the reader.
+   */
+  recorded: number;
 }
 
 /**
@@ -160,7 +180,8 @@ export interface ConcurrencyGateOptions {
   maxQueued: number;
   /**
    * THE LONGEST THIS GATE WILL MAKE ANYBODY WAIT BEFORE IT STARTS THEIR WORK, enforced rather than
-   * derived.
+   * derived — and that is the WHOLE of what it bounds. See "WHAT IT DOES NOT BOUND" at the bottom
+   * of this block, which is the half a promise like this always leaves out.
    *
    * WHY IT EXISTS. `maxQueued` alone was sold as a promise about the wait — "256/4 x 42 ms = 2.7 s,
    * the worst wait this gate will impose on anybody" — and that arithmetic multiplies a depth this
@@ -175,6 +196,26 @@ export interface ConcurrencyGateOptions {
    * done for somebody who has very likely closed the tab, and the slot is worth more to whoever is
    * still there. It only ever fires when the machine is slower than `maxQueued` assumed, which is
    * exactly the case the old arithmetic got wrong.
+   *
+   * WHAT IT DOES NOT BOUND, MEASURED, AND WHY THAT IS NOT A DEFECT IN THE GATE. This clock starts
+   * when `run` is called and stops when `work` is called. It says nothing about how long the
+   * caller's REQUEST takes, because everything either side of those two moments happens on an
+   * event loop this gate does not own: accepting the socket, parsing the body, resolving the route,
+   * and — after the hash — the INSERT and the response write. MEASURED on this host, 2026-08-12,
+   * against the built server, with the flood generated from four separate processes so the load
+   * generator was not sharing the measurer's event loop: forty registrations under a 1,893 req/s
+   * sign-in flood ran min 245 ms, MEDIAN 41,410 ms, MAX 45,603 ms, and a second run at 1,852 req/s
+   * ran min 277, median 42,621, max 46,374. This bound was 3,000 ms throughout and it HELD — all
+   * eighty of those students were answered 201, none was refused for having waited. The wait a
+   * person experienced was fourteen times the promise, and the promise was not broken.
+   *
+   * So the sentence that is true is "nobody waits more than `maxWaitMs` in this queue", and the
+   * sentence that is NOT true, however natural it is to write, is "nobody waits more than
+   * `maxWaitMs`". A caller can saturate the loop in front of the gate and there is no constant in
+   * this file that bounds that; the gate's answer to a flood is that the CPU is divided by turns
+   * (see `QueueLane`), not that latency has a ceiling. The one lesson this file keeps relearning is
+   * that a promise measured somewhere else is a hope, and a promise about a DIFFERENT INTERVAL from
+   * the one being enforced is the same mistake with the arithmetic hidden.
    */
   maxWaitMs: number;
 }
@@ -414,11 +455,27 @@ export function createConcurrencyGate(options: ConcurrencyGateOptions): Concurre
  */
 export interface ThresholdNotice {
   /**
-   * Count one event against `key`. True exactly once per window, on the call that reaches the
-   * threshold — never on the ones after it, so a caller who keeps going cannot flood the audit
-   * trail and hide everything else in it.
+   * Count one event against `key`, and answer with THE NUMBER COUNTED SO FAR IN THIS WINDOW when
+   * this call is one an operator should be told about — 0 on every other call.
+   *
+   * IT RETURNED A BOOLEAN UNTIL 2026-08-12 AND THAT COST THE OPERATOR THE ONLY FIGURE THAT
+   * MATTERED. A boolean can only say "at least the threshold", so the two call sites in
+   * `api/auth.ts` had nothing to put in their audit rows but the threshold constant itself, and
+   * both wrote it: `{"answers":20}` and `{"failures":50}`. MEASURED against the built server on
+   * this host: 4,000 probes of one taken address in 2.4 s — 1,665 answers a second — produced the
+   * operator exactly one row, and that row said `"answers":20`. The magnitude is the whole signal
+   * (twenty is a club intake with a few forgetful members in it; four thousand is somebody reading
+   * a roster), and it was the one thing the row could not carry.
+   *
+   * WHY IT IS NOT SIMPLY "RETURN THE COUNT EVERY TIME", which is the obvious version and would put
+   * one audit row on the trail per request — the flood this whole primitive exists to avoid, since
+   * a trail an attacker can fill at will is a trail that hides everything else in it. So it
+   * announces at the threshold and then at each DOUBLING of it: 20, 40, 80, 160, … A caller who
+   * sends n events in a window writes about log2(n / threshold) + 1 rows, so the 4,000 above become
+   * eight rows and a sustained 1.1 M-a-window flood becomes sixteen. Bounded, and every row states
+   * a number that was true when it was written.
    */
-  crossed(key: string, nowMs?: number): boolean;
+  announce(key: string, nowMs?: number): number;
 }
 
 export interface ThresholdNoticeOptions {
@@ -431,10 +488,16 @@ const NOTICE_SWEEP_ABOVE = 1024;
 
 export function createThresholdNotice(options: ThresholdNoticeOptions): ThresholdNotice {
   if (options.threshold < 1) throw new RangeError('threshold must be at least 1');
-  const seen = new Map<string, { startedMs: number; count: number }>();
+  /**
+   * `announceAt` is the next count that earns a row: the threshold, then each doubling of it. Kept
+   * per key rather than derived from `count` so the sequence cannot be re-entered — a key whose
+   * window rolls over starts again at the threshold, and one that does not never announces the
+   * same number twice.
+   */
+  const seen = new Map<string, { startedMs: number; count: number; announceAt: number }>();
 
   return {
-    crossed(key, nowMs = Date.now()) {
+    announce(key, nowMs = Date.now()) {
       let entry = seen.get(key);
       if (entry === undefined || nowMs - entry.startedMs >= options.windowMs) {
         // Swept on the cold path only, and only once the map is bigger than any real deployment's
@@ -445,11 +508,15 @@ export function createThresholdNotice(options: ThresholdNoticeOptions): Threshol
             if (nowMs - at.startedMs >= options.windowMs) seen.delete(old);
           }
         }
-        entry = { startedMs: nowMs, count: 0 };
+        entry = { startedMs: nowMs, count: 0, announceAt: options.threshold };
         seen.set(key, entry);
       }
       entry.count += 1;
-      return entry.count === options.threshold;
+      if (entry.count < entry.announceAt) return 0;
+      // Doubling rather than `+= threshold`: a linear ladder would still be one row per twenty
+      // requests, which at the measured 1,665 answers a second is 83 rows a second.
+      entry.announceAt *= 2;
+      return entry.count;
     },
   };
 }
@@ -516,7 +583,25 @@ export type RateLimitAttempt =
        */
       release: () => void;
     }
-  | { started: false; retryAfterSec: number };
+  /**
+   * THE BUDGET IS SHUT, AND THE TWO NUMBERS THAT SAY WHY MUST BE READ TOGETHER.
+   *
+   * `recorded` is what has actually been written down; `retryAfterSec` is how long until a slot
+   * frees. `recorded === 0` with `retryAfterSec === 1` is a BURST — the budget is held entirely by
+   * attempts still running, nothing has happened yet, and the wait is one hash. Anything else is a
+   * spent window and the wait is the rest of it.
+   *
+   * BOTH ARE HERE BECAUSE A CALLER THAT BRANCHED ON ONE AND PRINTED THE OTHER SHIPPED A REFUSAL
+   * THAT CONTRADICTED ITSELF IN ONE BREATH. MEASURED against the built server on this host,
+   * 2026-08-12: 130 students behind one campus NAT, six submits at a time — 60 accounts, 70
+   * refusals, and 37 of the 70 read "GrantSpotter is already making as many accounts at once as it
+   * will from this connection … wait a moment and try again" in a body carrying
+   * `"retryAfterSec":900`, which the browser renders as "… wait a moment and try again. Try again
+   * in 15 minutes." The handler had branched on a SECOND read of `count()`, which excludes
+   * in-flight attempts, while the wait came from this decision. One instant, two readings, two
+   * sentences that cannot both be true. Branch on what you are about to print.
+   */
+  | { started: false; retryAfterSec: number; recorded: number };
 
 export interface RateLimiter {
   check(key: string, nowMs?: number): RateLimitDecision;
@@ -532,12 +617,20 @@ export interface RateLimiter {
    * operator could see, because every one of those seven was inside a budget that never closed.
    *
    * IT HAD NO PRODUCTION CALLER FOR ONE DAY — the note here said so, and said that if a second
-   * release went by with nothing calling it, it should be deleted. It has two callers again as of
-   * 2026-08-12, both in `api/auth.ts` and both for exactly the purpose this docblock describes:
-   * the sentence a refused registrant is shown, and the `registrations` field of the audit row
-   * that says a rung closed. Both used to quote `rung.max`, a constant, and a constant cannot be
-   * wrong out loud — which is how the row came to say `"registrations":120` on a deployment with
-   * one user in it. A number that is READ from the limiter can only ever be what the limiter holds.
+   * release went by with nothing calling it, it should be deleted. It has exactly ONE as of
+   * 2026-08-12: the `registrations` field of the audit row that says a rung closed
+   * (`announceClosedRungs` in `api/auth.ts`). That field used to quote `rung.max`, a constant, and
+   * a constant cannot be wrong out loud — which is how the row came to say `"registrations":120` on
+   * a deployment with one user in it. A number that is READ from the limiter can only ever be what
+   * the limiter holds.
+   *
+   * IT BRIEFLY HAD A SECOND CALLER AND THAT ONE WAS A DEFECT, recorded here because the shape is
+   * inviting. The refusal SENTENCE was built from a second call to this method after `begin` had
+   * already refused — two readings of one instant — and because this number excludes in-flight
+   * attempts while the budget includes them, the sentence and the `retryAfterSec` beside it
+   * contradicted each other for 37 of 130 measured students. A caller that needs the count AND the
+   * wait must take both from the one decision: see `RateLimitAttempt`, which now carries `recorded`
+   * for exactly that. This method is for a caller that wants the count and NOTHING else.
    *
    * IN-FLIGHT ATTEMPTS ARE NOT COUNTED, unlike `check`'s reading of the same key. This number goes
    * into a sentence about what has already happened; an attempt whose outcome is still unknown is
@@ -664,15 +757,19 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
   function decide(key: string, nowMs: number): RateLimitDecision {
     const hits = recent(key, nowMs);
     if (hits.length + (inFlight.get(key) ?? 0) < options.maxFailures) {
-      return { allowed: true, retryAfterSec: 0 };
+      return { allowed: true, retryAfterSec: 0, recorded: hits.length };
     }
     const oldest = hits[0];
     // Nothing recorded, so the budget is spent entirely by attempts still running: the wait is one
     // argon2id hash, not one window. Answering ~900 seconds to somebody who is behind a queue that
     // drains in milliseconds would be a worse lie than no number at all.
-    if (oldest === undefined) return { allowed: false, retryAfterSec: 1 };
+    if (oldest === undefined) return { allowed: false, retryAfterSec: 1, recorded: 0 };
     const retryAfterMs = options.windowMs - (nowMs - oldest);
-    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
+    return {
+      allowed: false,
+      retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)),
+      recorded: hits.length,
+    };
   }
 
   return {
@@ -691,7 +788,16 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter & Ra
 
     begin(key, nowMs = Date.now()) {
       const decision = decide(key, nowMs);
-      if (!decision.allowed) return { started: false, retryAfterSec: decision.retryAfterSec };
+      if (!decision.allowed) {
+        // Both numbers out of ONE decision, so the sentence a caller builds from them describes one
+        // instant. See the `started: false` variant of `RateLimitAttempt` for what a second read
+        // cost the 130 students it was measured on.
+        return {
+          started: false,
+          retryAfterSec: decision.retryAfterSec,
+          recorded: decision.recorded,
+        };
+      }
       inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
 
       let settled = false;

@@ -103,15 +103,24 @@ function messageForEnroll(err: unknown): string {
     case 'bad_request':
       return err.message;
     /*
-      THE SERVER'S OWN NUMBER, AND ONLY WHEN IT SENT ONE.
+      THE SERVER'S OWN SENTENCE, THEN THE SERVER'S OWN NUMBER, AND THE NUMBER IS SAID EXACTLY ONCE.
 
       There are two rate-limited conditions on this route and they mean different things: the
       registration ladder (too many accounts created from this connection, this network, or this
       server, in the last fifteen minutes) and the hash queue shedding a request (the server is
       doing as much password work as it can this second, retry-after 1). Both are answered with the
       server's own sentence, because the server is the only party that knows which one happened and
-      its two sentences already say so — and both are followed by the wait it actually stated,
-      instead of the flat "wait a minute" this screen used to print over a fifteen-minute pause.
+      its sentences already say so — and both are followed by the wait it actually stated, instead
+      of the flat "wait a minute" this screen used to print over a fifteen-minute pause.
+
+      THE CONCATENATION IS ONLY HONEST BECAUSE THE OTHER HALF STOPPED SAYING WHEN, and that half was
+      wrong for a day. `api/auth.ts` used to end its refusals with "wait a moment and try again" or
+      "wait a few minutes and try again", so this line produced, MEASURED against the built server
+      with 130 students behind one campus NAT: "… so it is not starting another one this second.
+      Nothing is wrong with your details — wait a moment and try again. … Try again in 15 minutes."
+      One paragraph, two durations, from two sources, disagreeing by three orders of magnitude. The
+      server's sentences carry no duration at all now (`registrationRefusal`); `retryAfterSec` is
+      the one statement of when, and this is the one place it is rendered.
 
       What this branch adds is the thing neither sentence can say from the server side: somebody
       who ALREADY has an account is not affected by any of it, and can sign in right now.
@@ -151,15 +160,22 @@ export function Enroll({ onAuthenticated, onCancel }: EnrollProps): JSX.Element 
       The button is disabled while a request is in flight, and this line refuses the submit as
       well, because a form can be submitted by the Enter key while the pointer is nowhere near the
       button. Two POSTs from one intent is how a person ends up reading "there is already an
-      account for that email address" about the account they are in the middle of creating — and
-      now that every attempt is charged to the registration ladder, it is also how they spend two
-      of their own places instead of one.
+      account for that email address" about the account they are in the middle of creating.
+
+      IT DOES NOT COST THEM A PLACE IN THE REGISTRATION LADDER, AND THIS COMMENT SAID IT DID until
+      2026-08-12 ("now that every attempt is charged to the registration ladder, it is also how they
+      spend two of their own places instead of one"). The server charges that budget when
+      `users.create` returns and at no other moment, so a duplicate POST that loses the race, or is
+      answered "already has an account", leaves no mark on it. The reason above is the whole reason:
+      the second POST buys a confusing sentence, not a smaller allowance.
     */
     if (busy) return;
 
     // Checked here as well as on the server: the floor is stated above this field before anything
-    // is typed, and a round trip that can only answer with the rule we already printed spends one
-    // of this connection's registrations for nothing.
+    // is typed, and a round trip that can only answer with the rule we already printed is a
+    // pointless wait for the person. (It is only that. It costs them nothing in the registration
+    // ladder — the server charges that when an account is created and at no other moment, and the
+    // 422 is refused before any hash runs — and this comment claimed otherwise until 2026-08-12.)
     if (!meetsPasswordFloor(password)) {
       setError(`Password must be at least ${String(MIN_PASSWORD_LENGTH)} characters.`);
       return;
