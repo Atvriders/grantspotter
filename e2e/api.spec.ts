@@ -200,7 +200,15 @@ test('log in, set a profile, browse with an honest census, star, calendar, recei
   expect(browse.profileApplied).toBe('student');
 
   // THE CENSUS, as `npm run profile-corpus -- ee-undergrad` measures it: 69 of 150 are open to
-  // this applicant (55 plain + 14 preferred), 53 are not, and 28 cannot be decided at all.
+  // this applicant (55 plain + 14 preferred), 51 are not, and 30 cannot be decided at all.
+  //
+  // THIS SENTENCE SAID "53 are not, and 28 cannot be decided" UNTIL THE VERIFICATION PASS, and the
+  // assertions eighteen lines below it said 51 and 30 — the figures the two later paragraphs in
+  // this same comment correct it to. Round six moved this census twice on one day and the opening
+  // summary was updated once. Nothing executes a summary, which is the whole reason
+  // `eligibilityCorpus.test.ts` opens by refusing to restate its own numbers; the rule this file
+  // needs is the same one, and until it has it, a restated figure gets re-derived from the
+  // assertion below rather than trusted.
   //
   // MOVED AGAIN 2026-08-12, and again toward the applicant. `ConstraintSpec` gained the
   // DISJUNCTION funders keep writing and it could not hold — "Brevard County FL, OR ANY FL

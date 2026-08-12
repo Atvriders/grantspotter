@@ -593,7 +593,8 @@
               "Computer Science",
               "similar scientific field"
             ],
-            "excludedFields": []
+            "excludedFields": [],
+            "orUnrepresented": "similar scientific field"
           }
         },
         {

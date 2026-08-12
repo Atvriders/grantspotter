@@ -309,9 +309,17 @@ describe('nothing recorded as the funder’s words may be words the funder did n
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard. 48 field_of_study constraints carry a bare domain, the CWops proof list, and
+    // Vacuity guard. 49 field_of_study constraints carry a bare domain, the CWops proof list, and
     // Robert A. Rodriguez K5AUW's "previous awardees" — the audience with no profile field that
     // this field was introduced for.
-    expect(checked).toBe(50);
+    //
+    // 50 UNTIL THE VERIFICATION PASS OF THE SAME ROUND, when the 49th field_of_study record
+    // arrived: The Chick Allen, NW3Y, Scholarship's "or similar scientific field". It had fallen
+    // through BOTH nets — `namesADomain` knew `related` but not its synonym `similar`, and knew
+    // `science` but not its adjective `scientific` — so the phrase survived into `fields` as a
+    // list member that word overlap admits almost nobody to, and the record hard-refused 16 of 20
+    // probed majors, Physics, Chemistry, Biology and Astronomy among them. See
+    // `spec-vs-sentence.test.ts`, the corpus-wide rule that found it.
+    expect(checked).toBe(51);
   });
 });

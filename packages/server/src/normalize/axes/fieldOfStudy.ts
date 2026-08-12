@@ -446,7 +446,15 @@ function unrestrictedAlternative(part: string, fields: string[]): boolean {
  * measured to justify them.
  */
 const UNADJUDICABLE_DOMAINS = new Set([
-  'science', 'sciences', 'stem',
+  // `scientific` sits beside `science`/`sciences` for exactly the reason `technical` already sits
+  // beside `technology`/`technologies`: it is the same domain in its adjectival form, and the set
+  // is about the DOMAIN a word names, not the part of speech it names it with. Added round six
+  // under this block's own bar — name the domain, the record, and the major it refuses: the domain
+  // is `scientific`, the record is The Chick Allen, NW3Y, Scholarship ("Electronics, Electrical
+  // Engineering, Aerospace Engineering, Computer Science OR SIMILAR SCIENTIFIC FIELD"), and the
+  // majors are Physics, Chemistry, Biology and Astronomy — every one of them a hard `ineligible`
+  // measured with the real matcher, under a sentence that invites them in so many words.
+  'science', 'sciences', 'scientific', 'stem',
   'technology', 'technologies', 'technical',
   'engineering',
   'mathematics', 'math', 'maths',
@@ -459,12 +467,30 @@ const UNADJUDICABLE_DOMAINS = new Set([
 /**
  * Scaffolding around a field name, removed before the domain test and ONLY for that test — the
  * spec keeps the funder's entry verbatim. "Mathematics fields" (Lois Manley), "Technology-related
- * field" (Homer V. Thompson, Walter Gallinghouse) and "a Health Care-related field" (Richard
- * Warren) are the corpus's three shapes, and all three name the domain and nothing else.
+ * field" (Homer V. Thompson, Walter Gallinghouse), "a Health Care-related field" (Richard Warren)
+ * and "similar scientific field" (Chick Allen) are the corpus's four shapes, and all four name the
+ * domain and nothing else.
+ *
+ * `similar` JOINED `related` IN ROUND SIX, and the fourth shape is why. The relatedness word may
+ * come FIRST — "or SIMILAR SCIENTIFIC field", not "Technology-RELATED field" — and with only
+ * `related` here that entry's core came out as "similar scientific", which is in no domain set, so
+ * the phrase fell through this net as well as through `matcher.ts`'s `isFieldWideningMarker` (where
+ * it is deliberately not a widening, because "scientific" names a real bound). It therefore
+ * survived into `fields` as a LIST MEMBER THAT MATCHES ALMOST NOBODY: word overlap admits only an
+ * applicant who writes "similar", "scientific" or "field" in their own major. Measured before this
+ * change, Chick Allen hard-refused 16 of 20 probed majors, Physics, Chemistry, Biology and
+ * Astronomy among them, while displaying "or similar scientific field" as the evidence.
+ *
+ * `similar` is a relatedness word exactly as `related` is — `matcher.ts`'s `RELATEDNESS_WORDS`
+ * has carried both since long before this — so this is one list catching up with the other, not a
+ * new judgement. The remedy is `orUnrepresented` (fail -> unknown) and NOT widening (fail -> pass):
+ * whether Physics is a field similar to Aerospace Engineering is not something this matcher can
+ * decide, and a music major must still not be admitted to it.
  */
 const ENTRY_SCAFFOLDING = new Set([
   'field', 'fields', 'discipline', 'disciplines', 'area', 'areas', 'major', 'majors',
-  'subject', 'subjects', 'study', 'studies', 'related', 'of', 'in', 'a', 'an', 'the', 'or',
+  'subject', 'subjects', 'study', 'studies', 'related', 'similar', 'of', 'in', 'a', 'an', 'the',
+  'or',
 ]);
 
 /**

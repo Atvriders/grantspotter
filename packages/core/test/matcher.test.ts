@@ -864,6 +864,18 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
   /**
    * The other half of the same judgement, and the reason this is a narrow rule rather than a
    * blanket one. Each of these is a real corpus sentence whose verdict must not move.
+   *
+   * READ WHAT THIS ASSERTS AND WHAT IT DOES NOT — the distinction cost an award. Every tuple here
+   * is a BARE TIER, with no `orUnrepresented`, and the claim is about `matcher.ts`'s widening rule
+   * alone: these sentences do not open their lists, so a music major does not walk into them. That
+   * is still exactly right.
+   *
+   * It is NOT a claim that the corpus record refuses anybody, and until round six's verification
+   * pass the first tuple was silently doing duty as one. The Chick Allen record really did publish
+   * this bare tier, and it hard-refused Physics, Chemistry, Biology and Astronomy under a sentence
+   * reading "or similar scientific field". Not being a widening and being a bar are different
+   * things, and the third answer — `unknown` — is the one the record now gives (see the block below
+   * this `it`, and `server/src/normalize/axes/spec-vs-sentence.test.ts` R7).
    */
   it('does not mistake a bounded qualifier for an open list', () => {
     const stillClosed: Array<[string[], string]> = [
@@ -899,6 +911,44 @@ describe('field_of_study — funders who say their list is not exhaustive', () =
         ).status,
       ]).toEqual([rawText, 'fail']);
     }
+  });
+
+  /**
+   * AND THE THIRD ANSWER, WHICH IS WHAT THE CORPUS ACTUALLY PUBLISHES FOR THE FIRST OF THOSE FOUR.
+   *
+   * "or similar scientific field" is not a widening — the assertion above is unchanged and must
+   * stay — but it is also not something word overlap can adjudicate: an applicant is admitted by it
+   * only if they write "similar", "scientific" or "field" in their own major. `fieldOfStudy.ts`
+   * therefore mints `orUnrepresented` for it, and `evaluateConstraint`'s contract is that the field
+   * can only ever turn a `fail` into an `unknown`. Both directions are asserted here, because a
+   * remedy that fixed the physics student by admitting the music student would be the same defect
+   * pointed the other way.
+   */
+  it('answers a bound it cannot adjudicate with unknown — never a pass, never a refusal', () => {
+    const rawText =
+      'Electronics, Electrical Engineering, Aerospace Engineering, Computer Science or similar scientific field';
+    const spec: ConstraintSpec = {
+      axis: 'field_of_study',
+      fields: ['Electronics', 'Electrical Engineering', 'Aerospace Engineering', 'Computer Science', 'similar scientific field'],
+      excludedFields: [],
+      orUnrepresented: 'similar scientific field',
+    };
+    const statusFor = (fieldOfStudy: string): string =>
+      evaluateConstraint(spec, makeStudent({ fieldOfStudy }), NOW, rawText).status;
+    // The applicant the funder's sentence invites, and the bare tier refused.
+    expect(statusFor('Physics')).toBe('unknown');
+    expect(statusFor('Astronomy')).toBe('unknown');
+    // The applicant the funder's sentence does not invite is STILL not admitted...
+    expect(statusFor('Music Performance')).toBe('unknown');
+    // ...and nothing about the route the funder named first has moved.
+    expect(statusFor('Electronics')).toBe('pass');
+    expect(statusFor('Computer Science')).toBe('pass');
+    // `unknown` with nothing to fill in: there is no answer the reader could type that decides
+    // whether Physics is a field similar to Aerospace Engineering.
+    expect(evaluateConstraint(spec, makeStudent({ fieldOfStudy: 'Physics' }), NOW, rawText)).toEqual({
+      status: 'unknown',
+      missing: [],
+    });
   });
 
   /**

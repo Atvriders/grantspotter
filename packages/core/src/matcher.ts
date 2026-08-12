@@ -428,8 +428,20 @@ const WIDENING_DESCRIPTOR_PATTERN = [...WIDENING_DESCRIPTOR_WORDS].join('|');
  *     relatedness word may be followed only by a WIDENING_DESCRIPTOR word before
  *     the noun. So "or related fields" and "or a related technical field" open
  *     the list, while "or SIMILAR SCIENTIFIC field" (Chuck Bierman, K7ZJ) does
- *     not — "scientific" names a real bound, and the corpus record that carries
- *     that phrasing must keep behaving exactly as it does today.
+ *     not — "scientific" names a real bound, and a music major must not be
+ *     admitted to an award for scientific fields.
+ *
+ *     THAT IS STILL RIGHT, AND IT USED TO SAY SOMETHING ELSE AS WELL: "…and the
+ *     corpus record that carries that phrasing must keep behaving exactly as it
+ *     does today." What it did that day was hard-REFUSE Physics, Chemistry,
+ *     Biology and Astronomy (The Chick Allen, NW3Y, Scholarship — 16 of 20
+ *     probed majors), with "or similar scientific field" on the screen above the
+ *     word "no". Not being a widening is not the same as being a bar: the third
+ *     answer is `unknown`, and round six gave the extractor a way to say it
+ *     (`ConstraintSpec.orUnrepresented`, minted in `fieldOfStudy.ts` by
+ *     `namesADomain`, which now reads `similar` as scaffolding and `scientific`
+ *     as a domain). So this rule still refuses to turn that phrase into a pass,
+ *     and the phrase no longer turns into a refusal either.
  *
  * "and other" is likewise absent, and only the plural "and/or/among others" is
  * matched, so "Engineering or other 4-year technical degree" stays a technical
