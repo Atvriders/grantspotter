@@ -1,6 +1,7 @@
-import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route, useLocation } from 'react-router-dom';
 import { SessionProvider, useSession } from './store/session.js';
 import { AppShell } from './components/AppShell.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { SignedOut } from './routes/FirstRun.js';
 import { Browse } from './routes/Browse.js';
 import { Opportunity } from './routes/Opportunity.js';
@@ -35,6 +36,7 @@ function AdminOnly({ children }: { children: JSX.Element }): JSX.Element {
 
 function Authenticated(): JSX.Element {
   const { user, loading, refresh } = useSession();
+  const { pathname } = useLocation();
   if (loading) return <p className="eyebrow">Loading…</p>;
   /*
     Not `<Login>` directly. On a fresh install there is no account to sign in to, and this
@@ -48,75 +50,117 @@ function Authenticated(): JSX.Element {
 
   return (
     <AppShell>
-      <Routes>
-        {/*
-          Task 18's ineligibility explorer has no route of its own — it renders
-          inside Browse, which is why there is no `/why` here.
-        */}
-        <Route path="/" element={<Browse />} />
-        {/*
-          `/browse` is an ALIAS for `/`, not a second screen.
+      {/*
+        THE SCREEN BOUNDARY, AND WHY IT IS HERE RATHER THAN AROUND `AppShell`.
 
-          The rail's "Browse" entry points at `/`, so nothing in the app ever linked here — but
-          `/browse` is the address a user types, bookmarks or is sent by a colleague, and it is the
-          worked example three places in the ship plan use for "a deep client route survives a hard
-          refresh". Without this line all four of those were true only at the HTTP layer: the server
-          hands back the SPA shell for any GET (`api/spa.ts`), so `curl -o /dev/null -w '%{http_code}'
-          /browse` prints 200 and looks right, while the screen underneath renders `NotFound`. A
-          status check that passes over a wrong-address page is worse than one that fails.
+        A render throw with no boundary above it unmounts the whole document: measured in Chromium
+        before this line existed, one throw inside the profile screen's callsign panel left
+        `document.body.innerText` empty and ZERO inputs on the page. Placed INSIDE the shell, a
+        throw in a route now costs the route and nothing else — the rail, the topbar and the
+        unread badge stay on screen, so the way out of the failure is the same navigation the
+        person was already using. Wrapped around `AppShell` instead, the fallback would be a
+        sentence on an otherwise empty page and the way out would be the browser's Back button.
 
-          `replace` so the Back button returns to wherever the user came from rather than to the
-          alias, which would bounce them straight forward again.
-        */}
-        <Route path="/browse" element={<Navigate to="/" replace />} />
-        <Route path="/o/:programId" element={<Opportunity />} />
-        <Route path="/calendar" element={<Calendar />} />
-        <Route path="/exports" element={<ExportsRoute />} />
-        <Route path="/watchlist" element={<Watchlist />} />
-        {/*
-          The writing desk. The `*Screen` wrappers are the query-string-aware versions;
-          `TemplatesRoute` and `ApplicationsRoute` stay prop-driven so component tests can render
-          them without a router.
+        WHAT IT DOES NOT SAVE, because this is the part that is easy to over-claim: the route's own
+        form. React unmounts the boundary's whole subtree, and `routes/Profile.tsx` holds its
+        drafts in state inside that subtree, so a throw anywhere on the profile screen still takes
+        the applicant's unsaved Latitude with it — measured, same run, the Latitude input was
+        absent from the page afterwards. The boundary prints the values it can read out of the DOM
+        in the instant before React deletes them so they can at least be copied, and says in as
+        many words that it cannot put them back. The placement that genuinely PRESERVES the typing
+        is a `panel`-scoped boundary INSIDE a route, around the part most likely to throw; that is
+        why `ErrorBoundary` ships the scope and why `components/ErrorBoundary.test.tsx` measures
+        the difference between the two.
 
-          Both halves are here now. Until Task 19 created `routes/Applications.tsx` the second line
-          could not be written — importing a module that does not exist fails to resolve and takes
-          the whole web suite down — so the rail linked to `/applications` while the path rendered
-          NotFound, and `routes/Templates.test.tsx` ("every rail entry has a route") held it in a
-          self-cleaning PENDING list. That list is now empty, and the first assertion covers this
-          path from here on: a rail entry with no route is a working link to a wrong-address page,
-          which no component test of either file alone can see.
-        */}
-        <Route path="/templates" element={<TemplatesScreen />} />
-        <Route path="/applications" element={<ApplicationsScreen />} />
-        <Route path="/inbox" element={<Inbox />} />
-        <Route path="/sources" element={<Sources />} />
-        <Route path="/profile" element={<Profile />} />
-        {/*
-          `AdminOnly` is a client-side courtesy so the rail does not lead a member
-          somewhere they will be refused. `requireAdmin` on the server is the real
-          guard, and the Inbox deliberately has no wrapper here: members may READ
-          the queue, and `canDecide` from the API gates the controls instead.
-        */}
-        <Route
-          path="/admin"
-          element={
-            <AdminOnly>
-              <Admin />
-            </AdminOnly>
-          }
-        />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+        `resetKey={pathname}` is what keeps the rail honest. An error boundary holds its error
+        forever unless something clears it, so without this a caught error would survive every
+        navigation: the rail would still be on screen, clicking it would change the URL, and the
+        same crash message would sit there — a navigation bar that visibly does nothing.
+      */}
+      <ErrorBoundary scope="screen" region="This screen" resetKey={pathname}>
+        <Routes>
+          {/*
+            Task 18's ineligibility explorer has no route of its own — it renders
+            inside Browse, which is why there is no `/why` here.
+          */}
+          <Route path="/" element={<Browse />} />
+          {/*
+            `/browse` is an ALIAS for `/`, not a second screen.
+
+            The rail's "Browse" entry points at `/`, so nothing in the app ever linked here — but
+            `/browse` is the address a user types, bookmarks or is sent by a colleague, and it is the
+            worked example three places in the ship plan use for "a deep client route survives a hard
+            refresh". Without this line all four of those were true only at the HTTP layer: the server
+            hands back the SPA shell for any GET (`api/spa.ts`), so `curl -o /dev/null -w '%{http_code}'
+            /browse` prints 200 and looks right, while the screen underneath renders `NotFound`. A
+            status check that passes over a wrong-address page is worse than one that fails.
+
+            `replace` so the Back button returns to wherever the user came from rather than to the
+            alias, which would bounce them straight forward again.
+          */}
+          <Route path="/browse" element={<Navigate to="/" replace />} />
+          <Route path="/o/:programId" element={<Opportunity />} />
+          <Route path="/calendar" element={<Calendar />} />
+          <Route path="/exports" element={<ExportsRoute />} />
+          <Route path="/watchlist" element={<Watchlist />} />
+          {/*
+            The writing desk. The `*Screen` wrappers are the query-string-aware versions;
+            `TemplatesRoute` and `ApplicationsRoute` stay prop-driven so component tests can render
+            them without a router.
+
+            Both halves are here now. Until Task 19 created `routes/Applications.tsx` the second line
+            could not be written — importing a module that does not exist fails to resolve and takes
+            the whole web suite down — so the rail linked to `/applications` while the path rendered
+            NotFound, and `routes/Templates.test.tsx` ("every rail entry has a route") held it in a
+            self-cleaning PENDING list. That list is now empty, and the first assertion covers this
+            path from here on: a rail entry with no route is a working link to a wrong-address page,
+            which no component test of either file alone can see.
+          */}
+          <Route path="/templates" element={<TemplatesScreen />} />
+          <Route path="/applications" element={<ApplicationsScreen />} />
+          <Route path="/inbox" element={<Inbox />} />
+          <Route path="/sources" element={<Sources />} />
+          <Route path="/profile" element={<Profile />} />
+          {/*
+            `AdminOnly` is a client-side courtesy so the rail does not lead a member
+            somewhere they will be refused. `requireAdmin` on the server is the real
+            guard, and the Inbox deliberately has no wrapper here: members may READ
+            the queue, and `canDecide` from the API gates the controls instead.
+          */}
+          <Route
+            path="/admin"
+            element={
+              <AdminOnly>
+                <Admin />
+              </AdminOnly>
+            }
+          />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </ErrorBoundary>
     </AppShell>
   );
 }
 
 export function App(): JSX.Element {
   return (
-    <BrowserRouter>
-      <SessionProvider>
-        <Authenticated />
-      </SessionProvider>
-    </BrowserRouter>
+    /*
+      THE LAST LINE, and it covers three things the screen boundary cannot: `SessionProvider`
+      itself, `BrowserRouter`, and the signed-out pages, which `Authenticated` returns INSTEAD of
+      the shell. A throw in any of those still reaches the root, and the root is where React blanks
+      the document. Nothing here is preserved and the fallback says so — the whole page is what
+      failed — but a sentence and a reload button beat a white rectangle with no h1 in it, which is
+      what a session-provider throw produced before this line.
+
+      No `resetKey`: there is no navigation left to clear it with, so the only honest control is a
+      reload, and that is the only button the `app` scope draws.
+    */
+    <ErrorBoundary scope="app" region="GrantSpotter">
+      <BrowserRouter>
+        <SessionProvider>
+          <Authenticated />
+        </SessionProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

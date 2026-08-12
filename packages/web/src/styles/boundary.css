@@ -1,0 +1,161 @@
+/* The error boundary's fallback panel.
+
+   In `styles/` rather than beside the component in `components/` because the boundary is not a
+   screen's furniture: it is the thing that draws when a screen has stopped existing, and it wraps
+   the app itself in `App.tsx`. It is imported by `components/ErrorBoundary.tsx`, not by
+   `base.css`, so it still travels with the component and cannot be left out of a build.
+
+   Semantic tokens only, no hex: `lib/contrast.test.ts` derives the AA invariant from the token
+   grammar, and a colour written here would be outside everything that checks it. Every class is
+   `boundary-`-prefixed for the reason `callsign.css` gives — these stylesheets are bundled
+   together and a generic name restyles another route's markup at a distance. */
+
+/* The wrapper the boundary keeps around its children so it has a subtree to read in
+   `getSnapshotBeforeUpdate`. `display: contents` makes it generate no box at all, so a route
+   inside it is laid out exactly as it was when it was `.shell-main`'s direct child and the app's
+   `.shell` grid is unchanged. Anything other than `contents` here would silently re-parent every
+   route in the product. */
+.boundary-host {
+  display: contents;
+}
+
+.boundary {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  /* The one place the palette's "no" red is used for a failure that is not a verdict: this is a
+     4px edge, not a fill, so it reads as a stopped thing without dressing the message in alarm. */
+  border-left: 4px solid var(--no);
+  border-radius: var(--r-2);
+  padding: var(--s-4);
+  display: grid;
+  gap: var(--s-3);
+  /* `ch`, never a px width: `test/responsive.test.ts` forbids anything pinned wider than the
+     320px viewport, and prose wants a measure rather than a pixel count anyway. */
+  max-width: 78ch;
+}
+
+/* The panel scope sits inside a live screen, so it is inset like the other panels on it rather
+   than sitting on the page as a screen of its own. */
+.boundary-panel {
+  margin-top: var(--s-2);
+}
+
+.boundary:focus-visible {
+  /* The app and screen scopes take focus when they appear, because the element the person was in
+     no longer exists. Without this the ring lands on a container with no visible edge of its own. */
+  box-shadow: var(--focus-ring);
+}
+
+.boundary-title {
+  margin: 0;
+}
+
+.boundary-what,
+.boundary-loss {
+  margin: 0;
+  max-width: 66ch;
+  line-height: var(--lh-normal);
+}
+
+.boundary-loss {
+  font-weight: 560;
+}
+
+.boundary-rescue {
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.boundary-rescue-title {
+  margin: 0;
+  font-size: var(--fs-300);
+}
+
+.boundary-fields {
+  margin: 0;
+  display: grid;
+  gap: var(--s-2);
+}
+
+/* Two tracks, so the label and the value read as a pair — and `min-width: 0` on the items, which
+   `test/responsive.test.ts` requires of every multi-track grid in this repository: a grid item's
+   min-width defaults to its min-content width, and a rescued value is exactly the kind of long
+   unbroken string (a URL, a coordinate, a pasted paragraph) that floors a track. */
+.boundary-field {
+  display: grid;
+  grid-template-columns: minmax(0, 14ch) minmax(0, 1fr);
+  gap: var(--s-1) var(--s-3);
+}
+
+.boundary-field > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.boundary-field dt {
+  color: var(--text-muted);
+  font-size: var(--fs-200);
+}
+
+.boundary-field dd {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: var(--fs-200);
+  white-space: pre-wrap;
+}
+
+.boundary-actions {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: start;
+}
+
+.boundary-note {
+  margin: 0;
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  color: var(--text-muted);
+  max-width: 66ch;
+}
+
+.boundary-detail summary {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.boundary-detail > * + * {
+  margin-top: var(--s-2);
+}
+
+/* A component stack is unbreakable text of arbitrary length: without both of these it is the
+   single element that makes the page scroll sideways at 320px, which is the defect
+   `test/responsive.test.ts`'s header describes and the browser pass measures. */
+.boundary-stack {
+  margin: 0;
+  padding: var(--s-2);
+  background: var(--surface-3);
+  border-radius: var(--r-1);
+  font-family: var(--font-data);
+  font-size: var(--fs-100);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Both axes, written out. A component stack is long in both directions, and `overflow-x` alone
+     would leave the vertical overflow to the `visible`-computes-to-`auto` rule rather than saying
+     what is meant. */
+  overflow: auto;
+  max-height: 18em;
+}
+
+/* Narrow viewports: the label/value pair stops being a pair and becomes two lines, because 14ch
+   of label beside a coordinate leaves nothing for the coordinate. */
+@media (max-width: 480px) {
+  .boundary-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
