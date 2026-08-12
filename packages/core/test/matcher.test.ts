@@ -330,20 +330,109 @@ describe('matchProgram — hard constraints', () => {
     });
   });
 
+  /**
+   * A HARD AXIS NOBODY CAN ANSWER STILL BLOCKS NOBODY — and no longer ADMITS everybody either.
+   *
+   * `recommendation` and `other` have no profile field in CONTRACT §3, for any applicant, ever.
+   * Refusing on one would refuse the whole user base forever, so `not_evaluable` does not block,
+   * and that half is unchanged and asserted first below. What changed is the other half: when
+   * these are the ONLY requirements a record states, "does not block" was the entire verdict, and
+   * `eligible` — "you meet every requirement this record states" — was published without one
+   * requirement having been looked at. The ARRL Foundation Scholarship Program is that record in
+   * the real corpus, and it said `eligible` to a profile that has answered nothing at all.
+   */
+  const unanswerableOnly = makeProgram({
+    constraints: [
+      makeConstraint(
+        { axis: 'recommendation', recommenderType: 'sponsor_org_member', count: 3 },
+        { id: 'rec', hard: true, rawText: 'Three letters of recommendation are required.' },
+      ),
+      makeConstraint(
+        { axis: 'other', note: 'preference to a student ham from a ham family' },
+        { id: 'oth', hard: true, rawText: 'Preference to a student ham from a ham family.' },
+      ),
+    ],
+  });
+
   it('does not let a not-evaluable hard constraint block anyone', () => {
-    const program = makeProgram({
+    // The direction that hides money: never `ineligible`, and never a demand for a profile field
+    // that does not exist.
+    const verdict = matchProgram(makeStudent(), unanswerableOnly, NOW);
+    expect(verdict.kind).not.toBe('ineligible');
+    if (verdict.kind === 'unknown') expect(verdict.missingProfileFields).toEqual([]);
+  });
+
+  it('does not say yes out of nothing when every stated requirement is unanswerable', () => {
+    expect(matchProgram(makeStudent(), unanswerableOnly, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
+    // …and it is not about how full the profile is. A profile that answered NOTHING gets the same
+    // reading, because the gap is in what the record can be checked against, not in the reader.
+    expect(matchProgram({ kind: 'student' }, unanswerableOnly, NOW)).toEqual({
+      kind: 'unknown',
+      missingProfileFields: [],
+    });
+  });
+
+  it('still says eligible when one hard axis really was decided', () => {
+    const withOneCheckableAxis = makeProgram({
+      constraints: [
+        ...unanswerableOnly.constraints,
+        makeConstraint({ axis: 'gpa', min: 2.0 }, { id: 'gpa', hard: true }),
+      ],
+    });
+    // The GPA clears 2.0, so a requirement really was checked and met — which is exactly what
+    // `eligible` claims, and the recommendation line beside it does not withdraw it.
+    expect(matchProgram(makeStudent({ gpa: 3.1 }), withOneCheckableAxis, NOW)).toEqual({
+      kind: 'eligible',
+    });
+  });
+
+  it('leaves a funder who ANSWERED the question eligible, on both unanswerable axes', () => {
+    // "No letters of recommendation are required" / an `other` tier holding nothing: the same
+    // reading a citizenship list of "Any" gets. `statesARequirement` is what separates the two,
+    // and a funder saying "none needed" has not left anything unchecked.
+    const answered = makeProgram({
+      constraints: [
+        makeConstraint(
+          { axis: 'recommendation', recommenderType: 'none', count: 0 },
+          { id: 'rec', hard: true, rawText: 'No letters of recommendation are required.' },
+        ),
+        makeConstraint({ axis: 'other', note: '' }, { id: 'oth', hard: true }),
+      ],
+    });
+    expect(matchProgram(makeStudent(), answered, NOW)).toEqual({ kind: 'eligible' });
+  });
+
+  it('never fires on a SOFT unanswerable axis — a preference is not a requirement', () => {
+    const softOnly = makeProgram({
       constraints: [
         makeConstraint(
           { axis: 'recommendation', recommenderType: 'sponsor_org_member', count: 3 },
-          { id: 'rec', hard: true },
+          { id: 'rec', hard: false },
         ),
-        makeConstraint(
-          { axis: 'other', note: 'preference to a student ham from a ham family' },
-          { id: 'oth', hard: true },
-        ),
+        makeConstraint({ axis: 'gpa', min: 2.0 }, { id: 'gpa', hard: true }),
       ],
     });
-    expect(matchProgram(makeStudent(), program, NOW)).toEqual({ kind: 'eligible' });
+    expect(matchProgram(makeStudent({ gpa: 3.1 }), softOnly, NOW)).toEqual({ kind: 'eligible' });
+  });
+
+  /**
+   * AND IT IS NOT A NEW SILENCE FOR ORGANISATIONS. Most `not_evaluable`s in `evaluateConstraint`
+   * come from `if (!isStudent(profile))` — "this axis is about schooling and you are a club" —
+   * which is a requirement that does not bear on this applicant, not a requirement nobody could
+   * check. Reading those the same way would put every organisation on every student-worded record
+   * into `unknown`, over records where the funder answered plainly.
+   */
+  it('does not turn a student-only axis into unknown for an organisation', () => {
+    const studentWorded = makeProgram({
+      applicantEntities: ['club_501c3'],
+      constraints: [
+        makeConstraint({ axis: 'citizenship', allowed: ['ANY'] }, { id: 'cit', hard: true, rawText: 'Any' }),
+      ],
+    });
+    expect(matchProgram(makeOrg({ entity: 'club_501c3' }), studentWorded, NOW).kind).toBe('eligible');
   });
 });
 

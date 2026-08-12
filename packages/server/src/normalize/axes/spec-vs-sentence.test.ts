@@ -531,11 +531,19 @@ describe('R5 — a degree level the funder named, missing from the level list', 
       }
     }
     expect(offenders).toEqual([]);
-    // Vacuity guard: 47 level claims, on the largest hard-bar axis in this corpus (122 hard
+    // Vacuity guard: 67 level claims, on the largest hard-bar axis in this corpus (122 hard
     // institution constraints). It was 39 until the ASSOC pattern learned to read "2- or 4-year";
     // the eight sentences that phrasing added are all satisfied, which is the answer that makes
-    // widening the pattern safe to keep.
-    expect(claims).toBe(47);
+    // widening the pattern safe to keep. It was 47 until round nine read a bare "4-year college or
+    // university" as a floor at the bachelor rather than as `degreeLevels: []`: those 20 records
+    // used to be skipped by the `degreeLevels.length === 0` guard one line up — an empty list
+    // never drops a level because it never holds one — and each now makes exactly one BACH claim,
+    // every one of them satisfied — a floor that had come in BELOW the bachelor (say `['ASSOC']`,
+    // or a `['GRAD']` read off "university") would put all 20 into `offenders` above. The 13
+    // sibling records reading "2- or 4-year college or university" are still skipped by that same
+    // guard, which is the shape of the fix: they name a two-year route themselves, so they keep
+    // an empty list and this rule has nothing to check.
+    expect(claims).toBe(67);
   });
 
   it('…and it catches a two-year school published as a bachelor-only bar', () => {

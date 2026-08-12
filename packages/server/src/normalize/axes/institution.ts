@@ -70,9 +70,12 @@ const LEVEL_ORDER: DegreeLevel[] = ['CERT', 'ASSOC', 'BACH', 'GRAD'];
  * program", "Engineering or other 4-year technical degree", "intent to complete a 4-year degree").
  * When it qualifies a SCHOOL instead ("Accredited 4-year college or university", the corpus's
  * second-commonest Institution value) it describes the institution's tier, not the applicant's
- * level — a master's candidate attends a 4-year university too — so it creates nothing. Reading
- * institution tier as degree level would newly exclude associate and graduate applicants from
- * ~15 real entries; that is the false-exclude direction and is not allowed.
+ * level — a master's candidate attends a 4-year university too — so it creates nothing HERE.
+ * Reading an institution tier as THE applicant's degree level would newly exclude associate and
+ * graduate applicants from ~15 real entries; that is the false-exclude direction and is not
+ * allowed. A tier is read once more, further down and only where the funder stated no credential
+ * at all, as a FLOOR that admits its own rung and every rung above — see `statesAFourYearFloor`,
+ * which is the other half of this rule and not an exception to it.
  */
 const YEARS_2 = String.raw`(?:two|2)\s*-?\s*(?:or\s+(?:four|4)\s*-?\s*)?years?`;
 const YEARS_4 = String.raw`(?:four|4)\s*-?\s*years?`;
@@ -156,15 +159,75 @@ const DEGREE_OUTCOME_STATED =
 
 /**
  * WIDENING tokens — institution tiers the funder enumerated. They may only ADD to a list that is
- * already non-empty, never create one, so no entry ever gains a bar it did not have: "An
- * accredited 2- or 4-year college, university or trade school. Graduate studies permitted."
- * gains ASSOC and BACH beside its GRAD instead of barring undergraduates, while "Accredited
- * 4-year college or university" stays unrestricted.
+ * already non-empty, never NARROW one: "An accredited 2- or 4-year college, university or trade
+ * school. Graduate studies permitted." gains ASSOC and BACH beside its GRAD instead of barring
+ * undergraduates. A tier can still bring a bar into existence, but only through the one door
+ * below it — `statesAFourYearFloor`, which reads a tier as a floor exactly when the funder stated
+ * no credential of their own and named no tier below the four-year one.
  */
 const WIDENS: Array<[DegreeLevel, RegExp]> = [
   ['ASSOC', new RegExp(String.raw`\b${YEARS_2}\b|\bcommunity colleges?\b`, 'i')],
   ['BACH', new RegExp(String.raw`\b${YEARS_4}\b`, 'i')],
 ];
+
+/**
+ * ...AND THE HOLE THE WIDENING-ONLY RULE LEFT: A FLOOR THAT REFUSES NOBODY.
+ *
+ * WIDENS may only add to a list that already exists. So a record whose ONLY degree statement is
+ * the school's tier came out `degreeLevels: []` — and an empty list is not "no bar at that level",
+ * it is NO BAR AT ALL. 20 records in this corpus are that exact shape, every one of them HARD:
+ *
+ *   "4-year college or university"            (Bendicksen N7ZL, Cebik W4RNL, Bennett W7PHO, …)
+ *   "Accredited 4-year college or university" (Broughton K2AE, Dayton ARA, Orlando HamCation, …)
+ *   "Accredited four-year college or university"                              (YASME Foundation)
+ *   "Full-time student at an accredited 4-year college or university"      (Holt K8MJH/KC8OIP)
+ *
+ * MEASURED, with `scripts/profile-corpus.ts`'s own loader over the 150 publishable programmes.
+ * The part-time community-college ASSOC student (`adult-parttime`) was told `eligible` or
+ * `eligible_preferred` by 11 of these 20; the trade-school CERT student (`cert-trade`) by 10.
+ * Swept across all 51 states, an accredited community-college associate student went 2,447
+ * positives -> 1,864 and a trade-school certificate student 2,282 -> 1,699. A funder who wrote
+ * "4-year college or university" has said in their own words where the applicant must be
+ * studying, and a student one rung below that floor was reading `eligible` on that same sentence.
+ *
+ * AND IT REFUSED NOBODY THE SENTENCE ADMITS. The same sweep for a bachelor's student and for a
+ * graduate student — 51 states x 150 programmes each — moved ZERO pairs, in either direction.
+ *
+ * THIS IS NOT A REVERSAL OF THE WIDENING-ONLY RULE, AND MUST NOT BECOME ONE. That rule cures a
+ * NARROWING: a tier token may never remove a level the funder actually named, which is what turned
+ * "Any accredited 4-year college or university, graduate studies permitted" into `["GRAD"]` and
+ * barred every undergraduate from a scholarship that names undergraduates first. Both directions
+ * of that cure are kept here, by two conditions that are the whole rule:
+ *
+ *   1. IT ONLY FIRES ON SILENCE. If any clause CREATED a level — i.e. the funder said anything at
+ *      all about the applicant's own credential — the tier stays a widener and nothing below
+ *      changes. Not one record that publishes a level today has that level taken away.
+ *   2. IT IS A FLOOR, NOT A LEVEL. "4-year college or university" admits BACH *and every rung
+ *      above it*, because a master's candidate attends a 4-year university too — reading the tier
+ *      as the single level BACH is precisely the false exclude the header forbids, and would
+ *      newly refuse a graduate applicant from 11 of these 20 records.
+ *
+ * AND IT REFUSES TO GUESS DOWNWARD. The floor is only read off a sentence that names the 4-year
+ * tier AND NO TIER AT OR BELOW IT. "Any accredited 2- or 4-year college or university", "An
+ * accredited 2- or 4-year college, university, or trade school" and "Accredited 4-year college or
+ * university, junior college or trade technicial school in the U.S." (all verbatim) name a
+ * two-year or vocational route themselves, so they keep `[]` and go on refusing nobody — which is
+ * what those sentences say. A certificate student at an accredited community college is inside
+ * "2- or 4-year college", and barring them on a guess is the direction that hides money forever.
+ */
+const FOUR_YEAR_TIER = new RegExp(
+  String.raw`\b${YEARS_4}\s+(?:[\w.'-]+[\s,]+){0,3}?(?:colleges?|universit(?:y|ies)|institutions?|schools?)\b`,
+  'i',
+);
+/** Any tier at or below the four-year one, named anywhere in the same text. See above. */
+const LOWER_TIER_NAMED = new RegExp(
+  String.raw`\b${YEARS_2}\b|\b(?:community|junior)\s+colleges?\b|\bpost[-\s]?secondary\b` +
+    String.raw`|${TRADE_SCHOOL_NAMED.source}`,
+  'i',
+);
+function statesAFourYearFloor(text: string): boolean {
+  return FOUR_YEAR_TIER.test(text) && !LOWER_TIER_NAMED.test(text);
+}
 
 /** See TRADE_SCHOOL_NAMED / DEGREE_OUTCOME_STATED. Widens to CERT, never creates a bar. */
 function admitsCertificate(text: string): boolean {
@@ -192,8 +255,14 @@ function degreeLevels(clauses: string[]): DegreeLevel[] {
     }
     for (const level of created) levels.add(level);
   }
-  if (levels.size === 0) return [];
   const text = clauses.join(' ');
+  if (levels.size === 0) {
+    // The funder stated no credential of their own. A tier sentence is then the only degree
+    // statement there is, and it is a floor — see statesAFourYearFloor. Silence stays silence
+    // for every other wording.
+    if (!statesAFourYearFloor(text)) return [];
+    for (const level of LEVEL_ORDER.slice(LEVEL_ORDER.indexOf('BACH'))) levels.add(level);
+  }
   for (const [level, re] of WIDENS) if (re.test(text)) levels.add(level);
   if (admitsCertificate(text)) levels.add('CERT');
   return LEVEL_ORDER.filter((l) => levels.has(l));

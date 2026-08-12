@@ -1428,6 +1428,53 @@ export function matchProgram(
    */
   const recordStatesNothing = program.constraints.length === 0;
 
+  /**
+   * …AND A RECORD WHOSE ONLY STATED REQUIREMENT IS ONE NO PROFILE CAN EVER ANSWER STATES NOTHING
+   * THIS MATCHER CHECKED.
+   *
+   * `recordStatesNothing` tests the LIST. This tests what the list came to. A hard `not_evaluable`
+   * "does not block", which is right and stays right — `recommendation` and `other` have no
+   * profile field that could ever resolve them, so refusing on one would refuse everybody forever.
+   * But "does not block" was also the ENTIRE verdict when such an axis was the only requirement in
+   * the record, and then `eligible` — "you meet every requirement this record states" — was
+   * computed without a single requirement having been looked at.
+   *
+   * Measured over the 150 publishable programs the committed fixtures produce, exactly one record
+   * reaches that state: the ARRL Foundation Scholarship Program, whose one hard constraint is a
+   * `recommendation` axis quoting the funder's own sentence. It returned `eligible` to EVERY
+   * individual profile in `scripts/profile-corpus.ts` — including the empty one, which has
+   * answered nothing at all, and the one that answers "none" to everything, in all 51 states. That
+   * is silence-as-permission, the shape the two blocks above refuse, arriving one axis short of
+   * `recordStatesNothing`.
+   *
+   * TWO AXES, NOT "ANYTHING THAT CAME BACK not_evaluable" — and the difference is the whole safety
+   * of this rule. `recommendation` and `other` are unanswerable BY CONSTRUCTION: no field in
+   * CONTRACT §3 addresses them, for any applicant, ever. Most other `not_evaluable`s in this file
+   * mean something quite different — `if (!isStudent(profile)) return NOT_EVALUABLE` means "this
+   * axis is about schooling and you are an organisation", i.e. the requirement does not bear on
+   * this applicant, and a citizenship line reading "Any" is still the funder answering. Reading
+   * those as "nothing was checked" would put every organisation on every student-worded record
+   * into `unknown` — a second silence, invented by us, over records where the funder was not
+   * silent at all.
+   *
+   * IT IS THE SAME `unknown` AS THE OTHER THREE: not `ineligible` (nobody said no, and this record
+   * is a live index of real scholarships), not `eligible` (that is the claim being withdrawn), and
+   * nothing the reader could type would change it — a letter of recommendation is a packet item,
+   * not a profile field. `VerdictBadge` already renders it, and the funder's sentence is still
+   * shown beside it.
+   *
+   * IT DOES NOT FIRE WHERE ANYTHING WAS DECIDED. One hard axis returning `pass` is a requirement
+   * really checked against this applicant, which is what `eligible` claims — so a record with a
+   * recommendation line AND a GPA floor the applicant clears still says `eligible`. Nor does a
+   * vacuous `recommendation` ("no letters required") trigger it: `statesARequirement` is asked
+   * first, so a funder ANSWERING the question keeps the same reading "Any" already gets.
+   */
+  const unanswerableRequirement = (c: Constraint): boolean =>
+    (c.spec.axis === 'recommendation' || c.spec.axis === 'other') && statesARequirement(c.spec);
+  let onlyUnanswerableRequirements = program.constraints.some(
+    (c) => c.hard && unanswerableRequirement(c),
+  );
+
   const hardFailures: Constraint[] = [];
   const missingFields = new Set<string>();
   const metPreferences: Constraint[] = [];
@@ -1467,11 +1514,14 @@ export function matchProgram(
       // reader, say so with an empty list rather than dropping the unknown entirely.
       if (!listedOne) unlistableUnknown = true;
     }
-    // 'pass' and 'not_evaluable' do not block.
+    // 'pass' and 'not_evaluable' do not block. But an axis that came back `not_evaluable` was not
+    // CHECKED either, and a record where nothing else was decided has had nothing about it decided
+    // at all — see `onlyUnanswerableRequirements` above.
+    if (result.status !== 'not_evaluable') onlyUnanswerableRequirements = false;
   }
 
   if (hardFailures.length > 0) return { kind: 'ineligible', reasons: hardFailures };
-  if (missingFields.size > 0 || unlistableUnknown) {
+  if (missingFields.size > 0 || unlistableUnknown || onlyUnanswerableRequirements) {
     return { kind: 'unknown', missingProfileFields: [...missingFields].sort() };
   }
   if (metPreferences.length > 0) {

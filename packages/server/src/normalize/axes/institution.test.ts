@@ -152,16 +152,80 @@ describe('extractInstitution — an enumeration is never inverted into an exclus
     ).toEqual([]);
   });
 
-  // An institution TIER ("4-year college") describes the school, not the applicant's degree; a
-  // graduate student attends a 4-year university too. Only a statement about the applicant's own
-  // programme may create a level bar.
+  /**
+   * An institution TIER ("4-year college") describes the school, not the applicant's credential,
+   * so it may never NARROW a list the funder wrote — a graduate student attends a 4-year
+   * university too, and reading the tier as the single level BACH is what barred them.
+   *
+   * That rule is unchanged and asserted in the two cases below, which pair a tier with a
+   * credential the funder DID name. What changed is the case where the tier is the only degree
+   * statement in the sentence: see the "floor" block that follows.
+   */
   it.each([
+    ['Accredited 4-year college or university, or graduate program.', ['BACH', 'GRAD']],
+    ['Full-time studies at a two-year trade school or 4-year undergraduate institution', ['CERT', 'ASSOC', 'BACH']],
+  ])('never narrows a stated level list to the school tier: %s', (text, expected) => {
+    expect(levels({ Institution: text })).toEqual([...expected].sort());
+  });
+
+  /**
+   * ...AND A TIER THAT IS THE ONLY DEGREE STATEMENT IN THE SENTENCE IS A FLOOR, NOT A SILENCE.
+   *
+   * `degreeLevels: []` is not "no bar at that level", it is NO BAR AT ALL. 20 hard records in the
+   * corpus read "4-year college or university" and published exactly that, so a community-college
+   * associate student and a trade-school certificate student — the two populations this product is
+   * named for — were shown `eligible` on a sentence that places them outside it. Measured over
+   * 3,900 (profile, program) pairs, that was 22 of 811 positive verdicts.
+   *
+   * The floor is INCLUSIVE UPWARDS for the same reason the narrowing rule exists: a master's
+   * candidate attends a 4-year university, and 11 of these 20 records are positive for the corpus
+   * graduate profile today. `['BACH']` alone would refuse every one of them.
+   */
+  it.each([
+    ['4-year college or university'],
+    ['4 year college or university'],
     ['Accredited 4-year college or university'],
+    ['Any accredited 4-year college or university'],
     ['Accredited four-year college or university'],
+    ['Accredited 4-year college or university in NC, VA, WV, MD or TN'],
+    [
+      'Full-time student at an accredited 4-year college or university\nMust be a citizen of the ' +
+        'United States but without regard to gender, race, national origin, handicap status or any other factor.',
+    ],
+  ])('reads a bare four-year tier as a floor at the bachelor and above: %s', (text) => {
+    expect(levels({ Institution: text })).toEqual(['BACH', 'GRAD']);
+  });
+
+  /**
+   * ...AND ONLY WHERE THE FUNDER NAMED NOTHING BELOW IT. All six are verbatim corpus text, and
+   * each names a two-year or vocational route in its own words — a certificate student at an
+   * accredited community college is inside "2- or 4-year college", and barring them on a guess is
+   * the direction that hides money for good. "Any accredited 2- or 4-year college or university"
+   * is a different sentence from "4-year college or university" and does not become it here.
+   */
+  it.each([
     ['Any accredited 2- or 4-year college or university'],
+    ['Accredited 2 or 4-year college, technical school, or university'],
     ['An accredited 2- or 4-year college, university, or trade school within the United States'],
-  ])('does not read an institution tier as a degree-level bar: %s', (text) => {
+    ['Accredited 4-year college or university, junior college or trade technicial school in the U.S.'],
+    ['Any accredited 2- or 4-year university, college or technical school'],
+    [
+      'Applicant must be a high school senior accepted at a 2 or 4-year college or a student ' +
+        'currently enrolled at a 2 or 4-year college',
+    ],
+  ])('reads no floor from a sentence that names a lower tier itself: %s', (text) => {
     expect(levels({ Institution: text })).toEqual([]);
+  });
+
+  it('reads no floor from a sentence with no tier in it at all', () => {
+    for (const text of [
+      'Any',
+      'Any accredited institution',
+      'Any accredited college or university',
+      'Fully accredited institution or university.',
+    ]) {
+      expect(levels({ Institution: text })).toEqual([]);
+    }
   });
 
   /**

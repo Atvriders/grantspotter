@@ -146,15 +146,24 @@ describe('the census a licensed EE undergraduate actually gets', () => {
   // The two the funder itself left open are still here: MMARSI ("and then the remaining USA") and
   // CTRI ("applicants from all regions will be considered") keep their single soft constraint and
   // their verdicts.
-  it('reports 52 eligible-or-preferred of 150', () => {
+  //
+  // ROUND NINE TOOK ONE MORE, AND REFUSED NOBODY: 52 positive -> 51, `ineligible` unmoved at 51.
+  // The ARRL Foundation Scholarship Program moves `eligible -> unknown` for every individual
+  // profile, this one included — its only hard constraint is a `recommendation` axis no profile
+  // field can answer, so `eligible` was being published without one requirement having been
+  // checked. The round's other change — reading a bare "4-year college or university" as a floor —
+  // moves nothing for this profile, which is a bachelor's student at a 4-year school and is inside
+  // every one of those 20 sentences. It is measured on the profiles it does move, in
+  // `institution.ts` and in the round summary.
+  it('reports 51 eligible-or-preferred of 150', () => {
     expect(report.rows).toHaveLength(150);
     expect(report.counts).toEqual({
-      eligible: 43,
+      eligible: 42,
       eligible_preferred: 9,
-      unknown: 47,
+      unknown: 48,
       ineligible: 51,
     });
-    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(52);
+    expect(report.counts.eligible + report.counts.eligible_preferred).toBe(51);
   });
 
   it('breaks the exclusions down by axis: geography 36, applicant_entity 9, then the small ones', () => {
@@ -288,17 +297,25 @@ describe('an unset profile field yields unknown, never ineligible', () => {
     verdicts = matchAll(blank as Profile, corpus.programs, corpus.now);
   });
 
-  // 140 AND 1 SINCE THE GEOGRAPHY CASCADE LADDER LANDED. One record moved, `eligible -> unknown`:
-  // a bounded cascade whose ladder now asks this blank profile for the one thing that would decide
-  // it — a state. The direction is the point. An unanswered field still cannot produce a refusal
-  // (`ineligible` is the same 9, still all on the applicant-entity gate, asserted immediately
-  // below), and what used to be a silent `eligible` for a profile that has answered NOTHING is now
-  // a question.
-  it('leaves 140 of 150 unknown and refuses only the 9 with a researched audience', () => {
+  // 141 AND 0 — AND THE ZERO IS THE WHOLE POINT OF THE COLUMN. A profile that has answered
+  // NOTHING is now told `eligible` by nothing at all in this corpus.
+  //
+  // The last one was the ARRL Foundation Scholarship Program, whose only hard constraint is a
+  // `recommendation` axis: no profile field can ever answer it, so it came back `not_evaluable`,
+  // `not_evaluable` does not block, and a record with nothing else in it published `eligible` on
+  // the strength of a requirement nobody had looked at. It is `unknown` now, with nothing to ask
+  // for — see `matchProgram`'s `onlyUnanswerableRequirements`.
+  //
+  // The 140 before it was 140-and-1 since the geography cascade ladder landed, where one record
+  // moved `eligible -> unknown` because its ladder asks this blank profile for the one thing that
+  // would decide it — a state. The direction is the point in both rounds. An unanswered field
+  // still cannot produce a refusal: `ineligible` is the same 9, still all on the applicant-entity
+  // gate, asserted immediately below.
+  it('leaves 141 of 150 unknown, says yes to none, and refuses only the 9 with a researched audience', () => {
     expect(empty.counts).toEqual({
-      eligible: 1,
+      eligible: 0,
       eligible_preferred: 0,
-      unknown: 140,
+      unknown: 141,
       ineligible: 9,
     });
   });
@@ -401,11 +418,14 @@ describe('an unset profile field yields unknown, never ineligible', () => {
    */
   it('names the field each unknown is waiting on wherever the profile could supply one', () => {
     const unknowns = empty.rows.filter((r) => r.verdict === 'unknown');
-    expect(unknowns).toHaveLength(140);
+    expect(unknowns).toHaveLength(141);
     const answerable = unknowns.filter((r) => r.missingFields.length > 0);
     const unanswerable = unknowns.filter((r) => r.missingFields.length === 0);
     expect(answerable).toHaveLength(119);
-    expect(unanswerable).toHaveLength(21);
+    // 21 until the ARRL Foundation Scholarship Program joined them: its only hard constraint is a
+    // letter of recommendation, which is a packet item and not a profile field, so there is
+    // nothing to ask this reader for — the same empty list the other 21 carry.
+    expect(unanswerable).toHaveLength(22);
     // An unknown is never dressed as an exclusion, whichever kind it is.
     expect(unknowns.every((r) => r.reasons === '' && r.reasonsFromGrantSpotter === '')).toBe(true);
   });

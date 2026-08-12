@@ -1022,7 +1022,10 @@
           "rawText": "Any 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -1124,7 +1127,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -1230,7 +1236,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -1620,7 +1629,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -2134,7 +2146,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -3318,7 +3333,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -4763,7 +4781,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -5513,7 +5534,10 @@
           "rawText": "4 year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -5932,7 +5956,10 @@
           "rawText": "Full-time student at an accredited 4-year college or university\nMust be a citizen of the United States but without regard to gender, race, national origin, handicap status or any other factor.",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": false,
             "accreditationRequired": true
@@ -7007,7 +7034,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -9034,7 +9064,10 @@
           "rawText": "4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": false
@@ -9180,7 +9213,10 @@
           "rawText": "Any accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -10063,7 +10099,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -10418,7 +10457,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -10778,7 +10820,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -11556,7 +11601,10 @@
           "rawText": "accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -12625,7 +12673,10 @@
           "rawText": "Any accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -12860,7 +12911,10 @@
           "rawText": "Accredited 4-year college or university in NC, VA, WV, MD or TN",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -13844,7 +13898,10 @@
           "rawText": "Accredited 4-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
@@ -13961,7 +14018,10 @@
           "rawText": "Accredited four-year college or university",
           "spec": {
             "axis": "institution",
-            "degreeLevels": [],
+            "degreeLevels": [
+              "BACH",
+              "GRAD"
+            ],
             "tradeSchoolOK": false,
             "partTimeOK": true,
             "accreditationRequired": true
