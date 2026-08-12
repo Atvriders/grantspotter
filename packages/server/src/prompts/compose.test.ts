@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 // `normalize/deadline.ts` is a machine directive that must never reach the model verbatim.
 import { RECURRENCE_BY_SOURCE } from '../normalize/deadline.js';
 import { analyzeProse } from '../prose/index.js';
+import { loadSeedCorpus, seedDir } from '../seed/load.js';
 import { BANNED_TRANSITIONS, STOCK_CLOSERS, STOCK_OPENERS } from '../prose/lexicon.js';
 import { composePrompt } from './compose.js';
 import { DISCLOSURE_DEFAULT_ON, disclosureNote, disclosureSentence } from './disclosure.js';
@@ -269,6 +270,80 @@ describe('disclosureSentence', () => {
     expect(note).toMatch(/has not published/i);
     expect(note).toMatch(/does not guess|no position/i);
     expect(note).not.toMatch(/probably|likely|we assume/i);
+  });
+
+  /**
+   * EVERY CLAIM THESE NOTES MAKE *ABOUT THE CORPUS* IS CHECKED AGAINST THE CORPUS.
+   *
+   * `disclosureNote` does not only describe a stance; two of its arms reach past the record in
+   * front of the applicant and make a census claim — "several funders ask for one", "every funder
+   * in this corpus that has published a position …". Those are facts about `data/seed`, they were
+   * written from memory, and until 2026-08-12 nothing checked them. Both were FALSE. Counted from
+   * the shipped corpus on 2026-08-12 (`loadSeedCorpus(seedDir())`, 143 records):
+   *
+   *     unaddressed 142   permitted 1 (ARDC)   permitted_with_disclosure 0
+   *     prohibited 0      discouraged 0
+   *
+   * NOT ONE funder in the corpus asks to be told. "Several funders ask for one" was told to a
+   * student as a reason to include a sentence no funder here has ever requested, and the identical
+   * clause was on the applications screen (`web/src/routes/Applications.tsx`) where it was read
+   * more often. This is the same defect class as the registration refusal that shipped twice
+   * saying something false: a user-facing sentence that no test named.
+   *
+   * IT IS WRITTEN AS A CENSUS AND NOT AS A STRING COMPARISON so it keeps working. If a batch adds
+   * a funder that does require disclosure, the census changes, this goes red, and the copy gets
+   * updated — which is the opposite of a guard that pins today's words and can never tell you they
+   * have gone stale.
+   */
+  it('makes no claim about the corpus that the corpus does not support', () => {
+    const stances = new Map<string, number>();
+    for (const program of loadSeedCorpus(seedDir()).programs) {
+      const stance = program.aiPolicy.stance;
+      stances.set(stance, (stances.get(stance) ?? 0) + 1);
+    }
+    const count = (s: string): number => stances.get(s) ?? 0;
+
+    // The facts the copy is allowed to lean on, restated as the census that produced them.
+    expect(count('prohibited')).toBe(0);
+    expect(count('discouraged')).toBe(0);
+    const asksToBeTold = count('permitted_with_disclosure');
+    const published = count('permitted') + count('permitted_with_disclosure') + count('discouraged');
+
+    const everyNote = (
+      ['permitted', 'permitted_with_disclosure', 'discouraged', 'prohibited', 'unaddressed'] as const
+    ).map((stance) => disclosureNote(stance));
+
+    // "several ask" / "several funders ask" may only be said while several actually do. `several`
+    // is read as at least three; the assertion is deliberately generous, because the number that
+    // was shipped against it was zero.
+    for (const note of everyNote) {
+      if (/several\s+(funders\s+)?ask/i.test(note)) {
+        expect(
+          asksToBeTold,
+          `a note says several funders ask for a disclosure; ${String(asksToBeTold)} do`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
+
+    // The negative claims are census claims too, and they are the ones the copy now leans on:
+    // "no funder in it requires one", "none of them asks to be told". They are true only while the
+    // count really is zero, so they are pinned to the count and not merely allowed through.
+    for (const note of everyNote) {
+      if (/\b(no funder|none of them|nobody here)\b[^.]*\b(requires?|asks?)\b/i.test(note)) {
+        expect(asksToBeTold, 'the copy says no funder requires a disclosure').toBe(0);
+      }
+    }
+
+    // And the census sentence that used to live in the `unaddressed` arm: it may describe the
+    // funders that HAVE published a position only in terms every one of them satisfies. Kept as a
+    // guard after the clause was deleted, because the tempting fix was to reword it rather than
+    // drop it — see the note in `disclosure.ts`.
+    const unaddressed = disclosureNote('unaddressed');
+    if (/every funder in this corpus that has published a position/i.test(unaddressed)) {
+      expect(published).toBeGreaterThan(0);
+      // Whatever verb it uses, it may not say they ask for or require disclosure unless they do.
+      expect(unaddressed).not.toMatch(/published a position[^.]*\b(asks?|requires?|expects?)\b/i);
+    }
   });
 });
 

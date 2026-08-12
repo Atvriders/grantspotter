@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -799,6 +799,54 @@ describe('the whole screen', () => {
     await openTheDraft();
     fireEvent.click(screen.getByLabelText(/Include an AI-use disclosure sentence/i));
     await waitFor(() => expect(screen.getAllByText(COPY_PROMPT_DISCLOSURE_OFF).length).toBeGreaterThan(0));
+  });
+
+  /**
+   * THE SENTENCE UNDER THE DISCLOSURE CHECKBOX MAKES A CLAIM ABOUT THE CORPUS, AND NOTHING CHECKED IT.
+   *
+   * It read "No funder in this corpus prohibits AI assistance, and several ask to be told." The
+   * first half is true. The second half was false, and it was the half that pushed a student toward
+   * a disclosure: counted from `data/seed` on 2026-08-12, 142 of 143 shipped records have published
+   * nothing at all about AI, one (ARDC) permits it, and the number that ask to be told is ZERO.
+   * `packages/server/src/prompts/disclosure.ts` carried the identical clause and the same census
+   * now guards it there.
+   *
+   * READ FROM THE DATA, NOT FROM A FIXTURE. A stub would let this test agree with the copy while
+   * the shipped corpus disagreed with both — which is the shape of the defect, not a test of it.
+   * `data/seed` is committed data rather than server code, so reading it here crosses no package
+   * boundary; the file already reads `server/src/api/prompts.ts` as text for the same reason.
+   */
+  it('claims nothing about the corpus’s AI policies that data/seed does not support', async () => {
+    const seedDir = path.resolve(import.meta.dirname, '../../../../data/seed');
+    const stances = new Map<string, number>();
+    for (const file of readdirSync(seedDir).filter((f) => f.startsWith('programs.'))) {
+      const parsed = JSON.parse(readFileSync(path.join(seedDir, file), 'utf8')) as {
+        programs?: Array<{ aiPolicy?: { stance?: string } }>;
+      };
+      for (const program of parsed.programs ?? []) {
+        const stance = program.aiPolicy?.stance ?? 'unaddressed';
+        stances.set(stance, (stances.get(stance) ?? 0) + 1);
+      }
+    }
+    const count = (s: string): number => stances.get(s) ?? 0;
+    expect(count('unaddressed') + count('permitted')).toBeGreaterThan(0); // the corpus really loaded
+
+    stubScreenFetch();
+    renderScreen();
+    await openTheDraft();
+    const note = await screen.findByText(/No funder in this corpus/i);
+    const text = note.textContent ?? '';
+
+    // Whatever the sentence says, each clause has to be backed by the census.
+    if (/prohibits/i.test(text)) expect(count('prohibited')).toBe(0);
+    if (/discourages/i.test(text)) expect(count('discouraged')).toBe(0);
+    if (/\bask(s)? to be told\b/i.test(text)) {
+      const asks = count('permitted_with_disclosure');
+      if (/\bnone\b[^.]*ask|\bno funder\b[^.]*ask/i.test(text)) expect(asks).toBe(0);
+      else expect(asks, `the screen says funders ask to be told; ${String(asks)} do`).toBeGreaterThanOrEqual(3);
+    }
+    // The exact retired clause, named, so a regression fails by the words that were wrong.
+    expect(text).not.toMatch(/and several ask to be told/i);
   });
 });
 

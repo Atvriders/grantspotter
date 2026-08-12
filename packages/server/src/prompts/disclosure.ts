@@ -3,11 +3,14 @@ import type { AiStance } from '@grantspotter/core';
 /**
  * A one-sentence AI-use disclosure is ON by default.
  *
- * The evidence for that default is the corpus itself: not one funder reviewed prohibits applicants
- * from using AI, several publish a policy that asks for or welcomes disclosure, and none penalises
- * it. So the sentence costs nothing where it is optional and is required where it is not — and the
- * applicant can delete it in one keystroke. The default runs toward saying what happened, never
- * toward hiding it.
+ * The evidence for that default is the corpus itself, COUNTED rather than remembered — this
+ * paragraph read "several publish a policy that asks for or welcomes disclosure" until 2026-08-12
+ * and that was the sentence the two false user-facing ones below were written from. The census
+ * (`compose.test.ts`, "makes no claim about the corpus that the corpus does not support", which
+ * recomputes it on every run): of 143 shipped records, 142 have published nothing about AI, one
+ * (ARDC) permits it, and NONE prohibits it, discourages it, or asks to be told. So the sentence
+ * breaks no rule anybody here has published, and the applicant can delete it in one keystroke.
+ * The default runs toward saying what happened, never toward hiding it.
  */
 export const DISCLOSURE_DEFAULT_ON = true;
 
@@ -65,8 +68,9 @@ export function disclosureNote(stance: AiStance): string {
     case 'permitted':
       return (
         'This funder permits AI assistance and holds the applicant responsible for accuracy and ' +
-        'originality. Nothing in the corpus GrantSpotter reviewed penalises a disclosure sentence, ' +
-        'and several funders ask for one, so including it costs nothing.'
+        'originality. Nothing in the corpus GrantSpotter reviewed penalises a disclosure ' +
+        'sentence, so including it costs nothing — and no funder here requires one, so leaving ' +
+        'it out breaks no rule either.'
       );
     case 'discouraged':
       return (
@@ -82,10 +86,23 @@ export function disclosureNote(stance: AiStance): string {
     case 'unaddressed':
     default:
       return (
+        /*
+          THE CENSUS CLAUSE IS GONE, AND ITS REMOVAL IS THE FIX RATHER THAN A REWORDING.
+
+          It read "Every funder in this corpus that has published a position welcomes disclosure
+          and none penalises it". Counted on 2026-08-12, exactly ONE of the 143 shipped records has
+          published a position at all (ARDC, `permitted`) and its quote says nothing whatever about
+          disclosure — so "welcomes disclosure" described no funder in the corpus. Restating it
+          about what that one funder DID say puts the words "permits AI" into a paragraph whose
+          entire job is to say this funder has stated nothing, which `compose.test.ts` refuses by
+          name ("reports an unaddressed AI policy honestly instead of guessing") and is right to.
+          The default does not need a census to justify it; what is left is the one negative claim
+          the corpus does support.
+        */
         'This funder has not published any policy on applicants using AI. GrantSpotter does not guess a position it has ' +
-        'no evidence for, so no stance is shown and no permission should be read into the silence. Every funder in this ' +
-        'corpus that has published a position welcomes disclosure and none penalises it, which is why the disclosure ' +
-        'sentence is offered here by default. Including it is your call.'
+        'no evidence for, so no stance is shown and no permission should be read into the silence. Nothing in this ' +
+        'corpus penalises a disclosure sentence and no funder in it requires one, which is why the sentence is offered ' +
+        'here by default rather than added for you. Including it is your call.'
       );
   }
 }

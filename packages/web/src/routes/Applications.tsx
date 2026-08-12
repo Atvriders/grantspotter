@@ -332,8 +332,18 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
                 </label>
                 {current.includeDisclosure ? (
                   <p className="muted">
+                    {/*
+                      "and several ask to be told" until 2026-08-12, which was false: counted from
+                      `data/seed`, ZERO of the 143 shipped records asks to be told, 142 have
+                      published nothing about AI at all, and the one that has (ARDC) permits it.
+                      The clause was pushing a student toward a disclosure with a requirement no
+                      funder here has ever made. `Applications.test.tsx` recomputes the census on
+                      every run, so this sentence goes red rather than stale if a batch adds a
+                      funder that does require one.
+                    */}
                     The sentence is yours to edit before you send it. No funder in this corpus prohibits AI
-                    assistance, and several ask to be told.
+                    assistance and none asks to be told, so including it is your call rather than anyone’s
+                    rule. Where a funder has published a position, the prompt carries their own words.
                   </p>
                 ) : (
                   <p className="muted">{COPY_PROMPT_DISCLOSURE_OFF}</p>

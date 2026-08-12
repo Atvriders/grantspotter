@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../store/useApi.js';
 import { apiSend, ApiError } from '../api/client.js';
 import { CompletenessMeter } from '../components/CompletenessMeter.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import {
   EMPTY_COMPLETENESS,
   unevaluatedProfileKinds,
@@ -1057,35 +1058,52 @@ export function Profile(): JSX.Element {
                   </span>
                 )}
                 {field.key === 'callsign' && (
-                  <CallsignLookup
-                    callsign={value}
-                    /* WHAT THE FORM ALREADY HOLDS, so the panel can say what accepting costs.
-                       Read straight off the open tab's draft — not off the SAVED profile — because
-                       the applicant may have typed a coordinate two seconds ago and not pressed
-                       Save, and it is precisely that value the panel was measured destroying in
-                       silence. `?? ''` rather than omitting the key: an absent field and an empty
-                       one mean the same thing here, which is "nothing to lose". */
-                    held={{
-                      state: drafts[kind].state ?? '',
-                      licenseClass: drafts[kind].licenseClass ?? '',
-                      orgName: drafts[kind].orgName ?? '',
-                      lat: drafts[kind].lat ?? '',
-                      lon: drafts[kind].lon ?? '',
-                    }}
-                    target={kind}
-                    onAccept={applyLookup}
-                    clubNotice={
-                      kind === 'student'
-                        ? 'This is a club station licence, not an individual one. GrantSpotter ' +
-                          'keeps a club on the Organization tab, which is where an organisation ' +
-                          'name and the entity type funders ask for belong. The callsign and ' +
-                          'state can still be used here.'
-                        : 'This is a club station licence, which is what a collegiate club’s ' +
-                          'callsign is. A club licence carries no operator class, so there is ' +
-                          'none to fill in — the organisation name below goes straight onto this ' +
-                          'profile.'
-                    }
-                  />
+                  /*
+                    THE PANEL BOUNDARY, AND IT IS THE ONLY PLACEMENT IN THE APP THAT SAVES TYPING.
+
+                    `App.tsx` wraps the routes at `scope="screen"` and the router at `scope="app"`.
+                    Neither reaches inside a route, so a throw from this panel unmounted the whole
+                    profile form — measured in `Profile.boundary.test.tsx`: the document was left
+                    with zero inputs in it, and everything the applicant had typed and not saved
+                    went with them. A latitude is a number somebody read off a map by hand and it
+                    sits three elements from here.
+
+                    `scope="panel"` is what makes the difference visible AND correct: it keeps the
+                    form, renders an `h2` under `role="alert"` rather than replacing the screen's
+                    `h1`, and deliberately does not take focus, because the person reading it may
+                    be mid-word in the field beside it.
+                  */
+                  <ErrorBoundary scope="panel" region="The callsign lookup">
+                    <CallsignLookup
+                      callsign={value}
+                      /* WHAT THE FORM ALREADY HOLDS, so the panel can say what accepting costs.
+                         Read straight off the open tab's draft — not off the SAVED profile —
+                         because the applicant may have typed a coordinate two seconds ago and not
+                         pressed Save, and it is precisely that value the panel was measured
+                         destroying in silence. `?? ''` rather than omitting the key: an absent
+                         field and an empty one mean the same thing here, "nothing to lose". */
+                      held={{
+                        state: drafts[kind].state ?? '',
+                        licenseClass: drafts[kind].licenseClass ?? '',
+                        orgName: drafts[kind].orgName ?? '',
+                        lat: drafts[kind].lat ?? '',
+                        lon: drafts[kind].lon ?? '',
+                      }}
+                      target={kind}
+                      onAccept={applyLookup}
+                      clubNotice={
+                        kind === 'student'
+                          ? 'This is a club station licence, not an individual one. GrantSpotter ' +
+                            'keeps a club on the Organization tab, which is where an organisation ' +
+                            'name and the entity type funders ask for belong. The callsign and ' +
+                            'state can still be used here.'
+                          : 'This is a club station licence, which is what a collegiate club’s ' +
+                            'callsign is. A club licence carries no operator class, so there is ' +
+                            'none to fill in — the organisation name below goes straight onto ' +
+                            'this profile.'
+                      }
+                    />
+                  </ErrorBoundary>
                 )}
               </div>
             );

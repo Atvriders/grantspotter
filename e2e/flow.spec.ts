@@ -477,3 +477,75 @@ test('the single process serves the SPA on / and still answers JSON on /api', as
   expect(posted.headers()['content-type']).toContain('application/json');
   expect(await posted.text()).not.toContain('<div id="root">');
 });
+
+/**
+ * WHAT A MEMBER AN ADMINISTRATOR HAS SWITCHED OFF IS TOLD — IN A BROWSER, WHICH IS THE ONLY PLACE
+ * IT WAS EVER GOING TO BE READ.
+ *
+ * `packages/server/src/api/auth.ts` grew a sentence of its own for this state on 2026-08-12,
+ * with a docblock arguing at length that "Incorrect email or password." is false in the direction
+ * that costs the reader the most: it sends the one person who cannot fix anything off to reset a
+ * password that was never wrong, and this product has no reset mail. That fix was real and
+ * `packages/server/test/api.auth.test.ts` covers it — over HTTP.
+ *
+ * NOTHING COVERED THE BROWSER, and the browser threw the sentence away. `routes/Login.tsx`
+ * answered every `unauthorized` code with its own hardcoded "That email or password was not
+ * recognised." — so curl got the truth and the student got the falsehood, which is the audience
+ * that matters. Measured 2026-08-12 in the Chromium this suite drives, against a real disabled
+ * account on the real server, before the fix:
+ *
+ *   API   401 {"error":{"code":"unauthorized","message":"That account has been switched off …"}}
+ *   SCREEN "That email or password was not recognised."
+ *
+ * So the assertion is on what is ON THE SCREEN and not on what the API answered: an API-level
+ * assertion is what already existed and it is exactly what was green while this was broken.
+ *
+ * The account is created here rather than seeded, and disabled and left disabled, so no other spec
+ * in this file or any other loses an account it was relying on.
+ */
+test('a member an administrator switched off is told so in the browser, not blamed for their password', async ({
+  page,
+  request,
+}) => {
+  const email = `switched-off-${String(Date.now())}@example.org`;
+  const password = 'e2e-switched-off-password-not-a-real-secret';
+
+  const created = await request.post('/api/auth/enroll', { data: { email, password } });
+  expect(created.status()).toBe(201);
+
+  // Disabled through the real admin route, the way an operator does it.
+  const signedIn = await request.post('/api/auth/login', {
+    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+  });
+  expect(signedIn.status()).toBe(200);
+  const list = (await (await request.get('/api/admin/users')).json()) as {
+    rows: Array<{ id: string; email: string }>;
+  };
+  const row = list.rows.find((r) => r.email === email);
+  expect(row, 'the account this test just created is missing from the admin list').toBeTruthy();
+  const patched = await request.patch(`/api/admin/users/${String(row?.id)}/disabled`, {
+    data: { disabled: true },
+  });
+  expect(patched.status()).toBe(200);
+
+  // The API's own answer, quoted here only so a failure says which half moved.
+  const apiAnswer = await request.post('/api/auth/login', { data: { email, password } });
+  expect(apiAnswer.status()).toBe(401);
+  const apiMessage = ((await apiAnswer.json()) as { error: { message: string } }).error.message;
+  expect(apiMessage).toContain('switched off by an administrator');
+
+  // And now the half nothing was watching.
+  await openApp(page);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  const alert = page.getByRole('alert');
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText('switched off by an administrator');
+  // The specific falsehood, named, so a regression fails by the sentence that was wrong rather
+  // than as an unexplained text mismatch.
+  await expect(alert).not.toContainText('That email or password was not recognised.');
+  // Still signed out: the page must not have navigated into the shell.
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+});

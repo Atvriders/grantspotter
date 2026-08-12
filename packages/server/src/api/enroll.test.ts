@@ -558,9 +558,40 @@ describe('the ceiling on how many accounts one caller can make', () => {
       instant is the combination that shipped: "nothing has been created" carrying the fifteen-minute
       wait, which is the number the limiter only produces when something HAS been recorded.
     */
+    /*
+      THREE KINDS OF 429 ON THIS ROUTE, NOT TWO — AND THE THIRD IS WHY THIS TEST WAS PASSING BY LUCK.
+
+      The `else` here read "anything that is not the burst sentence quotes a count", and that is
+      false: `hashUnderGate` sheds when the argon2id queue is full and answers a THIRD sentence
+      ("This server is already doing as much password checking as it can right now …") which
+      deliberately makes no claim about accounts at all. Whether the gate sheds during a
+      240-request burst depends on how busy the machine is. MEASURED on this host on 2026-08-12:
+      the same unchanged test passed on one full-suite run and failed on the next with
+      `no count in: This server is already doing as much password checking …` — the only thing that
+      differed was load. A load-dependent test is a test that will eventually go red for a reason
+      nobody can reproduce, and worse, its `else` branch was silently NOT checking the ladder's
+      arithmetic on every run where a shed happened to appear.
+
+      So all three are named, and each is held to the invariant that is actually its own. The one
+      rule that spans them is the one this file exists for: NO refusal may make a claim about
+      accounts that the database contradicts.
+    */
+    const shed = /as much password checking as it can/i;
+    let ladderRefusals = 0;
     for (const res of refusals) {
       const message = res.body.error.message as string;
       const wait = res.body.error.details.retryAfterSec as number;
+      if (shed.test(message)) {
+        // The gate's own refusal. It is not the ladder: it must not claim anything about accounts
+        // in either direction, and it must carry the short wait, because nothing was spent.
+        expect(message, 'the shed refusal counted accounts').not.toMatch(/accounts have been created/i);
+        expect(message, 'the shed refusal claimed nothing was created').not.toMatch(
+          /no account has been created/i,
+        );
+        expect(wait, `a shed refusal asking for a ${String(wait)}s wait: ${message}`).toBe(1);
+        continue;
+      }
+      ladderRefusals += 1;
       if (/no account has been created/i.test(message)) {
         expect(wait, `"nothing created" beside a ${String(wait)}s wait: ${message}`).toBe(1);
       } else {
@@ -571,12 +602,26 @@ describe('the ceiling on how many accounts one caller can make', () => {
         expect(wait).toBeGreaterThan(1);
       }
     }
+    // The burst must really have reached the ladder. Without this, a run where the gate shed
+    // EVERY over-budget request would satisfy every assertion above having tested nothing the
+    // ladder does — which is precisely the hole the un-named third sentence left open.
+    expect(ladderRefusals, 'no request in the burst reached the registration ladder').toBeGreaterThan(0);
 
     // And once the burst has settled there is nothing in flight, so the next caller gets the third
     // sentence and its number is the one an operator would count in the users table.
-    const after = await request(server)
+    //
+    // RETRIED PAST A SHED for the reason above and no further: a shed is the gate saying "ask me
+    // again", the ladder's answer is what this asserts, and the two are told apart by the sentence
+    // rather than by hoping the machine is idle. Three attempts, then the assertion runs on
+    // whatever came back — a run that can only ever shed is a failure worth seeing.
+    let after = await request(server)
       .post('/api/auth/enroll')
       .send({ email: 'burst-after@example.org', password: GOOD_PASSWORD });
+    for (let attempt = 0; attempt < 3 && shed.test(String(after.body.error?.message)); attempt++) {
+      after = await request(server)
+        .post('/api/auth/enroll')
+        .send({ email: `burst-after-${String(attempt)}@example.org`, password: GOOD_PASSWORD });
+    }
     expect(after.status).toBe(429);
     expect(after.body.error.message).toContain(`${String(created)} accounts have been created`);
     expect(after.body.error.details.retryAfterSec).toBeGreaterThan(1);

@@ -55,8 +55,32 @@ function messageFor(err: unknown): string {
     return 'The GrantSpotter API could not be reached. Check that the server is running.';
   }
   switch (err.code) {
+    /*
+      THE SERVER'S OWN SENTENCE, BECAUSE THERE IS MORE THAN ONE OF THEM AND THIS SCREEN CANNOT
+      TELL WHICH IT IS HOLDING.
+
+      This arm returned a hardcoded "That email or password was not recognised." until 2026-08-12.
+      `POST /api/auth/login` answers `unauthorized` in two different states and only one of them is
+      about the credentials: a wrong password ("Incorrect email or password.") and an account an
+      administrator has switched off, which `api/auth.ts` gave a sentence of its own precisely
+      because blaming the password there is false in the direction that costs the reader the most
+      — this product has no reset mail, so it sends the one person who cannot fix anything to ask
+      the same administrator who just switched them off. The browser overwrote both with the first.
+      MEASURED in Chromium against the real server (`e2e/flow.spec.ts`, "a member an administrator
+      switched off"): API 401 "That account has been switched off by an administrator …", screen
+      "That email or password was not recognised."
+
+      PRINTING THE SERVER'S SENTENCE RATHER THAN MATCHING FOR THE DISABLED ONE, which is where this
+      differs from `Enroll.tsx`'s `/set up/i` test. There, two conditions share one status and the
+      screen has something longer and kinder to say than the API does. Here the API's sentences are
+      already written for this reader, and a screen that re-words them is a second place the copy
+      has to be kept true — which is the defect, not a guard against it. The fallback below covers
+      the only case that leaves nothing to print.
+    */
     case 'unauthorized':
-      return 'That email or password was not recognised.';
+      return err.message.trim() === ''
+        ? 'That email or password was not recognised.'
+        : err.message;
     /*
       The server sends `details.retryAfterSec` with this and this screen used to throw it away,
       printing "wait a minute" for a pause the server had already said was fifteen. The same

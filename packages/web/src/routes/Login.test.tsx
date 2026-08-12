@@ -123,6 +123,74 @@ describe('Login', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  /**
+   * THE SECOND `unauthorized` SENTENCE, WHICH THIS SCREEN USED TO OVERWRITE WITH THE FIRST.
+   *
+   * `POST /api/auth/login` answers 401 for two different states. One is the credentials; the other
+   * is an account an administrator has switched off, and `api/auth.ts` carries a long argument for
+   * why that one must not be told their password was wrong — there is no reset mail on this
+   * product, so the sentence sends the one person who cannot fix anything to ask the administrator
+   * who just switched them off. `packages/server/test/api.auth.test.ts` has covered the API's half
+   * since 2026-08-12. Nothing covered the browser's, and the browser was discarding it: the arm was
+   * `case 'unauthorized': return 'That email or password was not recognised.'`.
+   *
+   * Two assertions and not one. The first is that the truth arrives; the second names the specific
+   * falsehood, because "the right words are present" and "the wrong words are gone" are different
+   * claims and only the pair rules out a screen printing both.
+   */
+  it('prints the server’s own sentence for a switched-off account instead of blaming the password', async () => {
+    const disabled =
+      'That account has been switched off by an administrator, so GrantSpotter will not sign it ' +
+      'in. Your password is correct and there is nothing wrong with it — changing it would not ' +
+      'help. Ask whoever runs this GrantSpotter to switch the account back on.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error: { code: 'unauthorized', message: disabled },
+          requestId: 'req-test-1',
+        }),
+      }),
+    );
+    const refresh = vi.fn();
+    renderLogin(refresh);
+
+    await signIn();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/switched off by an administrator/i);
+    expect(alert).not.toHaveTextContent(/was not recognised/i);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The fallback, which is the only reason a hardcoded sentence survives in that arm at all: a 401
+   * whose envelope carries an empty message still has to say something. Asserted so the fallback is
+   * a decision with a test on it rather than dead code nobody can see the shape of.
+   */
+  it('falls back to its own sentence when a 401 carries no message to print', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error: { code: 'unauthorized', message: '   ' },
+          requestId: 'req-test-1',
+        }),
+      }),
+    );
+    renderLogin();
+
+    await signIn();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /that email or password was not recognised/i,
+    );
+  });
+
   it('names the cooldown when the server rate-limits the attempt', async () => {
     vi.stubGlobal(
       'fetch',
