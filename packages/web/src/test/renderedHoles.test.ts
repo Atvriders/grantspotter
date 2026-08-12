@@ -62,6 +62,37 @@ describe('the after-every-test sweep for rendered holes', () => {
     expect(findRenderedHole('“undefined and 3 others”')).toBe('undefined');
   });
 
+  /**
+   * THE TWO GUARDS, POINTED AT THE SAME SENTENCE, AND WHY THAT MATTERS.
+   *
+   * This sweep and the census in `packages/server/test/userFacingCopyContract.test.ts` divide the
+   * problem between them: the census reads sentences that exist, and this reads sentences that
+   * rendered. On 2026-08-12 the division had a gap in it. The census could not see a single
+   * interpolated sentence — its own `{}` placeholder tripped its own CSS-selector rule — so for
+   * the whole class of copy where a value is substituted, THIS was the only guard, and this one
+   * only fires in a state some test actually renders.
+   *
+   * Every case below is that class: a sentence whose literal half is fine and whose substituted
+   * half did not arrive. `frameFor('found', callsign)` is the round-two original. The census can
+   * see all four of these now; this file is what happens when one of them runs anyway.
+   */
+  it('catches the substituted half of a sentence whose literal half is perfect', () => {
+    const missing = undefined as unknown as string;
+    for (const sentence of [
+      `FCC record for ${String(missing)}`,
+      `Verified ${String(missing)}, on 2026-08-01.`,
+      `This record is for ${String(missing)}, not the W1AW you asked about.`,
+      `A calendar window may span at most ${String(missing)} days.`,
+    ]) {
+      expect(findRenderedHole(sentence), sentence).toBe('undefined');
+    }
+
+    // And the same sentences, substituted with something real, must stay silent — the guard is
+    // about the hole, never about the wording around it.
+    expect(findRenderedHole('FCC record for W1AW')).toBe(null);
+    expect(findRenderedHole('A calendar window may span at most 400 days.')).toBe(null);
+  });
+
   /** Words that contain a token are words. A guard that fires on prose gets switched off. */
   it('does not fire on English that happens to contain the letters', () => {
     for (const sentence of [

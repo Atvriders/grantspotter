@@ -2,11 +2,16 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  censusUserFacingCopy,
   collectAssertionCorpus,
-  collectUserFacingCopy,
+  DROP_REASONS,
   isAsserted,
+  isKnownUnreadPosition,
+  normalizeCopy,
+  UNREAD_POSITIONS,
   REPO_ROOT,
   type CopySite,
+  type DroppedString,
 } from './helpers/userFacingCopy.js';
 
 /**
@@ -44,12 +49,15 @@ import {
  *   lying. It is the only kind worth building.
  *
  * The three checks this file makes are all of the second kind (a fourth `describe`, first below,
- * only guards the census itself against going quiet):
+ * guards the census itself against going quiet AND against going blind):
  *
  *   1. THE ONE-NUMBER RULE. No sentence may say when to come back. The only statement of when in
  *      this product is `retryAfterSec`, rendered through `lib/retryAfter.ts`. Rewording a refusal
- *      cannot trip this; inventing a wait is the only thing that can. There is no allowlist,
- *      because after 2026-08-12 there is nothing to allow.
+ *      cannot trip this; inventing a wait is the only thing that can. It is run over every string
+ *      the walk touched — the counted sentences, the drops and the blind-spot ledger — because a
+ *      rule that only reaches what a prose heuristic approved has a hole shaped like that
+ *      heuristic's mistakes. That widening found five live violations in `callsign/callook.ts`,
+ *      after the commit that built this rule said there was nothing left to allow.
  *
  *   2. THE UNASSERTED BUDGET. A per-file count of sentences no test names, which may go down and
  *      may not go up. Editing an asserted sentence does not change a count. Adding a sentence
@@ -62,14 +70,40 @@ import {
  * product source file, not a grep. It lives beside `contactUrlEntryPointContract.test.ts`,
  * `vitestCoverageContract.test.ts` and `tsconfigCoverage.test.ts` because it is the same kind of
  * object: a repo-wide invariant that reads what actually runs rather than a description of it.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────────────────────
+ * AND THE FIFTH ROUND'S FINDING, WHICH IS ABOUT THIS FILE RATHER THAN ABOUT THE PRODUCT.
+ *
+ * All three checks above were built on 2026-08-12 over a census that could not see a single
+ * interpolated sentence. The placeholder the census wrote into its own text — `{}` — is refused by
+ * its own CSS-selector rule, so every template literal carrying a substitution was classified as a
+ * stylesheet and discarded in silence. 0 of 1,323 recorded sites contained the marker the type's
+ * docblock promised. The one-number rule iterated a set that could not contain an invented wait
+ * written as a template; the budget's headline understated the debt by 84; and the paragraph
+ * headed "WHY THE INTERPOLATED FORM PASSES" described chunk analysis over sites that were never
+ * collected — a docblock asserting a mechanism that did not run, which is the exact defect class
+ * this whole week has been about.
+ *
+ * The lesson is not "fix the placeholder". It is that a counter which can exclude something
+ * without saying so will eventually exclude the thing that matters, and stay green while it does.
+ * `helpers/userFacingCopy.ts` no longer excludes anything silently: every string it walks is a
+ * counted site, a drop with a reason from a closed set, or an entry in a named blind-spot
+ * position, and `accounts for every string it walked` asserts the arithmetic.
  */
 
-const copy = collectUserFacingCopy();
+const census = censusUserFacingCopy();
+const copy = census.sites;
 const corpus = collectAssertionCorpus();
 const unasserted = copy.filter((site) => !isAsserted(site, corpus));
 
 function show(site: CopySite): string {
   return `${site.file}:${String(site.line)} [${site.kind}] ${site.text.slice(0, 140)}`;
+}
+
+function showDrop(drop: DroppedString): string {
+  return `${drop.file}:${String(drop.line)} [${drop.reason}${
+    drop.detail === null ? '' : `/${drop.detail}`
+  }] ${drop.text.slice(0, 140)}`;
 }
 
 describe('the census itself', () => {
@@ -110,6 +144,133 @@ describe('the census itself', () => {
       expect(texts, `"${notASentence}" is not a sentence a person reads`).not.toContain(notASentence);
     }
   });
+
+  /**
+   * THE CHECK THAT WOULD HAVE CAUGHT THE DEFECT THIS ROUND REPAIRED, AND THE REASON IT IS HERE.
+   *
+   * Round four built this census, counted 1,320 sentences, read the 335 no test named and fixed
+   * eight. It also, silently, could not see a single interpolated sentence. `record` was handed
+   * `chunks.join('{}')` to judge, `machineryRule` refuses a brace because a brace is how a CSS rule
+   * body is spelled, and so EVERY template literal carrying a substitution was classified as a
+   * stylesheet and discarded without a word. Measured at abffd25: **0 of 1,323 sites contained the
+   * `{}` that `CopySite.text`'s own docblock promised would be there.**
+   *
+   * That is the worst shape a bug can take in a counter. Nothing failed. The total looked healthy.
+   * The class it dropped was the class most likely to be wrong — an interpolated sentence is one
+   * whose words were chosen for a value the runtime does not have to supply, which is exactly what
+   * "FCC record for undefined" was — and `CallsignLookup.tsx`'s "FCC record for {}", the round-two
+   * defect this whole census was built to find, was among the missing.
+   *
+   * So the property is asserted rather than assumed, in both directions: sentences with a
+   * substitution exist in quantity, AND one specific sentence known to carry one is present. A
+   * future separator that trips a machinery rule turns this red on the first run.
+   */
+  it('can see an interpolated sentence', () => {
+    const interpolated = copy.filter((site) => site.text.includes('{}'));
+    expect(
+      interpolated.length,
+      'The census recorded no sentence with a substitution in it. That is what a placeholder ' +
+        'colliding with a machinery rule looks like from the outside: a healthy total, and a ' +
+        'whole class of copy — the class most likely to be false — invisible. See ' +
+        '`proseCandidate` in helpers/userFacingCopy.ts.',
+    ).toBeGreaterThan(120);
+
+    const roundTwo = copy.filter(
+      (site) =>
+        site.file === 'packages/web/src/components/CallsignLookup.tsx' &&
+        site.chunks.some((chunk) => chunk.includes('fcc record for')),
+    );
+    expect(
+      roundTwo.map(show),
+      'Round two’s own defect — "FCC record for undefined" — is written as an interpolation, ' +
+        'and the census must be able to see the sentence that produced it.',
+    ).not.toEqual([]);
+  });
+
+  /**
+   * EVERY STRING THE WALK TOUCHED IS ACCOUNTED FOR, BY ARITHMETIC.
+   *
+   * A counter that silently omits is worse than no counter, because the number gets quoted — and
+   * the placeholder bug proved that a scanner can drop a whole class of thing while every test
+   * around it stays green. The repair is structural, not a second heuristic: `extractFromFile`
+   * either records a site or records a drop with a named reason, so a future early `return` in the
+   * cascade breaks a sum rather than shaving a total nobody is watching.
+   *
+   * Three things are asserted, and the third is the loud one:
+   *
+   *   the identity           sites + drops = candidates in a position this census reads
+   *   the closed vocabulary  every drop reason is one of `DROP_REASONS`, every blind-spot entry is
+   *                          one of `UNREAD_POSITIONS` — so a NEW kind of exclusion fails here
+   *                          until somebody names it and writes down why nobody reads it
+   *   nothing unclassified   a string that reached the end of the cascade without a decision.
+   *                          This must be empty. It is the failure mode the census had.
+   */
+  it('accounts for every string it walked, and refuses to shrug at one', () => {
+    expect(
+      census.sites.length + census.drops.length,
+      'A string in a read position was neither counted nor dropped, so it left the census by a ' +
+        'path that records nothing. Find the branch in `extractFromFile` that returns without ' +
+        'calling `record`.',
+    ).toBe(census.considered);
+
+    expect(census.considered).toBeGreaterThan(2000);
+    expect(census.stringishNodes).toBeGreaterThan(census.considered);
+
+    const strangeDrops = census.drops.filter(
+      (drop) => !(DROP_REASONS as readonly string[]).includes(drop.reason),
+    );
+    expect(strangeDrops.map(showDrop), 'a drop reason outside the closed set').toEqual([]);
+
+    const strangePositions = census.unread.filter((entry) => !isKnownUnreadPosition(entry.reason));
+    expect(
+      strangePositions.map(showDrop),
+      'A string was excluded from the census for a reason not on `UNREAD_POSITIONS`. Add it to ' +
+        'that list with a sentence saying why a person cannot read what sits there — the list is ' +
+        'the census admitting where it does not look, and an unnamed exclusion is the thing this ' +
+        'round exists to make impossible.',
+    ).toEqual([]);
+
+    const unclassified = census.drops.filter(
+      (drop) => drop.reason === 'unclassified' || drop.detail === 'unclassified',
+    );
+    expect(
+      unclassified.map(showDrop),
+      'The census met a string it could not classify and fell through to `unclassified`. It is ' +
+        'reported rather than dropped on purpose: a counter that quietly excludes what it does ' +
+        'not understand reports a number that is wrong in the direction nobody checks.',
+    ).toEqual([]);
+  });
+
+  /**
+   * THE BLIND SPOT, PUBLISHED RATHER THAN PINNED.
+   *
+   * `Census.unread` is every string that reads as English by this module's own rules and sits
+   * somewhere this census does not look. It is 1,461 entries at abffd25 and most of them are
+   * machinery that happens to scan as prose. Some are not: `api/auth.ts` keeps its refusals as
+   * module constants, so `ACCOUNT_DISABLED` and "Too many failed sign-ins for this email address
+   * from this connection." are sentences a person reads that no census has counted.
+   *
+   * IT IS NOT RATCHETED BY COUNT, DELIBERATELY. The counts move whenever anybody writes a SQL
+   * statement or an analyst note, and a number that must be bumped during ordinary work is a
+   * number that gets bumped without being read — the first kind of guard, the kind this file's
+   * header says gets switched off. What is ratcheted is the NAMES, above: the shape of the blind
+   * spot is fixed, its volume is not. And the one-number rule below is run over this bucket as
+   * well as over the sites, so the part of it that can actually harm a reader is governed by
+   * content even where it is not governed by count.
+   */
+  it('knows the size of its own blind spot', () => {
+    expect(
+      census.unread.length,
+      'the blind-spot ledger is empty, which means it stopped being collected',
+    ).toBeGreaterThan(500);
+    const positions = new Set(census.unread.map((entry) => entry.reason.split(':')[0]));
+    for (const named of ['bare-literal-outside-the-browser', 'sql-statement', 'log-line']) {
+      expect(positions, `${named} is no longer being recorded`).toContain(named);
+    }
+    expect(new Set(UNREAD_POSITIONS).size, 'UNREAD_POSITIONS has a duplicate').toBe(
+      UNREAD_POSITIONS.length,
+    );
+  });
 });
 
 /**
@@ -143,20 +304,89 @@ describe('the census itself', () => {
  * come-back-later cue and a length-of-time cue in the SAME literal run — which is what a promise
  * about when to return is, and what nothing else is.
  *
- * WHY THE INTERPOLATED FORM PASSES. `` `Try again in ${humanRetryAfter(wait)}.` `` has literal runs
- * "Try again in " and "." — a retry cue and no duration, because the duration is a value. That is
- * the shape this rule exists to leave standing, and it is the only one.
+ * WHY THE INTERPOLATED FORM PASSES, AND THE FACT THAT UNTIL 2026-08-12 IT DID NOT PASS — IT WAS
+ * NEVER LOOKED AT. `` `Try again in ${humanRetryAfter(wait)}.` `` has literal runs "Try again in "
+ * and "." — a retry cue and no duration, because the duration is a value. That is the shape this
+ * rule exists to leave standing, and it is the only one. But this paragraph described a mechanism
+ * that did not run: the census classified every interpolated sentence as a CSS selector and never
+ * recorded one, so "chunk analysis over an interpolated sentence" was a claim about an empty set.
+ * Demonstrated below on the census itself, which holds 189 sentences carrying a substitution at
+ * abffd25 and has held no fewer since.
+ *
+ * WHAT IT IS RUN OVER, WHICH IS THE OTHER HALF OF THE SAME LESSON. Sites, drops AND the blind-spot
+ * ledger — every string the walk touched, not only the ones it decided were copy. The rule used to
+ * iterate `copy` alone, which made its reach a consequence of a prose heuristic rather than of the
+ * rule itself, and `packages/server/src/callsign/callook.ts` is what that cost: five refusals
+ * saying "try again in a moment" and "Try again shortly", written as bare literals in the server
+ * tree, in a position the census does not read. They were live at abffd25 and the commit that
+ * built this rule said "there is now nothing to allowlist". There was. It was somewhere the rule
+ * could not look.
  */
 const COME_BACK_LATER = /\btry again\b|\bcome back\b|\bretry\b|\bwait\b|\bcheck back\b/;
 const HOW_LONG =
   /\bshortly\b|\bin a (?:moment|minute|while|bit|sec)\b|\ba (?:few|couple of) (?:seconds|minutes|hours|days)\b|\bin about\b|\b\d+\s*(?:second|minute|hour|day)s?\b|\ban hour\b|\ba minute\b|\bsoon\b|\bpresently\b/;
+
+/**
+ * THE FIVE THAT ARE REAL AND ARE NOT FIXED HERE.
+ *
+ * Widening the rule to the blind-spot ledger found these immediately. Every one is a live promise
+ * about when to come back, printed to an applicant, with no `retryAfterSec` behind it:
+ *
+ *   callook.ts:1007  a request that timed out                "try again in a moment"
+ *   callook.ts:1010  a transport failure, cause unknown      "try again in a moment"
+ *   callook.ts:1097  a body that stopped arriving            "try again in a moment"
+ *   callook.ts:1102  a dropped connection mid-answer         "try again in a moment"
+ *   callook.ts:1128  callook reloading its FCC snapshot      "Try again shortly"
+ *
+ * The last one is the interesting one and it is still a violation. The sentence around it cites
+ * callook's own published figure — the reload "usually takes under five minutes" — which is a
+ * sourced fact about the source and belongs there. "Try again shortly" is not that fact; it is an
+ * instruction this software invented on top of it, and the first four have no fact underneath at
+ * all: a socket timeout says nothing whatever about when the source will answer.
+ *
+ * THEY ARE LISTED RATHER THAN FIXED because `packages/server/src/callsign/callook.ts` is not this
+ * agent's territory and another agent is committing into this tree. Listing them is not the same
+ * as tolerating them: each entry is matched against the exact literal run, so this cannot cover a
+ * sixth violation or a reworded fifth, and `nothing on the list has been quietly fixed` below
+ * fails the moment one is repaired without the entry being deleted. Delete the entry with the fix.
+ */
+const KNOWN_UNGOVERNED: readonly { readonly file: string; readonly run: string }[] = [
+  {
+    file: 'packages/server/src/callsign/callook.ts',
+    run: 'the source being slow, not anything to do with your callsign - try again in a moment,',
+  },
+  {
+    file: 'packages/server/src/callsign/callook.ts',
+    run: 'network, not your callsign - try again in a moment, or type your details in and',
+  },
+  {
+    file: 'packages/server/src/callsign/callook.ts',
+    run: 'not anything to do with your callsign - try again in a moment, or type your details',
+  },
+  {
+    file: 'packages/server/src/callsign/callook.ts',
+    run: 'your callsign - try again in a moment, or type your details in and carry on.',
+  },
+  {
+    file: 'packages/server/src/callsign/callook.ts',
+    run: 'minutes. nothing is wrong with your callsign. try again shortly, or type your details',
+  },
+];
+
+function promisesATime(text: string): boolean {
+  return COME_BACK_LATER.test(text) && HOW_LONG.test(text);
+}
+
+function isKnownUngoverned(file: string, run: string): boolean {
+  return KNOWN_UNGOVERNED.some((entry) => entry.file === file && entry.run === run);
+}
 
 describe('no sentence may say when to come back', () => {
   it('states the wait only as the number the system computed', () => {
     const promises: string[] = [];
     for (const site of copy) {
       for (const chunk of site.chunks) {
-        if (COME_BACK_LATER.test(chunk) && HOW_LONG.test(chunk)) promises.push(show(site));
+        if (promisesATime(chunk) && !isKnownUngoverned(site.file, chunk)) promises.push(show(site));
       }
     }
 
@@ -170,12 +400,63 @@ describe('no sentence may say when to come back', () => {
   });
 
   /**
+   * THE SAME RULE, OVER THE STRINGS THE CENSUS DOES NOT COUNT.
+   *
+   * A guard whose reach is decided by a prose heuristic is a guard with a hole shaped exactly like
+   * that heuristic's mistakes, and this one had two: interpolated sentences (invisible until this
+   * round) and every bare literal in the server tree (invisible still). A promise about when to
+   * come back is recognisable from the characters alone, so there is no reason for this rule to
+   * wait for the census to decide a string is copy first.
+   */
+  it('reaches into the strings the census does not count', () => {
+    const promises: string[] = [];
+    for (const entry of [...census.drops, ...census.unread]) {
+      const run = normalizeCopy(entry.text);
+      if (promisesATime(run) && !isKnownUngoverned(entry.file, run)) promises.push(showDrop(entry));
+    }
+
+    expect(
+      promises,
+      'A promise about when to come back is sitting somewhere the census does not read — a bare ' +
+        'literal in the server, an object value, a log line. Position is not a defence: the ' +
+        'reader sees the sentence either way. Say what happened, and let `retryAfterSec` say when.',
+    ).toEqual([]);
+  });
+
+  /**
+   * The other tooth of the ratchet, and the reason the list above is not an allowlist.
+   *
+   * An exemption that outlives the defect it names is worse than no exemption: the file gets
+   * fixed, the entry stays, and the next invented wait written in that file is free. Every entry
+   * must still be a real, matching violation, or it must be deleted.
+   */
+  it('has nothing on the list that has been quietly fixed', () => {
+    const everyRun = new Set<string>();
+    for (const site of copy) for (const chunk of site.chunks) everyRun.add(`${site.file} ${chunk}`);
+    for (const entry of [...census.drops, ...census.unread]) {
+      everyRun.add(`${entry.file} ${normalizeCopy(entry.text)}`);
+    }
+
+    const stale = KNOWN_UNGOVERNED.filter(
+      (entry) => !everyRun.has(`${entry.file} ${entry.run}`),
+    ).map((entry) => `${entry.file}: ${entry.run}`);
+
+    expect(
+      stale,
+      'This entry in KNOWN_UNGOVERNED no longer matches anything in the product. Either the ' +
+        'sentence was fixed — in which case delete the entry, that is the last step of the work — ' +
+        'or it was reworded, in which case the exemption is now covering a sentence nobody ' +
+        'examined. Neither may be left standing.',
+    ).toEqual([]);
+  });
+
+  /**
    * The rule demonstrated firing, in both directions. A guard nobody has watched work is a guard
    * that may match nothing at all — the failure `contactUrlEntryPointContract.test.ts` was walked
    * past three separate ways while green.
    */
   it('is a rule about promises, not about the word "minutes"', () => {
-    const violates = (text: string): boolean => COME_BACK_LATER.test(text) && HOW_LONG.test(text);
+    const violates = promisesATime;
 
     // The five sentences that shipped.
     expect(violates('you have used your verification allowance for this hour. try again shortly.')).toBe(true);
@@ -190,6 +471,41 @@ describe('no sentence may say when to come back', () => {
     expect(violates('you have used every verification in your hourly allowance.')).toBe(false);
     expect(violates('deadlines within 30 days of today')).toBe(false);
     expect(violates('expect a decision in 60 to 90 days.')).toBe(false);
+  });
+
+  /**
+   * THE MECHANISM THE DOCBLOCK CLAIMS, EXECUTED.
+   *
+   * "WHY THE INTERPOLATED FORM PASSES" above describes chunk analysis over a sentence with a
+   * substitution in it. Until 2026-08-12 that paragraph described nothing: the census held zero
+   * such sentences, so the rule had never once been applied to one and the honest form it claims
+   * to protect had never been protected. This is that paragraph turned into an assertion — over
+   * the REAL census rather than over strings written here, because strings written here are what
+   * the docblock already was.
+   */
+  it('applies chunk by chunk to the interpolated sentences the census now holds', () => {
+    const interpolated = copy.filter((site) => site.text.includes('{}'));
+    expect(interpolated.length).toBeGreaterThan(120);
+
+    // The honest form, as the census actually stores it: literal runs, the value absent.
+    const honest = copy.filter((site) =>
+      site.chunks.some((chunk) => /\btry again in\s*$/.test(chunk)),
+    );
+    expect(
+      honest.map(show),
+      '`Try again in ${humanRetryAfter(wait)}.` is the one legal way to state a wait, and the ' +
+        'census must be holding at least one of them for this rule to have been exercised on the ' +
+        'shape it exists to leave standing.',
+    ).not.toEqual([]);
+    for (const site of honest) {
+      for (const chunk of site.chunks) expect(promisesATime(chunk)).toBe(false);
+    }
+
+    // And the shape that must NOT pass, written as an interpolation. Before this round the census
+    // recorded no such site at all, so this sentence could be added to any web file and the rule
+    // above would not have seen it.
+    const planted = ['too many attempts. try again in about an hour, ', '.'];
+    expect(planted.some(promisesATime)).toBe(true);
   });
 });
 
@@ -216,27 +532,44 @@ describe('no sentence may say when to come back', () => {
  * this round is about were all the second thing. They are a measure of how much copy is
  * completely unlooked-at, which is where every one of those findings was hiding.
  *
- * `templates/slots.ts` is 75 of the 335 on its own: the writing desk's slot labels and hints, a
+ * `templates/slots.ts` is 75 of these on its own: the writing desk's slot labels and hints, a
  * flat table of static strings. It is left as one entry rather than broken up because copying 75
  * strings into a test file would move the number without looking at anything — the useful test
  * for that file is that every slot a template references has a label and a hint, which is a
  * different test than this one is asking for.
+ *
+ * WHY THE TOTAL WENT UP ON 2026-08-12 WITHOUT ANYBODY WRITING A SENTENCE. It went from 335 to 413,
+ * and every one of the additions was already shipping — 84 of them measured against abffd25,
+ * before this tree moved under the measurement. The census could not see them: an interpolated
+ * sentence was classified as a CSS selector by the census's own placeholder, and a JSX attribute
+ * whose name was not on a list written in advance was discarded unread. Both are repaired in
+ * `helpers/userFacingCopy.ts`, so "335 of 1,320" was never the debt — it was the debt minus the
+ * part the counter could not see, which is the worst kind of number to have quoted. The headline
+ * below now says what was measured after the counter was fixed.
  */
 const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
   Object.entries({
-    'packages/core/src/maidenhead.ts': 1,
-    'packages/server/src/api/adminUsersRouter.ts': 2,
+    'packages/core/src/maidenhead.ts': 5,
+    'packages/server/src/api/adminUsersRouter.ts': 3,
     'packages/server/src/api/applications.ts': 2,
     'packages/server/src/api/calendarRouter.ts': 1,
     'packages/server/src/api/channelRouter.ts': 1,
     'packages/server/src/api/exports.ts': 1,
+    'packages/server/src/api/inboxRouter.ts': 2,
+    'packages/server/src/api/profileRouter.ts': 2,
+    'packages/server/src/api/programDetail.ts': 1,
+    'packages/server/src/api/programsRouter.ts': 1,
     'packages/server/src/api/prompts.ts': 2,
-    'packages/server/src/api/sourcesRouter.ts': 2,
-    'packages/server/src/api/templates.ts': 1,
-    'packages/server/src/api/watchRouter.ts': 1,
-    'packages/server/src/config.ts': 6,
+    'packages/server/src/api/sourcesRouter.ts': 4,
+    'packages/server/src/api/templates.ts': 2,
+    'packages/server/src/api/verifyRouter.ts': 1,
+    'packages/server/src/api/watchRouter.ts': 2,
+    'packages/server/src/auth/middleware.ts': 1,
+    'packages/server/src/config.ts': 7,
     'packages/server/src/db/repositories/applications.ts': 1,
-    'packages/server/src/seed/load.ts': 2,
+    'packages/server/src/fetcher/index.ts': 1,
+    'packages/server/src/review/index.ts': 1,
+    'packages/server/src/seed/load.ts': 4,
     'packages/server/src/sources/ardc-award-tables.ts': 1,
     'packages/server/src/sources/arrl-news-rss.ts': 1,
     'packages/server/src/sources/arrl-pages.ts': 1,
@@ -247,44 +580,47 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/server/src/sources/nsf-funding-rss.ts': 1,
     'packages/server/src/sources/tier-c-b.ts': 1,
     'packages/server/src/templates/slots.ts': 75,
-    'packages/web/src/App.tsx': 1,
     'packages/web/src/api/client.ts': 1,
-    'packages/web/src/components/AgendaList.tsx': 8,
+    'packages/web/src/App.tsx': 1,
+    'packages/web/src/components/AgendaList.tsx': 10,
     'packages/web/src/components/AppShell.tsx': 2,
-    'packages/web/src/components/CallsignLookup.tsx': 34,
-    'packages/web/src/components/CopyPromptButton.tsx': 2,
+    'packages/web/src/components/CallsignLookup.tsx': 43,
+    'packages/web/src/components/CompletenessMeter.tsx': 1,
+    'packages/web/src/components/CopyPromptButton.tsx': 3,
     'packages/web/src/components/DisputedPanel.tsx': 2,
     'packages/web/src/components/DraftGaps.tsx': 1,
     'packages/web/src/components/FactChecklist.tsx': 6,
     'packages/web/src/components/FilterPanel.tsx': 3,
-    'packages/web/src/components/IneligibilityDrawer.tsx': 4,
-    'packages/web/src/components/MonthGrid.tsx': 3,
+    'packages/web/src/components/IneligibilityDrawer.tsx': 7,
+    'packages/web/src/components/MonthGrid.tsx': 7,
     'packages/web/src/components/NavDrawer.tsx': 2,
     'packages/web/src/components/ProgramTable.tsx': 1,
     'packages/web/src/components/ProseCheckPanel.tsx': 5,
     'packages/web/src/components/ProvenanceTable.tsx': 6,
     'packages/web/src/components/SlotForm.tsx': 2,
-    'packages/web/src/components/SourceLink.tsx': 3,
+    'packages/web/src/components/SourceLink.tsx': 4,
     'packages/web/src/components/StatusPill.tsx': 3,
-    'packages/web/src/components/VerdictBadge.tsx': 2,
+    'packages/web/src/components/TrustBadge.tsx': 2,
+    'packages/web/src/components/VerdictBadge.tsx': 3,
     'packages/web/src/lib/callsignFill.ts': 1,
+    'packages/web/src/lib/contrast.ts': 1,
     'packages/web/src/lib/filterState.ts': 13,
     'packages/web/src/lib/profileFields.ts': 13,
     'packages/web/src/lib/safety.ts': 1,
-    'packages/web/src/routes/Admin.tsx': 12,
-    'packages/web/src/routes/Applications.tsx': 7,
+    'packages/web/src/routes/Admin.tsx': 15,
+    'packages/web/src/routes/Applications.tsx': 10,
     'packages/web/src/routes/Browse.tsx': 7,
-    'packages/web/src/routes/Calendar.tsx': 14,
-    'packages/web/src/routes/Enroll.tsx': 1,
+    'packages/web/src/routes/Calendar.tsx': 12,
+    'packages/web/src/routes/Enroll.tsx': 2,
     'packages/web/src/routes/Exports.tsx': 11,
-    'packages/web/src/routes/FirstRun.tsx': 3,
-    'packages/web/src/routes/Inbox.tsx': 9,
-    'packages/web/src/routes/Login.tsx': 2,
-    'packages/web/src/routes/Opportunity.tsx': 9,
-    'packages/web/src/routes/Profile.tsx': 11,
-    'packages/web/src/routes/Sources.tsx': 7,
-    'packages/web/src/routes/Templates.tsx': 4,
-    'packages/web/src/routes/Watchlist.tsx': 12,
+    'packages/web/src/routes/FirstRun.tsx': 4,
+    'packages/web/src/routes/Inbox.tsx': 12,
+    'packages/web/src/routes/Login.tsx': 3,
+    'packages/web/src/routes/Opportunity.tsx': 10,
+    'packages/web/src/routes/Profile.tsx': 16,
+    'packages/web/src/routes/Sources.tsx': 8,
+    'packages/web/src/routes/Templates.tsx': 6,
+    'packages/web/src/routes/Watchlist.tsx': 24,
   }),
 );
 
@@ -345,9 +681,14 @@ describe('sentences no test names', () => {
    * cannot drift from the figure the suite measures. The bound is one-sided on purpose: driving it
    * down is the work, and it must not need an edit here to do so.
    */
-  it('number 335 of 1,320 today, and that ceiling only falls', () => {
-    expect(copy.length).toBeGreaterThanOrEqual(1320);
-    expect(unasserted.length).toBeLessThanOrEqual(335);
+  /**
+   * The headline, asserted rather than described, so the figure quoted in the round's notes cannot
+   * drift from the figure the suite measures — and so that the previous headline, "335 of 1,320",
+   * cannot be repeated now that it is known to have been 335 of the 1,320 the counter could see.
+   */
+  it('number 413 of 1,541 today, and that ceiling only falls', () => {
+    expect(copy.length).toBeGreaterThanOrEqual(1541);
+    expect(unasserted.length).toBeLessThanOrEqual(413);
   });
 });
 
