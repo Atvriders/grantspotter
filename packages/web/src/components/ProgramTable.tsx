@@ -6,7 +6,7 @@ import {
   isApplicantEntityConstraint,
 } from '@grantspotter/core';
 import type { Program, Verdict } from '@grantspotter/core';
-import { VerdictBadge } from './VerdictBadge.js';
+import { VerdictBadge, unrepresentedRoutesOf } from './VerdictBadge.js';
 import { TrustBadge } from './TrustBadge.js';
 import { StatusPill } from './StatusPill.js';
 import { formatDate } from '../lib/trust.js';
@@ -267,10 +267,16 @@ function ProgramRecord({
 
       <div className="record-marks">
         <StatusPill status={row.program.trust.status} />
+        {/* The row does not grow a new line for `orUnrepresented` — the drawer under it only ever
+            opens for `ineligible`, and a route this schema cannot check can never produce one. What
+            it must not do is REPEAT A FALSE REASON: the unknown badge used to blame this
+            programme's record for a hole that is in GrantSpotter's schema. See
+            `unrepresentedRoutesOf`. */}
         <VerdictBadge
           verdict={row.verdict}
           onExplain={onExplain ? () => onExplain(row.program.id) : undefined}
           expanded={expanded}
+          unrepresentedRoutes={unrepresentedRoutesOf(row.program)}
         />
         <TrustBadge lastVerifiedAt={row.program.trust.lastVerifiedAt} now={now} />
       </div>
@@ -365,6 +371,7 @@ export function ProgramTable({
                     verdict={row.verdict}
                     onExplain={onExplain ? () => onExplain(row.program.id) : undefined}
                     expanded={expandedId === row.program.id}
+                    unrepresentedRoutes={unrepresentedRoutesOf(row.program)}
                   />
                 </td>
                 <td>

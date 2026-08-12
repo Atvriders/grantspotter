@@ -1,6 +1,36 @@
-import type { Verdict } from '@grantspotter/core';
+import type { Program, Verdict } from '@grantspotter/core';
 import { profileFieldLabel, type ProfileFieldKind } from '../lib/profileFields.js';
 import './badges.css';
+
+/**
+ * The routes a programme's own record names that GrantSpotter cannot check —
+ * `ConstraintAlternatives.orUnrepresented`, in the funder's own terms, in record order.
+ *
+ * The Robert A. Rodriguez K5AUW Scholarship is the clearest one: "open to graduating high school
+ * seniors, AND TO PREVIOUS AWARDEES". "Previous awardee" is not a `Stage`, not a `DegreeLevel` and
+ * not any field `StudentProfile` holds, so the axis declines to decide rather than refuse — an
+ * `unknown` with an EMPTY `missingProfileFields`.
+ *
+ * WHY EVERY UNKNOWN SURFACE NOW NEEDS THIS. Measured over the shipped corpus with
+ * `scripts/profile-corpus.ts` at its fixed 2026-08-02 clock: 51 constraints across the 150
+ * publishable programmes carry `orUnrepresented`, and for the graduate music student 20 of the
+ * programmes that come back `unknown` with nothing to fill in are of exactly this kind. On all 20
+ * this badge used to say "This program's record is missing something GrantSpotter needs to decide
+ * it", which is the wrong party: the record is complete and the funder's sentence is on file — it
+ * is this software's schema that cannot adjudicate "Science, Math, Engineering or Technology"
+ * against "Music Performance". Blaming the record sends a reader to check a page that already says
+ * what it needs to say.
+ *
+ * A `Program`, not a `Verdict`: `Verdict.unknown` carries only `missingProfileFields`, and the
+ * detail response does not say which profile it was computed against, so no caller can prove this
+ * route is what stopped THIS verdict. The copy below therefore says what the record names, never
+ * that it is the cause.
+ */
+export function unrepresentedRoutesOf(program: Program): string[] {
+  return program.constraints
+    .map((constraint) => constraint.spec.orUnrepresented)
+    .filter((route): route is string => route !== undefined && route.trim() !== '');
+}
 
 export interface VerdictBadgeProps {
   verdict: Verdict | null;
@@ -12,6 +42,12 @@ export interface VerdictBadgeProps {
    * missing fields with the copy for that editor tab; four field keys exist on both profiles.
    */
   profileKind?: ProfileFieldKind;
+  /**
+   * Routes this programme's record names that no rule here can check — {@link unrepresentedRoutesOf}.
+   * Only ever read for `unknown`, and only when there is nothing to fill in: a route the applicant
+   * satisfies makes the verdict `eligible`, and `orUnrepresented` can never produce a refusal.
+   */
+  unrepresentedRoutes?: readonly string[];
 }
 
 /**
@@ -29,6 +65,7 @@ export function VerdictBadge({
   onExplain,
   expanded = false,
   profileKind,
+  unrepresentedRoutes = [],
 }: VerdictBadgeProps): JSX.Element {
   if (verdict === null) {
     return (
@@ -132,7 +169,18 @@ export function VerdictBadge({
           // never-no would make the badge lie in exactly the way the rest of this
           // product refuses to. Flagged by Task 18 while writing the explorer copy.
           ? `Not an answer yet. This verdict is waiting on: ${names.join(', ')}. Answering one may reveal the next question rather than a final answer — while it stays unanswered, it is a question and not a "no".`
-          : // NOT "could not be evaluated from your profile" — that was true of neither case and
+          : unrepresentedRoutes.length > 0
+            ? // THE THIRD CAUSE, and the branch below was written before it existed. When a
+              // funder names a way of qualifying that this schema cannot describe, nothing is
+              // missing from the record — their sentence is on file and quoted on the record page
+              // — and nothing is missing from the profile either. What cannot be done is the
+              // ADJUDICATION. Saying "this program's record is missing something" about those
+              // sends the reader to check a page that already says what it needs to say, and
+              // saying "no field you could fill in would change that" is worse than vague on the
+              // 49 field-of-study cases, where the applicant's own `fieldOfStudy` is precisely
+              // what nobody can decide. See `unrepresentedRoutesOf` for the measurement.
+              `Not an answer yet. This funder names a way of qualifying that GrantSpotter cannot check — ${unrepresentedRoutes.join('; ')} — so it declined to decide rather than rule you out. Open the record to read their own sentence. It is not a "no".`
+            : // NOT "could not be evaluated from your profile" — that was true of neither case and
             // pointed the reader at the wrong place. Both causes are a hole in GRANTSPOTTER'S
             // record: a radius rule whose centre never resolved to a coordinate (1 record), and a
             // record that never said who may apply (19 records, which were a hard "no" for every

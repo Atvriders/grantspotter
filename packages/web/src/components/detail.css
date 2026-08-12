@@ -120,6 +120,47 @@
   border-radius: 0 var(--r-1) var(--r-1) 0;
 }
 
+/*
+  ...AND ANYTHING GRANTSPOTTER WROTE MUST NOT WEAR `.verbatim`. Deliberately the body face with a
+  DASHED rule, against `.verbatim`'s monospaced, solid-ruled, shaded block: the two appear one under
+  the other in the unknown panel, on the same requirement, and a reader has to be able to tell at a
+  glance which of them the funder published. Same choice, and the same reasoning, as
+  `.explain-authored` in explain.css.
+*/
+.authored {
+  display: block;
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  border-left: 2px dashed var(--border);
+  padding-left: var(--s-3);
+  max-width: 68ch;
+}
+
+.authored-by {
+  display: block;
+  font-size: var(--fs-100);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 640;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+/* One route per record, each with the funder's sentence under it. Prose, not a data column. */
+.unrepresented-routes {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.unrepresented-routes > li {
+  display: grid;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
 /* An obligation nobody stated. Muted, and never dressed as an answer. */
 .unstated { color: var(--text-muted); }
 

@@ -47,6 +47,7 @@
 import { hasFunderWording, isApplicantEntityConstraint, matchAll } from '@grantspotter/core';
 import type {
   Constraint,
+  ConstraintTier,
   Cycle,
   Funder,
   OpportunityClass,
@@ -70,6 +71,78 @@ export interface EligibilityReason {
   quoted: string;
   /** GrantSpotter's own statement about the record. Empty when the funder's sentence stands. */
   authored: string;
+  /**
+   * THE OTHER ROUTES THE FUNDER NAMED FOR THE SAME RULE — `ConstraintAlternatives.anyOf`, each
+   * restated as a compact phrase, in the order the funder wrote them. Empty for the constraints
+   * that state one thing, which is all but six in the shipped corpus.
+   *
+   * A THIRD FIELD RATHER THAN TEXT APPENDED TO `authored`, for the reason `authored` exists at all:
+   * that column means "no funder sentence was recorded for this reason, so read GrantSpotter's
+   * instead", and these constraints DO carry a funder sentence — the alternative is beside the
+   * quote, not in place of it. Folding them together would put a `GrantSpotter, not the funder` tag
+   * on rows whose quotation is perfectly real.
+   */
+  alsoAccepts: string[];
+}
+
+/**
+ * ONE TIER, AS A COMPACT PHRASE — for the alternatives column and the printed reason cell.
+ *
+ * NOT A SENTENCE, and deliberately not the same rendering as `IneligibilityDrawer.tierDetail` in
+ * `packages/web`. The screen has a paragraph and a reader looking at one programme; a report cell
+ * and a spreadsheet column have neither, and "Needs EXTRA or higher, held at least 0 months." in a
+ * cell beside forty others is noise where `licence EXTRA or higher` is a fact. The two renderings
+ * answer to different audiences and are allowed to differ; what they may NOT do is disagree about
+ * WHICH tiers exist, and neither invents or drops one — both map over `spec.anyOf` entire.
+ *
+ * `web -> core` and `server -> core`, never `web -> server`, so there is no third place to put a
+ * shared one that both could reach. The exhaustive `switch` is what keeps this honest: an axis
+ * added to core's union fails the typecheck here rather than printing an empty cell.
+ */
+function tierSummary(tier: ConstraintTier): string {
+  switch (tier.axis) {
+    case 'license':
+      return tier.heldMonthsMin !== undefined
+        ? `licence ${tier.licenseMin} or higher, held ${tier.heldMonthsMin} months`
+        : `licence ${tier.licenseMin} or higher`;
+    case 'geography':
+      if (tier.geo.type === 'any') return 'anywhere';
+      if (tier.geo.type === 'radius') {
+        return `within ${tier.geo.radiusMiles} miles of ${tier.geo.centerLabel ?? 'the stated point'}`;
+      }
+      return `${tier.geo.type.replace(/_/g, ' ')} ${tier.geo.values.join(', ')}`;
+    case 'field_of_study':
+      if (tier.excludedFields.length > 0) {
+        return tier.fields.length > 0
+          ? `field of study ${tier.fields.join(', ')}, excluding ${tier.excludedFields.join(', ')}`
+          : `any field of study except ${tier.excludedFields.join(', ')}`;
+      }
+      return tier.fields.length > 0
+        ? `field of study ${tier.fields.join(', ')}`
+        : 'any field of study';
+    case 'institution':
+      return `degree level ${tier.degreeLevels.join(', ')}`;
+    case 'gpa':
+      if (tier.min !== undefined) return `GPA ${tier.min} or higher`;
+      if (tier.classRankTopPct !== undefined) return `top ${tier.classRankTopPct}% of class`;
+      return 'GPA or class rank';
+    case 'arrl_membership':
+      return tier.minYears > 0 ? `ARRL member ${tier.minYears} year(s)` : 'ARRL member';
+    case 'recommendation':
+      return `${tier.count} recommendation(s) from ${tier.recommenderType.replace(/_/g, ' ')}`;
+    case 'citizenship':
+      return `citizenship ${tier.allowed.join(', ')}`;
+    case 'age_stage':
+      return `stage ${tier.stages.join(', ')}`;
+    case 'ham_activity':
+      return `activity in ${tier.activityKinds.join(', ')}`;
+    case 'gender':
+      return `open to ${tier.allowed.join(', ')}`;
+    case 'financial_need':
+      return 'financial need';
+    case 'other':
+      return tier.note === '' ? 'a requirement with no wording on record' : tier.note;
+  }
 }
 
 /**
@@ -91,7 +164,51 @@ function reasonDetail(constraint: Constraint): EligibilityReason {
     axis: reasonAxisKey(constraint),
     quoted: hasFunderWording(constraint) ? constraint.rawText : '',
     authored,
+    alsoAccepts: (constraint.spec.anyOf ?? []).map(tierSummary),
   };
+}
+
+/**
+ * The alternatives as ONE CELL, with the attribution inside the sentence.
+ *
+ * A CSV CELL HAS NO STYLING. On screen a dashed rule and a tag can say whose words these are; in a
+ * spreadsheet the cell is dropped into a mail merge, a slide, an email to a funder, and arrives
+ * carrying nothing but its characters. So the word GrantSpotter is in the sentence — not in the
+ * column header, which does not travel with the cell — for the same reason
+ * `reasonsFromGrantSpotter` is a separate column rather than a marker inside `reasons`.
+ */
+export function alsoAcceptsCell(details: readonly EligibilityReason[]): string {
+  return details
+    .filter((detail) => detail.alsoAccepts.length > 0)
+    .map(
+      (detail) =>
+        `GrantSpotter also treats the ${detail.axis} rule as satisfied by ` +
+        `${detail.alsoAccepts.join('; or ')} — the funder named more than one route.`,
+    )
+    .join(' | ');
+}
+
+/**
+ * A route the funder named that this schema cannot check, as one cell — attribution inside the
+ * sentence, for the reason {@link alsoAcceptsCell} gives.
+ *
+ * ONLY FOR `unknown` ROWS, and it does not claim to be the cause. `orUnrepresented` can only turn a
+ * refusal into an `unknown`, never into a `pass` and never into a refusal, so on an `eligible` row
+ * it is irrelevant and on an `ineligible` row the constraint holding it is not among the reasons.
+ * On an `unknown` row it is a true statement about the record and the one an applicant can act on;
+ * whether it is what stopped THIS verdict is not something `Verdict.unknown` records, and this
+ * sentence does not pretend otherwise.
+ */
+export function uncheckableRoutesCell(program: Program): string {
+  return program.constraints
+    .map((constraint) => constraint.spec.orUnrepresented)
+    .filter((route): route is string => route !== undefined && route.trim() !== '')
+    .map(
+      (route) =>
+        `GrantSpotter cannot check a route this funder named: ${route}. ` +
+        'That is a reason a verdict stops at unknown rather than at no.',
+    )
+    .join(' | ');
 }
 
 /** PLAN-LOCAL. */
@@ -119,6 +236,24 @@ export interface EligibilityRow {
    * being copied out of its context.
    */
   reasonsFromGrantSpotter: string;
+  /**
+   * The OTHER routes the funder named for a rule that excluded this applicant — `anyOf`, restated
+   * by GrantSpotter, attribution inside the sentence. Empty on every row whose reasons state one
+   * thing each, which is all but a handful.
+   *
+   * IT IS HERE BECAUSE THE STRUCTURED LINE WAS NARROWER THAN THE RULE. "Resident of Brevard County
+   * FL, or any FL resident" reached this file as `geography` + the funder's sentence, and every
+   * structured restatement of it said Brevard County — a requirement narrower than the one the
+   * matcher applies, which is how an applicant reads a "no" into a rule that would have let them in.
+   */
+  alsoAcceptedRoutes: string;
+  /**
+   * A route the funder named that no rule here can check — `orUnrepresented`, on `unknown` rows.
+   * The other half of the same silence: a verdict that stops at unknown for this reason named
+   * nothing a reader could act on, and "previous awardees" is very much something a reader can act
+   * on. See {@link uncheckableRoutesCell} for why it is not presented as the cause.
+   */
+  uncheckableRoutes: string;
   /**
    * The same reasons, structured, for `renderEligibilityReportHtml`. NOT a CSV column: `toCsv`
    * takes only the names in {@link ELIGIBILITY_CSV_COLUMNS}, so this never reaches the file.
@@ -157,7 +292,9 @@ export const ELIGIBILITY_CSV_COLUMNS = [
   'reasonAxes',
   'reasons',
   'reasonsFromGrantSpotter',
+  'alsoAcceptedRoutes',
   'missingFields',
+  'uncheckableRoutes',
   'nextCloses',
   'deadlineBasis',
   'amountRaw',
@@ -230,8 +367,10 @@ export function buildEligibilityReport(
         .map((d) => d.authored)
         .filter((t) => t !== '')
         .join(' | '),
+      alsoAcceptedRoutes: alsoAcceptsCell(details),
       reasonDetails: details,
       missingFields: verdict.kind === 'unknown' ? verdict.missingProfileFields.join('; ') : '',
+      uncheckableRoutes: verdict.kind === 'unknown' ? uncheckableRoutesCell(program) : '',
       nextCloses: cells.nextCloses,
       deadlineBasis: cells.deadlineBasis,
       amountRaw: cells.amountRaw,

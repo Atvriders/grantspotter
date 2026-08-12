@@ -677,6 +677,97 @@ describe('Opportunity detail — an unknown with nothing to fill in', () => {
    * The other half of the same rule, and the reason the test above is not simply a ban on a
    * phrase: on the ANSWERABLE branch that sentence is exactly right, and must survive.
    */
+  /**
+   * THE THIRD CAUSE, AND THE ONLY ONE A READER CAN ACT ON.
+   *
+   * `ConstraintAlternatives.orUnrepresented` holds a route the funder named that this schema
+   * cannot describe. The Robert A. Rodriguez K5AUW Scholarship is the plainest: "open to
+   * graduating high school seniors, AND TO PREVIOUS AWARDEES" — not a `Stage`, not a
+   * `DegreeLevel`, not any field `StudentProfile` holds. The matcher declines to decide rather than
+   * refuse, which is right, and until now the reason never reached a reader: the panel said
+   * "Nothing you can enter here would settle this one" and stopped.
+   *
+   * BOTH CLAUSES OF THAT SENTENCE ARE FALSE HERE, which is why this is its own branch rather than
+   * a paragraph appended to the old one. The record is complete and the funder's sentence is on
+   * file, so it is not a hole in GrantSpotter's record; and on the 49 field-of-study cases the
+   * applicant's own `fieldOfStudy` is exactly what nobody can adjudicate, so "nothing you can
+   * enter" is worse than vague. Measured over the shipped corpus with `scripts/profile-corpus.ts`:
+   * 51 constraints across 51 of the 150 publishable programmes, of which 20 reach the graduate
+   * music student as an unknown with nothing to fill in.
+   */
+  const RODRIGUEZ_RAW =
+    'The scholarship is open to graduating high school seniors, and to previous awardees.';
+  const UNCHECKABLE = {
+    ...CLUB_GRANT_DETAIL,
+    program: {
+      ...CLUB_GRANT_DETAIL.program,
+      constraints: [
+        {
+          id: 'c-stage',
+          hard: true,
+          fallbackRank: 0,
+          rawText: RODRIGUEZ_RAW,
+          spec: { axis: 'age_stage', stages: ['HS_SENIOR'], orUnrepresented: 'previous awardees' },
+        },
+      ],
+    },
+    verdict: { kind: 'unknown', missingProfileFields: [] as string[] },
+  };
+
+  it('names the route it could not check, instead of leaving the obstacle unnamed', async () => {
+    stubFetch(UNCHECKABLE);
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    const text = panel.textContent ?? '';
+    expect(text).toMatch(
+      /This funder named a way of qualifying that GrantSpotter cannot check, so the matcher declined to decide rather than rule you out\. Nothing on your profile was left blank; the judging is the part no rule here can do\./,
+    );
+    expect(text).toMatch(/The route GrantSpotter cannot check here: previous awardees/);
+    expect(text).toMatch(/not a .no./i);
+  });
+
+  /**
+   * ...AND STOPS SAYING THE TWO THINGS THAT ARE NOT TRUE OF IT. "Nothing you can enter here would
+   * settle this one" was written against a different cause and, kept here, would tell a music
+   * major that their own subject is not the question — when it is exactly the question nobody can
+   * decide. It is not softened; it is replaced by the branch that names what actually happened.
+   */
+  it('drops the "nothing you can enter" copy that was written for a different cause', async () => {
+    stubFetch(UNCHECKABLE);
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    const text = panel.textContent ?? '';
+    expect(text).not.toMatch(/nothing you can enter here/i);
+    // ...and the LEDE stops saying it too. "There is no field on your profile that would settle
+    // it" is true of a record nobody filled in and false of the 49 field-of-study records, where
+    // a different value in the reader's own subject box would settle it perfectly well.
+    expect(text).not.toMatch(/no field on your profile that would settle it/i);
+    expect(
+      text,
+      'the panel blames the funder’s page for a limit of our own schema',
+    ).toMatch(
+      /This is not a gap in the funder’s page and not a gap in your profile — it is a route no rule here can test\. Read their own sentence below and judge for yourself whether it describes you\./,
+    );
+  });
+
+  /**
+   * WHOSE WORDS THEY ARE, ON A SCREEN WHERE BOTH KINDS APPEAR TOGETHER. The funder's sentence is
+   * quoted verbatim in `.verbatim`, the box this page uses for text a funder published; every
+   * sentence GrantSpotter composed sits outside it, under a tag naming its author. A reader has to
+   * be able to tell, on one requirement, which of the two lines the funder actually wrote.
+   */
+  it('quotes the funder’s sentence and keeps its own words out of the quotation box', async () => {
+    stubFetch(UNCHECKABLE);
+    const { container } = renderDetail();
+    await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    const quotes = [...container.querySelectorAll('.verbatim')].map((el) => el.textContent);
+    expect(quotes).toContain(RODRIGUEZ_RAW);
+    for (const quote of quotes) expect(quote).not.toMatch(/GrantSpotter/);
+    const authored = [...container.querySelectorAll('.authored')].map((el) => el.textContent ?? '');
+    expect(authored.some((t) => t.includes('previous awardees'))).toBe(true);
+    expect(container.querySelectorAll('.authored-by').length).toBeGreaterThan(0);
+  });
+
   it('does still name the profile when the profile really is what it is waiting on', async () => {
     stubFetch({
       ...CLUB_GRANT_DETAIL,

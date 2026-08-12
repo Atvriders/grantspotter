@@ -4,7 +4,8 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { Constraint } from '@grantspotter/core';
-import { VerdictBadge } from './VerdictBadge.js';
+import { VerdictBadge, unrepresentedRoutesOf } from './VerdictBadge.js';
+import { makeProgram } from '../test/programRowFixtures.js';
 
 const licenseConstraint: Constraint = {
   id: 'c1',
@@ -175,5 +176,100 @@ describe('VerdictBadge', () => {
     // that both accepts an author-supplied name and replaces its children with it.
     wrap(<VerdictBadge verdict={{ kind: 'eligible' }} />);
     expect(screen.getByRole('img', { name: 'Eligible' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE THIRD CAUSE OF AN UNKNOWN WITH NOTHING TO FILL IN, AND THE ONE THE BADGE USED TO MISNAME.
+ *
+ * `ConstraintAlternatives.orUnrepresented` holds a route the funder named that this schema cannot
+ * describe — "The scholarship is open to graduating high school seniors, AND TO PREVIOUS
+ * AWARDEES", or a whole subject domain no word-matching can adjudicate. The axis declines to
+ * decide rather than refuse, which is right, and the badge then said "This program's record is
+ * missing something GrantSpotter needs to decide it, and there is no field you could fill in that
+ * would change that."
+ *
+ * Both halves are wrong here. The record is complete and the funder's sentence is on file; and on
+ * the 49 field-of-study cases the applicant's own `fieldOfStudy` is exactly the thing nobody can
+ * adjudicate, so "no field you could fill in" is worse than vague. Measured over the shipped
+ * corpus with `scripts/profile-corpus.ts`: 51 constraints across 51 of the 150 publishable
+ * programmes carry `orUnrepresented` (49 field_of_study, 1 age_stage, 1 ham_activity), and for the
+ * graduate music student 20 of the unknowns with nothing to fill in are of this kind.
+ */
+describe('VerdictBadge — a route this schema cannot check', () => {
+  it('names the obstacle instead of blaming the record for a hole in our own schema', () => {
+    wrap(
+      <VerdictBadge
+        verdict={{ kind: 'unknown', missingProfileFields: [] }}
+        unrepresentedRoutes={['previous awardees']}
+      />,
+    );
+    const title = screen.getByLabelText('Unknown').getAttribute('title') ?? '';
+    expect(title).toContain('previous awardees');
+    expect(title).toMatch(/cannot check/i);
+    expect(title).toMatch(/not a "no"/);
+    expect(title).not.toMatch(/record is missing something/i);
+    expect(title).not.toMatch(/no field you could fill in/i);
+  });
+
+  /**
+   * THE OTHER HALF OF THE SAME RULE. The 19 records whose applicant list nobody ever filled in and
+   * the one radius rule whose centre never resolved ARE gaps in GrantSpotter's record, and that
+   * sentence is exactly right for them. A route the schema cannot check is a different thing, and
+   * neither may borrow the other's words.
+   */
+  it('keeps the record-gap wording for the records that really are missing something', () => {
+    wrap(
+      <VerdictBadge verdict={{ kind: 'unknown', missingProfileFields: [] }} unrepresentedRoutes={[]} />,
+    );
+    expect(screen.getByLabelText('Unknown').getAttribute('title') ?? '').toMatch(
+      /record is missing something/i,
+    );
+  });
+
+  /**
+   * A ROUTE THE SCHEMA CANNOT CHECK NEVER OUTRANKS A FIELD THE READER CAN ANSWER. `orUnrepresented`
+   * is consulted only once every representable route has FAILED, so where a field is still unset
+   * the honest instruction is still "answer this one".
+   */
+  it('still points at the profile when there is something on it to answer', () => {
+    wrap(
+      <VerdictBadge
+        verdict={{ kind: 'unknown', missingProfileFields: ['gpa'] }}
+        unrepresentedRoutes={['previous awardees']}
+      />,
+    );
+    const title = screen.getByLabelText('Unknown, needs GPA').getAttribute('title') ?? '';
+    expect(title).toMatch(/waiting on: GPA/);
+    expect(title).not.toMatch(/previous awardees/);
+  });
+
+  it('reads the routes off the record, in order, and ignores the constraints that name none', () => {
+    const program = makeProgram({
+      constraints: [
+        { ...licenseConstraint, id: 'c-plain' },
+        {
+          id: 'c-stage',
+          hard: true,
+          fallbackRank: 0,
+          rawText: 'The scholarship is open to graduating high school seniors, and to previous awardees.',
+          spec: { axis: 'age_stage', stages: ['HS_SENIOR'], orUnrepresented: 'previous awardees' },
+        },
+        {
+          id: 'c-field',
+          hard: true,
+          fallbackRank: 0,
+          rawText: 'Mathematics or data science',
+          spec: {
+            axis: 'field_of_study',
+            fields: ['Mathematics', 'data science'],
+            excludedFields: [],
+            orUnrepresented: 'Mathematics',
+          },
+        },
+      ],
+    });
+    expect(unrepresentedRoutesOf(program)).toEqual(['previous awardees', 'Mathematics']);
+    expect(unrepresentedRoutesOf(makeProgram())).toEqual([]);
   });
 });

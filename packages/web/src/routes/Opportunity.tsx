@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Cycle, Funder, ObligationState, Program, Verdict } from '@grantspotter/core';
-import { obligationState } from '@grantspotter/core';
+import { hasFunderWording, obligationState } from '@grantspotter/core';
 import { useApi } from '../store/useApi.js';
 import { apiSend } from '../api/client.js';
-import { VerdictBadge } from '../components/VerdictBadge.js';
+import { VerdictBadge, unrepresentedRoutesOf } from '../components/VerdictBadge.js';
 import { TrustBadge } from '../components/TrustBadge.js';
 import { StatusPill } from '../components/StatusPill.js';
 import { DisputedPanel } from '../components/DisputedPanel.js';
-import { IneligibilityDrawer } from '../components/IneligibilityDrawer.js';
+import { IneligibilityDrawer, reasonHeading } from '../components/IneligibilityDrawer.js';
 import { ProvenanceTable, type FieldProvenance } from '../components/ProvenanceTable.js';
 import { SourceLink } from '../components/SourceLink.js';
 import { VerifyButton } from '../components/VerifyButton.js';
@@ -213,6 +213,15 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
   const isWatched = watched ?? data.watched;
   const applyUrl = program.applyUrl ?? '';
   const applyRefusal = linkRefusal(applyUrl);
+  /*
+    Constraints whose spec carries `orUnrepresented` — a route this record names and this schema
+    cannot describe. Kept as the CONSTRAINTS, not just the route strings, because each one owns the
+    funder's own sentence, and the whole point of naming the obstacle is that the reader can then
+    read the sentence it came out of and judge it themselves.
+  */
+  const unrepresented = program.constraints.filter(
+    (constraint) => constraint.spec.orUnrepresented !== undefined,
+  );
 
   async function toggleWatch(): Promise<void> {
     setWatchError(null);
@@ -237,7 +246,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
       <div className="detail-head">
         <h1>{program.name}</h1>
         <StatusPill status={program.trust.status} />
-        <VerdictBadge verdict={verdict} />
+        <VerdictBadge verdict={verdict} unrepresentedRoutes={unrepresentedRoutesOf(program)} />
         <TrustBadge lastVerifiedAt={program.trust.lastVerifiedAt} now={nowISO} />
       </div>
 
@@ -422,6 +431,23 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                   answered from your profile, so the matcher stopped rather than ruling you out —
                   an unset field yields unknown, never ineligible.
                 </p>
+              ) : unrepresented.length > 0 ? (
+                /*
+                  THE LEDE HAS TO BE TRUE OF ITS OWN BRANCH TOO, and the unconditional one below
+                  is not true of this one. "There is no field on your profile that would settle
+                  it" holds for a record whose applicant list nobody filled in; it is FALSE on the
+                  49 field-of-study records, where a different value in the applicant's own
+                  `fieldOfStudy` box would settle it perfectly well — the reason nobody can decide
+                  is that "is Music Performance inside Science, Math, Engineering or Technology?"
+                  is not a question word overlap can answer. The panel and the badge sit on this
+                  page together and may not disagree about whose limit this is.
+                */
+                <p>
+                  Unknown is not a &ldquo;no&rdquo;. This funder named a way of qualifying that
+                  GrantSpotter cannot check, so the matcher declined to decide rather than rule you
+                  out. Nothing on your profile was left blank; the judging is the part no rule here
+                  can do.
+                </p>
               ) : (
                 <p>
                   Unknown is not a &ldquo;no&rdquo;. Something the matcher needed could not be
@@ -450,6 +476,64 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                   This program stops at the first thing it cannot work out about you, so answering
                   one of these may reveal the next question rather than a final verdict.
                 </p>
+              ) : unrepresented.length > 0 ? (
+                /*
+                  THE THIRD CAUSE OF AN UNKNOWN WITH NOTHING TO FILL IN, and the only one where
+                  the obstacle is nameable and the reader can act on it.
+
+                  `ConstraintAlternatives.orUnrepresented` holds a route the funder named that this
+                  schema cannot describe — "and to previous awardees" is not a `Stage`, and whether
+                  Music Performance falls inside "Science, Math, Engineering or Technology" is not
+                  word overlap. The matcher declines to decide rather than refuse, which is right,
+                  and until now the reason never reached a reader: the panel said "Nothing you can
+                  enter here would settle this one" and left it there.
+
+                  BOTH CLAUSES OF THAT SENTENCE ARE WRONG HERE, which is why this branch exists
+                  rather than a paragraph appended to it. "Whatever the matcher could not work out
+                  is not a question any field on your profile puts to you" is false of the 49
+                  field-of-study records, where the applicant's own `fieldOfStudy` is exactly what
+                  nobody can adjudicate; and pointing at a gap in GrantSpotter's record is false of
+                  all 51, whose records are complete and whose funder's sentence is printed below.
+                  Measured over the shipped corpus with `scripts/profile-corpus.ts`: 51 constraints
+                  across 51 of the 150 publishable programmes, and for the graduate music student
+                  20 of the unknowns with nothing to fill in are of this kind.
+
+                  IT DOES NOT CLAIM TO BE THE CAUSE. `Verdict.unknown` carries only
+                  `missingProfileFields`, and this page is never told which profile the verdict was
+                  computed against, so nothing here can prove this route is what stopped THIS
+                  verdict. The copy says what the record names and what that does to a verdict, and
+                  stops there.
+                */
+                <>
+                  <p className="authored">
+                    <span className="authored-by">
+                      GrantSpotter&rsquo;s words, not the funder&rsquo;s
+                    </span>
+                    This is not a gap in the funder&rsquo;s page and not a gap in your profile — it
+                    is a route no rule here can test. Read their own sentence below and judge for
+                    yourself whether it describes you.
+                  </p>
+                  <ul className="unrepresented-routes">
+                    {unrepresented.map((constraint) => (
+                      <li key={constraint.id}>
+                        <span className="eyebrow">{reasonHeading(constraint)}</span>
+                        <span className="authored">
+                          <span className="authored-by">
+                            GrantSpotter&rsquo;s words, not the funder&rsquo;s
+                          </span>
+                          The route GrantSpotter cannot check here:{' '}
+                          {constraint.spec.orUnrepresented}
+                        </span>
+                        {/* The funder's own sentence, verbatim and quotable — `.verbatim` is this
+                            page's box for text a funder published, and the line above is
+                            deliberately outside it. */}
+                        {hasFunderWording(constraint) && (
+                          <p className="verbatim">{constraint.rawText}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               ) : (
                 /*
                   AN UNKNOWN WITH NOTHING TO FILL IN — reachable since the matcher stopped

@@ -3,7 +3,12 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { constraintSpecSchema, type Constraint, type ConstraintAxis } from '@grantspotter/core';
-import { IneligibilityDrawer, axisLabel, reasonHeading } from './IneligibilityDrawer.js';
+import {
+  IneligibilityDrawer,
+  alternativeDetails,
+  axisLabel,
+  reasonHeading,
+} from './IneligibilityDrawer.js';
 
 const reasons: Constraint[] = [
   {
@@ -245,5 +250,130 @@ describe('IneligibilityDrawer — a reason GrantSpotter wrote is never dressed a
         /No wording was recorded for this requirement\. Open the record and check the source\./,
       ),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE FUNDER NAMED MORE THAN ONE ROUTE, AND THE STRUCTURED LINE SAID ONLY THE NARROWEST.
+ *
+ * `ConstraintSpec.anyOf` landed in core with the extractors that emit it and NO read surface:
+ * measured with `grep -rn "anyOf" packages/web/src packages/server/src/exports packages/server/src/api`
+ * the day before this file grew, the answer was zero. So the IRARC Memorial scholarship — "Resident
+ * of Brevard County FL, or any FL resident" — rendered its restatement as `county: Brevard, FL.`
+ * beside a quotation that plainly offers a second route. The quote was right and the line under it
+ * described a rule NARROWER than the one `evaluateConstraint` applies, which is precisely how a
+ * Floridian in Orlando reads a "no" into an award that would have taken them.
+ *
+ * The fixtures below are the real ones, spec-for-spec, taken from
+ * `scripts/profile-corpus.ts`'s loader over the committed fixtures: six constraints across five of
+ * the 150 publishable programmes carry `anyOf`, and these are two of them.
+ */
+const brevardReason: Constraint = {
+  id: 'c-irarc-geo',
+  hard: true,
+  fallbackRank: 0,
+  rawText:
+    'Resident of Brevard County FL, or any FL resident attending a Florida school.',
+  spec: {
+    axis: 'geography',
+    geo: { type: 'county', values: ['Brevard, FL'] },
+    anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
+  },
+};
+
+const certificationReason: Constraint = {
+  id: 'c-irarc-field',
+  hard: true,
+  fallbackRank: 0,
+  rawText: 'Undergraduate degree or electronic technician certification program',
+  spec: {
+    axis: 'field_of_study',
+    fields: ['electronic technician certification program'],
+    excludedFields: [],
+    anyOf: [{ axis: 'field_of_study', fields: [], excludedFields: [] }],
+  },
+};
+
+describe('IneligibilityDrawer — a rule the funder gave more than one route to', () => {
+  it('states every route the matcher applies, not only the first one recorded', () => {
+    wrap(<IneligibilityDrawer programName="IRARC Memorial" reasons={[brevardReason]} />);
+    // The narrow tier is still shown: it is what the funder named first and it is true.
+    expect(screen.getByText(/county: Brevard, FL\./)).toBeInTheDocument();
+    // ...and so is the route that used to be invisible.
+    expect(
+      screen.getByText(
+        /GrantSpotter also treats this as satisfied by state: FL\. The funder named more than one route here, and any one of them is enough\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A TIER THAT RESTATES AS NOTHING WOULD DELETE THE WIDEST ROUTE. `field_of_study` with an empty
+   * `fields` and an empty `excludedFields` is how the extractor writes "or an undergraduate degree
+   * in anything" beside a named certification programme, and `matcher.ts` reads it as
+   * `required.unrestricted` — it passes everyone. The old restatement produced "Allows ." for it,
+   * which is both ungrammatical and a description of the opposite rule.
+   */
+  it('renders an unrestricted alternative as the whole-world route it is, never as "Allows ."', () => {
+    expect(alternativeDetails(certificationReason)).toEqual(['Any field of study.']);
+    wrap(<IneligibilityDrawer programName="IRARC Memorial" reasons={[certificationReason]} />);
+    expect(
+      screen.getByText(/GrantSpotter also treats this as satisfied by any field of study\./i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Allows \./)).toBeNull();
+  });
+
+  /**
+   * THE SAME HOLE, ON THE OTHER AXIS THAT HAS A "NO RESTRICTION" TIER. `geo.type === 'any'` is
+   * unreachable as a base tier — `evaluateGeo` PASSES it, so it can never be an ineligibility
+   * reason — and perfectly reachable as a sibling, which is why the restatement used to return
+   * `null` for it and why that is now wrong. A funder who writes "residents of Gwinnett County, or
+   * anyone at all" would have had their widest route silently deleted from the line.
+   */
+  it('renders an unrestricted geography alternative rather than dropping it silently', () => {
+    const anywhere: Constraint = {
+      id: 'c-anywhere',
+      hard: true,
+      fallbackRank: 0,
+      rawText: 'Residents of Gwinnett County, GA, or anyone at all.',
+      spec: {
+        axis: 'geography',
+        geo: { type: 'county', values: ['Gwinnett, GA'] },
+        anyOf: [{ axis: 'geography', geo: { type: 'any', values: [] } }],
+      },
+    };
+    expect(alternativeDetails(anywhere)).toEqual(['Anywhere — no location restriction.']);
+    wrap(<IneligibilityDrawer programName="Gwinnett ARS" reasons={[anywhere]} />);
+    expect(
+      screen.getByText(
+        /GrantSpotter also treats this as satisfied by Anywhere — no location restriction\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * THE ATTRIBUTION RULE, WHICH THIS LINE IS THE NEWEST TEST OF: text the funder wrote is
+   * quotable, and anything the software composed must be visibly the software's. The alternatives
+   * line is GrantSpotter's account of what it applied — the funder's sentence says what it says —
+   * so it must never appear inside `.explain-raw`, the monospaced box whose whole meaning is "the
+   * funder published these exact words", and it carries the attribution in the sentence rather
+   * than in a tag, so it survives being read aloud or copied out with no styling.
+   */
+  it('keeps its own sentence out of the funder’s quotation block', () => {
+    const { container } = wrap(
+      <IneligibilityDrawer programName="IRARC Memorial" reasons={[brevardReason]} />,
+    );
+    const quote = container.querySelector('.explain-raw');
+    expect(quote?.textContent).toBe(brevardReason.rawText);
+    expect(quote?.textContent).not.toMatch(/GrantSpotter/);
+    const alt = container.querySelector('.explain-alt');
+    expect(alt?.textContent).toMatch(/^GrantSpotter also treats/);
+  });
+
+  it('says nothing extra for the constraints that state one thing, which is nearly all of them', () => {
+    const { container } = wrap(<IneligibilityDrawer programName="Test Award" reasons={reasons} />);
+    expect(alternativeDetails(reasons[0]!)).toEqual([]);
+    expect(container.querySelector('.explain-alt')).toBeNull();
+    expect(container.textContent).not.toMatch(/more than one route/);
   });
 });

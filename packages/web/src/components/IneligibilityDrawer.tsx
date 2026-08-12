@@ -3,7 +3,7 @@ import {
   hasFunderWording,
   isApplicantEntityConstraint,
 } from '@grantspotter/core';
-import type { Constraint, ConstraintAxis } from '@grantspotter/core';
+import type { Constraint, ConstraintAxis, ConstraintTier } from '@grantspotter/core';
 import './explain.css';
 
 const AXIS_LABELS: Record<ConstraintAxis, string> = {
@@ -43,9 +43,29 @@ export function reasonHeading(constraint: Constraint): string {
     : axisLabel(constraint.spec.axis);
 }
 
-/** A short, human restatement of the machine-readable spec, under — never instead of — the quote. */
-function specDetail(constraint: Constraint): string | null {
-  const spec = constraint.spec;
+/**
+ * A short, human restatement of ONE TIER, under — never instead of — the quote.
+ *
+ * IT TAKES A `ConstraintTier`, NOT A `Constraint`, AND THAT IS THE WHOLE POINT. A spec is one tier
+ * plus `ConstraintAlternatives.anyOf` — other tiers of the same axis the funder also named, any one
+ * of which satisfies the rule — and this function used to be handed the spec and read only the
+ * tier. The IRARC Memorial scholarship ("Resident of Brevard County FL, or any FL resident") then
+ * rendered as `county: Brevard, FL.` under a quoted sentence that plainly offers a second route:
+ * the structured line, which is the part a reader scans, stated a requirement NARROWER than the one
+ * the matcher applies. `alternativeDetails` runs the same function over the siblings so the two can
+ * never again describe different rules.
+ *
+ * Two arms return a phrase where a spec-only reader could get away with `null`, because an
+ * alternative that renders as nothing is worse than no alternative at all — it silently deletes the
+ * WIDEST route from the line:
+ *   - `geo.type === 'any'` is unreachable as a base tier (`evaluateGeo` passes it, so it is never
+ *     an ineligibility reason) but perfectly reachable as a sibling.
+ *   - `field_of_study` with an empty `fields` AND an empty `excludedFields` is how the extractor
+ *     writes "or an undergraduate degree in anything" beside a named certification programme;
+ *     `matcher.ts` reads it as `required.unrestricted` and passes everyone, so "Allows ." was both
+ *     ungrammatical and a description of the opposite rule.
+ */
+function tierDetail(spec: ConstraintTier): string | null {
   switch (spec.axis) {
     case 'license':
       return spec.heldMonthsMin !== undefined
@@ -63,12 +83,17 @@ function specDetail(constraint: Constraint): string | null {
       if (spec.geo.type === 'arrl_division') {
         return `ARRL Division ${spec.geo.values.join(', ')}, which spans several states.`;
       }
-      if (spec.geo.type === 'any') return null;
+      if (spec.geo.type === 'any') return 'Anywhere — no location restriction.';
       return `${spec.geo.type.replace(/_/g, ' ')}: ${spec.geo.values.join(', ')}.`;
     case 'field_of_study':
-      return spec.excludedFields.length > 0
-        ? `Allows ${spec.fields.join(', ')}; excludes ${spec.excludedFields.join(', ')}.`
-        : `Allows ${spec.fields.join(', ')}.`;
+      if (spec.excludedFields.length > 0) {
+        return spec.fields.length > 0
+          ? `Allows ${spec.fields.join(', ')}; excludes ${spec.excludedFields.join(', ')}.`
+          : `Any field of study except ${spec.excludedFields.join(', ')}.`;
+      }
+      return spec.fields.length > 0
+        ? `Allows ${spec.fields.join(', ')}.`
+        : 'Any field of study.';
     case 'institution':
       return `Degree levels ${spec.degreeLevels.join(', ')}${
         spec.accreditationRequired ? ', accredited only' : ''
@@ -103,6 +128,48 @@ function specDetail(constraint: Constraint): string | null {
       // whole reason should be.
       return spec.note === '' ? null : spec.note;
   }
+}
+
+/** The base tier's restatement. Unchanged in meaning; see {@link tierDetail}. */
+function specDetail(constraint: Constraint): string | null {
+  return tierDetail(constraint.spec);
+}
+
+/**
+ * The OTHER routes the funder named for the same rule, each restated the same way the base tier is.
+ *
+ * Exported for the tests, which check it against the corpus records that actually carry
+ * `anyOf` — six constraints across five programmes, measured with `scripts/profile-corpus.ts`'s
+ * loader: IRARC (county Brevard OR state FL, and a certification programme OR any degree), Gwinnett
+ * (county OR state GA), Fred R. McDaniel (call district 5 OR six named states), North Texas Section
+ * (ARRL Section OR OK/TX) and Michael R. Ware (GENERAL held 24 months OR EXTRA).
+ *
+ * A tier that restates as nothing is dropped rather than rendered as a blank alternative; after the
+ * two arms `tierDetail` gained, no tier in the corpus does that.
+ */
+export function alternativeDetails(constraint: Constraint): string[] {
+  return (constraint.spec.anyOf ?? [])
+    .map((tier) => tierDetail(tier))
+    .filter((detail): detail is string => detail !== null);
+}
+
+/**
+ * The alternatives as one line of prose, WITH THE ATTRIBUTION INSIDE THE SENTENCE.
+ *
+ * "GrantSpotter also treats" and not "the funder also accepts": the funder's sentence is quoted
+ * two lines above and says whatever it says; this line is the software's account of what it
+ * actually applied, and the rule established two rounds ago is that anything the software composed
+ * must be visibly the software's. Naming it in the words rather than in a tag above them means it
+ * stays attributed when the line is read aloud or copied out.
+ *
+ * Exported so `Opportunity.tsx` and the tests use the same sentence rather than two that drift.
+ */
+export function alternativesSentence(alternatives: readonly string[]): string {
+  const routes = alternatives.map((a) => a.replace(/\.$/, '')).join('; or ');
+  return (
+    `GrantSpotter also treats this as satisfied by ${routes}. ` +
+    'The funder named more than one route here, and any one of them is enough.'
+  );
 }
 
 export interface IneligibilityDrawerProps {
@@ -190,6 +257,7 @@ export function IneligibilityDrawer({
           <ul>
             {reasons.map((reason) => {
               const detail = specDetail(reason);
+              const alternatives = alternativeDetails(reason);
               const quoted = hasFunderWording(reason);
               return (
                 <li key={reason.id}>
@@ -212,6 +280,19 @@ export function IneligibilityDrawer({
                           GrantSpotter&rsquo;s words, not the funder&rsquo;s
                         </span>
                         {detail ?? NO_WORDING_AT_ALL}
+                      </p>
+                    )}
+                    {/*
+                      OUTSIDE the quoted/authored branch, deliberately: a second route is a fact
+                      about the rule whichever kind of wording the rule arrived with, and it must
+                      never sit inside `.explain-raw`, the monospaced box whose whole meaning is
+                      "the funder published this". The attribution is in the sentence rather than in
+                      a tag above it, so it survives being read aloud, copied, or pasted somewhere
+                      with no styling — the same reason the CSV carries its attribution inline.
+                    */}
+                    {alternatives.length > 0 && (
+                      <p className="explain-detail explain-alt">
+                        {alternativesSentence(alternatives)}
                       </p>
                     )}
                   </div>

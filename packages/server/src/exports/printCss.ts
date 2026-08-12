@@ -34,6 +34,11 @@ td.missing { color: var(--warn); }
 .authored-by { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
   color: var(--warn); border: 1px dashed var(--warn); border-radius: 4px; padding: 0 .3rem; margin-right: .35rem; }
 .authored { color: var(--muted); font-style: italic; }
+/* A route beside the one restated above it — the funder's other alternative, or the route this
+   software cannot check. Block, muted and italic so it can never be mistaken for .rawtext, which
+   in this report means "the funder published these exact words"; its own attribution is in the
+   sentence, because a printed page has no hover and a photocopy has no legend. */
+.alt-route { display: block; margin-top: .25rem; color: var(--muted); font-style: italic; }
 .verdict { font-weight: 700; white-space: nowrap; }
 .verdict-eligible { color: #15803d; }
 .verdict-eligible_preferred { color: var(--accent); }

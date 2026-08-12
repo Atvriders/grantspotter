@@ -305,3 +305,143 @@ describe('renderEligibilityReportHtml', () => {
     expect(out).toMatch(/do not visit|not safe to visit/i);
   });
 });
+
+/**
+ * THE TWO ROUTES BESIDE THE ONE THE SPEC RECORDS — `ConstraintAlternatives`, in the report and in
+ * the file.
+ *
+ * `anyOf` and `orUnrepresented` arrived in core with the extractors that emit them and NO reader:
+ * `grep -rn "anyOf\|orUnrepresented" packages/web/src packages/server/src/exports
+ * packages/server/src/api` found zero references the day before this block was written. So a
+ * printed report of "Resident of Brevard County FL, or any FL resident" named `geography` and the
+ * funder's sentence and said nothing about the second route the matcher was actually applying, and
+ * a verdict that stopped at `unknown` because the funder named a route this schema cannot check
+ * gave the reader no way to learn that — which is a fact a person could act on.
+ *
+ * The two are disjoint by verdict and stay in separate columns: `anyOf` can only turn a refusal
+ * into a pass, so it is read off the reasons of an `ineligible` row; `orUnrepresented` can only
+ * turn a refusal into an `unknown`, so it is read off the record of an `unknown` one.
+ */
+const DISJUNCTION_PROGRAMS = [
+  makeProgram({
+    id: 'p-brevard',
+    name: 'IRARC Memorial Scholarship',
+    applicantEntities: ['individual'],
+    constraints: [
+      constraint({
+        id: 'c-geo',
+        rawText: 'Resident of Brevard County FL, or any FL resident.',
+        spec: {
+          axis: 'geography',
+          geo: { type: 'county', values: ['Brevard, FL'] },
+          anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['FL'] } }],
+        },
+      }),
+    ],
+  }),
+  makeProgram({
+    id: 'p-rodriguez',
+    name: 'Robert A. Rodriguez K5AUW Scholarship',
+    applicantEntities: ['individual'],
+    constraints: [
+      constraint({
+        id: 'c-stage',
+        rawText:
+          'The scholarship is open to graduating high school seniors, and to previous awardees.',
+        spec: { axis: 'age_stage', stages: ['HS_SENIOR'], orUnrepresented: 'previous awardees' },
+      }),
+    ],
+  }),
+  makeProgram({
+    id: 'p-plain',
+    name: 'Ordinary Program',
+    applicantEntities: ['individual'],
+    constraints: [
+      constraint({
+        id: 'c-license',
+        rawText: LICENCE_TEXT,
+        spec: { axis: 'license', licenseMin: 'GENERAL' },
+      }),
+    ],
+  }),
+];
+
+/** A Texan Tech: fails Brevard AND fails FL, is not an HS senior, and holds less than General. */
+const OHIO_PROFILE: StudentProfile = {
+  kind: 'student',
+  callsign: 'W8UM',
+  licenseClass: 'TECH',
+  state: 'OH',
+  county: 'Franklin',
+  stage: 'UNDERGRAD',
+};
+
+const disjunctionReport = (): ReturnType<typeof buildEligibilityReport> =>
+  buildEligibilityReport(OHIO_PROFILE as Profile, DISJUNCTION_PROGRAMS, FUNDERS, new Map(), NOW);
+
+describe('the routes beside the one the spec records', () => {
+  it('names the other route the funder gave, on the row the narrower one excluded', () => {
+    const row = disjunctionReport().rows.find((r) => r.programId === 'p-brevard')!;
+    expect(row.verdict).toBe('ineligible');
+    expect(row.alsoAcceptedRoutes).toBe(
+      'GrantSpotter also treats the geography rule as satisfied by state FL — ' +
+        'the funder named more than one route.',
+    );
+    // The funder's own column is untouched: their sentence is theirs, and it already said so.
+    expect(row.reasons).toBe('Resident of Brevard County FL, or any FL resident.');
+    expect(row.reasonsFromGrantSpotter).toBe('');
+  });
+
+  it('names the route it cannot check, on a verdict that stopped at unknown because of it', () => {
+    const row = disjunctionReport().rows.find((r) => r.programId === 'p-rodriguez')!;
+    expect(row.verdict).toBe('unknown');
+    // Nothing to fill in: "previous awardee" is not a value of any field a profile holds.
+    expect(row.missingFields).toBe('');
+    expect(row.uncheckableRoutes).toBe(
+      'GrantSpotter cannot check a route this funder named: previous awardees. ' +
+        'That is a reason a verdict stops at unknown rather than at no.',
+    );
+  });
+
+  it('says nothing extra about a rule that states one thing', () => {
+    const row = disjunctionReport().rows.find((r) => r.programId === 'p-plain')!;
+    expect(row.alsoAcceptedRoutes).toBe('');
+    expect(row.uncheckableRoutes).toBe('');
+  });
+
+  /**
+   * A CSV CELL HAS NO STYLING. On screen a dashed rule and a tag can carry the attribution; a cell
+   * dropped into a mail merge or an email to a funder arrives with nothing but its characters. So
+   * the word GrantSpotter is INSIDE the sentence, not in the column header — which does not travel
+   * with the cell — and the funder's own columns never acquire a sentence this software wrote.
+   */
+  it('carries its attribution inside the cell, where a spreadsheet cannot strip it', () => {
+    const csv = eligibilityReportToCsv(disjunctionReport());
+    const header = csv.trimEnd().split('\r\n')[0].split(',');
+    expect(header).toEqual([...ELIGIBILITY_CSV_COLUMNS]);
+    expect(header).toContain('alsoAcceptedRoutes');
+    expect(header).toContain('uncheckableRoutes');
+    for (const row of disjunctionReport().rows) {
+      if (row.alsoAcceptedRoutes !== '') expect(row.alsoAcceptedRoutes).toContain('GrantSpotter');
+      if (row.uncheckableRoutes !== '') expect(row.uncheckableRoutes).toContain('GrantSpotter');
+      // ...and neither ever leaks into the column headed with the funder's words.
+      expect(row.reasons).not.toContain('GrantSpotter');
+    }
+  });
+
+  it('keeps both out of the printed report’s verbatim class, and explains them in the footer', () => {
+    const html = renderEligibilityReportHtml(disjunctionReport());
+    expect(html).toContain(
+      '<span class="alt-route">GrantSpotter also treats this as satisfied by state FL — ' +
+        'the funder named more than one route.</span>',
+    );
+    expect(html).toContain('GrantSpotter cannot check a route this funder named: previous awardees');
+    // `.rawtext` means "the funder published these exact words" and may wrap nothing else.
+    const rawtexts = [...html.matchAll(/<span class="rawtext">(.*?)<\/span>/g)].map((m) => m[1]);
+    expect(rawtexts.length).toBeGreaterThan(0);
+    for (const quoted of rawtexts) expect(quoted).not.toContain('GrantSpotter');
+    // A reader of the printed page has no hover and no legend, so the footer says what both are.
+    expect(html).toContain('GrantSpotter also treats this as satisfied by&hellip;');
+    expect(html).toContain('GrantSpotter cannot check a route this funder named&hellip;');
+  });
+});

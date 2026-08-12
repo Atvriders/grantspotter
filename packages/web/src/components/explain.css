@@ -110,6 +110,15 @@
   color: var(--text-muted);
 }
 
+/* The other routes the funder named for the same rule. Set off from the tier above it because it
+   is a DIFFERENT claim — "and this also counts" — but deliberately not made to look like a
+   quotation: it is GrantSpotter's account of what it applied, and it says so in its own words. */
+.explain-alt {
+  border-left: 2px dashed var(--border);
+  padding-left: var(--s-3);
+  max-width: 68ch;
+}
+
 /* The ladder: what the unknown verdicts are waiting on. NOT a promise that
    answering resolves them — see UnknownFields.tsx. */
 .unknown-ladder {
