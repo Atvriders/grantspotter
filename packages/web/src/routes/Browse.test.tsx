@@ -180,6 +180,64 @@ describe('Browse census honesty', () => {
     expect(screen.getByText(/not a "no"/i)).toBeInTheDocument();
   });
 
+  /**
+   * THE CENSUS NOTE MUST NOT SEND THE READER TO THE PROFILE EDITOR TO CLOSE A HOLE IN OUR DATA.
+   *
+   * Until 2026-08-12 this paragraph read "It means something a program asks for could not be
+   * answered from your profile yet". That sentence attributes every `unknown` in the corpus to a
+   * gap in the READER, and it stopped being true the moment `matcher.ts` learned that a record
+   * stating nothing about who may apply is a question rather than a refusal.
+   *
+   * MEASURED against the built server on the shipped corpus for the flagship profile
+   * (`e2e/api.spec.ts`, "unknown is a real state", which names all twenty by programme):
+   * 27 unknown, of which 20 carry an EMPTY `missingProfileFields` — 19 records whose applicant
+   * list nobody ever filled in, plus the Yankee Clipper radius whose centre never resolved to a
+   * coordinate. For 20 of 27 the missing thing is in GRANTSPOTTER'S record and there is no field
+   * the reader could fill in that would change it. Before the entity fix it was 1 of 8, which is
+   * how a mostly-true sentence became a mostly-false one without any test noticing.
+   *
+   * This is the same defect the same commit fixed in `VerdictBadge` — whose title said "could not
+   * be evaluated from your profile" — one component up, on the summary card at the top of the same
+   * screen. `a11y.test.tsx` already asserted this paragraph EXISTS; nothing asserted it was true.
+   *
+   * The rule is stated as a prohibition rather than as a golden string so that rewording is free
+   * and re-attributing the gap to the reader is not.
+   */
+  it('never blames the reader’s profile for the corpus-wide unknown count', async () => {
+    stubFetch(
+      makeResponse({
+        rows: [ARRL_GRANTS_ROW],
+        summary: {
+          total: 150,
+          eligible: 55,
+          preferred: 13,
+          ineligible: 55,
+          unknown: 27,
+          ineligibleByAxis: [{ axis: 'geography', count: 36 }],
+          unknownByField: [{ field: 'gpa', count: 7 }],
+        },
+        total: 150,
+        profileApplied: 'student',
+      }),
+    );
+    renderBrowse();
+    const note = await screen.findByText(/waiting on an answer rather than ruling you out/i);
+    const text = note.textContent ?? '';
+
+    // The gap may not be pinned on the profile. The corpus-wide figure covers both kinds of
+    // unknown and the summary has no way to tell the reader which of the two any given row is.
+    expect(text, 'the census note blames the reader’s profile for every unknown').not.toMatch(
+      /(?:answered|evaluated|worked out|settled)\s+from your profile\b(?![^.]*\brecord\b)/i,
+    );
+    // ...and it must still say the number and refuse to read as a refusal.
+    expect(text).toMatch(/27 of the 150/);
+    expect(text).toMatch(/not a .no./i);
+    // The other cause has to be named, or the reader has no way to know it exists.
+    expect(text, 'the census note never mentions the other cause').toMatch(
+      /record|programme|program/i,
+    );
+  });
+
   it('links the ineligible figure to the same query filtered to ineligible', async () => {
     renderBrowse('/?klass=ham_grant');
     const link = await screen.findByRole('link', { name: /see the specific constraint for each/i });

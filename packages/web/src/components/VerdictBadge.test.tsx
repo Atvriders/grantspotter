@@ -100,9 +100,16 @@ describe('VerdictBadge', () => {
   });
 
   /**
-   * `unknown` is 8 of 150 for a fully specified EE undergraduate and far more when a profile
-   * field is unset. It is an honest, common state — a question this product has not been told
-   * the answer to — and it must never read as a soft "no".
+   * `unknown` is a common state, not a rare one, and it got commoner: 8 of 150 for a fully
+   * specified EE undergraduate until 2026-08-12 and 27 of 150 after it, when `matcher.ts` stopped
+   * reading a record that named no audience as a refusal. Twenty of those 27 are waiting on
+   * GrantSpotter's own data rather than on the reader (`e2e/api.spec.ts` names all twenty). It is
+   * an honest state — a question this product has not been told the answer to — and it must never
+   * read as a soft "no".
+   *
+   * The figure is quoted here because the neighbouring test below turns on how common it is; it is
+   * ASSERTED in `e2e/api.spec.ts` and `exports/eligibilityCorpus.test.ts`, which are the copies
+   * that fail when it moves. This one went stale for as long as those two took to be updated.
    */
   it('never reads unknown as a refusal', () => {
     wrap(<VerdictBadge verdict={{ kind: 'unknown', missingProfileFields: ['gpa'] }} />);

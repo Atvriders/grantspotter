@@ -1001,14 +1001,21 @@ async function askTheSource(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
+    /*
+     * NO "IN A MOMENT". Both arms said "try again in a moment" until 2026-08-12, and neither had
+     * anything behind the moment: one is a socket that stopped answering inside our own timeout
+     * and the other is a transport failure whose cause is unknown. Neither event says a single
+     * thing about when the source will next answer, and this product's one-number rule
+     * (`userFacingCopyContract.test.ts`) exists because a wait nobody measured is worse than no
+     * advice. The instruction survives; the invented duration does not.
+     */
     return unavailable(
       wasAborted(error)
         ? 'callook.info did not answer in time, so nothing was filled in. That is the network or ' +
-          'the source being slow, not anything to do with your callsign — try again in a moment, ' +
-          'or type your details in and carry on.'
+          'the source being slow, not anything to do with your callsign — try again, or type ' +
+          'your details in and carry on.'
         : 'We could not reach callook.info, so nothing was filled in. That is our end or the ' +
-          'network, not your callsign — try again in a moment, or type your details in and ' +
-          'carry on.',
+          'network, not your callsign — try again, or type your details in and carry on.',
     );
   }
 
@@ -1089,17 +1096,20 @@ async function askTheSource(
   try {
     raw = await response.text();
   } catch (error) {
+    // Same correction as the two arms above, and for the same reason: a body that stopped
+    // arriving and a connection that dropped mid-answer are not statements about when the source
+    // will answer next. "In a moment" was ours, and it is gone.
     return unavailable(
       wasAborted(error)
         ? 'callook.info started answering, but the rest of the answer had not arrived by the time ' +
           'GrantSpotter stopped waiting, so nothing was filled in. What it was going to say is ' +
           'not known and has not been guessed at. That is the network or the source being slow, ' +
-          'not anything to do with your callsign — try again in a moment, or type your details ' +
-          'in and carry on.'
+          'not anything to do with your callsign — try again, or type your details in and ' +
+          'carry on.'
         : 'The connection to callook.info dropped while its answer was still arriving, so ' +
           'GrantSpotter never saw the whole of it and nothing was filled in. What it was going ' +
           'to say is not known and has not been guessed at. That is our end or the network, not ' +
-          'your callsign — try again in a moment, or type your details in and carry on.',
+          'your callsign — try again, or type your details in and carry on.',
     );
   }
 
@@ -1120,13 +1130,25 @@ async function askTheSource(
   if (status === 'UPDATING') {
     return {
       status: 'updating',
-      // Its API reference: the database reloads from the FCC snapshot daily at 11:00 AM ET and
-      // the site is offline while it does, "usually less than five minutes".
+      /*
+       * Its API reference: the database reloads from the FCC snapshot daily at 11:00 AM ET and
+       * the site is offline while it does, "usually less than five minutes".
+       *
+       * THE ONE DURATION HERE IS THE SOURCE'S OWN, AND IT IS THE ONLY ONE ALLOWED TO BE HERE.
+       * This sentence ended "Try again shortly, or type your details in and carry on." until
+       * 2026-08-12, which was the harder of the five invented waits to see precisely BECAUSE a
+       * sourced figure was sitting two clauses away: callook publishes "usually less than five
+       * minutes" and this message quotes it, attributed, which is exactly what the product is
+       * for. "Shortly" was not that figure. It was a second, vaguer, unattributed answer to the
+       * same question, and where the two disagree the reader has no way to tell which one came
+       * from the source. Quoting the source's own number and stopping is strictly more
+       * informative than quoting it and then adding one of ours.
+       */
       message:
         'callook.info is reloading its copy of the FCC database right now — it does that once a ' +
-        'day, at about 11:00 in the morning US Eastern time, and it usually takes under five ' +
-        'minutes. Nothing is wrong with your callsign. Try again shortly, or type your details ' +
-        'in and carry on.',
+        'day, at about 11:00 in the morning US Eastern time, and it says the reload usually takes ' +
+        'under five minutes. Nothing is wrong with your callsign. Type your details in and ' +
+        'carry on.',
     };
   }
 

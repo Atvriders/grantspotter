@@ -323,62 +323,32 @@ describe('the census itself', () => {
  * could not look.
  */
 const COME_BACK_LATER = /\btry again\b|\bcome back\b|\bretry\b|\bwait\b|\bcheck back\b/;
-const HOW_LONG =
-  /\bshortly\b|\bin a (?:moment|minute|while|bit|sec)\b|\ba (?:few|couple of) (?:seconds|minutes|hours|days)\b|\bin about\b|\b\d+\s*(?:second|minute|hour|day)s?\b|\ban hour\b|\ba minute\b|\bsoon\b|\bpresently\b/;
 
 /**
- * THE FIVE THAT ARE REAL AND ARE NOT FIXED HERE.
+ * AND THE HOLE IN THE HOW-LONG HALF, WHICH WAS SHAPED LIKE THE DIGIT `1`.
  *
- * Widening the rule to the blind-spot ledger found these immediately. Every one is a live promise
- * about when to come back, printed to an applicant, with no `retryAfterSec` behind it:
+ * Until 2026-08-12 the only counted duration this half recognised was `\d+\s*(?:second|minute|
+ * hour|day)s?` — a NUMERAL. `Try again in five minutes.` therefore passed the guard completely:
+ * "try again" is a come-back cue, "five minutes" is a duration, and neither `\bshortly\b` nor
+ * `\bin a moment\b` nor the numeral branch matches it. That is not a hypothetical shape. The
+ * product spells its durations out in words nearly everywhere it states one — `api/auth.ts` says
+ * "fifteen minutes" three times, `prepLead.ts` says "thirty days" and "roughly two months",
+ * `callook.ts` says "under five minutes" — so the ONE form the rule could see was the one form
+ * this codebase does not habitually write.
  *
- *   callook.ts:1007  a request that timed out                "try again in a moment"
- *   callook.ts:1010  a transport failure, cause unknown      "try again in a moment"
- *   callook.ts:1097  a body that stopped arriving            "try again in a moment"
- *   callook.ts:1102  a dropped connection mid-answer         "try again in a moment"
- *   callook.ts:1128  callook reloading its FCC snapshot      "Try again shortly"
- *
- * The last one is the interesting one and it is still a violation. The sentence around it cites
- * callook's own published figure — the reload "usually takes under five minutes" — which is a
- * sourced fact about the source and belongs there. "Try again shortly" is not that fact; it is an
- * instruction this software invented on top of it, and the first four have no fact underneath at
- * all: a socket timeout says nothing whatever about when the source will answer.
- *
- * THEY ARE LISTED RATHER THAN FIXED because `packages/server/src/callsign/callook.ts` is not this
- * agent's territory and another agent is committing into this tree. Listing them is not the same
- * as tolerating them: each entry is matched against the exact literal run, so this cannot cover a
- * sixth violation or a reworded fifth, and `nothing on the list has been quietly fixed` below
- * fails the moment one is repaired without the entry being deleted. Delete the entry with the fix.
+ * MEASURED before adding the branch, over every string the census walk touches (sites, drops and
+ * the blind-spot ledger, 3,000-odd runs): 14 runs carry a spelled-out duration and NOT ONE of them
+ * also carries a come-back cue, so the widening added zero violations and zero exemptions on the
+ * day it landed. It costs the honest sentences nothing, which is the test of a rule worth having:
+ * "NCDXF asks for roughly two months of lead", "thirty days is GrantSpotter's default", "seven day
+ * columns" and "at least six weeks' lead" are all facts about a funder or a layout, and none of
+ * them tells anybody when to come back.
  */
-const KNOWN_UNGOVERNED: readonly { readonly file: string; readonly run: string }[] = [
-  {
-    file: 'packages/server/src/callsign/callook.ts',
-    run: 'the source being slow, not anything to do with your callsign - try again in a moment,',
-  },
-  {
-    file: 'packages/server/src/callsign/callook.ts',
-    run: 'network, not your callsign - try again in a moment, or type your details in and',
-  },
-  {
-    file: 'packages/server/src/callsign/callook.ts',
-    run: 'not anything to do with your callsign - try again in a moment, or type your details',
-  },
-  {
-    file: 'packages/server/src/callsign/callook.ts',
-    run: 'your callsign - try again in a moment, or type your details in and carry on.',
-  },
-  {
-    file: 'packages/server/src/callsign/callook.ts',
-    run: 'minutes. nothing is wrong with your callsign. try again shortly, or type your details',
-  },
-];
+const HOW_LONG =
+  /\bshortly\b|\bin a (?:moment|minute|while|bit|sec)\b|\ba (?:few|couple of) (?:seconds|minutes|hours|days)\b|\bin about\b|\b\d+\s*(?:second|minute|hour|day)s?\b|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|ninety|half an?|several)\s+(?:second|minute|hour|day|week|month)s?\b|\ban hour\b|\ba minute\b|\bsoon\b|\bpresently\b/;
 
 function promisesATime(text: string): boolean {
   return COME_BACK_LATER.test(text) && HOW_LONG.test(text);
-}
-
-function isKnownUngoverned(file: string, run: string): boolean {
-  return KNOWN_UNGOVERNED.some((entry) => entry.file === file && entry.run === run);
 }
 
 describe('no sentence may say when to come back', () => {
@@ -386,7 +356,7 @@ describe('no sentence may say when to come back', () => {
     const promises: string[] = [];
     for (const site of copy) {
       for (const chunk of site.chunks) {
-        if (promisesATime(chunk) && !isKnownUngoverned(site.file, chunk)) promises.push(show(site));
+        if (promisesATime(chunk)) promises.push(show(site));
       }
     }
 
@@ -412,7 +382,7 @@ describe('no sentence may say when to come back', () => {
     const promises: string[] = [];
     for (const entry of [...census.drops, ...census.unread]) {
       const run = normalizeCopy(entry.text);
-      if (promisesATime(run) && !isKnownUngoverned(entry.file, run)) promises.push(showDrop(entry));
+      if (promisesATime(run)) promises.push(showDrop(entry));
     }
 
     expect(
@@ -424,31 +394,27 @@ describe('no sentence may say when to come back', () => {
   });
 
   /**
-   * The other tooth of the ratchet, and the reason the list above is not an allowlist.
+   * THE ALLOWLIST IS GONE, AND SO ARE THE FIVE SENTENCES IT NAMED.
    *
-   * An exemption that outlives the defect it names is worse than no exemption: the file gets
-   * fixed, the entry stays, and the next invented wait written in that file is free. Every entry
-   * must still be a real, matching violation, or it must be deleted.
+   * A `KNOWN_UNGOVERNED` list stood here, holding five live invented waits in
+   * `packages/server/src/callsign/callook.ts` — four "try again in a moment" over, respectively, a
+   * request that timed out, a transport failure of unknown cause, a body that stopped arriving and
+   * a connection dropped mid-answer, none of which says anything whatever about when the source
+   * will next answer; and one "Try again shortly" sitting two clauses away from callook's OWN
+   * published figure for the same event. They were listed rather than fixed because that file
+   * belonged to another agent, with a second test asserting that no entry outlived its defect.
+   *
+   * They are fixed in this commit and the list is DELETED rather than emptied. An empty allowlist
+   * is an invitation: it leaves a place to write "not my territory" and stay green, and the
+   * ratchet test that guarded it can only guard entries somebody chose to write down. The
+   * instruction survives in all five ("try again, or type your details in and carry on"); the
+   * duration this software invented does not; and the UPDATING message now quotes callook's
+   * five-minute reload figure, attributed to callook inside the sentence, and adds nothing of its
+   * own on top of it.
+   *
+   * `states the wait only as the number the system computed` and `reaches into the strings the
+   * census does not count`, above, are what enforce this, with nothing subtracted from either.
    */
-  it('has nothing on the list that has been quietly fixed', () => {
-    const everyRun = new Set<string>();
-    for (const site of copy) for (const chunk of site.chunks) everyRun.add(`${site.file} ${chunk}`);
-    for (const entry of [...census.drops, ...census.unread]) {
-      everyRun.add(`${entry.file} ${normalizeCopy(entry.text)}`);
-    }
-
-    const stale = KNOWN_UNGOVERNED.filter(
-      (entry) => !everyRun.has(`${entry.file} ${entry.run}`),
-    ).map((entry) => `${entry.file}: ${entry.run}`);
-
-    expect(
-      stale,
-      'This entry in KNOWN_UNGOVERNED no longer matches anything in the product. Either the ' +
-        'sentence was fixed — in which case delete the entry, that is the last step of the work — ' +
-        'or it was reworded, in which case the exemption is now covering a sentence nobody ' +
-        'examined. Neither may be left standing.',
-    ).toEqual([]);
-  });
 
   /**
    * The rule demonstrated firing, in both directions. A guard nobody has watched work is a guard
@@ -465,12 +431,56 @@ describe('no sentence may say when to come back', () => {
     expect(violates('it is unreadable for a few minutes. try again shortly.')).toBe(true);
     expect(violates('try again in 15 minutes.')).toBe(true);
 
+    // The five that shipped in `callsign/callook.ts`, fixed in this commit. Kept as cases rather
+    // than as an allowlist, so the exact sentences that were live cannot be written again.
+    expect(
+      violates(
+        'the source being slow, not anything to do with your callsign - try again in a moment,',
+      ),
+    ).toBe(true);
+    expect(violates('network, not your callsign - try again in a moment, or type your details in and')).toBe(true);
+    expect(
+      violates('minutes. nothing is wrong with your callsign. try again shortly, or type your details'),
+    ).toBe(true);
+    // ...and the wording that replaced them, which keeps the instruction and drops the invention.
+    expect(violates('not anything to do with your callsign - try again, or type your details in and carry on.')).toBe(false);
+    expect(
+      violates(
+        'it says the reload usually takes under five minutes. nothing is wrong with your callsign.',
+      ),
+    ).toBe(false);
+
+    /*
+     * THE HOLE SHAPED LIKE THE DIGIT `1`, DEMONSTRATED.
+     *
+     * Every one of these was legal until 2026-08-12: the counted-duration branch recognised a
+     * NUMERAL and nothing else, so a wait written the way this codebase habitually writes waits —
+     * in words — walked straight through a rule whose whole subject is invented waits. Watch it
+     * fail on the numeral and pass on the word, and you have watched the guard not work.
+     */
+    expect(violates('try again in five minutes.')).toBe(true);
+    expect(violates('please wait thirty seconds and try again.')).toBe(true);
+    expect(violates('come back in two hours.')).toBe(true);
+    expect(violates('retry in several days.')).toBe(true);
+
     // The forms that are honest, and must stay legal.
     expect(violates('try again in ')).toBe(false); // …${humanRetryAfter(wait)}.
     expect(violates('too many sign-in attempts. try again later.')).toBe(false);
     expect(violates('you have used every verification in your hourly allowance.')).toBe(false);
     expect(violates('deadlines within 30 days of today')).toBe(false);
     expect(violates('expect a decision in 60 to 90 days.')).toBe(false);
+
+    /*
+     * And the spelled-out durations that ARE in the product today, none of which tells anybody
+     * when to come back. Widening the rule may not cost these anything; if it ever does, the
+     * widening is wrong, not the sentence. Measured: 14 runs carry a spelled-out duration and none
+     * pairs it with a come-back cue.
+     */
+    expect(violates("ncdxf asks for roughly two months of lead before it can act on a request.")).toBe(false);
+    expect(violates("thirty days is grantspotter's default,")).toBe(false);
+    expect(violates('seven day columns, and they do not shrink below the width their marks need.')).toBe(false);
+    expect(violates("event and travel process needing at least six weeks' lead and a maximum of three")).toBe(false);
+    expect(violates('one award also accepts applicants within three months of citizenship.')).toBe(false);
   });
 
   /**

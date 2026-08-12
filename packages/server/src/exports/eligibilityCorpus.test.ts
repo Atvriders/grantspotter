@@ -12,18 +12,27 @@ import { loadExportCorpus, type ExportCorpus } from './testCorpus.js';
  * `eligibility.test.ts` proves the shaping against four hand-built records. This file proves the
  * only things that matter about the feature, and neither is provable against hand-built records:
  *
- *   1. The census a real applicant actually gets, per axis. 68 of 150 for a licensed EE
- *      undergraduate, with 36 of the exclusions on GEOGRAPHY — and geography excluding 36 is
- *      CORRECT. Those scholarships genuinely are ARRL-Division, Section and state restricted.
- *      Presenting a correct exclusion as a fixable gap would be the report lying in the applicant's
- *      favour, which is the same defect as lying against them.
- *   2. `unknown` is a real, common, honest state and NEVER a soft "no". An empty profile leaves
- *      117 of 150 unknown and excludes ZERO of them: every ineligible verdict it produces comes
- *      from the applicant-entity gate — a fact about the programme, not an unanswered question.
+ *   1. The census a real applicant actually gets, per axis — and the fact that GEOGRAPHY is the
+ *      largest single exclusion is the interesting half. Those scholarships genuinely are
+ *      ARRL-Division, Section and state restricted. Presenting a correct exclusion as a fixable
+ *      gap would be the report lying in the applicant's favour, which is the same defect as lying
+ *      against them.
+ *   2. `unknown` is a real, common, honest state and NEVER a soft "no". A profile that states
+ *      nothing leaves most of the corpus unknown, and the only records it excludes outright are
+ *      excluded on a fact about the PROGRAMME rather than on an unanswered question.
  *
- * These counts move when fixtures land. UPDATE them, never soften them: they are the same numbers
- * `npm run profile-corpus -- ee-undergrad` prints, and `corpus.test.ts` pins the population they
- * are taken from.
+ * NO NUMBER IS QUOTED IN THIS PARAGRAPH, AND THAT IS DELIBERATE. It used to open with "68 of 150",
+ * "36 of the exclusions on GEOGRAPHY" and "an empty profile leaves 117 of 150 unknown and excludes
+ * ZERO of them". Every one of those figures is asserted in this file, forty to two hundred lines
+ * below — and when `matcher.ts` stopped reading an unrecorded applicant-entity list as a refusal
+ * on 2026-08-12, the assertions moved (117 became 136, 28 became 9) and the summary at the top did
+ * not, because nothing executes a summary. This project has already paid for that once: a drift
+ * guard whose evidence lived in a comment, found in round three. A restated measurement is a
+ * second copy of a fact with no test behind it, so this file keeps one copy, in the assertion.
+ *
+ * The counts below move when fixtures land. UPDATE them, never soften them: they are the same
+ * numbers `npm run profile-corpus -- ee-undergrad` prints, and `corpus.test.ts` pins the
+ * population they are taken from.
  */
 
 let corpus: ExportCorpus;
@@ -32,10 +41,27 @@ let report: EligibilityReport;
 const EE_UNDERGRAD = PROFILES.find((p) => p.key === 'ee-undergrad')!.profile;
 
 /**
- * The six hard-bar axes this corpus actually carries enough of to test, each with the profile
- * field the matcher asks for. `institution`, `recommendation`, `arrl_membership` and `gender` are
- * hard axes too, but these six are the ones that bar the most records: 117, 106, 84, 27, 13 and 12
- * hard constraints respectively.
+ * EVERY HARD-BAR AXIS THIS CORPUS CARRIES, not a hand-picked six.
+ *
+ * This list read `license, field_of_study, geography, citizenship, gpa, age_stage` and said of
+ * itself: "`institution`, `recommendation`, `arrl_membership` and `gender` are hard axes too, but
+ * these six are the ones that bar the most records: 117, 106, 84, 27, 13 and 12 hard constraints
+ * respectively."
+ *
+ * The six figures are right and the sentence around them is false. Measured over the same corpus:
+ * `institution` carries 122 hard constraints — MORE than any of the six, and the largest hard-bar
+ * axis in this corpus — and `recommendation` carries 12, level with `age_stage`. So the axis most
+ * able to refuse an applicant was the one axis on which "an unset field yields unknown, never
+ * ineligible" — the invariant this whole `describe` exists to prove — was never checked, excluded
+ * by a claim nothing executed.
+ *
+ * So the list is now every hard axis the corpus actually carries, and `covers every hard axis the
+ * corpus can bar on` below RECOMPUTES that set from the loaded programs and fails if the two
+ * differ. It cannot be a list somebody trimmed with a sentence again: a new fixture that
+ * introduces a hard axis nobody has exercised here fails the suite, and an axis that leaves the
+ * corpus fails it too. (The list cannot simply be derived at module scope — `it.each` is evaluated
+ * when the file is collected and `loadExportCorpus` is async — which is exactly the gap the prose
+ * was filling. A check is the honest way to fill it.)
  */
 const HARD_BAR_AXES: ConstraintAxis[] = [
   'license',
@@ -44,6 +70,11 @@ const HARD_BAR_AXES: ConstraintAxis[] = [
   'citizenship',
   'gpa',
   'age_stage',
+  'institution',
+  'recommendation',
+  'arrl_membership',
+  'gender',
+  'ham_activity',
 ];
 
 beforeAll(async () => {
@@ -227,6 +258,29 @@ describe('an unset profile field yields unknown, never ineligible', () => {
       expect(row.reasons, program.name).toBe('');
       expect(row.reasonsFromGrantSpotter, program.name).toBe('');
     }
+  });
+
+  /**
+   * THE RATCHET UNDER `HARD_BAR_AXES`, because the list it replaced was trimmed by a sentence.
+   *
+   * `it.each` is evaluated when this file is collected and the corpus loads asynchronously, so the
+   * list above cannot literally be derived. This is the next best thing and it is strictly better
+   * than the prose it replaces: the set is recomputed from the loaded programs and compared, so
+   * the list cannot silently omit the axis that bars the most records (which is what happened to
+   * `institution`, 122 hard constraints, the largest in the corpus and untested until 2026-08-12)
+   * and cannot silently keep exercising an axis that has left the fixtures.
+   */
+  it('covers every hard axis the corpus can bar on, and no axis it cannot', () => {
+    const carried = new Set<string>();
+    for (const program of corpus.programs) {
+      for (const constraint of program.constraints) {
+        if (constraint.hard) carried.add(constraint.spec.axis);
+      }
+    }
+    // `financial_need` is forced soft by the matcher whatever the record says (spec §4.5 rule 11),
+    // so a hard one in the data is never a bar and is not this list's business.
+    carried.delete('financial_need');
+    expect([...carried].sort()).toEqual([...HARD_BAR_AXES].sort());
   });
 
   it.each(HARD_BAR_AXES)(

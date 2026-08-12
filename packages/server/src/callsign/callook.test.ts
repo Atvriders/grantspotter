@@ -829,8 +829,28 @@ describe('lookupCallsign: the answers that are not a record', () => {
 
     expect(result.status).toBe('updating');
     expect(result.record).toBeUndefined();
-    expect(result.message).toMatch(/try again/i);
     expect(result.message).not.toMatch(/not found|no record|invalid/i);
+
+    /*
+     * THE ONLY DURATION IN THIS SENTENCE IS CALLOOK'S OWN, AND IT SAYS WHOSE IT IS.
+     *
+     * This assertion was `toMatch(/try again/i)` until 2026-08-12, and what it was actually
+     * pinning was "Try again shortly, or type your details in and carry on." — an instruction
+     * about when to come back that GrantSpotter invented and set two clauses away from a figure
+     * callook publishes. A reader cannot tell the two apart, and the one that was ours was the
+     * vaguer of the two. The product's one-number rule
+     * (`packages/server/test/userFacingCopyContract.test.ts`) forbids exactly that, and listed
+     * this sentence as a live violation.
+     *
+     * So the requirement is inverted rather than deleted. The message must carry the source's
+     * figure, attributed to the source; it must offer the way forward that does not depend on any
+     * duration at all; and it must state no wait of its own.
+     */
+    expect(result.message).toMatch(/it says the reload usually takes under five minutes/i);
+    expect(result.message).toMatch(/type your details in and carry on/i);
+    expect(result.message, 'a wait this software invented').not.toMatch(
+      /\bshortly\b|\bin a (?:moment|minute|while|bit)\b|\bsoon\b/i,
+    );
   });
 
   it('short-circuits a non-US callsign BEFORE any request', async () => {
@@ -997,8 +1017,19 @@ describe('lookupCallsign: failures', () => {
     expect(result.status).toBe('unavailable');
     expect(result.message).toMatch(/could not reach callook\.info/);
     expect(result.message).toMatch(/not your callsign/);
-    // The retry is the person's to make, and the message has to offer it.
-    expect(result.message).toMatch(/try again in a moment/);
+    /*
+     * The retry is the person's to make, and the message has to offer it — but it may not say
+     * WHEN. This read `toMatch(/try again in a moment/)` until 2026-08-12, which pinned the
+     * invented half of the sentence as though it were the point of it. A connection reset says
+     * nothing whatever about when callook will next answer, so "in a moment" was a number this
+     * software made up about somebody else's server, and the assertion held it in place.
+     *
+     * Split: the offer must be there, and the duration must not.
+     */
+    expect(result.message).toMatch(/try again, or type your details in and carry on/);
+    expect(result.message, 'a wait this software invented').not.toMatch(
+      /\bshortly\b|\bin a (?:moment|minute|while|bit)\b|\bsoon\b|\b\d+\s*(?:second|minute|hour)s?\b/i,
+    );
   });
 
   it('spends one timeout budget per call, not one per attempt', async () => {

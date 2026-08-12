@@ -203,8 +203,18 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
     // non-student profile), and none of these records carries either constraint in the
     // committed fixtures — so a correctly-typed, US-based, ARRL-affiliated club is eligible for
     // all of them. That is a real, code-verified reading of matchProgram, not an assumption.
+    //
+    // STRENGTHENED 2026-08-12, because the assertion was weaker than the sentence above it. It
+    // read `.not.toBe('ineligible')`, which `unknown` satisfies — so the paragraph claimed
+    // ELIGIBLE and the check permitted "we could not tell". That is the exact shape a verdict
+    // change slips through: the entity-gate fix the same day moved 19 records from `ineligible`
+    // to `unknown` across this corpus, and a `not.toBe('ineligible')` over a set that happened to
+    // include one of them would have gone on passing while the claim it guards became false.
+    // Measured: all six are `eligible`, so the assertion can say what the comment says.
     for (const program of open) {
-      expect(matchProgram(club, program, PROFILE_NOW_ISO).kind).not.toBe('ineligible');
+      expect(matchProgram(club, program, PROFILE_NOW_ISO), program.name).toEqual({
+        kind: 'eligible',
+      });
     }
   });
 
@@ -216,10 +226,18 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
 
     // The exact blind spot this profile closes: no individual profile, however constructed,
     // could ever pass the applicant-entity gate on this program.
-    expect(matchProgram(makeStudent(), ariss, PROFILE_NOW_ISO).kind).toBe('ineligible');
+    const refused = matchProgram(makeStudent(), ariss, PROFILE_NOW_ISO);
+    expect(refused.kind).toBe('ineligible');
+    // ...and that refusal is a real one, from a list somebody researched — not the empty list that
+    // used to refuse everybody. `ariss.applicantEntities` above is what makes it real; this is
+    // the verdict side of the same fact.
+    if (refused.kind !== 'ineligible') throw new Error('unreachable');
+    expect(refused.reasons.map((c) => c.spec.axis)).toEqual(['other']);
 
     const school = findProfile('school-org').profile;
     expect(school).toMatchObject({ kind: 'organization', entity: 'school_lea' });
-    expect(matchProgram(school, ariss, PROFILE_NOW_ISO).kind).not.toBe('ineligible');
+    // Same strengthening as above: `not.toBe('ineligible')` also admits `unknown`, and the point
+    // of this test is that the school CAN see it.
+    expect(matchProgram(school, ariss, PROFILE_NOW_ISO)).toEqual({ kind: 'eligible' });
   });
 });

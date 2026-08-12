@@ -189,6 +189,25 @@ test('log in, set a profile, browse with verdicts, star, calendar, receive a cha
   // `unknown` is a labelled state and the page refuses to let it read as a soft no.
   await expect(page.getByText(/Unknown is not a/)).toBeVisible();
 
+  /*
+   * ...AND IT DOES NOT BLAME THE READER FOR IT. This paragraph read "It means something a program
+   * asks for could not be answered from your profile yet" until 2026-08-12, which pins every
+   * `unknown` in the corpus on a gap in the READER. Against the real seeded corpus and a real
+   * profile — which is why the check is here and not only over a stubbed summary in
+   * `Browse.test.tsx` — most of them are not: `e2e/api.spec.ts` measures this same server at 27
+   * unknown for this applicant, of which 20 carry an EMPTY `missingProfileFields` and are named
+   * there one by one. Nineteen are records whose applicant list nobody ever filled in and one is a
+   * radius whose centre never resolved to a coordinate; all twenty are holes in GrantSpotter's own
+   * data that no field of the reader's could close.
+   *
+   * `VerdictBadge`'s title was corrected for exactly this and this paragraph, directly above the
+   * table on the same screen, was not. Stated as a prohibition so rewording stays free.
+   */
+  const censusNote = page.getByText(/waiting on an answer rather than ruling you out/);
+  await expect(censusNote).toBeVisible();
+  await expect(censusNote).not.toContainText(/(?:answered|evaluated) from your profile/i);
+  await expect(censusNote).toContainText(/the record itself never stated it/i);
+
   // Every honesty surface is reachable from the list. `Status: unknown` is the raw state, spelled
   // out — 118 of the 150 records carry it, and a blank cell there is a bug.
   await expect(page.getByLabel('Status: unknown').first()).toBeVisible();

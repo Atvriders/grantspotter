@@ -398,11 +398,37 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
           {verdict?.kind === 'unknown' && (
             <section className="panel card" aria-labelledby="unknown-verdict-heading">
               <h2 id="unknown-verdict-heading">Why this verdict is unknown</h2>
-              <p>
-                Unknown is not a &ldquo;no&rdquo;. Something this program asks for could not be
-                answered from your profile, so the matcher stopped rather than ruling you out — an
-                unset field yields unknown, never ineligible.
-              </p>
+              {/*
+                THE LEDE USED TO BE UNCONDITIONAL, AND ON ONE OF ITS TWO BRANCHES EVERY CLAUSE OF
+                IT WAS FALSE.
+
+                It read: "Something this program asks for could not be answered from your profile,
+                so the matcher stopped rather than ruling you out — an unset field yields unknown,
+                never ineligible." Where `missingProfileFields` is empty, nothing this program asks
+                for is at issue — the commonest cause is a record that asks NOTHING, because nobody
+                ever wrote down who may apply (19 of the 20 such records in the shipped corpus, and
+                20 of a licensed EE undergraduate's 27 unknown verdicts) — the profile is not where
+                the gap is, and no field was left unset. Two paragraphs later the same panel said
+                "Nothing you can enter here would settle this one", so the page contradicted
+                itself, and the two tests over this branch each read only the half that was true.
+
+                `VerdictBadge` was corrected for the identical state in the same commit that
+                created the 19. The badge and this panel are on screen together and may not
+                disagree about whose gap it is.
+              */}
+              {verdict.missingProfileFields.length > 0 ? (
+                <p>
+                  Unknown is not a &ldquo;no&rdquo;. Something this program asks for could not be
+                  answered from your profile, so the matcher stopped rather than ruling you out —
+                  an unset field yields unknown, never ineligible.
+                </p>
+              ) : (
+                <p>
+                  Unknown is not a &ldquo;no&rdquo;. Something the matcher needed could not be
+                  worked out at all, so it stopped rather than ruling you out. It is not a gap in
+                  what you have told us — there is no field on your profile that would settle it.
+                </p>
+              )}
               {verdict.missingProfileFields.length > 0 && (
                 <ul>
                   {verdict.missingProfileFields.map((field) => (
@@ -427,18 +453,25 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
               ) : (
                 /*
                   AN UNKNOWN WITH NOTHING TO FILL IN — reachable since the matcher stopped
-                  upgrading an unresolvable axis to `eligible` (close-out review I6). It happens
-                  when a constraint is scoped to something no field on your profile can answer:
-                  an organisation against a county or call-district geography, for instance, where
-                  the org editor has no such input to send you to. Naming a field here would be a
-                  promise the product cannot keep, and saying nothing would leave a bare badge —
-                  so the honest answer is to say there is nothing to answer.
+                  upgrading an unresolvable axis to `eligible` (close-out review I6). Naming a
+                  field here would be a promise the product cannot keep, and saying nothing would
+                  leave a bare badge — so the honest answer is to say there is nothing to answer.
+
+                  THE CAUSE THIS COMMENT NAMED WAS NOT THE CAUSE. It said this happens "when a
+                  constraint is scoped to something no field on your profile can answer: an
+                  organisation against a county or call-district geography, for instance". Measured
+                  over the shipped corpus at 2026-08-12, that case occurs ZERO times, and the two
+                  that do occur are both holes in GrantSpotter's own record: 19 programmes whose
+                  applicant list nobody ever filled in, and one radius rule whose stated centre
+                  ("YCCC center which is in Erving, MA. MA") never resolved to a coordinate. The
+                  copy below was written to the wrong cause, which is how it came to say "something
+                  this program asks for" about records that ask for nothing at all.
                 */
                 <p>
-                  Nothing you can enter here would settle this one. Something this program asks
-                  for is not a question any field on your profile puts to you, so the matcher
-                  stopped rather than guess. It is still not a &ldquo;no&rdquo; — read the
-                  funder&rsquo;s own page and decide for yourself.
+                  Nothing you can enter here would settle this one. Whatever the matcher could not
+                  work out is not a question any field on your profile puts to you, so it stopped
+                  rather than guess. It is still not a &ldquo;no&rdquo; — read the funder&rsquo;s
+                  own page and decide for yourself.
                 </p>
               )}
             </section>

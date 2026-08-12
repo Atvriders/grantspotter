@@ -73,11 +73,34 @@ function Census({ summary, filters }: { summary: BrowseSummary; filters: UiFilte
         {summary.eligible} eligible · {summary.preferred} preferred · {summary.unknown} unknown ·{' '}
         {summary.total} in view
       </span>
+      {/*
+        WHOSE GAP IT IS, AND WHY THIS PARAGRAPH NO LONGER GUESSES.
+
+        This read "It means something a program asks for could not be answered from your profile
+        yet" until 2026-08-12. That sentence pins every `unknown` in the corpus on the reader, and
+        `summary` is the one place on this screen that CANNOT know whether that is true: it is a
+        count over the whole corpus, and the two kinds of unknown are not distinguished in it.
+
+        Measured on the shipped corpus for a licensed EE undergraduate: 27 unknown, and 20 of them
+        carry an EMPTY `missingProfileFields` — 19 records that never stated who may apply, plus
+        one radius rule whose centre never resolved to a coordinate. For twenty of twenty-seven the
+        missing thing is in GrantSpotter's own record, and there is no field the reader could fill
+        in that would change it. Sending them to the profile editor asks them to close a hole in
+        our data by typing something about themselves, which is the same misdirection as calling it
+        a refusal, only quieter — `VerdictBadge`'s title was corrected for exactly this and this
+        paragraph, one component above it on the same screen, was not.
+
+        So the cause is named as the disjunction it actually is, and `VerdictBadge` and the
+        opportunity page say which of the two any particular row is. `Browse.test.tsx` forbids the
+        re-attribution rather than pinning the wording, so rewording this is free and blaming the
+        reader again is not.
+      */}
       {summary.unknown > 0 && (
         <span className="census-note">
-          Unknown is not a &quot;no&quot;. It means something a program asks for could not be
-          answered from your profile yet — {summary.unknown} of the {summary.total} in view are
-          waiting on an answer rather than ruling you out.
+          Unknown is not a &quot;no&quot;. It means something the matcher could not work out —
+          either your profile has not answered it, or the record itself never stated it — so{' '}
+          {summary.unknown} of the {summary.total} in view are waiting on an answer rather than
+          ruling you out. Open one to see which.
         </span>
       )}
     </section>

@@ -102,9 +102,10 @@ export function VerdictBadge({
 
     case 'unknown': {
       /**
-       * `unknown` is a real, common, honest state — 8 of 150 for a fully specified EE
-       * undergraduate, and far more when a profile field is unset. An unset field yields
-       * `unknown`, never `ineligible`, so this badge must never read as a soft "no".
+       * `unknown` is a real, common, honest state — 27 of 150 for a fully specified EE
+       * undergraduate (8 until 2026-08-12, when a record that named no audience stopped being a
+       * refusal), and far more when a profile field is unset. An unset field yields `unknown`,
+       * never `ineligible`, so this badge must never read as a soft "no".
        *
        * The title says "waiting on", never "fill this in and you get an answer": the matcher
        * short-circuits per axis, so filling `degreeLevel` moves a verdict from one `unknown` to a

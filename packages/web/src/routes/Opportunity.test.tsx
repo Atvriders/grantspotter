@@ -634,6 +634,61 @@ describe('Opportunity detail — an unknown with nothing to fill in', () => {
     const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
     expect(panel).toHaveTextContent(/is not a “no”|is not a "no"|not a .no./i);
   });
+
+  /**
+   * AND THE PANEL'S OWN LEDE MUST AGREE WITH IT.
+   *
+   * The two tests above read the SECOND paragraph and never the first, and the first was
+   * unconditional: "Something this program asks for could not be answered from your profile, so
+   * the matcher stopped rather than ruling you out — an unset field yields unknown, never
+   * ineligible." On this branch every clause of that is wrong. Nothing the program asks for is at
+   * issue (the commonest cause, 19 of the 20 unanswerable records in the shipped corpus, is a
+   * record that asks NOTHING because nobody ever wrote down who may apply); the profile is not
+   * where the gap is; and no field was left unset. The panel then contradicted itself two
+   * paragraphs later with "Nothing you can enter here would settle this one", and both tests
+   * passed on the half that was true.
+   *
+   * MEASURED: 20 of a licensed EE undergraduate's 27 unknown verdicts take this branch
+   * (`e2e/api.spec.ts` names all twenty). It is the majority case on this page, not the corner.
+   *
+   * `VerdictBadge`'s title for the identical state was corrected in the same commit that created
+   * the 19 — "This program’s record is missing something GrantSpotter needs to decide it, and
+   * there is no field you could fill in that would change that." The badge and the panel sit on
+   * this page together; they may not disagree about whose gap it is.
+   */
+  it('never tells the reader their profile is the gap, in any paragraph of the panel', async () => {
+    stubFetch(UNANSWERABLE);
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    const text = panel.textContent ?? '';
+
+    expect(text, 'the unanswerable panel blames the reader’s profile').not.toMatch(
+      /(?:answered|evaluated|worked out|settled)\s+from your profile\b/i,
+    );
+    // "an unset field yields unknown" is a true sentence about the matcher and a false
+    // explanation of THIS verdict: no field was left unset.
+    expect(text, 'the panel explains this verdict as an unset field').not.toMatch(/unset field/i);
+    // What it must say instead: there is nothing here for the reader to do.
+    expect(text).toMatch(/nothing you can enter here would settle this one/i);
+    expect(text).toMatch(/not a .no./i);
+  });
+
+  /**
+   * The other half of the same rule, and the reason the test above is not simply a ban on a
+   * phrase: on the ANSWERABLE branch that sentence is exactly right, and must survive.
+   */
+  it('does still name the profile when the profile really is what it is waiting on', async () => {
+    stubFetch({
+      ...CLUB_GRANT_DETAIL,
+      verdict: { kind: 'unknown', missingProfileFields: ['arrlAffiliated'] },
+    });
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: /why this verdict is unknown/i });
+    const text = panel.textContent ?? '';
+    expect(text).toMatch(/from your profile/i);
+    expect(text).toMatch(/answering one of these/i);
+    expect(text).not.toMatch(/nothing you can enter here/i);
+  });
 });
 
 /**
