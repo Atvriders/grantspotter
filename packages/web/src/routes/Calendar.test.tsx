@@ -202,6 +202,82 @@ describe('Calendar', () => {
   });
 
   /**
+   * THE FIFTH SURFACE THE MACHINE DIRECTIVE REACHED.
+   *
+   * `GET /api/calendar` sends `undated[].deadlineNote` as `program.deadline.note` VERBATIM — the
+   * same whole string `GET /api/programs/:id` sends — and that string really begins
+   * `RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,…` on the records whose schedule this
+   * pipeline encodes. The record page has split it since cc64182, the Inbox since 313f4c7, the
+   * spreadsheets and the packet since f0518b2. This list printed it whole, and every one of those
+   * three rounds was measured against the corpus, where NO record routes a directive here: a
+   * directive that parses projects a cycle, and a programme with a cycle is not undated. The
+   * corpus made the surface look clean; the code was not.
+   *
+   * The shape below is the one `core/test/cycles.test.ts` already pins as reachable and ignored —
+   * a directive "pasted here by accident" onto a kind that projects nothing. A curator who does
+   * that is the whole failure mode, and it is one keystroke.
+   *
+   * BOTH HALVES ARE ASSERTED. Deleting the directive alone would delete the schedule with it, and
+   * this panel exists to say what a programme with no date on the calendar does instead — so the
+   * rule has to arrive in English, and the funder's own sentence has to survive untouched.
+   */
+  it('renders a machine directive in the undated list as English, never as the directive', async () => {
+    stub({
+      ...RESPONSE,
+      undated: [
+        {
+          ...RESPONSE.undated[0],
+          deadlineKind: 'dormant',
+          deadlineNote:
+            'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | ' +
+            'Applications arriving after Sep 1 roll to the next Feb 1 cycle.',
+        },
+      ],
+    });
+    renderCalendar();
+    const undated = await screen.findByRole('region', { name: /no dated cycle/i });
+
+    expect(undated.textContent).not.toMatch(/RECUR/);
+    expect(undated.textContent).not.toMatch(/tz=/);
+    expect(undated.textContent).not.toMatch(/dates=/);
+
+    expect(
+      within(undated).getByText(/February 1, April 1, July 1, September 1 each year/),
+    ).toBeInTheDocument();
+    expect(
+      within(undated).getByText(/Applications arriving after Sep 1 roll to the next Feb 1 cycle\./),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A directive this product cannot read back is DROPPED, not shown — and the funder's own
+   * sentence still arrives. `parseRecurrence` throws on `dates=99-99`, and a half-understood
+   * schedule rendered as though it were understood is the plausible-looking fact this product
+   * exists not to publish. What must never happen is the fallback printing the raw string instead.
+   */
+  it('drops an unparseable directive without printing it and without losing the funder’s note', async () => {
+    stub({
+      ...RESPONSE,
+      undated: [
+        {
+          ...RESPONSE.undated[0],
+          deadlineKind: 'dormant',
+          deadlineNote:
+            'RECUR n_fixed_dates tz=Nowhere/Atall dates=99-99 | The club sets its own date each year.',
+        },
+      ],
+    });
+    renderCalendar();
+    const undated = await screen.findByRole('region', { name: /no dated cycle/i });
+
+    expect(undated.textContent).not.toMatch(/RECUR|tz=|dates=/);
+    expect(within(undated).queryByText(/Repeats:/)).not.toBeInTheDocument();
+    expect(
+      within(undated).getByText(/The club sets its own date each year\./),
+    ).toBeInTheDocument();
+  });
+
+  /**
    * `undated` is HORIZON-wide, not window-scoped (Task 11). Twenty-eight programmes are undated in
    * every window. A user looking at September must not read this list as "undated in September".
    */

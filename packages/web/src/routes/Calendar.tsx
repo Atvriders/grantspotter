@@ -16,7 +16,7 @@ import { TrustBadge } from '../components/TrustBadge.js';
   string>`. The local copy was `Record<string, string>` with a `?? kind` fallback, which meant a
   kind nobody had written words for reached this list as a bare identifier and nothing failed.
 */
-import { deadlineKindWords } from '../lib/programWords.js';
+import { deadlineKindWords, readDeadlineNote } from '../lib/programWords.js';
 import '../components/calendar.css';
 
 /** PLAN-LOCAL mirror of the server's `CalendarResponse` (`api/calendarRouter.ts`). */
@@ -310,20 +310,45 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
             on screen.
           </p>
           <ul>
-            {data.undated.map((program) => (
-              <li key={program.programId}>
-                <Link to={`/o/${program.programId}`}>{program.programName}</Link>
-                <div className="meta">
-                  <span>{program.funderName}</span>
-                  <span className="data">
-                    {deadlineKindWords(program.deadlineKind)}
-                  </span>
-                  <StatusPill status={program.status} />
-                  <TrustBadge lastVerifiedAt={program.lastVerifiedAt} now={nowISO} />
-                </div>
-                <p className="prep">{program.deadlineNote}</p>
-              </li>
-            ))}
+            {data.undated.map((program) => {
+              /*
+                THE FIFTH SURFACE THE MACHINE DIRECTIVE REACHED, and the only one no corpus check
+                could see.
+
+                `GET /api/calendar` sends `undated[].deadlineNote` as `program.deadline.note`
+                VERBATIM — the same whole string `GET /api/programs/:id` sends — and that string
+                really carries `RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,…`
+                in front of whatever the funder wrote. The record page has split it since cc64182
+                and the Inbox since 313f4c7; this list printed it whole.
+
+                NO RECORD IN EITHER CORPUS ROUTES ONE HERE TODAY, which is why three rounds of
+                measuring the corpus never saw it: a directive that parses projects a cycle, and a
+                programme with a cycle is not undated. `core/test/cycles.test.ts` pins the shape
+                that gets here anyway — a directive "pasted here by accident" onto a kind that
+                projects nothing — and a curator who does that puts `dates=02-01` on this page.
+
+                So the reader runs regardless of whether today's data needs it, and the rule gets
+                its own line rather than being dropped: this panel exists to say what a programme
+                with no date on the calendar does instead, and "February 1, April 1, July 1,
+                September 1 each year" is exactly that answer.
+              */
+              const note = readDeadlineNote(program.deadlineNote);
+              return (
+                <li key={program.programId}>
+                  <Link to={`/o/${program.programId}`}>{program.programName}</Link>
+                  <div className="meta">
+                    <span>{program.funderName}</span>
+                    <span className="data">
+                      {deadlineKindWords(program.deadlineKind)}
+                    </span>
+                    <StatusPill status={program.status} />
+                    <TrustBadge lastVerifiedAt={program.lastVerifiedAt} now={nowISO} />
+                  </div>
+                  {note.rule !== undefined && <p className="prep">Repeats: {note.rule}</p>}
+                  {note.prose !== '' && <p className="prep">{note.prose}</p>}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
