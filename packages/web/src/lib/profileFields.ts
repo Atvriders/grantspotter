@@ -373,6 +373,36 @@ export function callsignFillCaveat(key: string, kind?: ProfileFieldKind): string
 }
 
 /**
+ * THE CAVEAT A FIELD CARRIES FOR AS LONG AS IT HOLDS A VALUE, rather than for as long as a lookup
+ * is still on the screen.
+ *
+ * Strictly the `'fills_unattributed'` fields — `lat` and `lon` — and it is the counterpart of
+ * {@link callsignFillRefusal}, which answers for strictly the refusals. The split is not
+ * cosmetic: a refusal ("a lookup will never fill this in, and here is why") is news about an
+ * event, worth reading in the minute after a record came back and noise on a form nobody has run
+ * a lookup on. THIS caveat is news about a VALUE. `LOOKUP_FILLS_COORDINATE` was deliberately
+ * written to hold with a number in the box and with the box empty — that is the whole subject of
+ * its comment — and its last clause is about what happens after a save.
+ *
+ * Which is exactly the state it was not being shown in. Measured in Chromium on 2026-08-13
+ * against a local build: accept W1MX's PO-box coordinate on the organisation tab, press Save,
+ * then change the callsign in the form. `lat` still reads `42.34991837`, `#field-lat-lookup` is
+ * gone from the DOM, and the profile holds a number feeding radius verdicts with nothing anywhere
+ * on the page saying what it is or that nothing can vouch for it. The same emptiness is reached by
+ * reloading and editing the one marked field, and by a coordinate typed in by hand. The editor
+ * gated every annotation on "a lookup happened in this session, or a marker survived", which is a
+ * fact about the SESSION; a number in a box that nothing can attribute is a fact about the
+ * PROFILE, and it outlives every session it was created in.
+ */
+export function callsignFillUnattributedCaveat(
+  key: string,
+  kind?: ProfileFieldKind,
+): string | undefined {
+  const fill = lookup(key, kind)?.callsignFill;
+  return fill?.kind === 'fills_unattributed' ? fill.because : undefined;
+}
+
+/**
  * The field this one is COMPUTED FROM, and the sentence that says so — or `undefined` when nothing
  * computes it.
  *

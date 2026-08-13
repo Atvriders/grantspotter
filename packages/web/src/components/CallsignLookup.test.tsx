@@ -795,6 +795,134 @@ describe('the coordinate, and what it is a geocode of', () => {
     });
   });
 
+  /**
+   * THE PANEL'S COPY IS A FUNCTION OF THE STATE IT IS PRINTED IN, NOT OF THE ARM IT CAME FROM.
+   *
+   * Measured in Chromium on 2026-08-13 against a local build, on the organisation tab with W1MX
+   * and a held coordinate: pressing "Use this coordinate anyway, in place of mine" left the panel
+   * printing "GrantSpotter has left the boxes empty rather than fill them with it" and, one
+   * paragraph lower, "Leave the boxes below empty and what you stated stays exactly as it is" —
+   * directly above a Latitude reading 42.34991837 and a Longitude reading -71.0538559. The first
+   * is false. The second is worse than false: following it, which now means leaving two full boxes
+   * alone, is exactly what replaces the position the applicant stated.
+   *
+   * The replacement warning above them recomputed on that press, and this is the same rule applied
+   * to the two paragraphs that had not been written as functions of anything.
+   */
+  it('stops saying the boxes are empty once they are not', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    renderLookup({
+      callsign: 'W1MX',
+      target: 'organization',
+      held: { lat: '42.3601', lon: '-71.0942' },
+    });
+    await lookUp();
+
+    // Before the press, both sentences are true and both are on screen — read whole, because a
+    // test that quotes the first clause of a paragraph has looked at the first clause.
+    const empty = await screen.findByText(/The two boxes below are empty/i);
+    expect(empty).toHaveTextContent(/leaving them that way is an answer rather than a gap/i);
+    expect(empty).toHaveTextContent(
+      /the form keeps whatever latitude and longitude it already has/i,
+    );
+    expect(empty).toHaveTextContent(
+      /a radius rule with nothing to check is left unanswered rather than answered against you/i,
+    );
+    expect(empty).toHaveTextContent(
+      /Use this coordinate if it is close enough that you are happy answering those rules with it/i,
+    );
+    expect(
+      screen.getByText(/Leave the boxes below empty and what you stated stays exactly as it is/i),
+    ).toBeInTheDocument();
+
+    // And the paragraph above them, which is the record's half and does not move: what the number
+    // is, what it would decide, and the standing rule about who ever puts one in a box.
+    const offer = screen.getByText(/^This coordinate is callook’s geocode/i);
+    expect(offer).toHaveTextContent(
+      /reading rather than something stated\. Latitude and longitude are read for one thing only, rules of the form “within 250 miles of Seaford, Delaware”/i,
+    );
+    expect(offer).toHaveTextContent(
+      /verdict about you which this software will not compute from a number you did not choose/i,
+    );
+    expect(offer).toHaveTextContent(/Nothing but you ever puts a coordinate in the boxes below/i);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /use this coordinate anyway, in place of mine/i }),
+    );
+
+    // After it, neither is — because neither is true.
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('42.34991837');
+    expect(screen.queryByText(/left the boxes empty/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The two boxes below are empty/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Leave the boxes below empty/i)).not.toBeInTheDocument();
+    // And what IS true is said, along with the way back out of it.
+    const held = screen.getByText(/The two boxes below now hold exactly this number/i);
+    expect(held).toHaveTextContent(/Pressing “Use these values” writes it onto the form/i);
+    expect(held).toHaveTextContent(
+      /credited to callook\.info as a value the record stated; clearing both boxes takes it back out/i,
+    );
+    expect(held).toHaveTextContent(
+      /the form keeps the latitude and longitude it already has/i,
+    );
+  });
+
+  /** The way back out is a button, because advice nobody can act on is the defect above again. */
+  it('offers to clear the boxes only while there is something in them', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    renderLookup({ callsign: 'W1MX', target: 'organization', held: { lat: '42.3601' } });
+    await lookUp();
+
+    await screen.findByLabelText(/latitude to fill in/i);
+    expect(screen.queryByRole('button', { name: /clear these boxes/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /use this coordinate anyway/i }));
+    await userEvent.click(screen.getByRole('button', { name: /clear these boxes/i }));
+
+    expect(screen.getByLabelText(/latitude to fill in/i)).toHaveValue('');
+    expect(screen.getByLabelText(/longitude to fill in/i)).toHaveValue('');
+    // Back to the state the panel opened in, and saying so again.
+    expect(screen.getByText(/The two boxes below are empty/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /clear these boxes/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two states nobody presses a button to reach, and which the old copy described as neither:
+   * a number the applicant edited (which callook did not state and will not be credited for) and
+   * half a position (which answers no radius rule at all).
+   */
+  it('tells an edited coordinate and half a position apart from the record’s own', async () => {
+    stubResult({ status: 'found', record: W1MX_PO_BOX });
+    const { onAccept } = renderLookup({ callsign: 'W1MX', target: 'organization' });
+    await lookUp();
+
+    await userEvent.type(await screen.findByLabelText(/latitude to fill in/i), '42.36');
+    const half = screen.getByText(/One box below is empty and the other is not/i);
+    expect(half).toHaveTextContent(/Only the box holding something is written onto the form/i);
+    expect(half).toHaveTextContent(
+      /half a position answers no radius rule — those need a latitude and a longitude together/i,
+    );
+    expect(half).toHaveTextContent(/Fill the other one in, or clear both/i);
+
+    await userEvent.type(screen.getByLabelText(/longitude to fill in/i), '-71.09');
+    const edited = screen.getByText(
+      /The two boxes below hold a coordinate this record does not state/i,
+    );
+    expect(edited).toHaveTextContent(/you have typed or edited it/i);
+    expect(edited).toHaveTextContent(
+      /what leaves this panel is yours, and callook\.info is credited for none of it/i,
+    );
+    expect(edited).toHaveTextContent(
+      /Clearing both boxes leaves the form’s own latitude and longitude alone/i,
+    );
+
+    // And that is exactly what leaves the panel, so the sentence is not a guess about it.
+    await userEvent.click(screen.getByRole('button', { name: /use these values/i }));
+    expect(onAccept.mock.calls[0]?.[0]).toMatchObject({
+      lat: { value: '42.36', origin: 'user' },
+      lon: { value: '-71.09', origin: 'user' },
+    });
+  });
+
   it('withholds a coordinate the record cannot attribute to any address', async () => {
     stubResult({ status: 'found', record: NO_ADDRESS });
     renderLookup();

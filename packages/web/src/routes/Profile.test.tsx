@@ -198,6 +198,23 @@ async function renderLoaded(initial = '/profile') {
   return result;
 }
 
+/**
+ * THE TWO LIVE REGIONS THIS FORM KEEPS MOUNTED, ASKED FOR BY NAME.
+ *
+ * `getByRole('status')` was unambiguous while there was one of them, and it was also carrying two
+ * unrelated sentences in one green paragraph at the bottom of a 2,771px form: "Organization
+ * profile saved" and "Values you had stated were replaced by this record: … Latitude was 42.3601".
+ * They were split on 2026-08-13 — see `.profile-moved` in profile.css and the `moved` state in
+ * `Profile.tsx` — so a test that asks for "the live region" is no longer saying which of the two
+ * it expects the sentence in. Naming them is the stronger assertion: the save confirmation belongs
+ * beside Save, and what a record moved belongs beside the lookup that moved it.
+ */
+const savedRegion = (): HTMLElement =>
+  screen.getByRole('status', { name: /whether this profile has been saved/i });
+
+const movedRegion = (): HTMLElement =>
+  screen.getByRole('status', { name: /what accepting an FCC record changed/i });
+
 describe('Profile', () => {
   it('offers both a student and an organization editor', async () => {
     renderProfile();
@@ -419,7 +436,84 @@ describe('Profile', () => {
   it('confirms the save in a live region', async () => {
     await renderLoaded();
     await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/saved/i));
+    await waitFor(() => expect(savedRegion()).toHaveTextContent(/saved/i));
+  });
+
+  /**
+   * A REFUSAL IS ABOUT THE FORM THAT WAS REFUSED, AND STOPS BEING SAID WHEN THAT FORM IS PUT AWAY.
+   *
+   * Measured in Chromium on 2026-08-13 against a local build: press "Save organization profile"
+   * with no entity type, then press Student. The red alert "Choose an entity type. It is the one
+   * field an organization profile cannot be stored without…" is still on screen, above a "Save
+   * student profile" button, on a form with no entity type on it — asserted below, which is why
+   * the second half of this test checks the student form really has no such field rather than
+   * taking it on trust.
+   */
+  it('does not carry one tab’s refusal onto the other tab’s form', async () => {
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save organization profile/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Choose an entity type/i);
+
+    await userEvent.click(screen.getByRole('tab', { name: /student/i }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save student profile/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/entity type/i)).not.toBeInTheDocument();
+  });
+
+  /** The arrow keys are the other way into the other tab, and they are the same event. */
+  it('clears it for a keyboard user reaching the other tab with an arrow key', async () => {
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save organization profile/i }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    screen.getByRole('tab', { name: /organization/i }).focus();
+    await userEvent.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('tab', { name: /student/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The same rule where the sentence is encouraging rather than red: "Student profile saved.
+   * Completeness is now measured against it." over an organization form that has not been saved
+   * at all is a claim about the wrong profile, and this page holds two.
+   */
+  it('does not leave one tab’s save confirmation over the other tab’s form', async () => {
+    await renderLoaded();
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+    await waitFor(() => expect(savedRegion()).toHaveTextContent(/student profile saved/i));
+
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+
+    expect(savedRegion()).toBeEmptyDOMElement();
+  });
+
+  /**
+   * "…AND NONE OF THEM IS REQUIRED", MEASURED TWO LINES ABOVE A REQUIRED FIELD.
+   *
+   * On the organisation tab that sentence sat above a label reading "Entity type *" and a Save
+   * that refuses without it — three claims on one screen, one of them false, measured in Chromium
+   * on 2026-08-13. It is the lede that gave way rather than the rule: `orgProfileSchema.entity` is
+   * the one field on either profile zod does not mark `.optional()`, so a save without it is a
+   * 422 whatever this page says about it.
+   */
+  it('names the one required box on the tab that has one', async () => {
+    await renderLoaded();
+    expect(screen.getByText(/none of them is required/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /organization/i }));
+
+    expect(screen.queryByText(/none of them is required/i)).not.toBeInTheDocument();
+    // Named through the registry, so the lede cannot call it something its own label does not.
+    const lede = screen.getByText(/one of them is required/i);
+    expect(lede).toHaveTextContent(/Entity type, marked \* below/i);
+    expect(lede).toHaveTextContent(
+      /the one field the organization profile cannot be stored without/i,
+    );
+    expect(screen.getByText(/Entity type/, { selector: 'label' })).toHaveTextContent('*');
   });
 
   // ---- the selector for a user who holds both profiles ----
@@ -1131,7 +1225,7 @@ describe('filling the profile from the FCC record', () => {
     expect(screen.queryAllByText(/not a value you stated/i)).toHaveLength(0);
     // ...and the applicant is told, in the live region this form already keeps mounted: a value
     // vanishing from a field is a change they are owed a sentence about.
-    expect(screen.getByRole('status')).toHaveTextContent(
+    expect(movedRegion()).toHaveTextContent(
       /does not state State and License class, so those fields are now empty/i,
     );
 
@@ -1197,12 +1291,60 @@ describe('filling the profile from the FCC record', () => {
     await lookUpAndAccept();
 
     expect(screen.getByLabelText(/^state$/i)).toHaveValue('MI');
-    expect(screen.getByRole('status')).toHaveTextContent(
+    expect(movedRegion()).toHaveTextContent(
       /A value you had stated was replaced by this record: State was OH/i,
     );
-    expect(screen.getByRole('status')).toHaveTextContent(
-      /Type it back if the record is wrong about you/i,
-    );
+    expect(movedRegion()).toHaveTextContent(/Type it back if the record is wrong about you/i);
+    // AND NOT IN THE GREEN ONE. The sentence is a loss; `.profile-status` is `--ok`, the colour
+    // this product paints a verdict that went the applicant's way, and it is where this used to
+    // render — 1,254px below the field it names, measured in Chromium on 2026-08-13.
+    expect(savedRegion()).toBeEmptyDOMElement();
+  });
+
+  /**
+   * "Nothing has been saved yet" IS A CLAIM ABOUT THE STATE IT IS READ IN, and a save is where it
+   * stops being true. It was cleared while it shared the save confirmation's region; moving it to
+   * its own does not exempt it.
+   */
+  it('stops saying nothing has been saved once something has', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/^state$/i));
+    await userEvent.type(screen.getByLabelText(/^state$/i), 'OH');
+    await lookUpAndAccept();
+    expect(movedRegion()).toHaveTextContent(/Nothing has been saved yet/i);
+
+    await userEvent.click(screen.getByRole('button', { name: /save student profile/i }));
+
+    await waitFor(() => expect(savedRegion()).toHaveTextContent(/profile saved/i));
+    expect(movedRegion()).toBeEmptyDOMElement();
+  });
+
+  /**
+   * AND IT IS BESIDE THE CONTROL THAT DID IT, which is the other half of the same finding.
+   *
+   * Measured in Chromium on 2026-08-13: the sentence rendered at 3,061px down a 2,771px form,
+   * 1,254px below the Latitude box it names and out of sight of the panel that had just replaced
+   * it. jsdom computes no layout, so what is asserted here is the containment that produces the
+   * proximity — the region is inside the same field group as the callsign lookup, a few rows above
+   * the boxes it talks about, rather than parked beside Save at the end of the form.
+   */
+  it('puts that news beside the lookup that caused it, not at the foot of the form', async () => {
+    stubFetch({ lookup: { status: 'found', record: PERSON_RECORD } });
+    await renderLoaded();
+    await userEvent.clear(screen.getByLabelText(/^state$/i));
+    await userEvent.type(screen.getByLabelText(/^state$/i), 'OH');
+    await lookUpAndAccept();
+
+    const group = screen.getByLabelText(/^callsign$/i).closest('.profile-field');
+    expect(group).not.toBeNull();
+    expect(
+      within(group as HTMLElement).getByRole('button', { name: /look up this callsign/i }),
+    ).toBeInTheDocument();
+    expect(within(group as HTMLElement).getByRole('status')).toHaveTextContent(/State was OH/i);
+    // The save confirmation stays where a save confirmation belongs: with the Save button.
+    expect(within(group as HTMLElement).queryByLabelText(/whether this profile has been saved/i))
+      .toBeNull();
   });
 
   /**
@@ -1225,7 +1367,7 @@ describe('filling the profile from the FCC record', () => {
     await lookUpAndAccept();
 
     expect(screen.getByLabelText(/^state$/i)).toHaveValue('OH');
-    const status = screen.getByRole('status');
+    const status = movedRegion();
     expect(status).toHaveTextContent(
       /State now holds this record’s answer in place of the one read before it/i,
     );
@@ -1444,7 +1586,7 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
 
     await lookUpAndAccept();
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
-    expect(screen.getByRole('status')).toHaveTextContent(/Latitude/);
+    expect(movedRegion()).toHaveTextContent(/Latitude/);
   });
 
   /**
@@ -1507,6 +1649,55 @@ describe('the values nobody typed: a coordinate, and a call district', () => {
     expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(42.2808);
     expect(screen.queryAllByText(/It carries no mark, because GrantSpotter cannot record/i))
       .toHaveLength(0);
+    // AND THE FIELD DOES NOT FALL SILENT, which is what it did until 2026-08-13. What is gone is
+    // the claim about WHOSE record the number came from; what is left is a number that decides
+    // radius verdicts and that this profile can never attribute to anybody, and that is a fact
+    // about the value rather than about the lookup — so it is still said. Measured in Chromium
+    // before the fix: `#field-lat-lookup` left the DOM and 42.2808 sat in the box with nothing
+    // anywhere on the page about it.
+    expect(document.getElementById('field-lat-lookup')?.textContent).toMatch(
+      /A callsign lookup will not fill this in for you/i,
+    );
+  });
+
+  /**
+   * THE SAME HOLE REACHED THE ORDINARY WAY: SAVE, COME BACK TOMORROW.
+   *
+   * A stored profile carries markers for a callsign, a state, a licence class and an organisation
+   * name, and has nowhere to keep anything about a coordinate — `sourcesOf` reads back `{}` for it
+   * truthfully. So a reload of a profile whose only lookup-derived value is the coordinate has no
+   * lookup to gate an annotation on, and the number that answers "within 250 miles of Seaford,
+   * Delaware" arrived with nothing beside it at all. What it is owed is not a provenance the
+   * database does not hold — that would be an invention — but the standing fact about it, which
+   * `LOOKUP_FILLS_COORDINATE` was already written to state with a number in the box.
+   */
+  it('explains a coordinate a reload found in the box, with no lookup behind it', async () => {
+    stubFetch({
+      get: {
+        student: { kind: 'student', callsign: 'W8UM', lat: 41.714707, lon: -72.728411 },
+        organization: null,
+        completenessFor: 'student',
+        completeness: STUDENT_REPORT,
+      },
+    });
+    await renderLoaded();
+
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(41.714707);
+    for (const id of ['field-lat-lookup', 'field-lon-lookup']) {
+      expect(document.getElementById(id)?.textContent).toMatch(
+        /Anything in this box is in it because you put it there/i,
+      );
+    }
+    // Still gated where the gate belongs: a refusal explains an EVENT, and no lookup has run here.
+    expect(document.getElementById('field-county-lookup')).toBeNull();
+    expect(document.getElementById('field-licensedSince-lookup')).toBeNull();
+  });
+
+  /** An empty box has no value to explain, and thirty-five paragraphs nobody asked for is noise. */
+  it('says nothing beside a coordinate box that is empty', async () => {
+    await renderLoaded();
+    expect(screen.getByLabelText(/^latitude$/i)).toHaveValue(null);
+    expect(document.getElementById('field-lat-lookup')).toBeNull();
   });
 });
 

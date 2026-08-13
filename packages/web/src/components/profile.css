@@ -120,10 +120,35 @@
   margin: 0;
 }
 
+/* The save confirmation, and since 2026-08-13 nothing else. `--ok` is the colour this product
+   uses for a verdict that went the applicant's way, and it was also carrying the lookup's news
+   that values the applicant had stated were replaced — a loss, printed in the colour of a win.
+   That sentence has its own region now; see `.profile-moved`. */
 .profile-status {
   color: var(--ok);
   margin: 0;
   min-height: 1.2em;
+}
+
+/* What accepting a callsign record moved in the form, rendered beside the lookup that moved it.
+
+   `--warn`, not `--ok`: every sentence that reaches here says a value in the form is not what it
+   was — one the applicant stated and has now lost, or one the previous record left behind. The
+   chip is drawn only when there is something in it, so an always-mounted live region (which is
+   what makes an assistive technology announce the update rather than miss it) does not leave an
+   empty amber box on a form that has had no lookup run on it. */
+.profile-moved {
+  margin: 0;
+  font-size: var(--fs-200);
+  line-height: var(--lh-normal);
+  max-width: 66ch;
+}
+
+.profile-moved:not(:empty) {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
 }
 
 /* ---- the meter ---- */
@@ -167,6 +192,41 @@
   font-size: var(--fs-200);
   color: var(--text-muted);
   margin: 0;
+}
+
+/*
+  THE UNKNOWN-FIELDS LADDER, WHICH IS NOT IN THE WINDOW HERE — IT IS IN THE RAIL.
+
+  `.unknown-ladder li` is a two-column row, `minmax(0, 1fr) auto`, holding a field name over its
+  help sentence in the first track and a nowrap "N unknown verdicts are waiting on this" in the
+  second. `explain.css` stacks it at `@media (max-width: 803px)`, and that breakpoint is a fact
+  about the WINDOW — correct on `/browse`, where the ladder spans the main region. On this page the
+  meter puts it in the aside, which `.profile-grid` sizes `minmax(300px, 380px)` against a `1fr`
+  sibling with a min of 0: the aside always takes its 380px maximum, so the card is 380px wide and
+  its content 346px at every window from 1011px up.
+
+  Measured in Chromium on 2026-08-13, at a 1440px window, on a student profile with the seed
+  corpus behind it: the row computed `grid-template-columns: 29.75px 304.25px`. The name track had
+  collapsed to the link's min-content while the nowrap count took 304 of the 346 available, so
+  "Field of study" and "36 unknown verdicts are waiting on this" rendered on one line — the count
+  starting 6px after the link ends — and the help sentence beneath wrapped one word per line in a
+  30px column, thirteen rows of it down the rail.
+
+  STATED WITHOUT A WIDTH, and scoped to `.profile-grid`. A media query here would be a second copy
+  of the 1010 below, and the two would drift the day one of them moved; there is no window at which
+  this page's ladder is wide enough for two columns anyway, because where the grid stacks the
+  ladder is full width and `explain.css`'s own narrow rule gives it one column regardless. Naming
+  another component's class in this file is the thing its header warns against — the scope is what
+  makes it safe: nothing outside `.profile-grid` can be reached from here, so `/browse`'s ladder is
+  untouched. The right long-term fix is a container query in `explain.css`, which is where the
+  window/container confusion actually lives.
+*/
+.profile-grid .unknown-ladder li {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.profile-grid .unknown-ladder .waiting {
+  white-space: normal;
 }
 
 .profile-meter-warn {

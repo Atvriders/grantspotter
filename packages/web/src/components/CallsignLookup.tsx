@@ -1007,9 +1007,28 @@ export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefine
     kind: 'offered',
     point,
     from: geocode.geocodedFrom,
+    /*
+     * WHAT THE NUMBER IS AND WHAT IT WOULD DECIDE — AND NOT ONE WORD ABOUT WHAT THE BOXES HOLD.
+     *
+     * This sentence used to open "GrantSpotter has left the boxes empty rather than fill them with
+     * it", which is a claim about the state of two inputs the applicant can change, written by a
+     * function that is handed the RECORD and never sees them. Measured in Chromium on 2026-08-13
+     * against a local build, on W1MX: press "Use this coordinate anyway, in place of mine", and
+     * this paragraph goes on saying the boxes are empty directly above a Latitude reading
+     * `42.34991837` and a Longitude reading `-71.0538559`. Everything else in the panel recomputed
+     * on that press; this did not, because it could not.
+     *
+     * So it says what does not change — the subject of the geocode, the one thing a coordinate
+     * decides here, and the standing rule that nothing but the applicant ever puts one in a box —
+     * and {@link coordinateBoxesNote} says the part that does. That division is the same one
+     * `LOOKUP_FILLS_COORDINATE` in `lib/profileFields.ts` already makes for the permanent caveat
+     * beside the field, whose own comment records why "…and leaves this box empty" was pulled out
+     * of it: a claim about a box's current state, attached to something that outlives the state,
+     * is a sentence that will be read next to its own contradiction.
+     */
     note:
-      `This coordinate is ${coordinateSubjectPhrase(geocode.geocodedFrom)}. GrantSpotter has left ` +
-      'the boxes empty rather than fill them with it: latitude and longitude are read for one ' +
+      `This coordinate is ${coordinateSubjectPhrase(geocode.geocodedFrom)}. Latitude and ` +
+      'longitude are read for one ' +
       // ONE EXAMPLE OF ONE RULE PER SCREEN. This read “within 70 miles of Schenectady” while the
       // note three paragraphs below the same two boxes read “within 250 miles of Seaford,
       // Delaware” — two different examples of the same thing, a few inches apart, one of which is
@@ -1017,8 +1036,81 @@ export function describeGeocode(record: CallsignRecord): GeocodeOffer | undefine
       // the seed corpus, is the measurement that put the coordinate rule where it is).
       'thing only, rules of the form “within 250 miles of Seaford, Delaware”, and that is a ' +
       'verdict about you which this software will not compute from a number you did not choose. ' +
-      'Use it if it is close enough that you are happy answering those rules with it.',
+      'Nothing but you ever puts a coordinate in the boxes below.',
   };
+}
+
+/**
+ * WHAT THE TWO COORDINATE BOXES CURRENTLY HOLD — the half of the coordinate copy that is a fact
+ * about the form rather than about the record.
+ *
+ * Four states rather than two, because "not empty" is three different things to be told: the
+ * record's own number, a number the applicant typed or edited, and half a position. Each gets a
+ * different sentence for the same reason the six lookup statuses do.
+ */
+export type CoordinateBoxes = 'empty' | 'record' | 'edited' | 'half';
+
+/**
+ * The state above, decided by COMPARING the boxes against what the record stated — never by
+ * remembering that a button was pressed.
+ *
+ * The same device as {@link fromSource}, and deliberately the same comparison: `use()` labels a
+ * coordinate `origin: 'source'` exactly when the trimmed box equals `String(point.latitude)`, so
+ * `'record'` here means precisely "what leaves this panel will be credited to callook.info". A
+ * flag set by the button's `onClick` would disagree with that the moment somebody typed the number
+ * in by hand, or edited a digit and put it back.
+ */
+export function coordinateBoxes(lat: string, lon: string, stated: GeocodedPoint): CoordinateBoxes {
+  const latText = lat.trim();
+  const lonText = lon.trim();
+  if (latText === '' && lonText === '') return 'empty';
+  if (latText === '' || lonText === '') return 'half';
+  return latText === String(stated.latitude) && lonText === String(stated.longitude)
+    ? 'record'
+    : 'edited';
+}
+
+/**
+ * THE SENTENCE FOR EACH OF THOSE STATES, AND WHAT TO DO NEXT IN EVERY ONE OF THEM.
+ *
+ * The paragraph this replaces ended "Use it if it is close enough that you are happy answering
+ * those rules with it" whatever the boxes held, and the paragraph beside it advised leaving them
+ * empty while they were full — advice that, followed literally, does the opposite of what it
+ * promises. Every arm here therefore names the action that is actually available from the state it
+ * describes, and the panel renders a button for it.
+ */
+export function coordinateBoxesNote(boxes: CoordinateBoxes): string {
+  switch (boxes) {
+    case 'empty':
+      return (
+        'The two boxes below are empty, and leaving them that way is an answer rather than a ' +
+        'gap: the form keeps whatever latitude and longitude it already has, and a radius rule ' +
+        'with nothing to check is left unanswered rather than answered against you. Use this ' +
+        'coordinate if it is close enough that you are happy answering those rules with it.'
+      );
+    case 'record':
+      return (
+        'The two boxes below now hold exactly this number. Pressing “Use these values” writes it ' +
+        'onto the form, credited to callook.info as a value the record stated; clearing both ' +
+        'boxes takes it back out, and the form keeps the latitude and longitude it already has.'
+      );
+    case 'edited':
+      return (
+        'The two boxes below hold a coordinate this record does not state — you have typed or ' +
+        'edited it — so what leaves this panel is yours, and callook.info is credited for none ' +
+        'of it. Clearing both boxes leaves the form’s own latitude and longitude alone.'
+      );
+    case 'half':
+      return (
+        // NOT "One of the two boxes below is empty": `test/cycleCountCopy.test.ts` reads that as
+        // a CENSUS — "N of [the] M ⟨plural⟩" is the shape every version of the corpus-count defect
+        // has had, and the detector is noun-agnostic on purpose. This says the same thing without
+        // the partitive rather than being added to that guard's quarantine list.
+        'One box below is empty and the other is not. Only the box holding something is written ' +
+        'onto the form, and half a position answers no radius rule — those need a latitude and a ' +
+        'longitude together. Fill the other one in, or clear both.'
+      );
+  }
 }
 
 /** The record's own words for its operator class, or the truth about a club licence. */
@@ -1453,6 +1545,17 @@ function FoundPanel({
   };
   const heldCoordinate = { lat: (held.lat ?? '').trim(), lon: (held.lon ?? '').trim() };
   const wouldReplace = replacedBy(pending, held);
+  /**
+   * What the two coordinate boxes hold right now, against what the record stated — `undefined`
+   * where the record offered no coordinate to compare them with, which is the one case in which
+   * nothing here has anything to say about them.
+   *
+   * Computed in the render body beside `pending` and `wouldReplace`, and for the same reason those
+   * are: this is the third sentence on this panel that has to be a function of the boxes, and the
+   * two that already were are the two that were measured telling the truth.
+   */
+  const boxes =
+    geocode?.kind === 'offered' ? coordinateBoxes(lat, lon, geocode.point) : undefined;
 
   /**
    * The values, each labelled with WHO STATED IT.
@@ -1736,14 +1839,29 @@ function FoundPanel({
               </p>
             )}
             <p className="callsign-choose">{geocode.note}</p>
-            {geocode.kind === 'offered' && (
+            {geocode.kind === 'offered' && boxes !== undefined && (
               <>
+                {/* WHAT THE BOXES HOLD, RECOMPUTED ON EVERY RENDER, exactly as the replacement
+                    warning above them is. See `coordinateBoxesNote` for what each state has to
+                    say, and `describeGeocode`'s note for the half of this that is a fact about
+                    the record and stays put. */}
+                <p className="callsign-choose">{coordinateBoxesNote(boxes)}</p>
                 {/* THE PRESS THAT REPLACES SOMETHING SAYS SO BEFORE IT IS PRESSED, and it names
                     both numbers, because the more accurate value here is very often the
                     applicant's: measured on 2026-08-11, an MIT student holding the campus
                     coordinate 42.3601, -71.0942 had it silently replaced by W1MX's post office
-                    2.18 miles away — the record's number is not better, it is just the record's. */}
-                {(heldCoordinate.lat !== '' || heldCoordinate.lon !== '') && (
+                    2.18 miles away — the record's number is not better, it is just the record's.
+
+                    ONLY WHILE THE BOXES ARE EMPTY, since 2026-08-13. Every clause of it is in the
+                    future tense — "Using the record's coordinate REPLACES it", "LEAVE the boxes
+                    below empty" — which is the truth before the press and an instruction that
+                    does the opposite of what it says after one: measured in Chromium, this
+                    paragraph advised leaving two boxes empty that were at that moment holding
+                    42.34991837 and -71.0538559, where leaving them exactly as they were is what
+                    would replace the applicant's own position. Once a box holds something, the
+                    warning above — recomputed from `pending`, quoting both the old value and the
+                    new — is the one that is true, and it is the one the reader gets. */}
+                {boxes === 'empty' && (heldCoordinate.lat !== '' || heldCoordinate.lon !== '') && (
                   <p className="callsign-choose">
                     You have already stated a position on this profile:{' '}
                     <strong>
@@ -1768,6 +1886,24 @@ function FoundPanel({
                       ? 'Use this coordinate anyway'
                       : 'Use this coordinate anyway, in place of mine'}
                   </button>
+                  {/* THE OTHER HALF OF THE CHOICE, AND THE ONE THE COPY KEEPS NAMING. Every arm of
+                      `coordinateBoxesNote` past `'empty'` tells the reader that clearing the boxes
+                      leaves the form's own coordinate alone; until this button existed the only
+                      way to do it was to select two numbers and delete them by hand, which is the
+                      shape of advice nobody follows. Rendered only when there is something to
+                      clear, so it never offers to undo nothing. */}
+                  {boxes !== 'empty' && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setLat('');
+                        setLon('');
+                      }}
+                    >
+                      Clear these boxes
+                    </button>
+                  )}
                 </div>
               </>
             )}

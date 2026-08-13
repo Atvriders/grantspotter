@@ -14,6 +14,7 @@ import {
   callsignFillableFields,
   callsignFillCaveat,
   callsignFillDerivation,
+  callsignFillUnattributedCaveat,
   profileFieldLabel,
   profileFieldLabelList,
   PROFILE_FIELDS,
@@ -350,6 +351,25 @@ export function Profile(): JSX.Element {
   const [measuredFor, setMeasuredFor] = useState<ProfileKind | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState('');
+  /**
+   * WHAT ACCEPTING A RECORD MOVED IN THIS FORM — its own state, its own place on the page, and its
+   * own colour, because it is not the same kind of news as "profile saved".
+   *
+   * It shared `status` until 2026-08-13, and shared it with the save confirmation. Two things were
+   * wrong with that, both measured in Chromium against a local build. `.profile-status` is
+   * `color: var(--ok)` — measured `rgb(22, 112, 62)`, the green this product uses for a verdict
+   * that went the applicant's way — and the sentence rendered in it read "Values you had stated
+   * were replaced by this record: State was CA, Latitude was 42.3601, Longitude was -71.0942." A
+   * loss, in the colour of a success. And it rendered at 3,061px down a 2,771px form, 1,254px
+   * below the Latitude field it names and out of sight of the panel that had just done it, because
+   * the live region it shares sits beside the Save button where a save confirmation belongs.
+   *
+   * So it is rendered beside the lookup that caused it, in `--warn`, and the save confirmation
+   * keeps the region beside Save. Both are `role="status"` and both are mounted whether or not
+   * they have anything to say, which is the rule this form already followed for one of them: an
+   * assistive technology has to be watching the node before the text lands in it.
+   */
+  const [moved, setMoved] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -617,8 +637,10 @@ export function Profile(): JSX.Element {
           `${replacedFromRecord.length === 1 ? 'holds this record’s answer' : 'hold this record’s answers'} ` +
           `in place of the one read before ${replacedFromRecord.length === 1 ? 'it' : 'them'}, ` +
           'which was another licensee’s.';
-    const moved = [emptiedSentence, yoursSentence, previousSentence].filter((part) => part !== '');
-    setStatus(moved.length === 0 ? '' : `${moved.join(' ')} Nothing has been saved yet.`);
+    const sentences = [emptiedSentence, yoursSentence, previousSentence].filter(
+      (part) => part !== '',
+    );
+    setMoved(sentences.length === 0 ? '' : `${sentences.join(' ')} Nothing has been saved yet.`);
 
     setDrafts((current) => ({ ...current, [kind]: { ...current[kind], ...vacated, ...values } }));
     setSources((current) => ({
@@ -648,6 +670,10 @@ export function Profile(): JSX.Element {
 
   async function save(): Promise<void> {
     setStatus('');
+    // AND THE LOOKUP'S NEWS, WHICH ENDS "Nothing has been saved yet." — a sentence that survives a
+    // save is a sentence that contradicts the confirmation printed beside it. It was cleared here
+    // when it shared `status`; moving it to its own region does not move it out of this rule.
+    setMoved('');
     setError(null);
 
     const required = REQUIRED[kind];
@@ -740,13 +766,43 @@ export function Profile(): JSX.Element {
     }
   }
 
+  /**
+   * OPEN THE OTHER TAB, AND TAKE THE OTHER TAB'S MESSAGES OFF THE SCREEN WITH IT.
+   *
+   * Every one of these three is about the form that produced it, and none of them was being
+   * cleared. Measured in Chromium on 2026-08-13 against a local build: press "Save organization
+   * profile" with no entity type, then press Student, and the red alert "Choose an entity type. It
+   * is the one field an organization profile cannot be stored without…" is still on screen — above
+   * a "Save student profile" button, on a form that has no entity type to choose and that
+   * `REQUIRED` does not gate. A refusal is the strongest thing this form says to anybody, and it
+   * was being said about a form the reader was no longer looking at.
+   *
+   * The other two are the same defect where the sentence happens to be encouraging rather than
+   * red: "Student profile saved. Completeness is now measured against it." sitting over the
+   * organisation form, and a lookup's "Latitude was 42.3601 … Nothing has been saved yet." sitting
+   * over a profile that lookup never touched. The drafts, the markers and the coordinate subject
+   * are all kept per tab already; these were the three pieces of per-tab state that were not.
+   *
+   * BOTH WAYS INTO THE TAB GO THROUGH HERE — the click and the arrow keys — because a keyboard
+   * user reaching the other tab with `ArrowRight` is the same event as a mouse user pressing it.
+   */
+  function openTab(tab: ProfileKind): void {
+    if (tab === kind) return;
+    setKind(tab);
+    setError(null);
+    setStatus('');
+    setMoved('');
+  }
+
   function onTabKey(event: React.KeyboardEvent<HTMLButtonElement>): void {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    setKind(kind === 'student' ? 'organization' : 'student');
+    openTab(kind === 'student' ? 'organization' : 'student');
   }
 
   const noun = kind === 'student' ? 'student' : 'organization';
+  /** The one field this tab cannot be saved without, or `undefined` where there is none. */
+  const requiredKey = REQUIRED[kind];
   /**
    * Whether this field still holds the value a lookup wrote FOR THE CALLSIGN NOW IN THE FORM.
    * `profileValueOrigin` is core's and is the only sanctioned reader of the first half: testing
@@ -806,12 +862,29 @@ export function Profile(): JSX.Element {
       {/* WHICH BOXES CHANGE THE ANSWER. Thirty-five inputs is a lot to ask of somebody, and until
           this said so there was no way to tell the ones a verdict depends on from the ones that
           only ever appear on the application a funder reads. Every field below carries the answer
-          for itself; this is the sentence that says the distinction exists. */}
+          for itself; this is the sentence that says the distinction exists.
+
+          AND WHICH BOX IS REQUIRED, WHICH IS A FUNCTION OF THE TAB AND WAS WRITTEN AS A CONSTANT.
+          "…and none of them is required" was printed on both tabs. On the organisation tab it sat
+          two lines above a label reading "Entity type *" and a Save that hard-refuses without it
+          with "Choose an entity type. It is the one field an organization profile cannot be stored
+          without" — measured in Chromium on 2026-08-13, all three on one screen. One of the two
+          had to give, and it is not the refusal: `orgProfileSchema.entity` is the one field on
+          either profile that zod does not mark `.optional()`, so a save without it is a 422 and
+          the lede was the only one of the three saying anything untrue.
+
+          Read off `REQUIRED` and named through the registry, so the sentence cannot outlive either
+          the rule or the label: the field that gates the save is the field this names, and it is
+          called here what its own `<label>` calls it. */}
       <p className="profile-lede">
         Not every box changes what GrantSpotter tells you. Each one below says whether matching
-        reads it or whether it is there for your own records and your application — and none of
-        them is required. Leaving a field empty leaves the rules that need it{' '}
-        <strong>unanswered</strong>, which is not the same as answered against you.
+        reads it or whether it is there for your own records and your application
+        {requiredKey === undefined
+          ? ' — and none of them is required.'
+          : ` — and one of them is required: ${profileFieldLabel(requiredKey, kind)}, marked * below, ` +
+            `which is the one field the ${noun} profile cannot be stored without. Nothing else here is.`}{' '}
+        Leaving a field empty leaves the rules that need it <strong>unanswered</strong>, which is
+        not the same as answered against you.
       </p>
 
       <div className="profile-tabs" role="tablist" aria-label="Profile kind">
@@ -829,7 +902,7 @@ export function Profile(): JSX.Element {
             aria-controls={kind === tab ? `panel-${tab}` : undefined}
             tabIndex={kind === tab ? 0 : -1}
             onKeyDown={onTabKey}
-            onClick={() => setKind(tab)}
+            onClick={() => openTab(tab)}
           >
             {tab === 'student' ? 'Student' : 'Organization'}
           </button>
@@ -870,7 +943,7 @@ export function Profile(): JSX.Element {
             const id = `field-${field.key}`;
             const helpId = `${id}-help`;
             const value = drafts[kind][field.key] ?? '';
-            const isRequired = REQUIRED[kind] === field.key;
+            const isRequired = requiredKey === field.key;
             const mark = lookedUpSource(field.key);
             /**
              * ONE SENTENCE PER FIELD, CHOSEN FROM FOUR, AND THE ORDER IS THE ARGUMENT.
@@ -902,7 +975,33 @@ export function Profile(): JSX.Element {
             const derivation = isDerivedValue(field.key)
               ? callsignFillDerivation(field.key, kind)
               : undefined;
-            const caveat = lookupHappened ? callsignFillCaveat(field.key, kind) : undefined;
+            /**
+             * THE CAVEAT, AND THE TWO DIFFERENT QUESTIONS THAT REACH IT.
+             *
+             * After a lookup, every annotated field explains itself: why nothing was filled in
+             * (`county`, `licensedSince`) or what was and what cannot be recorded about it. That
+             * is news about an EVENT and it is gated on the event, which is right — "we did not
+             * fill this from a record you never asked us to read" is noise on a form nobody has
+             * run a lookup on.
+             *
+             * A COORDINATE IN A BOX IS NOT AN EVENT. It is a number that decides radius verdicts
+             * and that this profile can never attribute to anybody, and it survives the lookup, the
+             * save, the reload and the callsign it was read for. Measured in Chromium on
+             * 2026-08-13: with `lat` holding W1MX's post office `42.34991837`, typing a different
+             * callsign into the form takes every marker off (correctly — they described another
+             * licensee) and takes the only sentence about that number off with them;
+             * `#field-lat-lookup` leaves the DOM and nothing on the page says what the number is or
+             * that nothing can vouch for it. A coordinate typed in by hand never had a sentence at
+             * all. So while the box HOLDS something, the caveat written to be true of a held value
+             * is shown whether or not a lookup is still on screen — see
+             * `callsignFillUnattributedCaveat`, and `LOOKUP_FILLS_COORDINATE`, whose text was
+             * already written for exactly this reader.
+             */
+            const caveat = lookupHappened
+              ? callsignFillCaveat(field.key, kind)
+              : value === ''
+                ? undefined
+                : callsignFillUnattributedCaveat(field.key, kind);
             const note =
               mark !== undefined
                 ? `Read from ${mark.source} — not a value you stated. Edit it and it becomes yours.`
@@ -1105,6 +1204,31 @@ export function Profile(): JSX.Element {
                     />
                   </ErrorBoundary>
                 )}
+                {field.key === 'callsign' && (
+                  /* WHAT ACCEPTING A RECORD MOVED IN THIS FORM, BESIDE THE CONTROL THAT MOVED IT.
+                     Mounted always and empty when there is nothing to say, for the reason the
+                     status region beside Save is: a live region an assistive technology is
+                     already watching announces its next update, and a node that appears from
+                     nowhere may never be read out at all. See the `moved` state for the
+                     measurement that took this sentence out of the green region at the bottom of
+                     the form — and note that the values it names are the boxes a few rows down
+                     from here rather than a thousand pixels away. */
+                  <p
+                    role="status"
+                    /* NAMED, because there are now two of these on one page and an unnamed live
+                       region is indistinguishable from the other one to anybody inspecting the
+                       DOM — a test, a screen-reader user listing regions, or the next reader of
+                       this file. The name says what it speaks about; the announcement is still the
+                       text inside it. It deliberately contains no field's label: an `aria-label`
+                       answers `getByLabelText`, and a region called "…a callsign record…" made
+                       `getByLabelText(/callsign/i)` ambiguous with the Callsign input in eleven
+                       tests. */
+                    aria-label="What accepting an FCC record changed on this form"
+                    className="profile-moved"
+                  >
+                    {moved}
+                  </p>
+                )}
               </div>
             );
           })}
@@ -1127,8 +1251,8 @@ export function Profile(): JSX.Element {
           )}
           {/* Mounted always, so the confirmation is an update to a live region an
               assistive technology is already watching rather than a new node it may
-              never announce. */}
-          <p role="status" className="profile-status">
+              never announce. Named for the reason its sibling beside the lookup is. */}
+          <p role="status" aria-label="Whether this profile has been saved" className="profile-status">
             {status}
           </p>
 

@@ -1,8 +1,15 @@
 /* The callsign lookup control and the record panel it opens.
 
-   Its own stylesheet rather than an addition to profile.css because the first-run screen
-   uses this control too and does not import profile.css — a shared control whose styles
-   live in one caller's file is a control that renders unstyled in the other.
+   Its own stylesheet rather than an addition to profile.css because the control imports it
+   itself: `CallsignLookup.tsx` ends its imports with `./callsign.css`, so wherever the component
+   is rendered its styles arrive with it, and a host that forgets to import a stylesheet cannot
+   render it bare.
+
+   IT SAID "BECAUSE THE FIRST-RUN SCREEN USES THIS CONTROL TOO AND DOES NOT IMPORT PROFILE.CSS"
+   UNTIL 2026-08-13, naming a second host that does not exist — `Profile.tsx:1060` is the only
+   render site in this repository, which `CallsignLookup.tsx`'s own header was corrected to say on
+   2026-08-12 while this copy of the same claim was left standing. The decision is unchanged and so
+   is the argument for it; what is gone is a reason that was measured to be false.
 
    Every class is `callsign-`-prefixed for the same reason profile.css prefixes its own:
    these stylesheets are bundled together, and a generic name written here would restyle

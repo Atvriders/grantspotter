@@ -11,6 +11,7 @@ import {
   callsignFillCaveat,
   callsignFillDerivation,
   callsignFillRefusal,
+  callsignFillUnattributedCaveat,
   fieldUsedInMatching,
   PROFILE_FIELDS,
   profileFieldHelp,
@@ -288,6 +289,33 @@ describe('what a callsign lookup may fill', () => {
       // applicant chose in an earlier session, and it has to be true of both.
       expect(caveat, key).not.toMatch(/leaves this box empty|this box is empty|without filling it/i);
     }
+  });
+
+  /**
+   * AND IT IS REACHABLE WITHOUT A LOOKUP, which is the whole reason it was written to be true of a
+   * held value.
+   *
+   * The editor asks two different questions and had one function to ask them with. "Why is this
+   * field empty" is news about an EVENT and is rightly gated on a lookup having happened. "What is
+   * this number in this box" is news about a VALUE, and the value outlives the lookup, the save and
+   * the callsign it was read for — measured in Chromium on 2026-08-13, a saved profile holding
+   * W1MX's `42.34991837` had every sentence about it disappear the moment the callsign in the form
+   * was changed. So the caveat for the fields nothing can attribute is separately reachable, and a
+   * refusal is deliberately NOT: the two are different sentences with different lifetimes.
+   */
+  it('offers the coordinate caveat on its own, apart from the refusals', () => {
+    for (const key of ['lat', 'lon']) {
+      expect(callsignFillUnattributedCaveat(key)).toBe(callsignFillCaveat(key));
+      expect(callsignFillUnattributedCaveat(key)).toMatch(/in it because you put it there/i);
+    }
+    // A refusal explains an event and does not come through this door.
+    expect(callsignFillUnattributedCaveat('county')).toBeUndefined();
+    expect(callsignFillUnattributedCaveat('licensedSince')).toBeUndefined();
+    // Neither does a field with a marker to speak for it, nor one nobody annotated.
+    expect(callsignFillUnattributedCaveat('state')).toBeUndefined();
+    expect(callsignFillUnattributedCaveat('callDistrict')).toBeUndefined();
+    expect(callsignFillUnattributedCaveat('gpa')).toBeUndefined();
+    expect(callsignFillUnattributedCaveat('somethingNew')).toBeUndefined();
   });
 
   /**

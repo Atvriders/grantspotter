@@ -423,7 +423,13 @@ test('spec §14: log in, profile, browse, star, calendar, ICS, template, prompt,
   await page.getByLabel('Stage').selectOption('UNDERGRAD');
   await page.getByLabel('Citizenship').selectOption('US_CITIZEN');
   await page.getByRole('button', { name: /save student profile/i }).click();
-  await expect(page.getByRole('status')).toContainText('saved');
+  // NAMED, because this form keeps two live regions since 2026-08-13: the save confirmation beside
+  // Save, and what accepting an FCC record moved in the form, beside the lookup that moved it. A
+  // bare `getByRole('status')` is a strict-mode violation now, and naming the one this step is
+  // about is the assertion this line was always making.
+  await expect(
+    page.getByRole('status', { name: /whether this profile has been saved/i }),
+  ).toContainText('saved');
 
   // 3 — browse with verdicts
   await page.getByRole('link', { name: 'Browse', exact: true }).click();
