@@ -621,7 +621,10 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/server/src/sources/nsf-awards.ts': 1,
     'packages/server/src/sources/nsf-funding-rss.ts': 1,
     'packages/server/src/sources/tier-c-b.ts': 1,
-    'packages/server/src/templates/slots.ts': 75,
+    // 75 until 2026-08-13. `prose/facts.test.ts` now fills the budget skeleton through the real
+    // slot pipeline and reads `**Total project cost**` back out of the draft, which is the hint at
+    // slots.ts:54 in the state a student sees it — one sentence off the debt, so the budget moves.
+    'packages/server/src/templates/slots.ts': 74,
     'packages/web/src/api/client.ts': 1,
     'packages/web/src/App.tsx': 1,
     'packages/web/src/components/AgendaList.tsx': 10,
@@ -657,7 +660,17 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/web/src/routes/Browse.tsx': 4,
     'packages/web/src/routes/Calendar.tsx': 9,
     'packages/web/src/routes/Enroll.tsx': 2,
-    'packages/web/src/routes/Exports.tsx': 11,
+    // 11 until 2026-08-13, then 10. The export controls were rebuilt: five `<a download>` anchors
+    // became buttons that read the response, so the screen now says what landed on disk, what was
+    // refused, and — per control, in that control's own words — what "nothing matched" means. Every
+    // one of those sentences is read by a test that renders the state producing it
+    // (`routes/Exports.test.tsx`), including the no-profile warning that now replaces two live
+    // controls. The one sentence that carried this entry down is the profile refusal's second half;
+    // nothing here was banked from another round's literals — the empty-export copy was reworded
+    // off "nothing was saved" precisely BECAUSE asserting that phrase credited two of
+    // `routes/Watchlist.tsx`'s sentences by accident, which is the discount this file's header
+    // forbids taking.
+    'packages/web/src/routes/Exports.tsx': 10,
     'packages/web/src/routes/FirstRun.tsx': 4,
     // 12 until 2026-08-13, then 10. The queue's deadline-note line and its edit panel were rebuilt
     // — the `RECUR` directive is no longer printed at a member and no longer pre-filled into the
