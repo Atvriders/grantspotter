@@ -24,7 +24,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "One of only two verified non-ARRL US ham scholarship application paths; its intake does not run through the ARRL catalog. Every fact in this record is quoted from fixtures/ylrl/00-ylrl-net-scholarships.html. Status is `unknown` rather than `open` because the page states no cycle at all: an unpublished deadline cannot support an open badge.",
+      "rawOtherText": "The YLRL scholarships page states no cycle at all: it publishes no application window for this award.",
       "tags": ["ham", "scholarship", "ylrl", "women"]
     },
     {
@@ -51,7 +51,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "Quoted from fixtures/ylrl/00-ylrl-net-scholarships.html. The female-only and licence bullets are document-level on that page and apply to all three YLRL awards.",
+      "rawOtherText": "The female-only and licence bullets are document-level on the YLRL scholarships page and apply to all three YLRL awards.",
       "tags": ["ham", "scholarship", "ylrl", "women"]
     },
     {
@@ -79,7 +79,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The one award in this corpus written FOR part-time students. partTimeOK is true and degreeLevels is empty on purpose: YLRL restricts neither, and an empty allow-list here means the funder set no level, not that no level qualifies.",
+      "rawOtherText": "The one award here written FOR part-time students: YLRL restricts neither enrolment intensity nor degree level, so an unlisted degree level is one the funder never named rather than one that fails to qualify.",
       "tags": ["ham", "scholarship", "ylrl", "women", "part-time"]
     },
     {
@@ -103,7 +103,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "closed", "sourceUrl": "https://austinhams.org/scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "", "staleMirrorWarning": "Two warnings. (1) Search-engine snippets still show a March 25, 2026 deadline for an Austin ARC scholarship; the live club page says May 1 to July 31 and the club page wins. (2) The rebuilt page names no individual scholarship at all — the strings \"Copeland\" and \"Greenwood\" appear nowhere on it — so both names in this corpus come from the 2026-08-02 research pass, not from the capture." },
-      "rawOtherText": "Status is `closed` because 2026-08-02 falls after July 31, outside the club's own stated window; that is a point-in-time fact and must be re-derived, not merely re-stamped, whenever this corpus is re-verified. The club's portal at grants.austinhams.org legitimately displays \"No opportunities available\" between August 1 and April 30 — the closed state, not an error, and the reason the source module's expectedMinRecords is 0. No licence requirement appears anywhere on the captured page, so none is asserted here: a hard licence bar nobody published would exclude eligible students.",
+      "rawOtherText": "The club's portal at grants.austinhams.org legitimately displays \"No opportunities available\" between August 1 and April 30 — the closed state, not an error. No licence requirement appears anywhere on the captured page.",
       "tags": ["ham", "scholarship", "texas", "club"]
     },
     {
@@ -126,7 +126,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "closed", "sourceUrl": "https://austinhams.org/scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "", "staleMirrorWarning": "The rebuilt club page names no individual scholarship; \"Greenwood\" comes from the 2026-08-02 research pass, not from the capture. Confirm the award name with the club before relying on it." },
-      "rawOtherText": "DELIBERATELY HAS NO sourceKey, and is one of exactly two records in the corpus that does not. The austin-arc source module emits ONE page-level record keyed austin-arc-scholarships, which austin-arc-copeland owns; duplicating that pair here would violate the partial unique index on (source_id, external_key), and inventing a key no parser emits would fail to reconcile while looking correct.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "texas", "club"]
     },
     {
@@ -148,7 +148,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.yasme.org/news-releases/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "yasme.org 301s /feed/ and /wp-json/ to a 403 page for non-browser clients, so GrantSpotter does not poll it and no capture of that site exists in this repository. We do not spoof a browser user agent to defeat a deliberate access policy; Yasme announcements are relayed by the ARRL news RSS feed, which is what the change detector watches instead. NOT ASSERTED HERE: a reporting obligation. Earlier drafts stated one for recipients of the associated YASME scholarship, but with no fetchable page there is no funder sentence to quote, and an obligation with a fabricated citation is worse than an unstated one.",
+      "rawOtherText": "yasme.org 301s /feed/ and /wp-json/ to a 403 page for non-browser clients, so the site publishes nothing a reader can subscribe to; Yasme announcements are relayed by the ARRL news RSS feed. No page states a reporting obligation for recipients of the associated YASME scholarship.",
       "tags": ["ham", "grant", "yasme", "no-application"]
     },
     {
@@ -182,7 +182,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://www.ncdxf.org/pages/grant-app.html", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "ncdxf.org returns 403 for both robots.txt and sitemap.xml, so this record is re-verified by hand each quarter rather than crawled aggressively. NOT ASSERTED HERE: the \"roughly $1.2M distributed over about 48 years\" figure from the 2026-08-02 research pass, which appears nowhere on the captured guidelines page and is therefore not published as an amount. NOT ASSERTED HERE either: an emailed intake to a treasurer — the word \"treasurer\" appears zero times on the page, whose own instruction is to complete a Budget Worksheet and an Application Form and submit both to NCDXF.",
+      "rawOtherText": "ncdxf.org returns 403 for both robots.txt and sitemap.xml. The guidelines page's own instruction is to complete a Budget Worksheet and an Application Form and submit both to NCDXF; the word \"treasurer\" appears zero times on it, and the \"roughly $1.2M distributed over about 48 years\" figure from the 2026-08-02 research pass appears nowhere on it.",
       "tags": ["ham", "grant", "dxpedition", "manual"]
     },
     {
@@ -227,7 +227,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.ncdxf.org/pages/scholarships.html", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Verified in the 2026-08-02 research pass: the Youth Grant page contains a title and navigation and no programme terms. A low-value polling target, and part of why ncdxf.org is treated as Tier D — robots.txt and sitemap.xml both 403 non-browser clients.",
+      "rawOtherText": "Verified in the 2026-08-02 research pass: the Youth Grant page contains a title and navigation and no programme terms. ncdxf.org's robots.txt and sitemap.xml both 403 non-browser clients.",
       "tags": ["ham", "grant", "youth", "unpublished", "manual"]
     },
     {
@@ -252,7 +252,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://www.radio-astronomy.org/grants", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "THE FIFTH-GRADE-THROUGH-COLLEGE RULE IS A PREFERENCE, NOT A BAR — the page's own word is \"Preference\" — so this constraint is soft and cannot exclude anybody. THE AWARD IS CASH, not a kit: the page says SARA \"provides funds\" and that the aim is that \"the money reaches the largest number of students\". Radio JOVE, SuperSID and INSPIRE appear on that page only as example projects an applicant might BUILD with the money, never as what SARA hands over; klass stays equipment_in_kind to match the source module's browse category, and the instrument is cash_range, which is what the page describes. The address is written \"grants at radio-astronomy.org\" here because that is how the page spells it, as an anti-spam measure. NOT ASSERTED HERE: a $500 outlier award, and an explicit welcome to international applicants — neither appears on the captured page.",
+      "rawOtherText": "THE FIFTH-GRADE-THROUGH-COLLEGE RULE IS A PREFERENCE, NOT A BAR — the page's own word is \"Preference\". THE AWARD IS CASH, not a kit: the page says SARA \"provides funds\" and that the aim is that \"the money reaches the largest number of students\". Radio JOVE, SuperSID and INSPIRE appear on that page only as example projects an applicant might BUILD with the money, never as what SARA hands over. The address is written \"grants at radio-astronomy.org\" here because that is how the page spells it, as an anti-spam measure. Neither a $500 outlier award nor an explicit welcome to international applicants appears on the captured page.",
       "tags": ["ham", "equipment", "radio-astronomy", "students", "teachers"]
     },
     {
@@ -276,7 +276,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.radioclubofamerica.org/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "RCA runs on ClubExpress: sitemap.xml 403s, pretty URLs 404, and only content.aspx query-string URLs resolve — and the module id inside them changes without notice whenever RCA renumbers a module. That is why this record is curated by hand and re-verified quarterly rather than crawled, and why applyUrl is the club's root rather than a deep link that breaks silently. The wireless-track constraint is SOFT on purpose: it is our research on an unfetchable page, and a hard field bar built on that would exclude students RCA might well fund.",
+      "rawOtherText": "RCA runs on ClubExpress: sitemap.xml 403s, pretty URLs 404, and only content.aspx query-string URLs resolve — and the module id inside them changes without notice whenever RCA renumbers a module, so start from the club's root rather than from a deep link, which breaks silently.",
       "tags": ["scholarship", "wireless", "nominated", "no-license-required", "manual"]
     },
     {
@@ -297,7 +297,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.radioclubofamerica.org/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Recorded as a permanent contact-only entry and deliberately excluded from the nightly crawl, for the ClubExpress reasons set out on the RCA scholarship record.",
+      "rawOtherText": "",
       "tags": ["equipment", "youth", "schools", "contact-only", "manual"]
     }
   ]

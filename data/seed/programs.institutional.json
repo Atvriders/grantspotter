@@ -29,7 +29,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://ariss-usa.org/proposal-overview/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "SPARKI is named once on this page as a companion programme. Because the window sentence is rewritten each quarter at a stable URL, this is one of the better change-detection targets in the corpus: match \"proposal window\" and the open/close sentence that follows it. This is one of only four records in the whole corpus whose dates the funder actually printed rather than our projecting them, which is why dates.basis is funder_published here and projected almost everywhere else. Selection timing, in ARISS's words: 4 to 6 weeks after the close of the proposal window, organizations with approved proposals are sent a congratulatory email.",
+      "rawOtherText": "SPARKI is named once on this page as a companion programme, and the proposal-window sentence is rewritten each quarter at a stable URL. Selection timing, in ARISS's words: 4 to 6 weeks after the close of the proposal window, organizations with approved proposals are sent a congratulatory email.",
       "tags": ["ham", "in-kind", "iss", "education", "k12"]
     },
     {
@@ -52,7 +52,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://www.nasa.gov/kennedy/launch-services-program/cubesat-launch-initiative/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "NASA's NSPIRES system exposes no API, RSS, XML, JSON or CSV and is session-stateful, so Grants.gov is the only machine-readable route to NASA opportunities and this record is polled by watching the announcement page for a status change. Status is `unknown`, not `open` or `closed`: the page states no cycle, and neither badge would be defensible. `club_501c3` is included in applicantEntities even though the ingestion pipeline's per-source table lists only universities and schools, because the page's own sentence names non-profit organisations — barring a 501(c)(3) club from a programme NASA opens to it is the false-exclude direction, which hides a live opportunity. Expect one eligibility diff for review on the first crawl.",
+      "rawOtherText": "The announcement page states no cycle. Its own eligibility sentence names non-profit organisations alongside universities and schools. NASA's NSPIRES system exposes no API, RSS, XML, JSON or CSV and is session-stateful, so Grants.gov is the only machine-readable route to NASA opportunities.",
       "tags": ["in-kind", "cubesat", "nasa", "university", "status-ambiguous"]
     },
     {
@@ -75,7 +75,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.nasa.gov/learning-resources/national-space-grant-college-and-fellowship-project/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "GUIDED WORKFLOW, NOT A FEED — one of the two structurally non-aggregatable sources in this space. Steps that work. 1) Look up your state's Space Grant consortium in NASA's consortium directory. 2) Find the affiliate institution nearest you; consortium money usually flows through affiliates. 3) Ask the consortium director for the current student-award and mini-grant calendar, which is rarely posted more than a semester ahead. 4) Frame the ask in the consortium's own language: STEM workforce development, student research, K-12 outreach. A campus ground station is fundable as student research infrastructure and is rarely fundable as radio equipment. NOT ASSERTED HERE: a reporting obligation or a cost-share requirement. Both vary by consortium and no national page states either, so both keys are absent, which means unstated rather than not required.",
+      "rawOtherText": "Space Grant money is not one published call: it reaches students through state consortia, each on its own calendar. Steps that work — advice, not NASA's own text. 1) Look up your state's Space Grant consortium in NASA's consortium directory. 2) Find the affiliate institution nearest you; consortium money usually flows through affiliates. 3) Ask the consortium director for the current student-award and mini-grant calendar, which is rarely posted more than a semester ahead. 4) Frame the ask in the consortium's own language: STEM workforce development, student research, K-12 outreach. A campus ground station is fundable as student research infrastructure and is rarely fundable as radio equipment. Reporting obligations and cost-share requirements vary by consortium and no national page states either.",
       "tags": ["adjacent", "nasa", "space-grant", "university", "guided-workflow", "manual"]
     },
     {
@@ -105,7 +105,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://mtt.org/chapter-support/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "THE MEMBER MINIMUM IS TEN, not five: five is the reduced figure for a Student Branch Chapter specifically, and a 2026-08-02 research summary that said \"requires >=5 members\" flatly stated the exception as the rule. The two-reported-meetings requirement is the one chapters actually fail — report meetings in vTools as they happen rather than reconstructing them in September. Two further pots live on the same page and are not modelled as separate records: $500 seed money per chapter for a workshop or symposium (an IEEE MTT-S membership booth must be present at the event), and up to $2,250 a year of Chapter Officer travel support to a Chapter Chair Meeting.",
+      "rawOtherText": "THE MEMBER MINIMUM IS TEN, not five: five is the reduced figure for a Student Branch Chapter specifically. The two-reported-meetings requirement is the one chapters actually fail — report meetings in vTools as they happen rather than reconstructing them in September. Two further pots live on the same page: $500 seed money per chapter for a workshop or symposium (an IEEE MTT-S membership booth must be present at the event), and up to $2,250 a year of Chapter Officer travel support to a Chapter Chair Meeting.",
       "tags": ["adjacent", "ieee", "rf", "student-chapter"]
     },
     {
@@ -126,7 +126,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://mtt.org/chapter-support/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "DELIBERATELY HAS NO sourceKey, and is one of exactly two records in the corpus that does not: the ieee-mtts source module emits only its chapter-support record, which owns that crawler identity, and inventing a second key no parser emits would fail to reconcile while looking correct. It also has no applyUrl: the scholarships live on a page this project has never captured, reachable from the MTT-S site navigation under Undergrad Scholarships and Grad Fellowships. The field constraint is SOFT because it rests on an unverified research line rather than a funder sentence — and the same line misstated the chapter member minimum as five when the page says ten, which is why none of its figures are published as numbers here. An amateur radio licence is not required; this is engineering-society money and a ham student in an EE programme is a natural fit.",
+      "rawOtherText": "MTT-S links its Undergrad Scholarships and Grad Fellowships from its site navigation; the chapter-support page that was read names neither an amount nor a deadline for them. An amateur radio licence is not required; this is engineering-society money and a ham student in an EE programme is a natural fit.",
       "tags": ["adjacent", "ieee", "scholarship", "rf", "no-license-required", "partial-verification"]
     },
     {
@@ -154,7 +154,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://students.ieee.org/topics/submit-your-student-branch-annual-plan/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The deadline and the qualifying condition were both read live off the captured page; the rebate amounts were not, and are deliberately kept out of the numeric amount fields so that no filter, sort or export treats an unverified figure as money. Roughly 39 IEEE societies each publish their own chapter and student funding page on different templates and calendars — MTT-S is polled directly because it is the most RF-relevant, and the rest are a hand-curated pointer.",
+      "rawOtherText": "The deadline and the qualifying condition were both read live off the captured page; the rebate amounts on it were not verified. Roughly 39 IEEE societies each publish their own chapter and student funding page, on different templates and calendars.",
       "tags": ["adjacent", "ieee", "rebate", "student-branch", "partial-verification"]
     },
     {
@@ -175,7 +175,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://systemfusion.yaesu.com/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "FOUR CLAIMS THAT USED TO BE ON THIS RECORD AND ARE NOT ON THE FUNDER'S PAGE. A byte-level audit of the 145,639-byte capture found each of these zero times, case-insensitively: a twelve-month on-air obligation (`12 month`, `12-month`, `twelve`, `on the air`, `on-air`, `obligat`, `remain`); the LAN-01A pairing that supposedly explains the higher price (`lan-01a`, `network module`); a North America eligibility limit (`north america`); and a June 3 opening date (`june 3`). The 12-month figure traced to a hand-written fixture and the June date to a synthetic parser fixture, not to any live page. None is asserted here, and the eligibility constraint list is empty because the page states no eligibility at all. WHY applyUrl IS THE LANDING PAGE: the actual form is a window-dated PDF under /wp-content/uploads/{YYYY}/{MM}/, so a seed shipped to every installation must point at the stable page and let the crawler substitute the current form. Expect this record to need manual re-verification each time a new window opens.",
+      "rawOtherText": "The page states no eligibility at all. Yaesu publishes the application as a window-dated PDF under /wp-content/uploads/{YYYY}/{MM}/, so its address changes each time a new window opens.",
       "tags": ["equipment", "repeater", "yaesu", "discount", "pdf-only"]
     },
     {
@@ -198,7 +198,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://sga.fsu.edu/accounting/funding-your-rso", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "The figures in this record are ONE campus's — FSU's — read in the 2026-08-02 research pass and kept as a representative example. They are not your campus's rules. Read your own student government's allocation manual before you budget anything." },
-      "rawOtherText": "PLAYBOOK, and the single most valuable line in it is step 3. 1) Get the allocation manual, not the web summary; the caps and the barred-category list live in the manual. 2) Check whether capital equipment is barred. It usually is. 3) If it is barred, do not ask for a radio: ask for the programme the radio makes possible. A licence class, a Field Day event, a public-service demonstration, a school visit. Budget the consumables, the room, the food and the printing, and fund the radio itself from ARRL, ARDC or a departmental source. 4) Respect the lead-time rule; at FSU a request inside six weeks is simply not heard. 5) Track your request count. 6) Go to the annual activity-and-service budget cycle for anything recurring; the rolling process is for one-off events. NOT ASSERTED HERE: a reporting obligation. Most student governments do require receipts and a post-event report, but that is our generalisation across roughly 4,000 campuses rather than a sentence any one funder published, so the key is absent, which means unstated.",
+      "rawOtherText": "PLAYBOOK — advice, not a student government's own text — and the single most valuable line in it is step 3. 1) Get the allocation manual, not the web summary; the caps and the barred-category list live in the manual. 2) Check whether capital equipment is barred. It usually is. 3) If it is barred, do not ask for a radio: ask for the programme the radio makes possible. A licence class, a Field Day event, a public-service demonstration, a school visit. Budget the consumables, the room, the food and the printing, and fund the radio itself from ARRL, ARDC or a departmental source. 4) Respect the lead-time rule; at FSU a request inside six weeks is simply not heard. 5) Track your request count. 6) Go to the annual activity-and-service budget cycle for anything recurring; the rolling process is for one-off events. Most student governments do require receipts and a post-event report, but that is a generalisation across roughly 4,000 campuses rather than a sentence any one of them published.",
       "tags": ["adjacent", "campus", "sga", "guided-workflow", "playbook", "manual"]
     }
   ]

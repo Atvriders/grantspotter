@@ -34,7 +34,7 @@
           ]
         }
       },
-      "rawOtherText": "Spec §8's shipped example of the disputed surface, and the disputed block above is byte-identical to the curated override the ingestion pipeline applies to the same (sourceId, externalKey) pair, so a re-crawl cannot produce a phantom difference. This programme is funded by ARDC — the page thanks Amateur Radio Digital Communications for providing the funding, which is the same one-leg-with-a-splint dependency that runs through the ARRL scholarships. If you want an ARRL organisation grant with a published, verifiable window right now, the ARRL Amateur Radio Grants programme is the one with dates on its page. NOT ASSERTED HERE: a co-funder preference. That sentence is on the Amateur Radio Grants page, not this one, and carrying it across would be cross-contamination between two records.",
+      "rawOtherText": "This programme is funded by ARDC: the page thanks Amateur Radio Digital Communications for providing the funding, the same single-donor dependency that runs through the ARRL scholarships. If you want an ARRL organisation grant with a published, verifiable window right now, the ARRL Amateur Radio Grants programme is the one with dates on its page.",
       "tags": ["ham", "grant", "arrl", "club", "collegiate", "disputed"]
     },
     {
@@ -54,7 +54,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.arrl.org/cari", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Recorded as an explicit negative so that a future maintainer does not spend another research pass looking for a CARI grant, and so the UI never renders an empty \"CARI grants\" category. Status is `no_application` rather than `discontinued`: CARI is running right now, it simply was never a funding programme, and telling a student that an active ARRL programme has shut down would be a different falsehood. If you want ARRL money for a collegiate club the routes are the Club Grant Program and the ARRL Amateur Radio Grants programme.",
+      "rawOtherText": "CARI is running right now; it simply was never a funding programme, and no ARRL page offers a CARI grant. If you want ARRL money for a collegiate club the routes are the Club Grant Program and the ARRL Amateur Radio Grants programme.",
       "tags": ["negative", "verified_negative", "arrl", "cari", "collegiate", "not-funding"]
     },
     {
@@ -74,7 +74,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.amsat.org/university-participation/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Status is `no_application`, not `discontinued`: AMSAT is thriving and is simply not a grantmaker. If your project is satellite-adjacent, the real routes in this corpus are ARISS-USA for a scheduled ISS contact, NASA CSLI for launch services, and your state's NASA Space Grant consortium for cash.",
+      "rawOtherText": "AMSAT is thriving and is simply not a grantmaker. If your project is satellite-adjacent, the real routes are ARISS-USA for a scheduled ISS contact, NASA CSLI for launch services, and your state's NASA Space Grant consortium for cash.",
       "tags": ["negative", "verified_negative", "amsat", "satellite", "not-funding"]
     },
     {
@@ -94,7 +94,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.flexradio.com/purchasing-programs/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Recorded so the equipment category does not imply a discount that does not exist. Status is `no_application`, not `discontinued`: FlexRadio exists and sells radios. For genuinely discounted radio hardware the one verified route in this corpus is the Yaesu System Fusion DR-2X repeater programme, which is a purchase at a program price rather than a grant.",
+      "rawOtherText": "FlexRadio exists and sells radios; it publishes no education, student, club or nonprofit purchasing tier. For genuinely discounted radio hardware the one verified route is the Yaesu System Fusion DR-2X repeater programme, which is a purchase at a program price rather than a grant.",
       "tags": ["negative", "verified_negative", "flexradio", "equipment", "no-education-tier"]
     },
     {
@@ -115,7 +115,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.icomamerica.com/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "PLAYBOOK. 1) Do not send a cold form; there is no form. 2) Build the record first — a contest score, a Field Day writeup, a licence class you taught, students named. 3) Approach at a hamfest or at Hamvention, in person, with a one-page ask naming the exact model and what students will do with it. 4) Bring your faculty advisor and your callsign history. 5) Offer what a vendor actually wants: photographs, a results writeup, students at their booth, and the club callsign attached to a story worth repeating. 6) Ask your ARRL Section Manager for an introduction. Documented outcomes: IC-7610s at Carnegie Mellon W3VC, Penn State K3CR and Pitt W3YI. Kenwood: nothing found at all in the 2026-08-02 pass. NOT ASSERTED HERE: a sustainment obligation. Donors plainly do expect visible use, but that is our characterisation of a relationship rather than a term any vendor published, so the key is absent, which means unstated.",
+      "rawOtherText": "PLAYBOOK — advice, not a vendor's own text. 1) Do not send a cold form; there is no form. 2) Build the record first — a contest score, a Field Day writeup, a licence class you taught, students named. 3) Approach at a hamfest or at Hamvention, in person, with a one-page ask naming the exact model and what students will do with it. 4) Bring your faculty advisor and your callsign history. 5) Offer what a vendor actually wants: photographs, a results writeup, students at their booth, and the club callsign attached to a story worth repeating. 6) Ask your ARRL Section Manager for an introduction. Documented outcomes: IC-7610s at Carnegie Mellon W3VC, Penn State K3CR and Pitt W3YI. Kenwood: nothing found at all in the 2026-08-02 pass. Donors plainly do expect visible use, but no vendor has published that as a term.",
       "tags": ["negative", "verified_negative", "equipment", "icom", "dx-engineering", "kenwood", "playbook", "relationship-driven"]
     },
     {
@@ -138,7 +138,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://www.arrl.org/scholarship-descriptions", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "Do not go looking for a DARA or Hamvention scholarship page. There is not one. The ARRL catalog entry is the whole programme." },
-      "rawOtherText": "The catalog entry generated from the ARRL fixture is the authoritative record of this award's terms; this record exists so that a search for \"Hamvention scholarship\" returns the finding rather than a dead end. `partTimeOK` is true because DARA states no full-time requirement, and defaulting it to false is a named defect class in this repository — it once barred a part-time adult learner from 104 of 112 candidates. The ingestion pipeline's own manual-tier-d record for this finding carries status `no_application`, meaning there is no DARA-HOSTED application; this record keeps `unknown` and the ARRL apply destination, because the money is real and reachable and the terminal statuses would strip the one link that gets an applicant to it.",
+      "rawOtherText": "DARA hosts no application of its own: the award is applied for through the ARRL Foundation, and the ARRL catalog entry is the authoritative statement of its terms. DARA states no full-time requirement, so a part-time student is not barred.",
       "tags": ["negative", "verified_negative", "dara", "hamvention", "scholarship", "arrl-catalog-only"]
     },
     {
@@ -158,7 +158,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "discontinued", "sourceUrl": "https://www.chicagofmclub.org/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "Seven or more third-party scholarship aggregator sites still list this scholarship as open. It is not. Those sites mirror an old copy of the ARRL catalog and never re-check it, so treat every other listing they carry with the same suspicion." },
-      "rawOtherText": "The one negative in this batch that is genuinely `discontinued`: the scholarship really did end, which is also why it is the one that carries a stale-mirror warning. Kept as the worked example of the stale-mirror problem — a student who finds this award on an aggregator needs to be told why it is not in the live catalog.",
+      "rawOtherText": "The scholarship really did end. A student who finds it on an aggregator is reading a stale mirror of a programme that no longer accepts applications.",
       "tags": ["negative", "verified_negative", "discontinued", "scholarship", "stale-mirror", "illinois"]
     },
     {
@@ -185,7 +185,7 @@
         "contentHash": "",
         "staleMirrorWarning": "QCWA, ARRL and multiple club pages still instruct applicants to \"apply at the FAR website\". Those instructions are stale and they point at a compromised domain. Apply through the ARRL Foundation instead."
       },
-      "rawOtherText": "WHAT HAPPENED, IN FULL, so that nobody has to research it again. The former FAR domain, farweb.org, issues an HTTP 301 to batualam.org, an Indonesian online-gambling site whose page title begins TARGET88. The Internet Archive pins the takeover between 2025-10-17 and 2026-02-10. Three researchers confirmed the redirect independently in the 2026-08-02 pass. Both domains are hard-blocklisted in the fetcher itself rather than in configuration, so no crawl, no \"Verify now\" click and no user-supplied source can reach either of them, and this record carries no link to either in any URL field — deliberately, and there is a test that proves it. The domain names appear above in prose only, because a record whose whole purpose is to intercept the instruction \"apply at the FAR website\" has to be findable by somebody searching for exactly that. If you are looking for one of FAR's former scholarships, search the ARRL Foundation catalog: the 10-10, QCWA, YASME, K3IVO and CARA funds all appear there now.",
+      "rawOtherText": "The former FAR domain, farweb.org, issues an HTTP 301 to batualam.org, an Indonesian online-gambling site whose page title begins TARGET88. Do not visit either domain. The Internet Archive pins the takeover between 2025-10-17 and 2026-02-10, and three researchers confirmed the redirect independently in the 2026-08-02 pass. If you are looking for one of FAR's former scholarships, search the ARRL Foundation catalog: the 10-10, QCWA, YASME, K3IVO and CARA funds all appear there now.",
       "tags": ["negative", "safety_warning", "safety", "far", "compromised-domain", "blocklisted", "scholarship"]
     }
   ]
