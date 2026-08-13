@@ -15,13 +15,21 @@
  *
  * TWO RULES DECIDE WHAT GOES IN A LINE LIST.
  *
- *   1. LINES CARRYING A SLOT ARE EXCLUDED. `{{club.callsign}}` is replaced by a VALUE on its way
- *      into the document — "W8UM", or a `[TODO: …]` marker — and a value is exactly what the
- *      checklist is for. Excluding the line means the filled line is matched by nothing, so
- *      everything in it stays on the list and is attributed by the slot machinery as before.
- *   2. MATCHING IS VERBATIM AND WHOLE-LINE. Edit a shipped sentence and the line stops matching,
- *      so its facts come back onto the checklist as the applicant's own words — which is what they
- *      have become. That is the property that keeps this from blinding the panel.
+ *   1. A LINE CARRYING A SLOT IS A LINE WITH A HOLE IN IT, and both halves are described. Excluding
+ *      the whole line was the first answer here, on the reasoning that `{{club.callsign}}` becomes
+ *      a VALUE — "W8UM", or a `[TODO: …]` marker — and a value is what the checklist is for. True
+ *      of the value, false of the words around it, and the words around it are most of the line:
+ *      `| Indirect at {{project.indirectPct}}% | | | | | |` came back as an assertion the applicant
+ *      had to confirm — the word "Indirect", out of the product's own budget skeleton — and so did
+ *      the row numbers of the timeline table, whose rows carry slots too. Worse, dropping those
+ *      lines broke the RUN around them, so verbatim shipped lines with no slot in them at all
+ *      (`- [ ] Antenna, feedline and duplexer priced in the same budget as the repeater`) were left
+ *      stranded below the three-line threshold and demanded as well. So the line goes into
+ *      `patterns` instead, split at each slot: the literal runs are the product's, the gaps are the
+ *      applicant's, and only the gaps reach the checklist.
+ *   2. MATCHING IS VERBATIM AND WHOLE-LINE, up to those holes. Edit a shipped sentence and the line
+ *      stops matching, so its facts come back onto the checklist as the applicant's own words —
+ *      which is what they have become. That is the property that keeps this from blinding the panel.
  *
  * It reads the library once per root and caches, because it is called on every readiness check and
  * `loadTemplates` walks the content directory and parses every file.
@@ -29,18 +37,30 @@
 import type { ShippedTemplateText } from '../prose/facts.js';
 import { type TemplateDoc, loadTemplates } from './load.js';
 
-/** `templates/fill.ts`'s slot syntax, loosely: any `{{ … }}` at all disqualifies the line. */
-const SLOT_ON_LINE = /\{\{[^}]*\}\}/;
+/**
+ * `templates/fill.ts`'s slot syntax, loosely: any `{{ … }}` at all makes the line a pattern rather
+ * than a literal. A factory, not a shared constant — a `/g` regex carries `lastIndex` between
+ * callers, and `String.prototype.split` is the only consumer that would not notice.
+ */
+const slotOnLine = (): RegExp => /\{\{[^}]*\}\}/g;
 
 export function shippedTextOf(templates: readonly TemplateDoc[]): ShippedTemplateText[] {
-  return templates.map((t) => ({
-    id: t.id,
-    title: t.title,
-    lines: t.body
+  return templates.map((t) => {
+    const body = t.body
       .split('\n')
       .map((line) => line.trim())
-      .filter((line) => line !== '' && !SLOT_ON_LINE.test(line)),
-  }));
+      .filter((line) => line !== '');
+    return {
+      id: t.id,
+      title: t.title,
+      lines: body.filter((line) => !slotOnLine().test(line)),
+      // `split` on a pattern with no capture group yields exactly the literal runs, `n + 1` of them
+      // for `n` slots, empty where a slot opens or closes the line.
+      patterns: body
+        .filter((line) => slotOnLine().test(line))
+        .map((line) => ({ literals: line.split(slotOnLine()) })),
+    };
+  });
 }
 
 const cache = new Map<string, ShippedTemplateText[]>();

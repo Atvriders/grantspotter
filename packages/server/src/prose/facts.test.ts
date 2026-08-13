@@ -698,10 +698,18 @@ describe('material the product ships, inserted by the product', () => {
     expect(before.items.every((i) => i.origin === 'unattributed')).toBe(true);
   });
 
-  it('leaves almost nothing to confirm once the shipped text is recognised', () => {
+  /**
+   * NOTHING, not "almost nothing". This assertion used to read `toBeLessThan(5)` and passed with
+   * one item on the list: ENTITY "Indirect", out of the overlay's own budget sentence
+   * `> Indirect costs are charged at {{project.indirectPct}}% of direct costs`. A draft holding
+   * nothing but the product's text owes the applicant no signatures at all, and a threshold is how
+   * a defect survives its own regression test.
+   */
+  it('leaves nothing at all to confirm once the shipped text is recognised', () => {
     const before = exportReadiness(inserted);
     const after = exportReadiness(inserted, {}, [], shipped);
-    expect(after.items.length).toBeLessThan(5);
+    expect(after.items).toEqual([]);
+    expect(after.unconfirmed).toBe(0);
     expect(after.shippedFacts).toBe(before.items.length - after.items.length);
     expect(after.shippedTemplates).toEqual(['ARDC Grants Program — funder overlay']);
   });
@@ -767,5 +775,189 @@ describe('material the product ships, inserted by the product', () => {
   it('recognises nothing at all when it is handed no shipped text', () => {
     expect(shippedPassages(inserted, [])).toEqual([]);
     expect(exportReadiness(inserted).shippedFacts).toBe(0);
+  });
+});
+
+/**
+ * MARKDOWN SCAFFOLDING IS NOT AN ASSERTION.
+ *
+ * Measured as a student on the shipped corpus: `/o/ardc-grants` → "Start an application" →
+ * "Insert ARDC Grants Program — funder overlay" → "Activities and timeline" → "Budget and
+ * justification". Four of the nine rows the panel then demanded were FIGURE "1", "2", "3" and "4",
+ * each labelled "Not traceable to any stated value — this is prose you or a model wrote". They are
+ * the first column of the shipped skeleton table. A row number is not a figure a funder holds
+ * anybody responsible for, and every row spent on one is attention taken off a row that is.
+ *
+ * The rule is positional, so these tests are about POSITION: the same digit in a cell that is not
+ * an enumerator, or in a row whose ordinal it does not match, is a quantity somebody typed and
+ * stays on the list.
+ */
+describe('markdown scaffolding', () => {
+  const texts = (markdown: string): string[] =>
+    extractFactAssertions(markdown).map((f) => f.text);
+
+  const TABLE = [
+    '| Phase | Dates | Who |',
+    '|---|---|---|',
+    '| 1 | February 1 | Dana Ruiz |',
+    '| 2 | | |',
+    '| 3 | | |',
+  ].join('\n');
+
+  it('does not ask anybody to confirm the row numbers of a table', () => {
+    expect(texts(TABLE)).not.toContain('1');
+    expect(texts(TABLE)).not.toContain('2');
+    expect(texts(TABLE)).not.toContain('3');
+  });
+
+  it('still lists every value the rows of that table actually carry', () => {
+    expect(texts(TABLE)).toContain('Dana Ruiz');
+    expect(texts(TABLE).some((t) => t.includes('February 1'))).toBe(true);
+  });
+
+  /** The enumerator is the FIRST cell. A count in the second column is a count. */
+  it('lists a figure in any column but the enumerator', () => {
+    const table = ['| Item | Qty |', '|---|---|', '| 1 | 12 |', '| 2 | 4 |'].join('\n');
+    expect(texts(table)).toContain('12');
+    expect(texts(table)).toContain('4');
+    expect(texts(table)).not.toContain('1');
+    expect(texts(table)).not.toContain('2');
+  });
+
+  /**
+   * THE ORDINAL HAS TO AGREE, which is what stops this from swallowing a quantity that happens to
+   * sit in the first column. `| 4 |` in the first body row is not a row number, whatever it looks
+   * like, and nobody may take it off the list on the strength of where it sits alone.
+   */
+  it('leaves a first-column figure alone when it is not this row’s own ordinal', () => {
+    const table = ['| Radios | Cost |', '|---|---|', '| 4 | |', '| 9 | |'].join('\n');
+    expect(texts(table)).toContain('4');
+    expect(texts(table)).toContain('9');
+  });
+
+  it('does not list a first-column figure that is only there because a table has no delimiter', () => {
+    // No `|---|` row, so this is not a table at all and there are no body rows to number.
+    const notATable = ['| 1 | first |', '| 2 | second |'].join('\n');
+    expect(texts(notATable)).toContain('1');
+    expect(texts(notATable)).toContain('2');
+  });
+
+  it('does not ask anybody to confirm an ordered list’s numbering', () => {
+    const list = ['1. what is the catalog price?', '2) how many, and why?', '> 3. quoted, and numbered.'].join('\n');
+    expect(texts(list)).toEqual([]);
+  });
+
+  /** A list marker is `1.`; a year that opens a sentence is a year. Three digits is the cap. */
+  it('does not mistake a four-digit year at the head of a line for a list marker', () => {
+    expect(texts('2027. The work begins then.')).toContain('2027');
+  });
+
+  it('lists the figures a numbered item contains, only not its number', () => {
+    const item = '1. We will run 12 sessions for 40 students.';
+    expect(texts(item)).toContain('12');
+    expect(texts(item)).toContain('40');
+    expect(texts(item)).not.toContain('1');
+  });
+});
+
+/**
+ * A SHIPPED LINE WITH A BLANK IN IT IS STILL A SHIPPED LINE.
+ *
+ * Measured as a student on the shipped corpus, one press each of the ARDC overlay, "Activities and
+ * timeline" and "Budget and justification": the panel demanded nine confirmations and every one was
+ * GrantSpotter's own — ENTITY "Indirect", "Total", "Requested", "Contributed" out of the budget
+ * skeleton, FIGURE "1" "2" "3" "4" out of the timeline table — while the paragraph directly above
+ * them said "173 values in this draft are quoted, word for word, from material GrantSpotter ships".
+ * Both halves of one panel, disagreeing about the same text.
+ *
+ * The cause was that a template line carrying `{{project.indirectPct}}` was dropped from the
+ * comparison ENTIRELY, so the product's words around the blank came back as the applicant's — and,
+ * because a dropped line breaks the run, so did neighbouring lines with no slot in them at all.
+ *
+ * These run against the real library through the real fill pipeline. The second half is the part
+ * that must never regress: a value the applicant puts into one of those blanks is still theirs.
+ */
+describe('shipped lines that carry a slot', () => {
+  const shipped = shippedTemplateText();
+  const ids = ['funder-ardc', 'activities-timeline', 'budget-justification'];
+  const insert = (ctx: Record<string, unknown>): string =>
+    ids
+      .map((id) => fillTemplate(getTemplate(id).body, ctx).markdown)
+      .join('\n\n');
+  const blank = insert(buildSlotContext({}));
+
+  it('asks for nothing at all after the three one-click inserts that demanded nine', () => {
+    const readiness = exportReadiness(blank, {}, [], shipped);
+    expect(readiness.items).toEqual([]);
+    expect(readiness.unconfirmed).toBe(0);
+    expect(readiness.shippedFacts).toBeGreaterThan(100);
+  });
+
+  it('does not demand the words the budget skeleton is made of', () => {
+    const texts = buildFactChecklist(blank, {}, [], shipped).map((i) => i.text);
+    for (const word of ['Indirect', 'Total', 'Requested', 'Contributed', '1', '2', '3', '4']) {
+      expect(texts, word).not.toContain(word);
+    }
+  });
+
+  /**
+   * THE HOLE IS THE APPLICANT'S. `{{project.requestAmount}}` in the budget table is the product's
+   * scaffolding around one number the student put there, and the number is the whole reason the
+   * checklist exists. Filled through the real slot pipeline, so the value lands exactly where a
+   * student's would.
+   */
+  it('demands every value the applicant filled into one of those blanks', () => {
+    const ctx = buildSlotContext({
+      answers: {
+        'project.requestAmount': '$8,250',
+        'project.indirectPct': '12',
+        'project.budgetTotal': '$11,400',
+      },
+    });
+    const filled = insert(ctx);
+    const texts = buildFactChecklist(filled, {}, [], shipped).map((i) => i.text);
+    // `12%` and not `12`: the template ships the per-cent sign right after the blank
+    // (`{{project.indirectPct}}%`), so the span runs out of the hole and into the product's own
+    // character. A fact that OVERLAPS a filled value is the applicant's whole and stays whole.
+    for (const value of ['$8,250', '12%', '$11,400']) {
+      expect(texts, value).toContain(value);
+    }
+    // and the scaffolding those three sit inside is still not on the list
+    for (const word of ['Indirect', 'Total', 'Requested']) {
+      expect(texts, word).not.toContain(word);
+    }
+  });
+
+  /** Editing the words around a blank makes the whole line the applicant's again. */
+  it('brings a shipped line back the moment its wording is changed', () => {
+    const edited = blank.replace('**Total project cost**', '**Total project cost, all funders**');
+    const texts = buildFactChecklist(edited, {}, [], shipped).map((i) => i.text);
+    expect(texts).toContain('Total');
+  });
+
+  /**
+   * A PATTERN MAY NOT MATCH PROSE NOBODY QUOTED. A template line that OPENS with a slot has an
+   * empty first literal, which starts with every line ever written; only the literals it does ship
+   * may decide the match.
+   */
+  it('never reads the applicant’s own paragraphs as shipped material', () => {
+    expect(exportReadiness(DRAFT, {}, [], shipped).shippedFacts).toBe(0);
+    const own = [
+      'Our club bought a repeater in 2024 for $4,900.',
+      '- [ ] Dana Ruiz will file the coordination request by March 7, 2027',
+      '| 1 | Dana Ruiz | $2,000 |',
+    ].join('\n');
+    const texts = buildFactChecklist(own, {}, [], shipped).map((i) => i.text);
+    for (const value of ['2024', '$4,900', 'Dana Ruiz', '$2,000']) {
+      expect(texts, value).toContain(value);
+    }
+    expect(exportReadiness(own, {}, [], shipped).shippedFacts).toBe(0);
+  });
+
+  /** Taking assertions off the list must not take the overlay's own holes off the export gate. */
+  it('still refuses the export while those blanks are unfilled', () => {
+    const readiness = exportReadiness(blank, {}, [], shipped);
+    expect(readiness.openTodos).toBeGreaterThan(0);
+    expect(readiness.ready).toBe(false);
   });
 });

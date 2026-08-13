@@ -427,6 +427,12 @@ describe('FactChecklist', () => {
     // material would be false the moment somebody inserts "Need statement".
     expect(note.textContent).toMatch(/Every funder overlay carries the sources it was read from/i);
     expect(note.textContent).toMatch(/Edit any of that material/i);
+    // THE TWO PARAGRAPHS HAVE TO PARTITION THE DRAFT BETWEEN THEM. This one said 173 values were
+    // the product's while the list below it demanded nine that also were — the row numbers of a
+    // shipped table and the words of a shipped budget skeleton. The server draws the line at the
+    // template's blanks now, and the reader is told where it falls, because a student who typed a
+    // figure into shipped scaffolding has to be able to predict which paragraph covers it.
+    expect(note.textContent).toMatch(/filled into a blank in that material is yours/i);
   });
 
   /** One is not "1 values", and one row is not "they". */

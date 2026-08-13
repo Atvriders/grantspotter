@@ -46,6 +46,15 @@
  *     she is the faculty advisor is ordinary lowercase prose.
  *   - ANYTHING OUTSIDE THE TEXT IT IS GIVEN: an attached budget, a letter of support, a figure in
  *     an image.
+ *   - A CAPITAL THAT IS ONLY A CAPITAL BECAUSE OF WHERE IT SITS. The `entity` matcher's evidence is
+ *     Task 12's `midSentenceCapitalized`, and a markdown block has no sentences in it: a table is
+ *     one run of text with no full stop, so EVERY cell-initial capital reads as mid-sentence and
+ *     "Qty", "Unit", "Line" and "Who" arrive as named things. So do "A", "The", "By", "Give" and
+ *     "Name" where a bullet or a bolded lead-in starts a line. This is over-inclusion, and it is
+ *     LEFT IN rather than fixed by demoting line-initial capitals, because that same demotion
+ *     drops `Icom` from a budget row that names it once, at the start of a cell — a vendor nobody
+ *     is now asked to check. A checkbox nobody needed is the cost this module accepts; a missing
+ *     one is not. `MARKDOWN SCAFFOLDING` below removes only what is positionally decidable.
  *
  * Pure: no I/O, no network, no imports outside `prose/` (features.test.ts asserts that on disk).
  */
@@ -148,6 +157,40 @@ export interface ShippedTemplateText {
   id: string;
   title: string;
   lines: readonly string[];
+  /**
+   * The template's slot-carrying lines, as the literal runs it ships with a hole where each value
+   * lands. Optional so that a caller holding only `lines` — every caller before this existed, and
+   * facts.test.ts's hand-built fixtures — keeps working unchanged.
+   */
+  patterns?: readonly ShippedLinePattern[];
+}
+
+/**
+ * ONE SHIPPED LINE WITH A HOLE IN IT — the thing that made the panel contradict itself.
+ *
+ * A line carrying `{{project.indirectPct}}` used to be dropped from the shipped text entirely,
+ * on the reasoning that what lands there is a VALUE and a value is what the checklist is for. That
+ * is true of the value and false of the rest of the line, and the rest of the line is most of it.
+ * `| Indirect at {{project.indirectPct}}% | | | | | |` therefore came back as an assertion the
+ * applicant had to confirm — the word "Indirect", in the product's own budget skeleton — and so did
+ * the row numbers `1` `2` `3` `4` in the timeline table, whose rows carry slots too. The panel then
+ * printed both halves of the contradiction in adjacent paragraphs: "173 values in this draft are
+ * quoted, word for word, from material GrantSpotter ships", above "9 assertions still need
+ * confirmation", all nine of them the product's.
+ *
+ * DROPPING THE LINE ALSO BROKE THE PASSAGE AROUND IT. A run needs three lines or 200 characters to
+ * count, and a table whose every other row carries a slot has no such run — which is why
+ * `- [ ] Antenna, feedline and duplexer priced in the same budget as the repeater`, a line with no
+ * slot in it at all and shipped verbatim, was on the list as well. Recognising the slot lines
+ * repairs both.
+ *
+ * `literals` is what the template ships, split at each slot: `n` slots give `n + 1` literals, and a
+ * slot at either edge gives an empty one. A draft line matches when it starts with the first
+ * literal, ends with the last, and contains the rest in order — and the gaps between them are the
+ * filled VALUES, which stay on the checklist exactly as they always did.
+ */
+export interface ShippedLinePattern {
+  literals: readonly string[];
 }
 
 /**
@@ -363,8 +406,78 @@ function contextAround(text: string, start: number, end: number): string {
   return `${before}${text.slice(start, end)}${after}`.trim();
 }
 
+/**
+ * MARKDOWN SCAFFOLDING — the characters that number a document rather than assert anything in it.
+ *
+ * Pressing "Insert Activities and timeline" put four items on the checklist reading FIGURE `1`,
+ * `2`, `3`, `4`, each one labelled "Not traceable to any stated value — this is prose you or a
+ * model wrote". They are the first column of the skeleton table: `| 1 | … |`, `| 2 | … |`. A row
+ * number is not a figure a funder holds anybody responsible for, and asking a student to go and
+ * verify the number 3 against a source they can point to is the panel spending its only currency —
+ * the reader's attention — on the markup.
+ *
+ * THE RULE IS POSITIONAL, NEVER LEXICAL, which is what makes it safe to subtract. Each span below
+ * is decided entirely by where it sits in the markup, so no value the applicant wrote can fall into
+ * one by being the wrong number:
+ *   - THE ENUMERATOR COLUMN of a pipe table: the first cell of a body row, when it holds nothing
+ *     but an integer AND that integer is this row's own ordinal. `| 3 |` in the third body row is
+ *     a row number; `| 3 |` in the first is a quantity somebody typed, and it stays on the list.
+ *   - AN ORDERED-LIST MARKER: `1.`, `2)`, at the head of a line or of a quoted line. Capped at
+ *     three digits so `2027. The work begins` keeps its year.
+ *   - A TABLE DELIMITER ROW, `|---|---:|`. Nothing in one is matchable today; it is subtracted so
+ *     that stays true of a row carrying alignment colons or stray digits.
+ *
+ * Everything else a table does — its header cells, its units, its currency symbols — is ordinary
+ * text in an unusual place, and the header note above says why it is left on the list rather than
+ * guessed at from position.
+ */
+function markdownScaffoldSpans(text: string): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  let bodyRow = 0;
+  let afterDelimiter = false;
+
+  for (const line of draftLines(text)) {
+    const body = line.body;
+    if (body === '') {
+      afterDelimiter = false;
+      bodyRow = 0;
+      continue;
+    }
+
+    const marker = /^((?:>[ \t]*)*)(\d{1,3})[.)](?=[ \t]|$)/.exec(body);
+    if (marker !== null) {
+      const at = line.bodyStart + (marker[1] as string).length;
+      out.push({ start: at, end: at + (marker[2] as string).length });
+    }
+
+    if (!body.startsWith('|')) {
+      afterDelimiter = false;
+      bodyRow = 0;
+      continue;
+    }
+    if (/^\|[\s:|-]*-[\s:|-]*\|?$/.test(body)) {
+      afterDelimiter = true;
+      bodyRow = 0;
+      out.push({ start: line.bodyStart, end: line.bodyStart + body.length });
+      continue;
+    }
+    if (!afterDelimiter) continue;
+    bodyRow += 1;
+    const nextPipe = body.indexOf('|', 1);
+    if (nextPipe === -1) continue;
+    const cell = body.slice(1, nextPipe);
+    const value = cell.trim();
+    if (!/^\d{1,3}$/.test(value) || Number(value) !== bodyRow) continue;
+    const at = line.bodyStart + 1 + cell.indexOf(value);
+    out.push({ start: at, end: at + value.length });
+  }
+
+  return out;
+}
+
 export function extractFactAssertions(text: string): FactAssertion[] {
   const scan = blankGapMarkers(text);
+  const scaffold = markdownScaffoldSpans(text);
   const properNouns = buildDocIndex(scan).midSentenceCapitalized;
   const taken: Array<{ start: number; end: number }> = [];
   const out: FactAssertion[] = [];
@@ -384,6 +497,10 @@ export function extractFactAssertions(text: string): FactAssertion[] {
       // A span that reaches into a blanked gap is not a span of the real document.
       if (text.slice(start, end) !== matched) continue;
       if (overlaps(start, end)) continue;
+      // Markup, not prose. Containment and not overlap: a span that merely TOUCHES a row number —
+      // there is none today, and there would be one the day a matcher widened — is still a span
+      // reaching into the applicant's own text, and it stays on the list.
+      if (scaffold.some((s) => start >= s.start && end <= s.end)) continue;
       if (matcher.accept !== undefined && !matcher.accept(matched, { scan, start, end, properNouns })) {
         continue;
       }
@@ -492,13 +609,16 @@ interface DraftLine {
   start: number;
   end: number;
   body: string;
+  /** Where `body` itself begins, so a span found inside it can be reported in document offsets. */
+  bodyStart: number;
 }
 
 function draftLines(text: string): DraftLine[] {
   const out: DraftLine[] = [];
   let at = 0;
   for (const raw of text.split('\n')) {
-    out.push({ start: at, end: at + raw.length, body: raw.trim() });
+    const leading = raw.length - raw.trimStart().length;
+    out.push({ start: at, end: at + raw.length, body: raw.trim(), bodyStart: at + leading });
     at += raw.length + 1;
   }
   return out;
@@ -509,6 +629,61 @@ export interface ShippedPassage {
   end: number;
   /** Every shipped template a line in this passage was matched against, sorted. */
   titles: string[];
+  /**
+   * The spans inside this passage that are FILLED VALUES rather than shipped words — one per slot
+   * in every pattern line the run matched. A fact touching one of these is the applicant's, sits on
+   * shipped scaffolding, and stays on the checklist. Empty for a passage of plain shipped lines.
+   */
+  holes: Array<{ start: number; end: number }>;
+}
+
+/** A span of the draft covered by a pattern's holes, relative to the line body. */
+interface PatternMatch {
+  holes: Array<{ start: number; end: number }>;
+  /** How many characters of this line the product actually wrote — what the run threshold counts. */
+  literalChars: number;
+}
+
+/**
+ * Does this draft line read as that shipped line with its slots filled in?
+ *
+ * THE TWO REFUSALS ARE THE SAFETY. A pattern with an EMPTY MIDDLE literal means two adjacent slots
+ * with nothing between them, and there is no way to say where one value ends and the next begins —
+ * so the line is not recognised at all and everything in it stays on the checklist. A pattern whose
+ * literals are ALL whitespace (`{{project.summary}}` alone on its line) would match any line the
+ * applicant ever wrote; it is refused for the same reason, since a template that ships nothing but
+ * a hole has shipped no words to excuse.
+ *
+ * Middle literals are found leftmost-first. Where a filled value happens to contain the next
+ * literal, that anchors early and a few characters of the applicant's value are read as shipped —
+ * but those characters ARE the shipped string, verbatim, which is the one thing this whole
+ * mechanism is willing to excuse. The values on either side of it stay holes either way.
+ */
+function matchLinePattern(body: string, pattern: ShippedLinePattern): PatternMatch | undefined {
+  const literals = pattern.literals;
+  if (literals.length < 2) return undefined;
+  if (!literals.some((l) => l.trim() !== '')) return undefined;
+
+  const first = literals[0] as string;
+  const last = literals[literals.length - 1] as string;
+  if (!body.startsWith(first)) return undefined;
+
+  const holes: Array<{ start: number; end: number }> = [];
+  let at = first.length;
+  for (let i = 1; i < literals.length - 1; i++) {
+    const literal = literals[i] as string;
+    if (literal === '') return undefined;
+    const found = body.indexOf(literal, at);
+    if (found === -1) return undefined;
+    holes.push({ start: at, end: found });
+    at = found + literal.length;
+  }
+
+  const tail = body.length - last.length;
+  if (tail < at || !body.endsWith(last)) return undefined;
+  holes.push({ start: at, end: tail });
+
+  return { holes, literalChars: literals.reduce((n, l) => n + l.length, 0) };
 }
 
 /**
@@ -517,6 +692,12 @@ export interface ShippedPassage {
  * A BLANK LINE IS NEUTRAL. Markdown separates its paragraphs with them, and a run broken at every
  * blank line would be three one-line runs where the document has one nine-line section. A line the
  * applicant wrote ends the run; a line they left empty does not.
+ *
+ * A SLOT LINE IS A SHIPPED LINE WITH HOLES IN IT, not a line the applicant wrote. It joins the run,
+ * its shipped words are excused with the rest of the passage, and the value that landed in each
+ * hole comes back through `holes` so the caller can leave it on the checklist. Only its LITERAL
+ * characters count toward the 200-character threshold: a run must be 200 characters of the
+ * product's words, never 200 characters of the applicant's.
  *
  * Exported for the tests, which measure this against the real shipped overlay rather than against
  * a fixture that agrees with it by construction.
@@ -527,32 +708,44 @@ export function shippedPassages(
 ): ShippedPassage[] {
   if (shipped.length === 0) return [];
   const byLine = new Map<string, string>();
+  const patterns: Array<{ pattern: ShippedLinePattern; title: string }> = [];
   for (const template of shipped) {
     for (const line of template.lines) {
       const key = line.trim();
       if (key === '') continue;
       if (!byLine.has(key)) byLine.set(key, template.title);
     }
+    for (const pattern of template.patterns ?? []) {
+      patterns.push({ pattern, title: template.title });
+    }
+  }
+
+  /** A matched line: what it cost the run threshold, and which of its characters are values. */
+  interface RunLine {
+    line: DraftLine;
+    shippedChars: number;
+    holes: Array<{ start: number; end: number }>;
   }
 
   const lines = draftLines(text);
   const out: ShippedPassage[] = [];
-  let run: DraftLine[] = [];
+  let run: RunLine[] = [];
   const titles = new Set<string>();
 
   const close = (): void => {
     // Trailing blanks belong to whatever comes next, not to this passage.
-    while (run.length > 0 && (run[run.length - 1] as DraftLine).body === '') run.pop();
-    const shippedLines = run.filter((l) => l.body !== '');
-    const chars = shippedLines.reduce((n, l) => n + l.body.length, 0);
+    while (run.length > 0 && (run[run.length - 1] as RunLine).line.body === '') run.pop();
+    const shippedLines = run.filter((l) => l.line.body !== '');
+    const chars = shippedLines.reduce((n, l) => n + l.shippedChars, 0);
     if (
       shippedLines.length >= MIN_SHIPPED_RUN_LINES ||
       (shippedLines.length > 0 && chars >= MIN_SHIPPED_RUN_CHARS)
     ) {
       out.push({
-        start: (run[0] as DraftLine).start,
-        end: (run[run.length - 1] as DraftLine).end,
+        start: (run[0] as RunLine).line.start,
+        end: (run[run.length - 1] as RunLine).line.end,
         titles: [...titles].sort(),
+        holes: run.flatMap((l) => l.holes),
       });
     }
     run = [];
@@ -561,16 +754,47 @@ export function shippedPassages(
 
   for (const line of lines) {
     if (line.body === '') {
-      if (run.length > 0) run.push(line);
+      if (run.length > 0) run.push({ line, shippedChars: 0, holes: [] });
       continue;
     }
     const title = byLine.get(line.body);
-    if (title === undefined) {
+    if (title !== undefined) {
+      titles.add(title);
+      run.push({ line, shippedChars: line.body.length, holes: [] });
+      continue;
+    }
+    // THE MOST SPECIFIC PATTERN WINS, NOT THE FIRST ONE IN THE LIBRARY. `patterns` is every slot
+    // line of every shipped template, and a template whose line OPENS with a slot contributes an
+    // empty first literal — which starts with any line at all. One of those matched
+    // `- [ ] A coordinated pair issued by {{repeater.coordinator}}` on a single stray `— ` before
+    // the line that actually ships it did, and swallowed the product's own words into a hole. So
+    // every pattern is tried and the one explaining the most characters as the template's own is
+    // taken; ties go to the one with fewer holes, which is the same preference said twice.
+    let best: { title: string; match: PatternMatch } | undefined;
+    for (const candidate of patterns) {
+      const match = matchLinePattern(line.body, candidate.pattern);
+      if (match === undefined) continue;
+      const better =
+        best === undefined ||
+        match.literalChars > best.match.literalChars ||
+        (match.literalChars === best.match.literalChars &&
+          match.holes.length < best.match.holes.length);
+      if (better) best = { title: candidate.title, match };
+    }
+    if (best === undefined) {
       close();
       continue;
     }
-    titles.add(title);
-    run.push(line);
+    const match = best.match;
+    titles.add(best.title);
+    run.push({
+      line,
+      shippedChars: match.literalChars,
+      holes: match.holes.map((h) => ({
+        start: line.bodyStart + h.start,
+        end: line.bodyStart + h.end,
+      })),
+    });
   }
   close();
   return out;
@@ -611,6 +835,11 @@ function factChecklistWithShipped(
     .filter((fact) => {
       const passage = passages.find((p) => fact.start >= p.start && fact.end <= p.end);
       if (passage === undefined) return true;
+      // A VALUE SITTING IN SHIPPED SCAFFOLDING IS STILL THE APPLICANT'S. The passage excuses the
+      // template's words; it never excuses what was filled into one of its slots. Overlap and not
+      // containment, so a span that runs from the product's words into the applicant's is theirs —
+      // the direction this module errs in everywhere else.
+      if (passage.holes.some((h) => fact.start < h.end && fact.end > h.start)) return true;
       shippedFacts += 1;
       for (const title of passage.titles) quotedTemplates.add(title);
       return false;

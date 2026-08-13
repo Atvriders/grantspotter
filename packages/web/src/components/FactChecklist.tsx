@@ -25,6 +25,17 @@
  *   now and reports them as a count, which this panel prints with the template named: a shorter
  *   list with no explanation would be the same silent assertion pointing the other way.
  *
+ *   AND THE TWO HALVES OF THAT SENTENCE HAVE TO AGREE. They did not: the same panel printed "173
+ *   values in this draft are quoted, word for word, from material GrantSpotter ships" directly
+ *   above "9 assertions still need confirmation", and all nine were the product's own — the word
+ *   "Indirect" out of its budget skeleton, and the row numbers 1, 2, 3, 4 of its timeline table.
+ *   A shipped line carrying a `{{slot}}` was being dropped from the comparison whole, so the
+ *   product's words around the blank came back as the applicant's. The server now matches those
+ *   lines with a hole where the value lands: the template's words are excused, and whatever the
+ *   applicant filled into the blank is still theirs and still listed. This panel says so, because
+ *   a reader who has typed a figure into shipped scaffolding must be able to predict which of the
+ *   two paragraphs above covers it.
+ *
  *   THE LIST IS NOT EXHAUSTIVE AND SAYS SO. `extractFactAssertions` returns nothing for claims
  *   made entirely in words — superlatives, universals, causal claims, and the role half of
  *   "Elena Ruiz, faculty advisor" — and a test pins that, so nobody replaces the honest sentence
@@ -90,8 +101,9 @@ export function FactChecklist({
         was accusing the product's own sourced material of being unsourced, and the applicant's
         real assertions were unfindable underneath it. Those rows are gone; a panel that was
         simply shorter with no explanation would be the same silence pointing the other way, so
-        the count and the template are printed. The last sentence is the property that makes the
-        rest safe, and it is literally true: matching is verbatim and whole-line.
+        the count and the template are printed. The last two sentences are the property that makes
+        the rest safe, and both are literally true: matching is verbatim and whole-line except
+        where the template left a blank, and a value in one of those blanks is on the list below.
       */}
       {shippedFacts > 0 ? (
         <p className="muted checklist-shipped">
@@ -102,7 +114,8 @@ export function FactChecklist({
           {shippedTemplates.length > 0 ? ` — ${shippedTemplates.join(', ')}` : ''}: the product’s wording rather
           than yours, so {shippedFacts === 1 ? 'it is' : 'they are'} not listed below for your signature. Every
           funder overlay carries the sources it was read from; open it under Templates and check them as you would
-          any quotation. Edit any of that material and every value in the part you changed appears here.
+          any quotation. Anything you filled into a blank in that material is yours, not theirs, and is on the
+          list below. Edit any of that material and every value in the part you changed appears here too.
         </p>
       ) : null}
       <p className="muted checklist-scope">
