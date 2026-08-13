@@ -7,9 +7,9 @@
       "dates": { "basis": "projected" },
       "name": "ARDC Grants Program",
       "klass": "ham_grant",
-      "summary": "Grants in three areas: Support and Growth of Amateur Radio, Education, and Technical Innovation / research and development. No published cap; the 2026 award table runs from $1,285 to $258,000. ARDC's instructions state it aims to fund approximately $3.8 million in 2026 and funds about 30% of submitted proposals.",
+      "summary": "Grants in three areas: Support and Growth of Amateur Radio, Education, and Technical Innovation / research and development. ARDC publishes no cap and no floor; the widest figures in its own 2026 award table are $1,285 and $258,000, and the collegiate awards verified for this record run $2,000 to $77,000. ARDC's instructions state it aims to fund approximately $3.8 million in 2026 and funds about 30% of submitted proposals.",
       "applicantEntities": ["club_via_fiscal_sponsor", "club_501c3", "school_lea", "university", "university_dept"],
-      "amount": { "instrument": "cash_range", "amountMin": 1285, "amountMax": 258000, "amountRaw": "No published cap. Lowest and highest figures in ARDC's own 2026 award table: $1,285 and $258,000. Verified collegiate awards run $2,000 to $77,000.", "awardCountRaw": "28 awards listed in the 2026 table; multiple cycles per year" },
+      "amount": { "instrument": "cash_range", "amountMin": 1285, "amountMax": 258000, "amountRaw": "Our grantmaking budget varies yearly; in 2026 we aim to fund approximately $3.8 million. As of 2025, we fund about 30% of the submitted proposals.", "awardCountRaw": "28 awards listed in the 2026 table; multiple cycles per year" },
       "deadline": { "kind": "n_fixed_dates", "source": { "kind": "self" }, "note": "RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | Applications arriving after Sep 1 roll to the next Feb 1 cycle. ARDC evaluates for 60–120 days." },
       "applyVia": "external_spa_portal",
       "applyUrl": "https://grants.ardc.net",
@@ -33,7 +33,7 @@
       },
       "aiPolicy": { "stance": "permitted", "quote": "If you choose to use AI when writing your proposal be sure to thoroughly edit for clarity, brevity, and accuracy. If the proposal is extremely long and hard to understand, we can't evaluate or support it.", "url": "https://www.ardc.net/apply/grant-application-instructions/" },
       "trust": { "status": "open", "sourceUrl": "https://www.ardc.net/apply/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "ARDC asks applicants to be thorough but brief and to avoid unnecessary jargon. Two requirements applicants most often miss: every funded output must be open-source or open-access, and indirect costs are capped at 20%. The only cost-share sentence on the instructions page is conditional — an organisation whose indirect rate exceeds 20% is asked to cover the excess.",
+      "rawOtherText": "If your request is for a project that will take several years, it should still be clear in your proposal what the scope of the eventual end product is, and how the goals of the proposal connect back to that end product. Show us the roadmap for your project and where the activities in your proposal fit within that.",
       "tags": ["ham", "grant", "ardc", "open-source", "education", "research"]
     },
     {
@@ -43,9 +43,9 @@
       "dates": { "basis": "projected" },
       "name": "ARRL Amateur Radio Grants",
       "klass": "ham_grant",
-      "summary": "Organisation grants for clubs, schools and youth programmes, on a cyclical model three times a year. Awarded grants generally do not exceed $3,000, and in 2026 — the League's Year of the Club — award amounts may be up to $5,000. Grants are awarded only to organizations, not individuals.",
+      "summary": "Organisation grants for clubs, schools and youth programmes, on a cyclical model three times a year. Awarded grants generally do not exceed $3,000, and in 2026 — the League's Year of the Club — award amounts may be up to $5,000. ARRL states no floor, so the range has no published minimum. Grants are awarded only to organizations, not individuals.",
       "applicantEntities": ["club_unincorporated", "club_501c3", "school_lea", "university"],
-      "amount": { "instrument": "cash_range", "amountMax": 5000, "amountRaw": "Awarded grants generally do not exceed $3,000; award amounts may be up to $5,000 in 2026. No floor is published — do not infer one.", "awardCountRaw": "Multiple per cycle, three cycles a year" },
+      "amount": { "instrument": "cash_range", "amountMax": 5000, "amountRaw": "Awarded grants generally do not exceed $3,000; award amounts may be up to $5,000 in 2026.", "awardCountRaw": "Multiple per cycle, three cycles a year" },
       "deadline": { "kind": "n_fixed_windows", "source": { "kind": "self" }, "note": "RECUR n_fixed_windows tz=America/New_York windows=02-01..02-28,06-01..06-30,10-01..10-31 | Three windows a year. Generally not more than $3,000, up to $5,000 in 2026." },
       "applyVia": "external_spa_portal",
       "applyUrl": "https://www.arrl.org/amateur-radio-grants",
@@ -65,7 +65,7 @@
       },
       "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/amateur-radio-grants" },
       "trust": { "status": "closed", "sourceUrl": "https://www.arrl.org/amateur-radio-grants", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "Status as of the 2026-08-02 research pass: between cycles. The June window shut on June 30 and the next opens October 1. The ARRL Foundation published no AI policy: the grants page and the Grant Application Form PDF were both read in full and contain zero mentions of AI, ChatGPT or large language models. Terms inside the Kaleidoscope application portal are a JavaScript single-page app and could not be checked. The page states a co-funding PREFERENCE and says nothing about a required match.",
+      "rawOtherText": "",
       "tags": ["ham", "grant", "arrl", "club", "school"]
     },
     {
@@ -75,10 +75,10 @@
       "dates": { "basis": "funder_published" },
       "name": "ARRL Teachers Institute / ETP Grants (School Station and Progress)",
       "klass": "equipment_in_kind",
-      "summary": "Education and Technology Program grants supplying equipment, software and classroom resources to US K-12 schools and teachers. Two tracks: School Station grants for schools starting a station, and Progress grants for teachers already using amateur radio as an instructional tool who need additional resources. Aimed at K-12, not at colleges.",
+      "summary": "Education and Technology Program grants supplying equipment, software and classroom resources to US K-12 schools and teachers. ARRL publishes no cash value for either track. Two tracks: School Station grants for schools starting a station, and Progress grants for teachers already using amateur radio as an instructional tool who need additional resources. Aimed at K-12, not at colleges. The application packet includes a signed Antenna Installation Approval form.",
       "applicantEntities": ["teacher", "school_lea"],
-      "amount": { "instrument": "in_kind_equipment", "amountRaw": "Equipment, software and classroom resources. ARRL publishes no cash value for either track; do not infer one.", "awardCountRaw": "Not published." },
-      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "A single annual window with an open date and a close date. Application window published by the funder: opens 2025-10-01, closes 2025-10-31." },
+      "amount": { "instrument": "in_kind_equipment", "amountRaw": "", "awardCountRaw": "" },
+      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "A single annual window with an open date and a close date. Application window published by the funder: opens 2025-10-01, closes 2025-10-31. The October month has held across years but the year printed on the page has not, and the application is a Jotform whose form id changes every year, so open the page for the current year before you rely on either." },
       "applyVia": "jotform_year_keyed",
       "applyUrl": "https://www.arrl.org/etp-grants",
       "constraints": [
@@ -90,7 +90,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/etp-grants" },
       "trust": { "status": "closed", "sourceUrl": "https://www.arrl.org/etp-grants", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The window above is the one ARRL printed, verbatim in the page's own capitals: 'APPLICATIONS WILL ONLY BE ACCEPTED FOR REVIEW BETWEEN OCTOBER 1ST AND OCTOBER 31ST of 2025.' It is the most recent window the funder has published and it has closed; the October month looks stable across years but the year on the page does not. The application packet includes a signed Antenna Installation Approval form (Section 11). The only text on the page about what happens after an award is an anecdote about a school that stopped using its station. The application is a Jotform whose form id changes every year, and the attached .xlsx and .pdf files change underneath a year-agnostic URL; verify the current form id before applying.",
+      "rawOtherText": "APPLICATIONS WILL ONLY BE ACCEPTED FOR REVIEW BETWEEN OCTOBER 1ST AND OCTOBER 31ST of 2025.",
       "tags": ["ham", "equipment", "arrl", "k12", "teacher"]
     },
     {
@@ -100,10 +100,10 @@
       "dates": { "basis": "projected" },
       "name": "ARRL Foundation Scholarship Program",
       "klass": "ham_scholarship",
-      "summary": "One application covers the Foundation's entire scholarship catalogue. ARRL states it manages 'more than 170 scholarships established by generous donors ranging from $500 to $25,000'. All applicants must hold an active FCC amateur radio licence and be in higher education. As of the 2026-08-02 research pass the page says the 2026 cycle is closed; the next cycle opens around October 30.",
+      "summary": "One application covers the Foundation's entire scholarship catalogue. ARRL states it manages 'more than 170 scholarships established by generous donors ranging from $500 to $25,000', though its own scholarship-descriptions page says 'more than 150' and lists 111 entries. All applicants must hold an active FCC amateur radio licence and be in higher education. Awards administered by other organisations — QCWA, YASME, DARA and the Six Meter Club of Chicago among them — are applied for here, on this cycle.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "cash_range", "amountMin": 500, "amountMax": 25000, "amountRaw": "More than 170 scholarships ranging from $500 to $25,000 (ARRL's own words on the scholarship-program page).", "awardCountRaw": "ARRL states 'more than 170' awards; its scholarship-descriptions page says 'more than 150' and lists 111 catalogue entries." },
-      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | Opens about Oct 30 and closes Dec 30. ARRL publishes no closing time on either captured page; do not assume one." },
+      "amount": { "instrument": "cash_range", "amountMin": 500, "amountMax": 25000, "amountRaw": "more than 170 scholarships established by generous donors ranging from $500 to $25,000", "awardCountRaw": "more than 170" },
+      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | Opens about Oct 30 and closes Dec 30. ARRL publishes no closing time on either page it states this on, so do not assume one. As of 2026-08-02 the scholarship-program page said the 2026 cycle was closed. QCWA, whose award is on this cycle, asks that requests be made on or after October 31 and reach the ARRL Foundation before the first week in January." },
       "applyVia": "external_spa_portal",
       "applyUrl": "https://www.arrl.org/scholarship-program",
       "constraints": [
@@ -115,7 +115,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/scholarship-program" },
       "trust": { "status": "closed", "sourceUrl": "https://www.arrl.org/scholarship-program", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "Scholarships administered by other organisations but applied for through ARRL — QCWA, YASME, DARA and the Six Meter Club of Chicago among them — are on ARRL's cycle. QCWA additionally asks that requests start from October 31 and reach ARRL before the first week of January. Status as of 2026-08-02: the scholarship-program page states, twice, that the 2026 scholarship cycle is closed, and the window above is a projection of the rule the funder stated for the last cycle it dated ('The 2026 scholarship cycle runs from October 30, 2025 to December 30, 2025', on the scholarship-descriptions page). No closing TIME is published: '12:00 PM EST' and 'January 31' appear zero times across every captured ARRL scholarship page, and '2024: 135 awards, more than $715,000' appears on no captured page either.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "arrl", "catalog-parent"]
     }
   ]

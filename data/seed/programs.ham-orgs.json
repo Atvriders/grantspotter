@@ -9,7 +9,7 @@
       "klass": "ham_scholarship",
       "summary": "$2,500 for a licensed female amateur radio operator seeking a Bachelor's or Graduate degree full time at an accredited college or university. There are no residency restrictions and non-US amateurs are eligible. YLRL membership and a communications, radio or electronics course of study are both preferences, not bars.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "cash_fixed", "amountMin": 2500, "amountMax": 2500, "amountRaw": "$2,500", "awardCountRaw": "Not published. The page names three scholarships and states an amount for each; it states no award count." },
+      "amount": { "instrument": "cash_fixed", "amountMin": 2500, "amountMax": 2500, "amountRaw": "$2,500", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "The captured page publishes no opening date and no deadline anywhere. It describes the three scholarships and points at the YLRL apply page for the current opening and deadline dates. Deliberately left unresolved rather than guessed." },
       "applyVia": "page_form",
       "applyUrl": "https://ylrl.net/apply/",
@@ -24,7 +24,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The YLRL scholarships page states no cycle at all: it publishes no application window for this award.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "ylrl", "women"]
     },
     {
@@ -36,7 +36,7 @@
       "klass": "ham_scholarship",
       "summary": "$2,500 for a licensed female amateur radio operator seeking a Bachelor's or Graduate degree full time at an accredited college or university. Same eligibility bullets as the Ethel Smith K4LMB award, on the same page and with the same unpublished deadline.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "cash_fixed", "amountMin": 2500, "amountMax": 2500, "amountRaw": "$2,500", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "cash_fixed", "amountMin": 2500, "amountMax": 2500, "amountRaw": "$2,500", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "The captured page publishes no opening date and no deadline anywhere. It points at the YLRL apply page for the current opening and deadline dates. Deliberately left unresolved rather than guessed." },
       "applyVia": "page_form",
       "applyUrl": "https://ylrl.net/apply/",
@@ -51,7 +51,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The female-only and licence bullets are document-level on the YLRL scholarships page and apply to all three YLRL awards.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "ylrl", "women"]
     },
     {
@@ -61,9 +61,9 @@
       "dates": { "basis": "unpublished" },
       "name": "YLRL Marte Wessel K0EPE Memorial Scholarship",
       "klass": "ham_scholarship",
-      "summary": "$1,500 for a licensed female amateur radio operator studying part time at an accredited educational institution while working full time. Stay-at-home parents and caregivers count as full-time work, and high-school students are exempt from the work requirement. Any accredited technical or vocational school and any two- or four-year college qualifies.",
+      "summary": "$1,500 for a licensed female amateur radio operator studying part time at an accredited educational institution while working full time. Stay-at-home parents and caregivers count as full-time work, and high-school students are exempt from the work requirement. Any accredited technical or vocational school and any two- or four-year college qualifies. YLRL restricts neither enrolment intensity nor degree level, so a degree level it does not list is one it never named rather than one that fails to qualify.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "cash_fixed", "amountMin": 1500, "amountMax": 1500, "amountRaw": "$1,500", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "cash_fixed", "amountMin": 1500, "amountMax": 1500, "amountRaw": "$1,500", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "The captured page publishes no opening date and no deadline anywhere. It points at the YLRL apply page for the current opening and deadline dates. Deliberately left unresolved rather than guessed." },
       "applyVia": "page_form",
       "applyUrl": "https://ylrl.net/apply/",
@@ -79,7 +79,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://ylrl.net/Scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The one award here written FOR part-time students: YLRL restricts neither enrolment intensity nor degree level, so an unlisted degree level is one the funder never named rather than one that fails to qualify.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "ylrl", "women", "part-time"]
     },
     {
@@ -91,8 +91,8 @@
       "klass": "ham_scholarship",
       "summary": "One of the Austin Amateur Radio Club's scholarships for students resident in seven named Central Texas counties, pursuing higher education or skilled trades. NAME CAVEAT: the club's rebuilt page is headed \"Club Scholarships\" and names no individual award; \"Copeland\" comes from the 2026-08-02 research pass and could not be re-confirmed against the capture. No dollar figure appears anywhere on the page.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "Not published. There is not a single dollar figure on the club's scholarships page. Do not infer an amount.", "awardCountRaw": "Not published." },
-      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/Chicago window=05-01..07-31 | Applications open May 1 and close July 31 each year. The club states the window three times and never states a year; the page's only four-digit number is its footer copyright, so this is a rule we project forward rather than a dated window the club published." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
+      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/Chicago window=05-01..07-31 | Applications open May 1 and close July 31 each year. The club states the window three times and never states a year, so this is a rule projected forward rather than a dated window the club published. Outside the window the club's portal at grants.austinhams.org shows \"No opportunities available\"; that is the closed state, not an error." },
       "applyVia": "self_hosted_portal",
       "applyUrl": "https://grants.austinhams.org",
       "constraints": [
@@ -103,7 +103,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "closed", "sourceUrl": "https://austinhams.org/scholarships/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "", "staleMirrorWarning": "Two warnings. (1) Search-engine snippets still show a March 25, 2026 deadline for an Austin ARC scholarship; the live club page says May 1 to July 31 and the club page wins. (2) The rebuilt page names no individual scholarship at all — the strings \"Copeland\" and \"Greenwood\" appear nowhere on it — so both names in this corpus come from the 2026-08-02 research pass, not from the capture." },
-      "rawOtherText": "The club's portal at grants.austinhams.org legitimately displays \"No opportunities available\" between August 1 and April 30 — the closed state, not an error. No licence requirement appears anywhere on the captured page.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "texas", "club"]
     },
     {
@@ -114,8 +114,8 @@
       "klass": "ham_scholarship",
       "summary": "A second Austin Amateur Radio Club scholarship, same seven-county Central Texas footprint and the same annual window as the Copeland award. NAME CAVEAT: the club's rebuilt page names no individual award; \"Greenwood\" comes from the 2026-08-02 research pass and could not be re-confirmed against the capture. No dollar figure is published.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "Not published. There is not a single dollar figure on the club's scholarships page. Do not infer an amount.", "awardCountRaw": "Not published." },
-      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/Chicago window=05-01..07-31 | Applications open May 1 and close July 31 each year. The club states the window three times and never states a year, so this is a rule projected forward rather than a dated window the club published." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
+      "deadline": { "kind": "annual_window", "source": { "kind": "self" }, "note": "RECUR annual_window tz=America/Chicago window=05-01..07-31 | Applications open May 1 and close July 31 each year. The club states the window three times and never states a year, so this is a rule projected forward rather than a dated window the club published. Outside the window the club's portal shows \"No opportunities available\"; that is the closed state, not an error." },
       "applyVia": "self_hosted_portal",
       "applyUrl": "https://grants.austinhams.org",
       "constraints": [
@@ -138,7 +138,7 @@
       "klass": "ham_grant",
       "summary": "Board-selected support for youth programmes, developing-country radio societies, Reverse Beacon Network nodes and other foundations' scholarship funds; the companion Yasme Excellence Award is recognition on the same board-initiated basis. Observed awards run $5,000 to $7,500. There is no application form, no portal and no deadline.",
       "applicantEntities": ["club_unincorporated", "club_501c3", "school_lea", "university"],
-      "amount": { "instrument": "cash_range", "amountMin": 5000, "amountMax": 7500, "amountRaw": "$5,000 to $7,500 observed. Yasme publishes no award schedule; these are the figures the 2026-08-02 research pass observed in announcements.", "awardCountRaw": "Several a year, announced retrospectively." },
+      "amount": { "instrument": "cash_range", "amountMin": 5000, "amountMax": 7500, "amountRaw": "", "awardCountRaw": "Several a year, announced retrospectively." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline. The board initiates awards and announces them retrospectively, roughly twice a year. The practical route is to be visible: publish your work and let the board find it." },
       "applyVia": "none",
       "constraints": [
@@ -148,7 +148,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.yasme.org/news-releases/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "yasme.org 301s /feed/ and /wp-json/ to a 403 page for non-browser clients, so the site publishes nothing a reader can subscribe to; Yasme announcements are relayed by the ARRL news RSS feed. No page states a reporting obligation for recipients of the associated YASME scholarship.",
+      "rawOtherText": "",
       "tags": ["ham", "grant", "yasme", "no-application"]
     },
     {
@@ -158,9 +158,9 @@
       "dates": { "basis": "unpublished" },
       "name": "NCDXF Grant Program",
       "klass": "ham_grant",
-      "summary": "Cash grants to individuals and groups who use amateur radio to advance education, science and international goodwill. In practice the recipients are well-designed DXpeditions to locations high on the most-wanted lists, so this is not a collegiate programme. Applicants must have a significant financial stake of their own.",
+      "summary": "Cash grants to individuals and groups who use amateur radio to advance education, science and international goodwill. NCDXF states no amount, no cap and no total; its guidelines distinguish only \"major support\" for expeditions to the most-wanted locations from \"a smaller amount of support\" for other projects. In practice the recipients are well-designed DXpeditions to locations high on the most-wanted lists, so this is not a collegiate programme. Applicants must have a significant financial stake of their own.",
       "applicantEntities": ["individual", "club_unincorporated", "club_501c3"],
-      "amount": { "instrument": "unknown", "amountRaw": "Not published. The guidelines page states no amount, no cap and no total; it distinguishes only \"major support\" for expeditions to the most-wanted locations from \"a smaller amount of support\" for other projects.", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "rolling", "source": { "kind": "self" }, "note": "Rolling: the guidelines page publishes no deadline of any kind. NCDXF's own instruction is to allow lead time, because the entire Board of Directors reviews each application — normally you should allow two months lead time for action." },
       "applyVia": "page_form",
       "applyUrl": "https://www.ncdxf.org/pages/grant-app.html",
@@ -182,7 +182,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://www.ncdxf.org/pages/grant-app.html", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "ncdxf.org returns 403 for both robots.txt and sitemap.xml. The guidelines page's own instruction is to complete a Budget Worksheet and an Application Form and submit both to NCDXF; the word \"treasurer\" appears zero times on it, and the \"roughly $1.2M distributed over about 48 years\" figure from the 2026-08-02 research pass appears nowhere on it.",
+      "rawOtherText": "Applications must be made by completing (1) a Budget Worksheet and (2) an Application Form, and submitting both to NCDXF. Please include all the information requested on the worksheet and form. This will speed the review of your application.",
       "tags": ["ham", "grant", "dxpedition", "manual"]
     },
     {
@@ -192,9 +192,9 @@
       "dates": { "basis": "unpublished" },
       "name": "NCDXF W6EEN Memorial Scholarship",
       "klass": "ham_scholarship",
-      "summary": "Full tuition at any DX University or Contest University session held in North America, for licensed amateurs aged 25 or younger. There is no restriction as to class of license. No dollar figure is published because the award is the course itself, and an eligible ham applies by contacting the university directly rather than NCDXF.",
+      "summary": "Full tuition at any DX University or Contest University session held in North America, for licensed amateurs aged 25 or younger. \"There is no restriction as to class of license\" means any class qualifies, not that a licence is unnecessary — the same sentence begins \"If you are a licensed amateur radio operator\". No dollar figure is published because the award is the course itself, and an eligible ham applies by contacting the university directly rather than NCDXF.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "tuition_coverage", "amountRaw": "Full tuition at DX University or Contest University sessions held in North America. No dollar figure is published.", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "tuition_coverage", "amountRaw": "Full tuition at DX University or Contest University sessions held in North America.", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No deadline is published. Availability tracks the DX University and Contest University session schedules, which NCDXF does not restate on this page." },
       "applyVia": "page_form",
       "applyUrl": "https://www.ncdxf.org/pages/scholarships.html",
@@ -206,7 +206,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://www.ncdxf.org/pages/scholarships.html", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The page's apply instruction is to contact DX University or Contest University directly; NCDXF publishes their contact pages and does not take the application itself. \"There is no restriction as to class of license\" means ANY CLASS QUALIFIES — a floor of TECH — and never \"no licence needed\": the same sentence begins \"If you are a licensed amateur radio operator\". The page also carries a Previous ARRL Foundation Scholarship Program table marked No Longer Active; those rows are history, not an open award.",
+      "rawOtherText": "",
       "tags": ["ham", "scholarship", "youth", "training"]
     },
     {
@@ -218,7 +218,7 @@
       "klass": "ham_grant",
       "summary": "A youth grant listed by NCDXF whose page renders as navigation and a title only: it publishes no terms, no amount and no deadline. Recorded so that somebody searching for it learns that, rather than assuming GrantSpotter missed it.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "No amount is published anywhere on the page.", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No terms of any kind are published on the page. Contact NCDXF directly if you need this one." },
       "applyVia": "contact_person",
       "applyUrl": "https://www.ncdxf.org/pages/scholarships.html",
@@ -227,7 +227,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.ncdxf.org/pages/scholarships.html", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Verified in the 2026-08-02 research pass: the Youth Grant page contains a title and navigation and no programme terms. ncdxf.org's robots.txt and sitemap.xml both 403 non-browser clients.",
+      "rawOtherText": "",
       "tags": ["ham", "grant", "youth", "unpublished", "manual"]
     },
     {
@@ -237,9 +237,9 @@
       "dates": { "basis": "unpublished" },
       "name": "SARA Student and Teacher Project Grants",
       "klass": "equipment_in_kind",
-      "summary": "The Society of Amateur Radio Astronomers funds student radio-astronomy projects in several small grants of no more than $200 each, or more with the approval of the grant committee. Teachers are now eligible too. Preference goes to students from fifth grade through college and to new and innovative ideas, and the application is a Word or PDF form emailed back to SARA.",
+      "summary": "The Society of Amateur Radio Astronomers funds student radio-astronomy projects in several small grants of no more than $200 each, or more with the approval of the grant committee — a ceiling with discretion above it rather than a stated maximum. The award is cash, not a kit: Radio JOVE, SuperSID and INSPIRE are named only as projects an applicant might build with the money. Fifth grade through college is SARA's word \"Preference\", not a bar. Teachers are eligible too.",
       "applicantEntities": ["individual", "teacher", "school_lea"],
-      "amount": { "instrument": "cash_range", "amountRaw": "The funds will be divided up into several small grants of no more than $200 each or more, with the approval of the grant committee, to ensure that the money reaches the largest number of students. A ceiling with explicit committee discretion above it, so no maximum is asserted.", "awardCountRaw": "Not published; \"several small grants\"." },
+      "amount": { "instrument": "cash_range", "amountRaw": "The funds will be divided up into several small grants of no more than $200 each or more, with the approval of the grant committee, to ensure that the money reaches the largest number of students.", "awardCountRaw": "several small grants" },
       "deadline": { "kind": "rolling", "source": { "kind": "self" }, "note": "Rolling. No deadline of any kind appears anywhere on the grants page." },
       "applyVia": "email_pdf_packet",
       "applyUrl": "https://www.radio-astronomy.org/grants",
@@ -252,7 +252,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://www.radio-astronomy.org/grants", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "THE FIFTH-GRADE-THROUGH-COLLEGE RULE IS A PREFERENCE, NOT A BAR — the page's own word is \"Preference\". THE AWARD IS CASH, not a kit: the page says SARA \"provides funds\" and that the aim is that \"the money reaches the largest number of students\". Radio JOVE, SuperSID and INSPIRE appear on that page only as example projects an applicant might BUILD with the money, never as what SARA hands over. The address is written \"grants at radio-astronomy.org\" here because that is how the page spells it, as an anti-spam measure. Neither a $500 outlier award nor an explicit welcome to international applicants appears on the captured page.",
+      "rawOtherText": "",
       "tags": ["ham", "equipment", "radio-astronomy", "students", "teachers"]
     },
     {
@@ -262,9 +262,9 @@
       "dates": { "basis": "unpublished" },
       "name": "Radio Club of America Scholarship Program",
       "klass": "ham_scholarship",
-      "summary": "Sixteen named funds, the Rappaport, Carr and Cooper awards among them, for undergraduate and graduate students on a wireless career track. An amateur licence is NOT required. Only students at roughly nine participating schools are eligible and the university selects the recipients, so a student never applies to RCA: the action is to ask your department whether your school participates.",
+      "summary": "Sixteen named funds, the Rappaport, Carr and Cooper awards among them, for undergraduate and graduate students on a wireless career track. An amateur licence is NOT required. RCA publishes no per-award amount; about $15,000 a year is distributed in total. Only students at roughly nine participating schools are eligible and the university selects the recipients, so a student never applies to RCA: the action is to ask your department whether your school participates.",
       "applicantEntities": ["nominated_by_institution"],
-      "amount": { "instrument": "unknown", "amountRaw": "Per-award amounts are not published. About $15,000 a year is distributed in total, per the 2026-08-02 research pass.", "awardCountRaw": "Not published; awards are distributed each May." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No deadline is published. Awards are distributed each May, and the timeline is set by the participating university rather than by RCA. If your school participates, ask your department for its internal date." },
       "applyVia": "contact_person",
       "applyUrl": "https://www.radioclubofamerica.org/",
@@ -276,7 +276,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.radioclubofamerica.org/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "RCA runs on ClubExpress: sitemap.xml 403s, pretty URLs 404, and only content.aspx query-string URLs resolve — and the module id inside them changes without notice whenever RCA renumbers a module, so start from the club's root rather than from a deep link, which breaks silently.",
+      "rawOtherText": "",
       "tags": ["scholarship", "wireless", "nominated", "no-license-required", "manual"]
     },
     {
@@ -288,7 +288,7 @@
       "klass": "equipment_in_kind",
       "summary": "In-kind support for schools, scouting groups and museums: books, equipment and curriculum materials. No cash, no application form and no deadline. A permanent contact-only record.",
       "applicantEntities": ["school_lea", "club_unincorporated", "club_501c3"],
-      "amount": { "instrument": "in_kind_equipment", "amountRaw": "In-kind only — books, equipment and curriculum. No cash amount is published.", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "in_kind_equipment", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "rolling", "source": { "kind": "self" }, "note": "Rolling, effectively none. Contact the club." },
       "applyVia": "contact_person",
       "applyUrl": "https://www.radioclubofamerica.org/",

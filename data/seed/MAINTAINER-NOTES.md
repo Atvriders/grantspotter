@@ -23,16 +23,43 @@ real and worth keeping; the field they were written into was the defect.
 
 So: **the curation rationale lives here, and the funder's page content lives in the record.**
 
+**ROUND TWO, the same day.** The fix above moved the machine tokens and left the voice. The ARRL
+Club Grant panel then read *"This programme is funded by ARDC: the page thanks Amateur Radio Digital
+Communications for providing the funding … If you want an ARRL organisation grant with a published,
+verifiable window right now, the ARRL Amateur Radio Grants programme is the one with dates on its
+page."* Sentence one is a description OF the page; sentence two is GrantSpotter recommending a
+different programme — inside a panel that says it is quoting the funder. Not one machine token in
+either, so the guard passed it. Re-scanning the shipped corpus with a detector built for voice
+rather than vocabulary found **68 fields on 31 records** in the same shape — 31 of the 32
+hand-curated records, and **none of the 111 generated ARRL catalogue records**, which is what makes
+this a defect of curation both times. Zero of the 68 carried a machine tell: round one really had
+removed all of those.
+
 `packages/server/src/seed/funderVoice.test.ts` enforces that. It fails the build if any field the
 product renders as the funder's own words — `rawOtherText`, a constraint's `rawText`, an
 `aiPolicy.quote`, `amount.amountRaw` / `awardCountRaw`, a `fundingRestrictions` entry, a prose
-obligation, or a sidecar `evidence` quote — mentions GrantSpotter's own workings. When it fails,
-move the sentence here rather than rewording it until the detector stops noticing.
+obligation, or a sidecar `evidence` quote — is GrantSpotter talking rather than the funder. Read its
+header before editing: it says exactly which four families it can see and the five things it
+**cannot**. When it fails, move the sentence rather than rewording it until the detector stops
+noticing — rewording is what produced round two.
 
 **Fields that are GrantSpotter's own voice and are not policed:** `summary`, `deadline.note`,
 `trust.disputed.note` and `trust.staleMirrorWarning`. The page does not present those as anybody
 else's words. A curation note that a *student* needs — "the cycle could not be resolved and this
 record does not guess" — belongs in one of those, not in this file and not in `rawOtherText`.
+
+**The other attributed channel is the writing desk.** `content/templates/funders/*.md` are rendered
+as GrantSpotter's own overlays and say so in their own text ("GrantSpotter cannot list yours and
+will not pretend to"). Advice belongs there. Two of the three playbooks that used to sit in
+`rawOtherText` were already duplicated there in fuller form, which is why removing them cost the
+student nothing.
+
+**An empty string is a legal, and usually the correct, value.** `amount.amountRaw` and
+`awardCountRaw` render through `orNotStated`, so an empty field prints the app's own *"Not stated"*
+— GrantSpotter's voice, correctly attributed — while `"Not published."` typed into the field prints
+as something the funder wrote. The generated ARRL catalogue has kept that convention since it was
+written: *"an entry whose page states no count keeps the empty string rather than a sentence we
+wrote."* Twenty-four award fields were brought into line with it in round two.
 
 Notes below are ordered by seed file, then by record id. Each is the text that was removed from
 that record's `rawOtherText`, verbatim.
@@ -315,21 +342,391 @@ unstructured requirements.
 
 ---
 
+## Round two, 2026-08-13: what moved and where it went
+
+The 67 fields the voice scan found, by family (a field can carry more than one):
+
+| Family | Fields | Records | What it looked like |
+|---|---|---|---|
+| META — describes the page or the record | 61 | 28 | "the page thanks…", "the captured page lists 2024 recipients", "the word *treasurer* appears zero times on it", "Not published." |
+| PIPELINE — hedges about how the record was made | 18 | 13 | "the 2026-08-02 research pass", "could not be checked", "robots.txt and sitemap.xml both 403 non-browser clients" |
+| ADVICE — second person aimed at the applicant | 16 | 13 | "do not infer one", "Confirm on the MTT-S scholarships page before you budget", "Your campus will differ" |
+| CROSSREF — recommends another programme in this corpus | 5 | 5 | "the ARRL Amateur Radio Grants programme is the one with dates on its page" |
+| MACHINE — round one's tells | 0 | 0 | — |
+
+Totals are 68 distinct fields on 31 records; a field can belong to more than one family. Seventy-
+seven fields changed in all, because a companion field ("Not published." sitting beside a flagged
+`amountRaw`) was brought into line at the same time.
+
+Where each kind went:
+
+* **Facts a student needs** → `summary`, `deadline.note`, `trust.staleMirrorWarning`. The ARRL ETP
+  Jotform-id warning and the Austin ARC "No opportunities available" closed state are now in
+  `deadline.note`; the FAR takeover window and the two hijacked domains are now in
+  `trust.staleMirrorWarning`; the FSU figures are now inside the campus-SGA warning that already
+  said they were one campus's.
+* **Advice** → already in `content/templates/funders/`. `funder-campus-sga.md` and
+  `funder-nasa-space-grant.md` carry the two playbooks in fuller, attributed form. The vendor
+  playbook has **no** template — its method is compressed into `summary`, and a
+  `funder-vendor-relationships.md` overlay is the right permanent home for it. That file belongs to
+  whoever owns `content/`.
+* **Fetch and provenance notes** → this file, under the record.
+* **Nothing** → where the sentence only restated `summary`, `deadline.note` or a constraint that
+  already quoted the funder. Roughly half of the removed `rawOtherText` was in that state.
+
+### Three constraints were DELETED, not reworded
+
+`club-grant-affiliated` (arrl-club-grant), `sga-rso` (campus-sga-playbook) and `mtts-field`
+(ieee-mtt-s-student-awards) each carried a sentence GrantSpotter composed, with an inline
+"(2026-08-02 research pass; the captured page publishes no terms)" admitting as much — inside the
+`.verbatim` quote block. The ARRL Club Grant capture really does carry no eligibility text at all:
+it is a 2024 recipient list and a thank-you to ARDC.
+
+The product's own doctrine for this is written in `matcher.ts`: *"A constraint GrantSpotter composed
+at match time has no such sentence, and the honest representation of 'no funder said this' is an
+EMPTY `rawText` — not a plausible sentence written in the funder's voice."* `Opportunity.tsx` and
+`IneligibilityDrawer` both branch on `hasFunderWording` and print *"No funder sentence was recorded
+for this one"* in the authored-voice block.
+
+**That representation is not reachable from seed data today.** `validate.ts`'s `constraint-shape`
+rule rejects an empty `rawText` outright, so `loadSeedCorpus` throws. Keeping the rule with an
+invented quotation was the worse of the two remaining options, so the constraints are gone and the
+fact each encoded is now in `summary` in GrantSpotter's voice. Three records lost a matcher rule
+that no funder ever published.
+
+**The real fix belongs to whoever owns `packages/server/src/seed/validate.ts`:** allow an empty
+`rawText` on a constraint (the renderers already handle it), and these three become
+empty-`rawText` constraints instead of deletions.
+
+---
+
 ## Known residual, NOT fixed here
 
-Three records — `campus-sga-playbook`, `vendor-equipment-relationship-playbook` and
-`nasa-space-grant` — carry a numbered playbook in `rawOtherText` that is GrantSpotter's advice to an
-applicant, not any funder's text. Nothing in it is about GrantSpotter's own workings, so the guard
-does not flag it, and deleting it would delete the only value those three records have.
+**The playbooks are out of `rawOtherText`.** The previous round left three there and asked that they
+not be deleted. They were not deleted — `campus-sga-playbook` and `nasa-space-grant` already had
+richer, attributed copies in `content/templates/funders/`, and the vendor playbook's method is now
+in that record's `summary`. The "advice, not the funder's own text" preamble is gone with them; it
+was an interim measure that asked the reader to disbelieve a heading the product had just printed.
 
-It is still under a heading that says "text from the source". The interim measure is in the field
-itself — each playbook now opens by saying it is advice and not the funder's own text — which a
-reader can at least see. The real fix is a rendering one: an authored-voice block, the same
-`GrantSpotter's words, not the funder's` treatment `Opportunity.tsx` already gives a composed
-constraint, and it belongs to whoever owns `packages/web/`. Do not "fix" it by deleting the
-playbooks.
+**What remains open, in order of how much it matters:**
 
-The interim wording deliberately does not say the product's name. It cannot: the guard reads that
-as a note about this software leaking into a funder-voice field, and it is right to — the first
-draft of this fix wrote "GrantSpotter's advice, not a vendor's text" into `rawOtherText` and the
-guard failed it.
+1. `validate.ts` forbids the empty constraint `rawText` that `matcher.ts` calls the honest
+   representation. Until that is reconciled, a constraint with no funder sentence has to be deleted
+   rather than marked. See the section above.
+2. There is no `content/templates/funders/funder-vendor-relationships.md`, so the vendor-relationship
+   method is compressed into a 600-character `summary` instead of being written out where it can be
+   attributed properly.
+3. The guard cannot see a fluent invention, a paraphrase, or a quote lifted from the wrong page.
+   `funderVoice.test.ts`'s header lists all five blind spots. Do not read a green tick there as
+   "every quotation in this corpus is real" — it means "no field is visibly GrantSpotter talking".
+
+---
+
+## Round-two removals, verbatim
+
+Every string below was rendered to a reader as the funder's own words and is not. Kept here so
+that nothing researched is lost and so the next reviewer can see what the voice looked like.
+
+### `programs.curated.json`
+
+**`ardc-grants`**
+
+* `rawOtherText` → trimmed
+  > ARDC asks applicants to be thorough but brief and to avoid unnecessary jargon. Two requirements applicants most often miss: every funded output must be open-source or open-access, and indirect costs are capped at 20%. The only cost-share sentence on the instructions page is conditional — an organisation whose indirect rate exceeds 20% is asked to cover the excess.
+
+* `amount.amountRaw` → trimmed
+  > No published cap. Lowest and highest figures in ARDC's own 2026 award table: $1,285 and $258,000. Verified collegiate awards run $2,000 to $77,000.
+
+**`arrl-amateur-radio-grants`**
+
+* `rawOtherText` → empty
+  > Status as of the 2026-08-02 research pass: between cycles. The June window shut on June 30 and the next opens October 1. The ARRL Foundation published no AI policy: the grants page and the Grant Application Form PDF were both read in full and contain zero mentions of AI, ChatGPT or large language models. Terms inside the Kaleidoscope application portal are a JavaScript single-page app and could not be checked. The page states a co-funding PREFERENCE and says nothing about a required match.
+
+* `amount.amountRaw` → trimmed
+  > Awarded grants generally do not exceed $3,000; award amounts may be up to $5,000 in 2026. No floor is published — do not infer one.
+
+**`arrl-etp-grants`**
+
+* `rawOtherText` → trimmed
+  > The window above is the one ARRL printed, verbatim in the page's own capitals: 'APPLICATIONS WILL ONLY BE ACCEPTED FOR REVIEW BETWEEN OCTOBER 1ST AND OCTOBER 31ST of 2025.' It is the most recent window the funder has published and it has closed; the October month looks stable across years but the year on the page does not. The application packet includes a signed Antenna Installation Approval form (Section 11). The only text on the page about what happens after an award is an anecdote about a school that stopped using its station. The application is a Jotform whose form id changes every year, and the attached .xlsx and .pdf files change underneath a year-agnostic URL; verify the current form id before applying.
+
+* `amount.amountRaw` → empty
+  > Equipment, software and classroom resources. ARRL publishes no cash value for either track; do not infer one.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`arrl-foundation-scholarships`**
+
+* `rawOtherText` → empty
+  > Scholarships administered by other organisations but applied for through ARRL — QCWA, YASME, DARA and the Six Meter Club of Chicago among them — are on ARRL's cycle. QCWA additionally asks that requests start from October 31 and reach ARRL before the first week of January. Status as of 2026-08-02: the scholarship-program page states, twice, that the 2026 scholarship cycle is closed, and the window above is a projection of the rule the funder stated for the last cycle it dated ('The 2026 scholarship cycle runs from October 30, 2025 to December 30, 2025', on the scholarship-descriptions page). No closing TIME is published: '12:00 PM EST' and 'January 31' appear zero times across every captured ARRL scholarship page, and '2024: 135 awards, more than $715,000' appears on no captured page either.
+
+* `amount.amountRaw` → trimmed
+  > More than 170 scholarships ranging from $500 to $25,000 (ARRL's own words on the scholarship-program page).
+
+* `amount.awardCountRaw` → trimmed
+  > ARRL states 'more than 170' awards; its scholarship-descriptions page says 'more than 150' and lists 111 catalogue entries.
+
+### `programs.ham-orgs.json`
+
+**`ylrl-ethel-smith-k4lmb`**
+
+* `rawOtherText` → empty
+  > The YLRL scholarships page states no cycle at all: it publishes no application window for this award.
+
+* `amount.awardCountRaw` → empty
+  > Not published. The page names three scholarships and states an amount for each; it states no award count.
+
+**`ylrl-mary-lou-brown-nm7n`**
+
+* `rawOtherText` → empty
+  > The female-only and licence bullets are document-level on the YLRL scholarships page and apply to all three YLRL awards.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`ylrl-marte-wessel-k0epe`**
+
+* `rawOtherText` → empty
+  > The one award here written FOR part-time students: YLRL restricts neither enrolment intensity nor degree level, so an unlisted degree level is one the funder never named rather than one that fails to qualify.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`austin-arc-copeland`**
+
+* `rawOtherText` → empty
+  > The club's portal at grants.austinhams.org legitimately displays "No opportunities available" between August 1 and April 30 — the closed state, not an error. No licence requirement appears anywhere on the captured page.
+
+* `amount.amountRaw` → empty
+  > Not published. There is not a single dollar figure on the club's scholarships page. Do not infer an amount.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`austin-arc-greenwood`**
+
+* `amount.amountRaw` → empty
+  > Not published. There is not a single dollar figure on the club's scholarships page. Do not infer an amount.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`yasme-supporting-grants`**
+
+* `rawOtherText` → empty
+  > yasme.org 301s /feed/ and /wp-json/ to a 403 page for non-browser clients, so the site publishes nothing a reader can subscribe to; Yasme announcements are relayed by the ARRL news RSS feed. No page states a reporting obligation for recipients of the associated YASME scholarship.
+
+* `amount.amountRaw` → empty
+  > $5,000 to $7,500 observed. Yasme publishes no award schedule; these are the figures the 2026-08-02 research pass observed in announcements.
+
+**`ncdxf-grant-program`**
+
+* `rawOtherText` → trimmed
+  > ncdxf.org returns 403 for both robots.txt and sitemap.xml. The guidelines page's own instruction is to complete a Budget Worksheet and an Application Form and submit both to NCDXF; the word "treasurer" appears zero times on it, and the "roughly $1.2M distributed over about 48 years" figure from the 2026-08-02 research pass appears nowhere on it.
+
+* `amount.amountRaw` → empty
+  > Not published. The guidelines page states no amount, no cap and no total; it distinguishes only "major support" for expeditions to the most-wanted locations from "a smaller amount of support" for other projects.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`ncdxf-w6een-scholarship`**
+
+* `rawOtherText` → empty
+  > The page's apply instruction is to contact DX University or Contest University directly; NCDXF publishes their contact pages and does not take the application itself. "There is no restriction as to class of license" means ANY CLASS QUALIFIES — a floor of TECH — and never "no licence needed": the same sentence begins "If you are a licensed amateur radio operator". The page also carries a Previous ARRL Foundation Scholarship Program table marked No Longer Active; those rows are history, not an open award.
+
+* `amount.amountRaw` → trimmed
+  > Full tuition at DX University or Contest University sessions held in North America. No dollar figure is published.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`ncdxf-youth-grant`**
+
+* `rawOtherText` → empty
+  > Verified in the 2026-08-02 research pass: the Youth Grant page contains a title and navigation and no programme terms. ncdxf.org's robots.txt and sitemap.xml both 403 non-browser clients.
+
+* `amount.amountRaw` → empty
+  > No amount is published anywhere on the page.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`sara-student-teacher-grants`**
+
+* `rawOtherText` → empty
+  > THE FIFTH-GRADE-THROUGH-COLLEGE RULE IS A PREFERENCE, NOT A BAR — the page's own word is "Preference". THE AWARD IS CASH, not a kit: the page says SARA "provides funds" and that the aim is that "the money reaches the largest number of students". Radio JOVE, SuperSID and INSPIRE appear on that page only as example projects an applicant might BUILD with the money, never as what SARA hands over. The address is written "grants at radio-astronomy.org" here because that is how the page spells it, as an anti-spam measure. Neither a $500 outlier award nor an explicit welcome to international applicants appears on the captured page.
+
+* `amount.amountRaw` → trimmed
+  > The funds will be divided up into several small grants of no more than $200 each or more, with the approval of the grant committee, to ensure that the money reaches the largest number of students. A ceiling with explicit committee discretion above it, so no maximum is asserted.
+
+* `amount.awardCountRaw` → trimmed
+  > Not published; "several small grants".
+
+**`rca-scholarship-program`**
+
+* `rawOtherText` → empty
+  > RCA runs on ClubExpress: sitemap.xml 403s, pretty URLs 404, and only content.aspx query-string URLs resolve — and the module id inside them changes without notice whenever RCA renumbers a module, so start from the club's root rather than from a deep link, which breaks silently.
+
+* `amount.amountRaw` → empty
+  > Per-award amounts are not published. About $15,000 a year is distributed in total, per the 2026-08-02 research pass.
+
+* `amount.awardCountRaw` → empty
+  > Not published; awards are distributed each May.
+
+**`rca-youth-activities`**
+
+* `amount.amountRaw` → empty
+  > In-kind only — books, equipment and curriculum. No cash amount is published.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+### `programs.institutional.json`
+
+**`ariss-iss-contact`**
+
+* `amount.awardCountRaw` → empty
+  > Not published. Proposals are accepted in four windows a year.
+
+**`nasa-csli`**
+
+* `rawOtherText` → empty
+  > The announcement page states no cycle. Its own eligibility sentence names non-profit organisations alongside universities and schools. NASA's NSPIRES system exposes no API, RSS, XML, JSON or CSV and is session-stateful, so Grants.gov is the only machine-readable route to NASA opportunities.
+
+* `amount.amountRaw` → trimmed
+  > No cash award is described. NASA provides "a low-cost pathway to conduct scientific investigations and technology demonstrations in space"; the page describes teams obtaining hands-on flight hardware design, development, and build experience.
+
+* `amount.awardCountRaw` → empty
+  > Not published per cycle. NASA states it has launched over 150 CubeSats through CSLI.
+
+* `fundingRestrictions[0]` → empty
+  > The captured page describes launch and deployment opportunities and no hardware funding. Budget for building the spacecraft separately.
+
+**`nasa-space-grant`**
+
+* `rawOtherText` → empty
+  > Space Grant money is not one published call: it reaches students through state consortia, each on its own calendar. Steps that work — advice, not NASA's own text. 1) Look up your state's Space Grant consortium in NASA's consortium directory. 2) Find the affiliate institution nearest you; consortium money usually flows through affiliates. 3) Ask the consortium director for the current student-award and mini-grant calendar, which is rarely posted more than a semester ahead. 4) Frame the ask in the consortium's own language: STEM workforce development, student research, K-12 outreach. A campus ground station is fundable as student research infrastructure and is rarely fundable as radio equipment. Reporting obligations and cost-share requirements vary by consortium and no national page states either.
+
+* `amount.amountRaw` → empty
+  > Consortium-level student awards typically $1,000 to $10,000. Not published nationally; every consortium sets its own, and yours may differ.
+
+* `amount.awardCountRaw` → empty
+  > Not published nationally; varies by consortium.
+
+**`ieee-mtts-chapter-support`**
+
+* `rawOtherText` → trimmed
+  > THE MEMBER MINIMUM IS TEN, not five: five is the reduced figure for a Student Branch Chapter specifically. The two-reported-meetings requirement is the one chapters actually fail — report meetings in vTools as they happen rather than reconstructing them in September. Two further pots live on the same page: $500 seed money per chapter for a workshop or symposium (an IEEE MTT-S membership booth must be present at the event), and up to $2,250 a year of Chapter Officer travel support to a Chapter Chair Meeting.
+
+**`ieee-mtt-s-student-awards`**
+
+* `rawOtherText` → empty
+  > MTT-S links its Undergrad Scholarships and Grad Fellowships from its site navigation; the chapter-support page that was read names neither an amount nor a deadline for them. An amateur radio licence is not required; this is engineering-society money and a ham student in an EE programme is a natural fit.
+
+* `amount.amountRaw` → empty
+  > Not published on any captured page. The 2026-08-02 research pass recorded ten undergraduate scholarships at $1,500 and three graduate fellowships at $6,000; the captured chapter-support page carries only navigation links to the two programmes and states neither figure, so no numeric amount is published here. Confirm on the MTT-S scholarships page before you budget.
+
+* `amount.awardCountRaw` → empty
+  > Not published on any captured page.
+
+* `constraints[mtts-field].rawText` → empty
+  > MTT-S undergraduate scholarships and graduate fellowships are for students working in microwave theory and technology or a directly related RF field (2026-08-02 research pass; the captured page links to the programmes but publishes no terms).
+
+**`ieee-student-branch-rebate`**
+
+* `rawOtherText` → empty
+  > The deadline and the qualifying condition were both read live off the captured page; the rebate amounts on it were not verified. Roughly 39 IEEE societies each publish their own chapter and student funding page, on different templates and calendars.
+
+* `amount.amountRaw` → empty
+  > Not published on any captured page. The 2026-08-02 research pass recorded $50 a year for a branch under 50 members, $100 at 50 or more, plus $2 per member and $1 per chapter member — figures taken from search snippets, not from a live read, because mga.ieee.org returns HTTP 418 to non-browser clients and we do not spoof a user agent. No numeric amount is published here; confirm the current schedule with your branch counsellor.
+
+**`yaesu-dr2x-repeater`**
+
+* `rawOtherText` → empty
+  > The page states no eligibility at all. Yaesu publishes the application as a window-dated PDF under /wp-content/uploads/{YYYY}/{MM}/, so its address changes each time a new window opens.
+
+* `amount.amountRaw` → trimmed
+  > The new program price is either $1,450.00 or $1,860.00. This is a price the buyer pays, not an award, and the page does not say what distinguishes the two figures.
+
+* `amount.awardCountRaw` → empty
+  > Not published.
+
+**`campus-sga-playbook`**
+
+* `rawOtherText` → empty
+  > PLAYBOOK — advice, not a student government's own text — and the single most valuable line in it is step 3. 1) Get the allocation manual, not the web summary; the caps and the barred-category list live in the manual. 2) Check whether capital equipment is barred. It usually is. 3) If it is barred, do not ask for a radio: ask for the programme the radio makes possible. A licence class, a Field Day event, a public-service demonstration, a school visit. Budget the consumables, the room, the food and the printing, and fund the radio itself from ARRL, ARDC or a departmental source. 4) Respect the lead-time rule; at FSU a request inside six weeks is simply not heard. 5) Track your request count. 6) Go to the annual activity-and-service budget cycle for anything recurring; the rolling process is for one-off events. Most student governments do require receipts and a post-event report, but that is a generalisation across roughly 4,000 campuses rather than a sentence any one of them published.
+
+* `amount.amountRaw` → empty
+  > Representative figures from one campus, FSU, read in the 2026-08-02 research pass: programming up to $3,000 and up to $5,000 in extraordinary cases, travel $250 per student and $5,000 per organisation, development fund up to $300 per fiscal year. Your campus will differ, sometimes by an order of magnitude.
+
+* `constraints[sga-rso].rawText` → empty
+  > The club must be a registered student organisation in good standing at the institution (2026-08-02 research pass; every campus states this in its own allocation manual).
+
+### `programs.negatives.json`
+
+**`arrl-club-grant`**
+
+* `rawOtherText` → trimmed
+  > This programme is funded by ARDC: the page thanks Amateur Radio Digital Communications for providing the funding, the same single-donor dependency that runs through the ARRL scholarships. If you want an ARRL organisation grant with a published, verifiable window right now, the ARRL Amateur Radio Grants programme is the one with dates on its page.
+
+* `constraints[club-grant-affiliated].rawText` → empty
+  > ARRL Foundation Club Grants go to ARRL-affiliated clubs (2026-08-02 research pass; the captured page lists 2024 recipients and carries no eligibility text of its own).
+
+**`arrl-cari-not-a-funding-program`**
+
+* `rawOtherText` → empty
+  > CARI is running right now; it simply was never a funding programme, and no ARRL page offers a CARI grant. If you want ARRL money for a collegiate club the routes are the Club Grant Program and the ARRL Amateur Radio Grants programme.
+
+* `amount.amountRaw` → empty
+  > No money is awarded to applicants. CARI is a community programme, not a grant.
+
+**`amsat-no-grants-program`**
+
+* `rawOtherText` → empty
+  > AMSAT is thriving and is simply not a grantmaker. If your project is satellite-adjacent, the real routes are ARISS-USA for a scheduled ISS contact, NASA CSLI for launch services, and your state's NASA Space Grant consortium for cash.
+
+* `amount.amountRaw` → empty
+  > No grants are made.
+
+**`flexradio-no-education-tier`**
+
+* `rawOtherText` → empty
+  > FlexRadio exists and sells radios; it publishes no education, student, club or nonprofit purchasing tier. For genuinely discounted radio hardware the one verified route is the Yaesu System Fusion DR-2X repeater programme, which is a purchase at a program price rather than a grant.
+
+* `amount.amountRaw` → empty
+  > No education, student, club or nonprofit pricing exists.
+
+**`vendor-equipment-relationship-playbook`**
+
+* `rawOtherText` → empty
+  > PLAYBOOK — advice, not a vendor's own text. 1) Do not send a cold form; there is no form. 2) Build the record first — a contest score, a Field Day writeup, a licence class you taught, students named. 3) Approach at a hamfest or at Hamvention, in person, with a one-page ask naming the exact model and what students will do with it. 4) Bring your faculty advisor and your callsign history. 5) Offer what a vendor actually wants: photographs, a results writeup, students at their booth, and the club callsign attached to a story worth repeating. 6) Ask your ARRL Section Manager for an introduction. Documented outcomes: IC-7610s at Carnegie Mellon W3VC, Penn State K3CR and Pitt W3YI. Kenwood: nothing found at all in the 2026-08-02 pass. Donors plainly do expect visible use, but no vendor has published that as a term.
+
+* `amount.amountRaw` → empty
+  > Equipment donations of real value have been made, but no programme, price list or award schedule is published by any of the three vendors.
+
+* `amount.awardCountRaw` → empty
+  > No published count.
+
+**`dara-grantmaker-only-via-arrl`**
+
+* `rawOtherText` → empty
+  > DARA hosts no application of its own: the award is applied for through the ARRL Foundation, and the ARRL catalog entry is the authoritative statement of its terms. DARA states no full-time requirement, so a part-time student is not barred.
+
+**`chicago-fm-club-scholarship-discontinued`**
+
+* `rawOtherText` → empty
+  > The scholarship really did end. A student who finds it on an aggregator is reading a stale mirror of a programme that no longer accepts applications.
+
+* `amount.amountRaw` → empty
+  > Not awarded. The programme no longer exists.
+
+**`far-domain-compromised`**
+
+* `rawOtherText` → empty
+  > The former FAR domain, farweb.org, issues an HTTP 301 to batualam.org, an Indonesian online-gambling site whose page title begins TARGET88. Do not visit either domain. The Internet Archive pins the takeover between 2025-10-17 and 2026-02-10, and three researchers confirmed the redirect independently in the 2026-08-02 pass. If you are looking for one of FAR's former scholarships, search the ARRL Foundation catalog: the 10-10, QCWA, YASME, K3IVO and CARA funds all appear there now.
+
+* `amount.amountRaw` → empty
+  > No award is available through this organisation's former website.
+

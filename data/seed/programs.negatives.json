@@ -7,15 +7,14 @@
       "dates": { "basis": "unpublished" },
       "name": "ARRL Club Grant Program",
       "klass": "ham_grant",
-      "summary": "ARDC-funded grants to Amateur Radio clubs, collegiate clubs included, in amounts as small as $1,000 to as large as the maximum $25,000. In 2024 the programme distributed $500,502 to 37 of 110 applicants who between them requested nearly $1.6 million; the 2024 recipient list includes Kansas State, Missouri S&T, Oklahoma State, Baylor's WA5BU and City Tech. THE CYCLE IS DISPUTED: the page shows 2024 results, no open cycle and no application link.",
+      "summary": "ARDC-funded grants to Amateur Radio clubs, collegiate clubs included, in amounts as small as $1,000 to as large as the maximum $25,000. In 2024 the programme distributed $500,502 to 37 of 110 applicants who requested nearly $1.6 million; the recipients include Kansas State, Missouri S&T, Oklahoma State and Baylor's WA5BU. THE CYCLE IS DISPUTED: the page shows 2024 results, no open cycle, no application link and no eligibility rule, so none is recorded here. For an ARRL organisation grant with published dates, look at Amateur Radio Grants instead.",
       "applicantEntities": ["club_unincorporated", "club_501c3"],
       "amount": { "instrument": "cash_range", "amountMin": 1000, "amountMax": 25000, "amountRaw": "Applicants requested amounts as small as $1,000 to as large as the maximum $25,000. 2024 actual: $500,502 across 37 of 110 applicants.", "awardCountRaw": "37 clubs in 2024, from 110 applicants." },
       "deadline": { "kind": "dormant", "source": { "kind": "self" }, "note": "The cycle could not be resolved on the verification date recorded in this record's trust block, and this record deliberately does not guess. The page publishes past results, no open cycle and no application link, and the application portal behind it is a JavaScript app that returns no server-side text, so open or closed cannot be determined programmatically. The three readings the research produced are recorded in the disputed field rather than reconciled into one. The only reliable change signal is the ARRL news feed." },
       "applyVia": "external_spa_portal",
       "applyUrl": "https://www.arrl.org/club-grant-program",
       "constraints": [
-        { "id": "club-grant-affiliated", "hard": true, "fallbackRank": 0, "rawText": "ARRL Foundation Club Grants go to ARRL-affiliated clubs (2026-08-02 research pass; the captured page lists 2024 recipients and carries no eligibility text of its own).", "spec": { "axis": "arrl_membership", "required": true, "minYears": 0 } }
-      ],
+],
       "fundingRestrictions": ["Does not fund ongoing operating expenses."],
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/files/file/Foundation/Grant%20Application%20Form.pdf" },
@@ -34,7 +33,7 @@
           ]
         }
       },
-      "rawOtherText": "This programme is funded by ARDC: the page thanks Amateur Radio Digital Communications for providing the funding, the same single-donor dependency that runs through the ARRL scholarships. If you want an ARRL organisation grant with a published, verifiable window right now, the ARRL Amateur Radio Grants programme is the one with dates on its page.",
+      "rawOtherText": "The ARRL Foundation is grateful for the generosity of Amateur Radio Digital Communications (ARDC) which provided the funding for this grant program.",
       "tags": ["ham", "grant", "arrl", "club", "collegiate", "disputed"]
     },
     {
@@ -44,9 +43,9 @@
       "dates": { "basis": "unpublished" },
       "name": "ARRL Collegiate Amateur Radio Initiative (CARI) — not a funding program",
       "klass": "ham_grant",
-      "summary": "CARI is not funding. It is a community programme: Zoom meetups, the Collegiate QSO Party, and networking at Hamvention. Two researchers confirmed that independently in the 2026-08-02 pass. The W1YSM Snyder endowment funds CARI activities but has no open application of any kind, so there is nothing here for a club to apply to.",
+      "summary": "CARI is not funding. It is a community programme: Zoom meetups, the Collegiate QSO Party, and networking at Hamvention. CARI is running — it simply was never a grant, and no ARRL page offers one. The W1YSM Snyder endowment funds CARI activities but has no open application of any kind, so there is nothing here for a club to apply to. For ARRL money for a collegiate club, the routes are the Club Grant Program and the ARRL Amateur Radio Grants programme.",
       "applicantEntities": ["university", "club_unincorporated"],
-      "amount": { "instrument": "unknown", "amountRaw": "No money is awarded to applicants. CARI is a community programme, not a grant.", "awardCountRaw": "None." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "None." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline, because there is nothing to apply for." },
       "applyVia": "none",
       "constraints": [],
@@ -54,7 +53,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.arrl.org/cari", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "CARI is running right now; it simply was never a funding programme, and no ARRL page offers a CARI grant. If you want ARRL money for a collegiate club the routes are the Club Grant Program and the ARRL Amateur Radio Grants programme.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "arrl", "cari", "collegiate", "not-funding"]
     },
     {
@@ -64,9 +63,9 @@
       "dates": { "basis": "unpublished" },
       "name": "AMSAT — no grants program exists",
       "klass": "ham_grant",
-      "summary": "AMSAT does not make grants. Its university-participation page is a near-empty stub naming a single RIT project. AMSAT is a grant RECIPIENT, through ARISS and ARDC, not a grantmaker. Confirmed by two researchers in the 2026-08-02 pass.",
+      "summary": "AMSAT does not make grants. Its university-participation page is a near-empty stub naming a single RIT project. AMSAT is a grant RECIPIENT, through ARISS and ARDC, not a grantmaker. For a satellite-adjacent project the routes that do exist are ARISS-USA for a scheduled ISS contact, NASA CSLI for launch services, and your state's NASA Space Grant consortium for cash.",
       "applicantEntities": ["university", "club_unincorporated"],
-      "amount": { "instrument": "unknown", "amountRaw": "No grants are made.", "awardCountRaw": "None." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "None." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline, because AMSAT runs no grants programme." },
       "applyVia": "none",
       "constraints": [],
@@ -74,7 +73,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.amsat.org/university-participation/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "AMSAT is thriving and is simply not a grantmaker. If your project is satellite-adjacent, the real routes are ARISS-USA for a scheduled ISS contact, NASA CSLI for launch services, and your state's NASA Space Grant consortium for cash.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "amsat", "satellite", "not-funding"]
     },
     {
@@ -84,9 +83,9 @@
       "dates": { "basis": "unpublished" },
       "name": "FlexRadio — no education, student, club or nonprofit purchasing tier",
       "klass": "equipment_in_kind",
-      "summary": "FlexRadio's purchasing-programs page was fetched specifically to check for an education discount in the 2026-08-02 pass. There is none. The only programmes are the Certified Pre-Owned scheme and trade-ins, both open to anybody, and neither is a discount a club or a school can apply for.",
+      "summary": "FlexRadio's purchasing-programs page was checked specifically for an education discount. There is none: no education, student, club or nonprofit pricing exists. The only programmes are the Certified Pre-Owned scheme and trade-ins, both open to anybody, and neither is a discount a club or a school can apply for. The one verified route to discounted hardware in this corpus is the Yaesu System Fusion DR-2X repeater programme, and that is a purchase at a program price rather than a grant.",
       "applicantEntities": ["university", "club_unincorporated", "individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "No education, student, club or nonprofit pricing exists.", "awardCountRaw": "None." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "None." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline, because no education tier exists to apply to." },
       "applyVia": "none",
       "constraints": [],
@@ -94,7 +93,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "no_application", "sourceUrl": "https://www.flexradio.com/purchasing-programs/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "FlexRadio exists and sells radios; it publishes no education, student, club or nonprofit purchasing tier. For genuinely discounted radio hardware the one verified route is the Yaesu System Fusion DR-2X repeater programme, which is a purchase at a program price rather than a grant.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "flexradio", "equipment", "no-education-tier"]
     },
     {
@@ -104,9 +103,9 @@
       "dates": { "basis": "unpublished" },
       "name": "Icom America, DX Engineering and Kenwood — real equipment, no application path",
       "klass": "equipment_in_kind",
-      "summary": "Genuine collegiate giving happens here: IC-7610 transceivers have reached Carnegie Mellon's W3VC, Penn State's K3CR and Pitt's W3YI. But there is no application programme, no page and no deadline — it is relationship-driven, and Kenwood has nothing at all. Shipped as a playbook rather than an opportunity, because an opportunity with an invented deadline would be worse than nothing.",
+      "summary": "Genuine collegiate giving happens here: IC-7610 transceivers have reached Carnegie Mellon's W3VC, Penn State's K3CR and Pitt's W3YI. But no vendor publishes a programme, a price list or an award schedule — it is relationship-driven, and Kenwood has nothing at all. What works, from those outcomes: build a record first, then ask a named person in person at a hamfest for a named model, with a faculty advisor present and something the vendor wants in return. Shipped as a playbook, not an opportunity, because an invented deadline would be worse than nothing.",
       "applicantEntities": ["university", "club_unincorporated", "club_501c3"],
-      "amount": { "instrument": "in_kind_equipment", "amountRaw": "Equipment donations of real value have been made, but no programme, price list or award schedule is published by any of the three vendors.", "awardCountRaw": "No published count." },
+      "amount": { "instrument": "in_kind_equipment", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no deadline because there is no application. Approaches are made person to person, usually through a regional representative." },
       "applyVia": "contact_person",
       "applyUrl": "https://www.icomamerica.com/",
@@ -115,7 +114,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.icomamerica.com/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "PLAYBOOK — advice, not a vendor's own text. 1) Do not send a cold form; there is no form. 2) Build the record first — a contest score, a Field Day writeup, a licence class you taught, students named. 3) Approach at a hamfest or at Hamvention, in person, with a one-page ask naming the exact model and what students will do with it. 4) Bring your faculty advisor and your callsign history. 5) Offer what a vendor actually wants: photographs, a results writeup, students at their booth, and the club callsign attached to a story worth repeating. 6) Ask your ARRL Section Manager for an introduction. Documented outcomes: IC-7610s at Carnegie Mellon W3VC, Penn State K3CR and Pitt W3YI. Kenwood: nothing found at all in the 2026-08-02 pass. Donors plainly do expect visible use, but no vendor has published that as a term.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "equipment", "icom", "dx-engineering", "kenwood", "playbook", "relationship-driven"]
     },
     {
@@ -125,7 +124,7 @@
       "dates": { "basis": "unpublished" },
       "name": "DARA / Hamvention — a grantmaker only through its ARRL catalog entry",
       "klass": "ham_scholarship",
-      "summary": "The Dayton Amateur Radio Association funds a real $1,500 scholarship, but only as an entry in the ARRL Foundation catalog. Its own sites carry nothing: zero hrefs containing \"scholar\" or \"grant\" on w8bi.org, no scholarship page on hamvention.org, and daytonhamvention.org did not resolve in the 2026-08-02 pass. This record is a negative about the funder's web presence, not about the money, which is real.",
+      "summary": "The Dayton Amateur Radio Association funds a real $1,500 scholarship, but only as an entry in the ARRL Foundation catalog, which is where its terms actually live. Its own sites carry nothing about it. DARA states no full-time requirement, so a part-time student is not barred. This record is a negative about the funder's web presence, not about the money, which is real.",
       "applicantEntities": ["individual"],
       "amount": { "instrument": "cash_fixed", "amountMin": 1500, "amountMax": 1500, "amountRaw": "$1,500, multiple per year, awarded through the ARRL Foundation catalog.", "awardCountRaw": "Multiple per year." },
       "deadline": { "kind": "unpublished", "source": { "kind": "inherited", "fromProgramId": "arrl-foundation-scholarships" }, "note": "DARA publishes no deadline anywhere. Applications go through the single ARRL Foundation scholarship application, so the cycle shown against this record is the ARRL Foundation's, inherited rather than stated here." },
@@ -138,7 +137,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://www.arrl.org/scholarship-descriptions", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "Do not go looking for a DARA or Hamvention scholarship page. There is not one. The ARRL catalog entry is the whole programme." },
-      "rawOtherText": "DARA hosts no application of its own: the award is applied for through the ARRL Foundation, and the ARRL catalog entry is the authoritative statement of its terms. DARA states no full-time requirement, so a part-time student is not barred.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "dara", "hamvention", "scholarship", "arrl-catalog-only"]
     },
     {
@@ -150,7 +149,7 @@
       "klass": "ham_scholarship",
       "summary": "Discontinued. There are zero hits for it in the live ARRL scholarship catalog, and 325 KB of chicagofmclub.org was fetched in the 2026-08-02 pass without a single occurrence of the word \"scholarship\". It is still listed by seven or more third-party aggregators, which is direct evidence that those sites mirror stale ARRL data rather than re-reading it.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "Not awarded. The programme no longer exists.", "awardCountRaw": "None." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "None." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline. Any deadline you find for this scholarship comes from a stale mirror." },
       "applyVia": "none",
       "constraints": [],
@@ -158,7 +157,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "discontinued", "sourceUrl": "https://www.chicagofmclub.org/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "Seven or more third-party scholarship aggregator sites still list this scholarship as open. It is not. Those sites mirror an old copy of the ARRL catalog and never re-check it, so treat every other listing they carry with the same suspicion." },
-      "rawOtherText": "The scholarship really did end. A student who finds it on an aggregator is reading a stale mirror of a programme that no longer accepts applications.",
+      "rawOtherText": "",
       "tags": ["negative", "verified_negative", "discontinued", "scholarship", "stale-mirror", "illinois"]
     },
     {
@@ -170,7 +169,7 @@
       "klass": "ham_scholarship",
       "summary": "SAFETY WARNING, not an offer. The Foundation for Amateur Radio's website is no longer under the foundation's control: the domain now issues a 301 redirect to an Indonesian online-gambling site. Do not visit it and do not send an application to it. FAR's historical scholarship portfolio — the 10-10, QCWA, YASME, K3IVO and CARA funds among them — appears to have been absorbed into the ARRL Foundation, which is where to look instead.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "No award is available through this organisation's former website.", "awardCountRaw": "None." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "None." },
       "deadline": { "kind": "no_application_exists", "source": { "kind": "self" }, "note": "There is no application and no deadline. Any page that tells you to apply at the FAR website is out of date and is pointing you at a domain somebody else now controls." },
       "applyVia": "none",
       "constraints": [],
@@ -183,9 +182,9 @@
         "lastVerifiedAt": "2026-08-02",
         "verificationMethod": "manual_curation",
         "contentHash": "",
-        "staleMirrorWarning": "QCWA, ARRL and multiple club pages still instruct applicants to \"apply at the FAR website\". Those instructions are stale and they point at a compromised domain. Apply through the ARRL Foundation instead."
+        "staleMirrorWarning": "The former FAR domain, farweb.org, issues an HTTP 301 to batualam.org, an Indonesian online-gambling site whose page title begins TARGET88, and the Internet Archive pins the takeover between 2025-10-17 and 2026-02-10. Do not visit either domain. QCWA, ARRL and multiple club pages still instruct applicants to \"apply at the FAR website\". Those instructions are stale and they point at a compromised domain. Apply through the ARRL Foundation instead: the 10-10, QCWA, YASME, K3IVO and CARA funds all appear in its catalog now."
       },
-      "rawOtherText": "The former FAR domain, farweb.org, issues an HTTP 301 to batualam.org, an Indonesian online-gambling site whose page title begins TARGET88. Do not visit either domain. The Internet Archive pins the takeover between 2025-10-17 and 2026-02-10, and three researchers confirmed the redirect independently in the 2026-08-02 pass. If you are looking for one of FAR's former scholarships, search the ARRL Foundation catalog: the 10-10, QCWA, YASME, K3IVO and CARA funds all appear there now.",
+      "rawOtherText": "",
       "tags": ["negative", "safety_warning", "safety", "far", "compromised-domain", "blocklisted", "scholarship"]
     }
   ]

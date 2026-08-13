@@ -9,7 +9,7 @@
       "klass": "equipment_in_kind",
       "summary": "A scheduled, voice-only contact of roughly ten minutes between your students and an ISS crew member, plus an ARISS Technical Mentor and an Educational Mentor to get the ground station and the education plan ready. No cash changes hands. Written for US schools and educational organisations; colleges and universities are not named in the eligibility sentence and K-12 dominates the awardee list.",
       "applicantEntities": ["school_lea", "university"],
-      "amount": { "instrument": "in_kind_service", "amountRaw": "No cash. A scheduled ISS crew contact of approximately 10 minutes, plus an ARISS Technical Mentor who helps develop an Equipment Plan and an ARISS Educational Mentor. The applicant provides the ground station.", "awardCountRaw": "Not published. Proposals are accepted in four windows a year." },
+      "amount": { "instrument": "in_kind_service", "amountRaw": "No cash. A scheduled ISS crew contact of approximately 10 minutes, plus an ARISS Technical Mentor who helps develop an Equipment Plan and an ARISS Educational Mentor. The applicant provides the ground station.", "awardCountRaw": "" },
       "deadline": { "kind": "quarterly_rewritten", "source": { "kind": "self" }, "note": "One window sentence rewritten quarterly at a stable URL. Application window published by the funder: opens 2026-07-01, closes 2026-09-30. The page prints the month and day and no year; the year is fixed by the contact period the same sentence names, January to June 2027." },
       "applyVia": "page_form",
       "applyUrl": "https://ariss-usa.org/proposal-overview/",
@@ -39,20 +39,20 @@
       "dates": { "basis": "unpublished" },
       "name": "NASA CubeSat Launch Initiative (CSLI)",
       "klass": "equipment_in_kind",
-      "summary": "Launch and deployment opportunities for CubeSats built by US educational institutions and non-profit organisations, museums and science centres included. NASA calls it a low-cost pathway to flight: the ride is the award, and the team designs, develops and builds its own hardware. NASA has launched over 150 CubeSats through the initiative.",
+      "summary": "Launch and deployment opportunities for CubeSats built by US educational institutions and non-profit organisations, museums and science centres included. NASA calls it a low-cost pathway to flight: the ride is the award, and the team designs, develops and builds its own hardware. There is no hardware funding, so budget for building the spacecraft separately. NASA has launched over 150 CubeSats through the initiative.",
       "applicantEntities": ["university", "school_lea", "club_501c3"],
-      "amount": { "instrument": "in_kind_service", "amountRaw": "No cash award is described. NASA provides \"a low-cost pathway to conduct scientific investigations and technology demonstrations in space\"; the page describes teams obtaining hands-on flight hardware design, development, and build experience.", "awardCountRaw": "Not published per cycle. NASA states it has launched over 150 CubeSats through CSLI." },
+      "amount": { "instrument": "in_kind_service", "amountRaw": "a low-cost pathway to conduct scientific investigations and technology demonstrations in space", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No dated window is published on the announcement page. The page states only a habit: CSLI's Announcements of Partnership Opportunity is typically released each August with proposals due in November. A habit is not a deadline, so nothing here is put on a calendar; watch the page for the announcement itself." },
       "applyVia": "page_form",
       "applyUrl": "https://www.nasa.gov/kennedy/launch-services-program/cubesat-launch-initiative/",
       "constraints": [
         { "id": "csli-entity", "hard": true, "fallbackRank": 0, "rawText": "NASA's CubeSat Launch Initiative provides opportunities for CubeSats built by U.S. educational institutions, and non-profit organizations, including informal educational institutions such as museums and science centers to fly on upcoming launches.", "spec": { "axis": "other", "note": "US educational institutions and non-profits, informal educational institutions such as museums and science centres included." } }
       ],
-      "fundingRestrictions": ["The captured page describes launch and deployment opportunities and no hardware funding. Budget for building the spacecraft separately."],
+      "fundingRestrictions": [],
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://www.nasa.gov/kennedy/launch-services-program/cubesat-launch-initiative/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The announcement page states no cycle. Its own eligibility sentence names non-profit organisations alongside universities and schools. NASA's NSPIRES system exposes no API, RSS, XML, JSON or CSV and is session-stateful, so Grants.gov is the only machine-readable route to NASA opportunities.",
+      "rawOtherText": "",
       "tags": ["in-kind", "cubesat", "nasa", "university", "status-ambiguous"]
     },
     {
@@ -64,7 +64,7 @@
       "klass": "adjacent_stem",
       "summary": "Fifty-two independent state and territory consortia funding university students, faculty and teams. Per the research this is the most common real route to a campus ground station or a cubesat. Consortium-level student awards typically run $1,000 to $10,000 but are set consortium by consortium and are not published nationally. Shipped as a guided workflow with a state-keyed picker, not as a feed.",
       "applicantEntities": ["university", "university_dept", "individual"],
-      "amount": { "instrument": "cash_range", "amountMin": 1000, "amountMax": 10000, "amountRaw": "Consortium-level student awards typically $1,000 to $10,000. Not published nationally; every consortium sets its own, and yours may differ.", "awardCountRaw": "Not published nationally; varies by consortium." },
+      "amount": { "instrument": "cash_range", "amountMin": 1000, "amountMax": 10000, "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "There is no national deadline and there never has been. Fifty-two consortia keep fifty-two independent calendars, rarely posted more than a semester ahead. Find your state's consortium and work to its calendar." },
       "applyVia": "contact_person",
       "applyUrl": "https://www.nasa.gov/learning-resources/national-space-grant-college-and-fellowship-project/",
@@ -75,7 +75,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "contact_only", "sourceUrl": "https://www.nasa.gov/learning-resources/national-space-grant-college-and-fellowship-project/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "Space Grant money is not one published call: it reaches students through state consortia, each on its own calendar. Steps that work — advice, not NASA's own text. 1) Look up your state's Space Grant consortium in NASA's consortium directory. 2) Find the affiliate institution nearest you; consortium money usually flows through affiliates. 3) Ask the consortium director for the current student-award and mini-grant calendar, which is rarely posted more than a semester ahead. 4) Frame the ask in the consortium's own language: STEM workforce development, student research, K-12 outreach. A campus ground station is fundable as student research infrastructure and is rarely fundable as radio equipment. Reporting obligations and cost-share requirements vary by consortium and no national page states either.",
+      "rawOtherText": "",
       "tags": ["adjacent", "nasa", "space-grant", "university", "guided-workflow", "manual"]
     },
     {
@@ -105,7 +105,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://mtt.org/chapter-support/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "THE MEMBER MINIMUM IS TEN, not five: five is the reduced figure for a Student Branch Chapter specifically. The two-reported-meetings requirement is the one chapters actually fail — report meetings in vTools as they happen rather than reconstructing them in September. Two further pots live on the same page: $500 seed money per chapter for a workshop or symposium (an IEEE MTT-S membership booth must be present at the event), and up to $2,250 a year of Chapter Officer travel support to a Chapter Chair Meeting.",
+      "rawOtherText": "In addition to the chapter activity support above, MTT-S offers $500 seed money per chapter for a workshop or symposium, on condition that an IEEE MTT-S membership booth is present at the event, and up to $2,250 a year of Chapter Officer travel support to attend a Chapter Chair Meeting.",
       "tags": ["adjacent", "ieee", "rf", "student-chapter"]
     },
     {
@@ -114,19 +114,18 @@
       "dates": { "basis": "unpublished" },
       "name": "IEEE MTT-S Undergraduate Scholarships and Graduate Fellowships",
       "klass": "adjacent_stem",
-      "summary": "MTT-S runs undergraduate scholarships and graduate fellowships for students working in microwave theory and technology, alongside its chapter funding. An amateur licence is not required. Recorded so a ham student in an EE programme knows they exist — but the captured MTT-S page only links to them, so this record publishes no amount, no count and no deadline.",
+      "summary": "MTT-S runs undergraduate scholarships and graduate fellowships for students working in microwave theory and technology or a directly related RF field, alongside its chapter funding. An amateur licence is not required. Recorded so a ham student in an EE programme knows they exist — but the MTT-S page this record was built from only links to them, so no amount, no count, no deadline and no eligibility rule of the funder's own is recorded here. Everything above is GrantSpotter's reading, not MTT-S's text.",
       "applicantEntities": ["individual"],
-      "amount": { "instrument": "unknown", "amountRaw": "Not published on any captured page. The 2026-08-02 research pass recorded ten undergraduate scholarships at $1,500 and three graduate fellowships at $6,000; the captured chapter-support page carries only navigation links to the two programmes and states neither figure, so no numeric amount is published here. Confirm on the MTT-S scholarships page before you budget.", "awardCountRaw": "Not published on any captured page." },
+      "amount": { "instrument": "unknown", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No deadline is published on any captured page. The October 1 cutoff on the chapter-support page governs CHAPTER funding requests and must not be assumed to govern these student awards; the two are separate programmes." },
       "applyVia": "contact_person",
       "constraints": [
-        { "id": "mtts-field", "hard": false, "fallbackRank": 0, "rawText": "MTT-S undergraduate scholarships and graduate fellowships are for students working in microwave theory and technology or a directly related RF field (2026-08-02 research pass; the captured page links to the programmes but publishes no terms).", "spec": { "axis": "field_of_study", "fields": ["Microwave Engineering", "Electrical Engineering", "RF Engineering", "Electromagnetics"], "excludedFields": [] } }
-      ],
+],
       "fundingRestrictions": [],
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "unknown", "sourceUrl": "https://mtt.org/chapter-support/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "" },
-      "rawOtherText": "MTT-S links its Undergrad Scholarships and Grad Fellowships from its site navigation; the chapter-support page that was read names neither an amount nor a deadline for them. An amateur radio licence is not required; this is engineering-society money and a ham student in an EE programme is a natural fit.",
+      "rawOtherText": "",
       "tags": ["adjacent", "ieee", "scholarship", "rf", "no-license-required", "partial-verification"]
     },
     {
@@ -136,9 +135,9 @@
       "dates": { "basis": "projected" },
       "name": "IEEE Student Branch Annual Rebate",
       "klass": "adjacent_stem",
-      "summary": "A rebate paid to IEEE Student Branches that file their Annual Plan. The plan is due 15 March and filing it is what qualifies the branch: \"Submitting an Annual Plan is required to qualify for a Student Branch Rebate.\" The rebate schedule itself is not published on the page IEEE points branches at.",
+      "summary": "A rebate paid to IEEE Student Branches that file their Annual Plan. The plan is due 15 March and filing it is what qualifies the branch: \"Submitting an Annual Plan is required to qualify for a Student Branch Rebate.\" The rebate schedule itself is not published on the page IEEE points branches at, so no amount is recorded here — ask your branch counsellor for the current figures.",
       "applicantEntities": ["ieee_student_branch_chapter"],
-      "amount": { "instrument": "per_member_rebate", "amountRaw": "Not published on any captured page. The 2026-08-02 research pass recorded $50 a year for a branch under 50 members, $100 at 50 or more, plus $2 per member and $1 per chapter member — figures taken from search snippets, not from a live read, because mga.ieee.org returns HTTP 418 to non-browser clients and we do not spoof a user agent. No numeric amount is published here; confirm the current schedule with your branch counsellor.", "awardCountRaw": "One rebate per branch per year." },
+      "amount": { "instrument": "per_member_rebate", "amountRaw": "", "awardCountRaw": "One rebate per branch per year." },
       "deadline": { "kind": "n_fixed_dates", "source": { "kind": "self" }, "note": "RECUR n_fixed_dates tz=America/New_York dates=03-15 | Student Branch Annual Plans are due 15 March. No year is printed next to that date and no opening date appears anywhere on the page, so this is a deadline projected forward as a rule, not a window IEEE published." },
       "applyVia": "page_form",
       "applyUrl": "https://students.ieee.org/topics/submit-your-student-branch-annual-plan/",
@@ -154,7 +153,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://students.ieee.org/topics/submit-your-student-branch-annual-plan/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The deadline and the qualifying condition were both read live off the captured page; the rebate amounts on it were not verified. Roughly 39 IEEE societies each publish their own chapter and student funding page, on different templates and calendars.",
+      "rawOtherText": "",
       "tags": ["adjacent", "ieee", "rebate", "student-branch", "partial-verification"]
     },
     {
@@ -164,9 +163,9 @@
       "dates": { "basis": "funder_published" },
       "name": "Yaesu System Fusion DR-2X Repeater Program",
       "klass": "equipment_in_kind",
-      "summary": "A limited-time purchase programme, not a grant: Yaesu USA offers the DR-2X dual-mode repeater at a program price through August 31st, 2026. The page states two prices, $1,450.00 and $1,860.00, and does not say what distinguishes them. The application is a dated fillable PDF linked from the landing page.",
+      "summary": "A limited-time purchase programme, not a grant: Yaesu USA offers the DR-2X dual-mode repeater at a program price through August 31st, 2026. Yaesu states two prices, $1,450.00 and $1,860.00, and does not say what distinguishes them, and states no eligibility requirement of any kind. The application is a dated fillable PDF whose address changes every time a new window opens.",
       "applicantEntities": ["club_unincorporated", "club_501c3", "individual"],
-      "amount": { "instrument": "discounted_purchase", "amountMin": 1450, "amountMax": 1860, "amountRaw": "The new program price is either $1,450.00 or $1,860.00. This is a price the buyer pays, not an award, and the page does not say what distinguishes the two figures.", "awardCountRaw": "Not published." },
+      "amount": { "instrument": "discounted_purchase", "amountMin": 1450, "amountMax": 1860, "amountRaw": "The new program price is either $1,450.00 or $1,860.00.", "awardCountRaw": "" },
       "deadline": { "kind": "ad_hoc", "source": { "kind": "self" }, "note": "Irregular windows announced by the funder with no fixed schedule. Application deadline published by the funder: closes 2026-08-31. Yaesu states no opening date; the fillable form's filename names months without day numbers, so only the close is dated." },
       "applyVia": "page_form",
       "applyUrl": "https://systemfusion.yaesu.com/",
@@ -175,7 +174,7 @@
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://systemfusion.yaesu.com/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "The page states no eligibility at all. Yaesu publishes the application as a window-dated PDF under /wp-content/uploads/{YYYY}/{MM}/, so its address changes each time a new window opens.",
+      "rawOtherText": "",
       "tags": ["equipment", "repeater", "yaesu", "discount", "pdf-only"]
     },
     {
@@ -185,20 +184,19 @@
       "dates": { "basis": "unpublished" },
       "name": "Campus Student Government / student activity fee funding",
       "klass": "adjacent_stem",
-      "summary": "Your own campus student government is, per the research, one of the two most reliably winnable sources of money for a collegiate radio club, and the one no aggregator can index: roughly 4,000 campuses with independent rules on Qualtrics, CampusGroups, Presence and Engage. Shipped as a playbook rather than an opportunity, because there is nothing here to poll.",
+      "summary": "Your own campus student government is one of the two most reliably winnable sources of money for a collegiate radio club, and the one no aggregator can index: roughly 4,000 campuses with independent rules on Qualtrics, CampusGroups, Presence and Engage. Every campus expects a registered student organisation in good standing, but no campus's own wording is recorded here. Shipped as a playbook rather than an opportunity, because there is nothing here to poll; the playbook itself is in the writing desk.",
       "applicantEntities": ["club_unincorporated", "university_dept"],
-      "amount": { "instrument": "cash_range", "amountMin": 250, "amountMax": 5000, "amountRaw": "Representative figures from one campus, FSU, read in the 2026-08-02 research pass: programming up to $3,000 and up to $5,000 in extraordinary cases, travel $250 per student and $5,000 per organisation, development fund up to $300 per fiscal year. Your campus will differ, sometimes by an order of magnitude.", "awardCountRaw": "Varies by campus; FSU caps event and travel requests at three per organisation per fiscal year." },
+      "amount": { "instrument": "cash_range", "amountMin": 250, "amountMax": 5000, "amountRaw": "", "awardCountRaw": "Varies by campus; FSU caps event and travel requests at three per organisation per fiscal year." },
       "deadline": { "kind": "rolling", "source": { "kind": "self" }, "note": "Hybrid on most campuses: rolling event and travel requests with a lead-time requirement — six weeks at FSU — plus one annual activity-and-service budget cycle. Ask your own student government for both calendars; no national date exists and none is projected here." },
       "applyVia": "contact_person",
       "applyUrl": "https://sga.fsu.edu/accounting/funding-your-rso",
       "constraints": [
-        { "id": "sga-rso", "hard": true, "fallbackRank": 0, "rawText": "The club must be a registered student organisation in good standing at the institution (2026-08-02 research pass; every campus states this in its own allocation manual).", "spec": { "axis": "other", "note": "Registered student organisation in good standing." } }
-      ],
+],
       "fundingRestrictions": ["Capital equipment is frequently barred outright by student-activity-fee rules. A radio often cannot be bought with this money directly."],
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed" },
-      "trust": { "status": "contact_only", "sourceUrl": "https://sga.fsu.edu/accounting/funding-your-rso", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "The figures in this record are ONE campus's — FSU's — read in the 2026-08-02 research pass and kept as a representative example. They are not your campus's rules. Read your own student government's allocation manual before you budget anything." },
-      "rawOtherText": "PLAYBOOK — advice, not a student government's own text — and the single most valuable line in it is step 3. 1) Get the allocation manual, not the web summary; the caps and the barred-category list live in the manual. 2) Check whether capital equipment is barred. It usually is. 3) If it is barred, do not ask for a radio: ask for the programme the radio makes possible. A licence class, a Field Day event, a public-service demonstration, a school visit. Budget the consumables, the room, the food and the printing, and fund the radio itself from ARRL, ARDC or a departmental source. 4) Respect the lead-time rule; at FSU a request inside six weeks is simply not heard. 5) Track your request count. 6) Go to the annual activity-and-service budget cycle for anything recurring; the rolling process is for one-off events. Most student governments do require receipts and a post-event report, but that is a generalisation across roughly 4,000 campuses rather than a sentence any one of them published.",
+      "trust": { "status": "contact_only", "sourceUrl": "https://sga.fsu.edu/accounting/funding-your-rso", "lastVerifiedAt": "2026-08-02", "verificationMethod": "manual_curation", "contentHash": "", "staleMirrorWarning": "One campus's figures, FSU's, kept as a representative example and nothing more: programming up to $3,000 and up to $5,000 in extraordinary cases, travel $250 per student and $5,000 per organisation, a development fund up to $300 per fiscal year, and a six-week lead time. They are not your campus's rules. Read your own student government's allocation manual before you budget anything." },
+      "rawOtherText": "",
       "tags": ["adjacent", "campus", "sga", "guided-workflow", "playbook", "manual"]
     }
   ]
