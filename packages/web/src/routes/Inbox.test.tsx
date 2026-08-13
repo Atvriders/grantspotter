@@ -3,7 +3,7 @@ import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { Program } from '@grantspotter/core';
-import { Inbox, QUEUE_CAP, describeChangeValue, queueSummary } from './Inbox.js';
+import { Inbox, QUEUE_CAP, describeChangeValue, queueSummary, statedWindowLoss } from './Inbox.js';
 import type { InboxRow } from './Inbox.js';
 
 function makeCandidate(over: Partial<Program> = {}): Program {
@@ -583,5 +583,275 @@ describe('Inbox states', () => {
     // is exactly what that ratchet exists to expose.
     expect(await screen.findByText(/decided by/i)).toBeInTheDocument();
     expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
+  });
+});
+
+/**
+ * THE MACHINE DIRECTIVE, AND THE RULE AN ADMINISTRATOR COULD DELETE WITHOUT BEING SHOWN IT.
+ *
+ * MEASURED on the SHIPPED corpus (`data/seed/`, the 143 records a fresh install serves), with a
+ * pending review item injected for `arrl-foundation-scholarships` and the screen walked in
+ * Chromium at 1280x900:
+ *
+ *   AS A MEMBER — this queue is `requireAuth`, not `requireAdmin`, so this is a student — the one
+ *   card printed `RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 |` THREE
+ *   times: once on each side of the before→after arrow (`deadline_changed` carries the whole
+ *   `DeadlineSpec`, and `describeChangeValue` returned `record.note` raw) and once under "Deadline
+ *   note". `cc64182` had removed the identical string from the record page eight commits earlier.
+ *
+ *   AS AN ADMINISTRATOR, the same string was PRE-FILLED into a textarea labelled only "Deadline
+ *   note", under a hint that said the note was the editable part and nothing that said the first
+ *   segment was a rule. Deleting the `RECUR …|` prefix and keeping the sentence — what tidying a
+ *   note looks like — and pressing "Save and approve" took the record's projected cycles from 2 to
+ *   0, its 112 inheritors' from 224 to 0, and the whole `cycles` table from 243 rows to 17. The
+ *   screen reported "Edited by hand and written to the corpus."
+ *
+ * Every figure above was reproduced on the fixture corpus too (150 publishable / 553 suppressed),
+ * where the same record is `arrl-scholarship-program--scholarship-program--7b29405e`: 2 → 0, 224 →
+ * 0, 244 → 18.
+ */
+const RECUR_NOTE =
+  'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | ' +
+  'Opens about Oct 30 and closes Dec 30. ARRL publishes no closing time on either captured page.';
+
+const PROSE_ONLY =
+  'Opens about Oct 30 and closes Dec 30. ARRL publishes no closing time on either captured page.';
+
+function recurRow(over: Partial<Program['deadline']> = {}): InboxRow {
+  return makeRow({
+    candidate: makeCandidate({
+      deadline: {
+        kind: 'annual_window',
+        source: { kind: 'self' },
+        note: RECUR_NOTE,
+        ...over,
+      },
+    }),
+  });
+}
+
+describe('the RECUR directive on a queued candidate', () => {
+  it('is not printed at the member reading the queue, in any of the three places it used to be', async () => {
+    stubFetch({ canDecide: false, rows: [recurRow()] });
+    renderInbox();
+    const item = await findItem(/ARRL Foundation Scholarship Program/);
+    // The summary line, both halves of the arrow, and the note line — everything the card renders
+    // outside the "exact payload" disclosure, which exists to carry the payload verbatim.
+    const shown = item.textContent ?? '';
+    expect(shown).not.toMatch(/RECUR /);
+    expect(shown).not.toMatch(/tz=America/);
+    expect(shown).not.toMatch(/window=10-30/);
+  });
+
+  it('is read to the member as a schedule instead, in the record page’s own words', async () => {
+    stubFetch({ canDecide: false, rows: [recurRow()] });
+    renderInbox();
+    const item = await findItem(/ARRL Foundation Scholarship Program/);
+    expect(within(item).getByText(/^Repeats:/)).toHaveTextContent(
+      'Repeats: October 30 to December 30 each year, 00:00 to 12:00 America/New_York',
+    );
+    expect(within(item).getByText(/^Deadline note:/)).toHaveTextContent(
+      `Deadline note: ${PROSE_ONLY}`,
+    );
+  });
+
+  /**
+   * A DIRECTIVE THAT DOES NOT PARSE IS SAID TO BE UNREADABLE, NOT GUESSED AT AND NOT HIDDEN.
+   * `Opportunity.tsx` drops it silently, which is right for a record page; this is the screen
+   * whose job is inspecting candidates, and a reviewer deciding whether to approve one needs to
+   * know that no date will come out of it.
+   */
+  it('says so when the rule cannot be read, without printing the rule', async () => {
+    stubFetch({
+      canDecide: false,
+      rows: [recurRow({ note: 'RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask them.' })],
+    });
+    renderInbox();
+    const item = await findItem(/ARRL Foundation Scholarship Program/);
+    expect(item.textContent).toContain(
+      'This candidate carries a repeat rule GrantSpotter cannot read, so it projects no dates from it.',
+    );
+    expect(item.textContent).not.toMatch(/Mars\/Olympus|RECUR /);
+    expect(within(item).queryByText(/^Repeats:/)).not.toBeInTheDocument();
+  });
+
+  it('is summarised, not dumped, when the change event carries a whole DeadlineSpec', () => {
+    const spec = JSON.stringify({ kind: 'annual_window', source: { kind: 'self' }, note: RECUR_NOTE });
+    expect(describeChangeValue(spec, 'deadline')).toBe(PROSE_ONLY);
+  });
+
+  it('falls back to the deadline kind IN WORDS when the note is empty, not to the enum', () => {
+    const spec = JSON.stringify({ kind: 'n_fixed_windows', source: { kind: 'self' }, note: '' });
+    expect(describeChangeValue(spec, 'deadline')).toBe('Several application windows each year');
+  });
+
+  it('falls back to the rule when the note is nothing but a directive', () => {
+    const spec = JSON.stringify({
+      kind: 'n_fixed_dates',
+      source: { kind: 'self' },
+      note: 'RECUR n_fixed_dates tz=UTC dates=02-01',
+    });
+    expect(describeChangeValue(spec, 'deadline')).toBe(
+      'February 1 each year, closing at 23:59 UTC',
+    );
+  });
+});
+
+describe('the edit panel, which used to hand an administrator the rule to delete', () => {
+  async function openEdit(rows: InboxRow[] = [recurRow()]): Promise<{
+    fetchMock: ReturnType<typeof vi.fn>;
+    panel: HTMLElement;
+  }> {
+    const fetchMock = stubFetch({ canDecide: true, rows });
+    renderInbox();
+    await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    return { fetchMock, panel: await findItem(/ARRL Foundation Scholarship Program/) };
+  }
+
+  it('pre-fills the box with the funder’s sentences and NOT with the directive', async () => {
+    await openEdit();
+    expect(screen.getByLabelText(/deadline note/i)).toHaveValue(PROSE_ONLY);
+  });
+
+  it('shows the rule it is keeping, in words and verbatim, so nothing is preserved in secret', async () => {
+    const { panel } = await openEdit();
+    expect(panel.textContent).toContain(
+      'Repeat rule — kept exactly as it is, and not editable here',
+    );
+    expect(panel.textContent).toContain(
+      'October 30 to December 30 each year, 00:00 to 12:00 America/New_York',
+    );
+    // The directive itself, so an administrator can see the exact string that travels with the
+    // edit. This is the one place on the screen it belongs: an admin-only panel about it.
+    expect(panel.textContent).toContain(
+      'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00',
+    );
+  });
+
+  it('says what the rule does and who else it moves, not merely that it is locked', async () => {
+    const { panel } = await openEdit();
+    expect(panel.textContent).toContain(
+      'This is what GrantSpotter reads to generate every future date it publishes for this ' +
+        'programme, including for any record that inherits this deadline. It travels with your ' +
+        'edit unchanged, and the server refuses an edit that changes it. A rule that is wrong is ' +
+        'a fix to the source.',
+    );
+    expect(panel.textContent).toContain(
+      'Only these sentences are editable here. Anything else wrong with this record is a fix to ' +
+        'its source, not to one queued candidate.',
+    );
+  });
+
+  it('keeps the rule on the note it posts, however the reviewer rewrites the sentences', async () => {
+    const { fetchMock } = await openEdit();
+    const field = screen.getByLabelText(/deadline note/i);
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Closes Dec 30, hand-checked against the ARRL portal.');
+    await userEvent.click(screen.getByRole('button', { name: /save and approve/i }));
+    await waitFor(() => {
+      expect(postBody(fetchMock).decision).toBe('edited');
+    });
+    const candidate = postBody(fetchMock).candidate as Program;
+    expect(candidate.deadline.note).toBe(
+      'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | ' +
+        'Closes Dec 30, hand-checked against the ARRL portal.',
+    );
+  });
+
+  /**
+   * THE GESTURE THAT DESTROYED THE RULE, MADE HARMLESS. Clearing the box entirely is the widest
+   * version of "delete the note and retype it", and it must still not be able to take the rule
+   * with it — the note posts as the directive alone, which `parseRecurrence` reads identically.
+   */
+  it('keeps the rule even when the reviewer empties the box', async () => {
+    const { fetchMock } = await openEdit();
+    await userEvent.clear(screen.getByLabelText(/deadline note/i));
+    await userEvent.click(screen.getByRole('button', { name: /save and approve/i }));
+    await waitFor(() => {
+      expect(postBody(fetchMock).decision).toBe('edited');
+    });
+    expect((postBody(fetchMock).candidate as Program).deadline.note).toBe(
+      'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00',
+    );
+  });
+
+  it('keeps a directive it cannot read, which is the one it must not be trusted to re-type', async () => {
+    const { fetchMock } = await openEdit([
+      recurRow({ note: 'RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask them.' }),
+    ]);
+    const panel = await findItem(/ARRL Foundation Scholarship Program/);
+    expect(panel.textContent).toContain(
+      'GrantSpotter cannot read this rule, so it projects no dates from it. It is kept anyway, unchanged.',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /save and approve/i }));
+    await waitFor(() => {
+      expect(postBody(fetchMock).decision).toBe('edited');
+    });
+    expect((postBody(fetchMock).candidate as Program).deadline.note).toBe(
+      'RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask them.',
+    );
+  });
+
+  it('shows no rule panel at all for a note that carries none', async () => {
+    const { panel } = await openEdit([makeRow()]);
+    expect(panel.textContent).not.toContain('Repeat rule');
+    expect(screen.getByLabelText(/deadline note/i)).toHaveValue('Closes Dec 30 at 12:00 PM EST.');
+  });
+});
+
+/**
+ * THE OTHER LOAD-BEARING THING IN THE SAME FIELD. `parseObservedWindow` reads `opens YYYY-MM-DD` /
+ * `closes YYYY-MM-DD` back out of the sentence after `published by the funder:`, and
+ * `observedCycles` turns it into the only kind of cycle this product marks `isEstimated: false`.
+ * Three shipped records carry one. It is PROSE, so it stays in the box an administrator may edit —
+ * but it may not leave without being named, which is the whole complaint about the directive said
+ * about the half that cannot be locked.
+ */
+describe('statedWindowLoss', () => {
+  const STATED =
+    'Applications open in the autumn — published by the funder: opens 2026-07-01, ' +
+    'closes 2026-09-30. The page prints no year.';
+
+  it('is silent when the note never stated a window', () => {
+    expect(statedWindowLoss('Closes Dec 30 at 12:00 PM EST.', 'Closes Dec 30.')).toBeNull();
+  });
+
+  it('is silent when the reviewer left the stated window alone', () => {
+    expect(statedWindowLoss(STATED, `${STATED} Checked 2026-08-13.`)).toBeNull();
+  });
+
+  it('names the dates that would stop being published, and whose they are', () => {
+    const warning = statedWindowLoss(STATED, 'Applications open in the autumn.');
+    expect(warning).toBe(
+      'GrantSpotter reads a window the funder itself published out of this note (opens ' +
+        '2026-07-01, closes 2026-09-30) and puts it on the calendar as the one date on it nobody ' +
+        'projected. These sentences no longer state it, so saving removes that date. Right if ' +
+        'the funder withdrew the window; wrong if you were tidying the wording.',
+    );
+  });
+
+  it('says the date MOVED rather than went, when the reviewer restated it differently', () => {
+    const warning = statedWindowLoss(
+      STATED,
+      'published by the funder: opens 2026-07-01, closes 2026-10-31.',
+    );
+    expect(warning).toBe(
+      'GrantSpotter reads a window the funder itself published out of this note (opens ' +
+        '2026-07-01, closes 2026-09-30) and puts it on the calendar as the one date on it nobody ' +
+        'projected. These sentences now state opens 2026-07-01, closes 2026-10-31 instead, so ' +
+        'saving moves that date.',
+    );
+  });
+
+  it('reaches the reviewer as an alert on the panel, before they press Save', async () => {
+    stubFetch({ canDecide: true, rows: [recurRow({ note: `RECUR annual_window tz=America/New_York window=07-01..09-30 | ${STATED}` })] });
+    renderInbox();
+    await userEvent.click(await screen.findByRole('button', { name: /^edit$/i }));
+    const field = screen.getByLabelText(/deadline note/i);
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Applications open in the autumn.');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /no longer state it, so saving removes that date/,
+    );
   });
 });

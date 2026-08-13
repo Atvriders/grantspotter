@@ -1,10 +1,16 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ChangeKind, Program, ReviewDecision } from '@grantspotter/core';
+import { parseObservedWindow } from '@grantspotter/core';
 import { ApiError, apiSend } from '../api/client.js';
 import { useApi } from '../store/useApi.js';
 import { formatDate } from '../lib/trust.js';
 import { blockedHostFor } from '../lib/safety.js';
+// The record page's reader, imported rather than restated. `cc64182` split `DeadlineSpec.note`
+// into the half a person can read and the machine directive in front of it for `Opportunity.tsx`;
+// this screen prints the SAME field and kept printing the whole string. Two readers for one string
+// is how the two surfaces came to disagree in the first place, so there is one.
+import { deadlineKindWords, joinDeadlineNote, readDeadlineNote } from '../lib/programWords.js';
 import { StatusPill } from '../components/StatusPill.js';
 import { TrustBadge } from '../components/TrustBadge.js';
 import '../components/inbox.css';
@@ -114,9 +120,17 @@ export function describeChangeValue(raw: string | null, fieldPath: string | null
   }
 
   const record = parsed as Record<string, unknown>;
-  // DeadlineSpec: the note is the sentence a human wrote or the parser read.
+  // DeadlineSpec: the note is the sentence a human wrote or the parser read — MINUS the `RECUR`
+  // directive, which is neither. `deadline_changed` carries the whole spec (`diff/index.ts` sets
+  // `before: prevProgram.deadline`), so this branch was the second of the two places this screen
+  // printed the directive at a member, once on each side of the arrow. `record.kind` is likewise
+  // a storage identifier and not a word, so the empty-note fallback goes through the same table
+  // the calendar's undated list uses.
   if (typeof record.note === 'string' && typeof record.kind === 'string') {
-    return record.note !== '' ? record.note : record.kind;
+    const read = readDeadlineNote(record.note);
+    if (read.prose !== '') return read.prose;
+    if (read.rule !== undefined) return read.rule;
+    return deadlineKindWords(record.kind);
   }
   // AmountSpec.
   if (typeof record.amountRaw === 'string') {
@@ -125,6 +139,46 @@ export function describeChangeValue(raw: string | null, fieldPath: string | null
   // A whole Program — `new` and `vanished`.
   if (typeof record.name === 'string') return record.name;
   return raw.length > 160 ? `${raw.slice(0, 160)}…` : raw;
+}
+
+/**
+ * THE WINDOW A FUNDER STATED, ABOUT TO STOP BEING STATED — or `null` when this edit leaves it
+ * alone.
+ *
+ * The `RECUR` directive is not the only load-bearing thing inside `DeadlineSpec.note`. Core's
+ * `parseObservedWindow` reads `opens YYYY-MM-DD` / `closes YYYY-MM-DD` back out of the sentence
+ * after `published by the funder:`, and `observedCycles` turns that into the one cycle on the
+ * whole calendar marked `isEstimated: false` — the single date this product says a funder itself
+ * printed. It is PROSE, so unlike the directive it belongs in the box and an administrator may
+ * genuinely have to correct it. What it may not do is leave without being mentioned.
+ *
+ * So this is a warning and not a refusal, and it is worded as the question it actually is. The
+ * dates come from core's parser, never from a regex written here: a warning that disagreed with
+ * the reader about which window is stored would be worse than no warning.
+ */
+export function statedWindowLoss(storedNote: string, draftProse: string): string | null {
+  const before = parseObservedWindow(storedNote);
+  if (before === undefined) return null;
+  const after = parseObservedWindow(draftProse);
+  if (after !== undefined && after.opensAt === before.opensAt && after.closesAt === before.closesAt) {
+    return null;
+  }
+
+  const say = (w: { opensAt?: string; closesAt?: string }): string =>
+    [
+      w.opensAt === undefined ? null : `opens ${w.opensAt}`,
+      w.closesAt === undefined ? null : `closes ${w.closesAt}`,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(', ');
+
+  const stored = `GrantSpotter reads a window the funder itself published out of this note (${say(
+    before,
+  )}) and puts it on the calendar as the one date on it nobody projected.`;
+  return after === undefined
+    ? `${stored} These sentences no longer state it, so saving removes that date. Right if the ` +
+        `funder withdrew the window; wrong if you were tidying the wording.`
+    : `${stored} These sentences now state ${say(after)} instead, so saving moves that date.`;
 }
 
 /**
@@ -246,9 +300,20 @@ export function Inbox(): JSX.Element {
     if (decision === 'edited') {
       // The whole candidate, not a fragment: the server revalidates it against
       // `programSchema` and 422s anything that is not a complete Program.
+      //
+      // `draftNote` IS THE PROSE ONLY. The directive is read off the stored candidate and rejoined
+      // here, so the rule survives whatever the reviewer typed — and the reviewer was never handed
+      // it to type over. The server checks the same thing again on its own (`inboxRouter`'s
+      // recurrence guard), because a browser is not where a corpus invariant can be enforced.
       body.candidate = {
         ...row.candidate,
-        deadline: { ...row.candidate.deadline, note: draftNote },
+        deadline: {
+          ...row.candidate.deadline,
+          note: joinDeadlineNote({
+            directive: readDeadlineNote(row.candidate.deadline.note).directive,
+            prose: draftNote,
+          }),
+        },
       };
     }
 
@@ -269,7 +334,11 @@ export function Inbox(): JSX.Element {
 
   function openPanel(row: InboxRow, mode: 'edit' | 'reject'): void {
     setPanel({ rowId: row.id, mode });
-    setDraftNote(row.candidate.deadline.note);
+    // The PROSE, not the note. What the box holds is what Save writes back, so a box pre-filled
+    // with the directive is a box in which deleting the directive is one keystroke and looks like
+    // tidying — which is what an administrator was invited to do by a panel labelled only
+    // "Deadline note".
+    setDraftNote(readDeadlineNote(row.candidate.deadline.note).prose);
     setDraftReason('');
   }
 
@@ -454,9 +523,37 @@ export function Inbox(): JSX.Element {
                 )}
               </div>
 
-              <p className="inbox-outcome">
-                Deadline note: {row.candidate.deadline.note}
-              </p>
+              {/*
+                THE MACHINE DIRECTIVE STOPS HERE. This screen is read-only for members BY DESIGN
+                — `inboxRouter`'s GET is `requireAuth`, not `requireAdmin`, because knowing a
+                deadline is under review is trust information — so `row.candidate.deadline.note`
+                printed raw put "RECUR annual_window tz=America/New_York window=10-30..12-30" in
+                front of a student, on the same corpus and in the same words the record page had
+                just stopped doing it in.
+
+                Each half gets its own line rather than one joined sentence: the rule is derived
+                and the prose is the funder's, and a reader deciding whether to trust a date needs
+                to know which of the two they are looking at.
+              */}
+              {(() => {
+                const note = readDeadlineNote(row.candidate.deadline.note);
+                return (
+                  <>
+                    {note.prose !== '' && (
+                      <p className="inbox-outcome">Deadline note: {note.prose}</p>
+                    )}
+                    {note.rule !== undefined && (
+                      <p className="inbox-outcome">Repeats: {note.rule}</p>
+                    )}
+                    {note.directive !== undefined && note.rule === undefined && (
+                      <p className="inbox-outcome">
+                        This candidate carries a repeat rule GrantSpotter cannot read, so it
+                        projects no dates from it.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
 
               {row.candidate.applyUrl !== undefined && (
                 <p className="inbox-outcome">
@@ -530,9 +627,47 @@ export function Inbox(): JSX.Element {
                     </button>
                   </div>
 
-                  {panel?.rowId === row.id && panel.mode === 'edit' && (
+                  {panel?.rowId === row.id && panel.mode === 'edit' && (() => {
+                    const stored = readDeadlineNote(row.candidate.deadline.note);
+                    const windowLoss = statedWindowLoss(row.candidate.deadline.note, draftNote);
+                    return (
                     <div className="inbox-panel">
-                      <label htmlFor={`inbox-note-${row.id}`}>Deadline note</label>
+                      {/*
+                        THE RULE IS SHOWN AND NOT OFFERED. It used to be pre-filled into the box
+                        below, under a label that said only "Deadline note", beside a hint that
+                        said the note was the editable part — so an administrator who deleted the
+                        `RECUR …|` prefix and kept the sentence, which is exactly what tidying a
+                        note looks like, deleted the rule that generates every future date for the
+                        programme. Measured on the shipped corpus: one such save took the ARRL
+                        Foundation record's projected dates from 2 to 0 and, because 112 records
+                        inherit that deadline, the corpus's cycle table from 243 rows to 17.
+
+                        Showing it read-only is the point of the panel, not decoration: the
+                        requirement is that nobody can silently delete a rule they were never
+                        shown, and both halves of that are load-bearing.
+                      */}
+                      {stored.directive !== undefined && (
+                        <div className="inbox-rule">
+                          <p className="inbox-rule-head">
+                            Repeat rule — kept exactly as it is, and not editable here
+                          </p>
+                          <p>
+                            {stored.rule ??
+                              'GrantSpotter cannot read this rule, so it projects no dates from it. It is kept anyway, unchanged.'}
+                          </p>
+                          <p className="data inbox-rule-raw">{stored.directive}</p>
+                          <p className="inbox-hint">
+                            This is what GrantSpotter reads to generate every future date it
+                            publishes for this programme, including for any record that inherits
+                            this deadline. It travels with your edit unchanged, and the server
+                            refuses an edit that changes it. A rule that is wrong is a fix to the
+                            source.
+                          </p>
+                        </div>
+                      )}
+                      <label htmlFor={`inbox-note-${row.id}`}>
+                        Deadline note — the funder&rsquo;s own sentences
+                      </label>
                       <textarea
                         id={`inbox-note-${row.id}`}
                         value={draftNote}
@@ -541,9 +676,14 @@ export function Inbox(): JSX.Element {
                         }}
                       />
                       <p className="inbox-hint">
-                        Only the deadline note is editable here. Anything else wrong with this
+                        Only these sentences are editable here. Anything else wrong with this
                         record is a fix to its source, not to one queued candidate.
                       </p>
+                      {windowLoss !== null && (
+                        <p role="alert" className="inbox-safety">
+                          {windowLoss}
+                        </p>
+                      )}
                       <div className="inbox-actions">
                         <button
                           type="button"
@@ -566,7 +706,8 @@ export function Inbox(): JSX.Element {
                         </button>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {panel?.rowId === row.id && panel.mode === 'reject' && (
                     <div className="inbox-panel">

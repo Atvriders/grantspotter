@@ -5,6 +5,7 @@ import {
   DEADLINE_KIND_WORDS,
   VERIFICATION_METHOD_WORDS,
   deadlineKindWords,
+  joinDeadlineNote,
   readDeadlineNote,
 } from './programWords.js';
 
@@ -174,5 +175,51 @@ describe('readDeadlineNote', () => {
 
   it('leaves nothing behind when the directive was the whole note', () => {
     expect(readDeadlineNote('RECUR n_fixed_dates tz=UTC dates=02-01').prose).toBe('');
+  });
+});
+
+/**
+ * THE DIRECTIVE VERBATIM, AND WHY A READER'S SPLIT NEEDED AN INVERSE.
+ *
+ * `readDeadlineNote` was written for surfaces that PRINT the note, and for those `rule` is the
+ * whole answer: a directive that does not parse is dropped, because a half-understood schedule
+ * rendered as if it were understood is the thing this product exists not to publish.
+ *
+ * The Inbox's edit panel is the first caller that has to put the note back TOGETHER — it hands the
+ * prose to an administrator to rewrite — and for that caller "dropped" means "deleted from the
+ * corpus". So the split now also returns the bytes, whether or not they parse, and the join is
+ * here rather than at the call site because a surface that splits by one rule and rejoins by
+ * another loses the pipe, or doubles it, or drops the directive on an empty note.
+ */
+describe('readDeadlineNote’s directive, and joinDeadlineNote', () => {
+  const ARDC_DIRECTIVE = 'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01';
+  const ARDC = `${ARDC_DIRECTIVE} | Applications arriving after Sep 1 roll to the next Feb 1 cycle.`;
+
+  it('returns the directive verbatim, with the prefix and without the bar', () => {
+    expect(readDeadlineNote(ARDC).directive).toBe(ARDC_DIRECTIVE);
+  });
+
+  it('returns no directive for a note that carries none', () => {
+    expect(readDeadlineNote('The funder has never published a deadline.').directive).toBeUndefined();
+  });
+
+  it('returns a directive it could not read, because that is the one nobody can retype', () => {
+    const read = readDeadlineNote('RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask them.');
+    expect(read.rule).toBeUndefined();
+    expect(read.directive).toBe('RECUR n_fixed_dates tz=Mars/Olympus dates=02-01');
+  });
+
+  it('round-trips a note through the split and the join unchanged', () => {
+    const read = readDeadlineNote(ARDC);
+    expect(joinDeadlineNote({ directive: read.directive, prose: read.prose })).toBe(ARDC);
+  });
+
+  it('rejoins a directive-only note as the directive alone, with no dangling bar', () => {
+    expect(joinDeadlineNote({ directive: ARDC_DIRECTIVE, prose: '' })).toBe(ARDC_DIRECTIVE);
+    expect(joinDeadlineNote({ directive: ARDC_DIRECTIVE, prose: '   ' })).toBe(ARDC_DIRECTIVE);
+  });
+
+  it('rejoins prose with no directive as the prose alone', () => {
+    expect(joinDeadlineNote({ prose: 'Closes Dec 30.' })).toBe('Closes Dec 30.');
   });
 });

@@ -136,6 +136,18 @@ export interface DeadlineNote {
   prose: string;
   /** The recurrence rule in English, when one is encoded and parses. */
   rule?: string;
+  /**
+   * The directive VERBATIM — `RECUR ` prefix included, terminating `|` excluded — when the note
+   * carries one, whether or not it parses.
+   *
+   * `rule` is for a reader and is deliberately absent when the directive does not parse. This is
+   * for a caller that has to PUT THE NOTE BACK TOGETHER, and such a caller may not lose the half
+   * it could not read: the Inbox's edit panel hands the prose to an administrator to rewrite and
+   * rejoins it to this string, so a directive dropped here is a recurrence rule deleted from the
+   * corpus. Present iff the note starts with `RECURRENCE_PREFIX`, which is the only position
+   * `parseRecurrence` reads one in.
+   */
+  directive?: string;
 }
 
 /**
@@ -164,11 +176,30 @@ export function readDeadlineNote(note: string): DeadlineNote {
   if (!trimmed.startsWith(RECURRENCE_PREFIX)) return { prose: trimmed };
 
   const bar = trimmed.indexOf('|');
+  const directive = (bar === -1 ? trimmed : trimmed.slice(0, bar)).trim();
   const prose = bar === -1 ? '' : trimmed.slice(bar + 1).trim();
   try {
     const rule = describeRecurrence(parseRecurrence(trimmed));
-    return rule === undefined ? { prose } : { prose, rule };
+    return rule === undefined ? { prose, directive } : { prose, rule, directive };
   } catch {
-    return { prose };
+    return { prose, directive };
   }
+}
+
+/**
+ * The inverse of `readDeadlineNote`'s split: a directive and some prose back into one `note`.
+ *
+ * It exists so that no caller ever writes `` `${directive} | ${prose}` `` itself. An edit surface
+ * that splits with one rule and rejoins with another is a surface that loses the pipe, or doubles
+ * it, or drops the directive on an empty note — three ways to delete a recurrence rule, all of
+ * them silent, none of them visible in the box the human typed into.
+ *
+ * A note that is ONLY a directive rejoins as the directive alone, with no trailing bar:
+ * `parseRecurrence` reads that identically, and a bar with nothing after it is a sentence the
+ * record page would print as an empty note.
+ */
+export function joinDeadlineNote(parts: Pick<DeadlineNote, 'directive' | 'prose'>): string {
+  const prose = parts.prose.trim();
+  if (parts.directive === undefined) return prose;
+  return prose === '' ? parts.directive : `${parts.directive} | ${prose}`;
 }

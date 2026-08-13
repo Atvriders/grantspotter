@@ -659,7 +659,12 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/web/src/routes/Enroll.tsx': 2,
     'packages/web/src/routes/Exports.tsx': 11,
     'packages/web/src/routes/FirstRun.tsx': 4,
-    'packages/web/src/routes/Inbox.tsx': 12,
+    // 12 until 2026-08-13, then 10. The queue's deadline-note line and its edit panel were rebuilt
+    // — the `RECUR` directive is no longer printed at a member and no longer pre-filled into the
+    // box an administrator is invited to rewrite — and every sentence on the new panel is read by
+    // a test that renders the state producing it. Two of the sentences already there ("Deadline
+    // note:" and the edit hint) were rewritten in the same pass and are now asserted too.
+    'packages/web/src/routes/Inbox.tsx': 10,
     'packages/web/src/routes/Login.tsx': 3,
     'packages/web/src/routes/Opportunity.tsx': 7,
     'packages/web/src/routes/Profile.tsx': 16,

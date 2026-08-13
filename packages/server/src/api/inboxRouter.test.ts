@@ -11,7 +11,7 @@ import { runSource } from '../crawl/runner.js';
 import { contextForSource } from '../crawl/context.js';
 import { DO_NOT_PUBLISH_TAG, normalizeRaw } from '../normalize/index.js';
 import { TIER_D_RECORDS, manualTierD } from '../sources/manual-tier-d.js';
-import { buildReviewItems, rejectKeyFor } from '../review/index.js';
+import { buildReviewItems, editReviewItem, rejectKeyFor, reprojectAllCycles } from '../review/index.js';
 import { reindexBrowse } from './reindex.js';
 import { createInboxRouter } from './inboxRouter.js';
 import { AppError, errorHandler, requestIdMiddleware } from './errors.js';
@@ -805,5 +805,195 @@ describe('approval order', () => {
     expect(
       (ownerFirst as Array<{ program_id: string }>).some((c) => c.program_id === 'order-dependent'),
     ).toBe(true);
+  });
+});
+
+/**
+ * THE ONE EDIT THAT DELETES DATES, AND THE ONLY PLACE IT CAN BE REFUSED.
+ *
+ * `DeadlineSpec.note` carries the `RECUR` directive `expandCycles` reads, and `editReviewItem`
+ * re-projects the record's cycles from the EDITED note — `writeCyclesFor` deletes the old ones
+ * before writing the new. So an edit that drops the directive does not stop adding dates: it
+ * removes every future date already published for that programme, and for every programme that
+ * inherits its deadline.
+ *
+ * MEASURED THROUGH THE BROWSER, on the corpus a real deployment gets (`data/seed/`, 143 records,
+ * built by booting the server on an empty DATA_DIR). An administrator opened "Edit" on a pending
+ * candidate, deleted the `RECUR …|` prefix, kept the prose, and pressed "Save and approve":
+ * `arrl-foundation-scholarships` went from 2 projected cycles to 0, its 112 inheritors from 224 to
+ * 0, and the whole `cycles` table from 243 rows to 17. The same walk on the fixture corpus: 2 → 0,
+ * 224 → 0, 244 → 18.
+ *
+ * Task 23's panel no longer puts the directive in the textarea, which is the fix a human meets.
+ * This is the one that holds for a request that did not come from that panel — the route takes a
+ * whole `Program` from any administrator's HTTP client, and an invariant enforced only in a
+ * browser is not enforced.
+ */
+describe('the recurrence rule inside an edited deadline note', () => {
+  let db: Database.Database;
+
+  /** The candidate is the fixture's own ARRL record, whose note really carries the directive. */
+  const DIRECTIVE = 'RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00';
+  const PROSE = 'Opens about Oct 30; closes Dec 30 at 12:00 PM EST. Moved from Jan 31 - do not hardcode.';
+  const ruleCandidate = (note: string): Program => ({
+    ...arrlScholarship,
+    tags: CANDIDATE_TAGS,
+    deadline: { ...arrlScholarship.deadline, note },
+  });
+
+  beforeEach(() => {
+    db = openTestDb();
+    seedFixtureCorpus(db);
+    reindexBrowse(db, NOW);
+    db.prepare(
+      `INSERT INTO change_events
+         (id, source_id, program_id, kind, before_json, after_json, detected_at, field_path)
+       VALUES ('ce-rule', ?, 'arrl-foundation-scholarship', 'deadline_changed', ?, ?, ?, 'deadline')`,
+    ).run(
+      SOURCE_ID,
+      JSON.stringify(arrlScholarship.deadline),
+      JSON.stringify(ruleCandidate(`${DIRECTIVE} | ${PROSE}`).deadline),
+      NOW,
+    );
+    db.prepare(
+      `INSERT INTO review_items
+         (id, change_event_id, candidate_json, decision, confidence, reject_key)
+       VALUES ('ri-rule', 'ce-rule', ?, 'pending', 0.82, NULL)`,
+    ).run(JSON.stringify(ruleCandidate(`${DIRECTIVE} | ${PROSE}`)));
+    // The state a deployment is in from its first crawl onward: the rule has been projected, so
+    // there are dates to lose.
+    reprojectAllCycles(db, NOW);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  const cycleCount = (programId = 'arrl-foundation-scholarship'): number =>
+    (db.prepare('SELECT COUNT(*) AS n FROM cycles WHERE program_id = ?').get(programId) as { n: number }).n;
+
+  /**
+   * WHAT THE GUARD IS GUARDING, stated by running the deletion past it. `editReviewItem` is Plan
+   * 2's own writer and has no opinion about notes; called with a stripped one it does exactly what
+   * the route used to let a browser ask for.
+   */
+  it('really does delete the projected dates when the directive goes (this is the mechanism)', () => {
+    expect(cycleCount()).toBeGreaterThan(0);
+    editReviewItem(db, 'ri-rule', ADMIN.id, NOW, ruleCandidate(PROSE));
+    expect(cycleCount()).toBe(0);
+  });
+
+  it('refuses an edit that drops the rule, with 422 and the corpus untouched', async () => {
+    const before = cycleCount();
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({ decision: 'edited', candidate: ruleCandidate(PROSE) });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('validation_failed');
+    expect(cycleCount()).toBe(before);
+    expect(published(db).deadline.note).toBe(arrlScholarship.deadline.note);
+    expect(
+      db.prepare('SELECT decision FROM review_items WHERE id = ?').get('ri-rule'),
+    ).toEqual({ decision: 'pending' });
+  });
+
+  /**
+   * The message is the whole of the refusal a reviewer meets: it has to say what the rule is FOR
+   * and where a wrong one gets fixed, or the next thing that happens is a second attempt.
+   */
+  it('says what would have been lost and where the rule is actually fixed', async () => {
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({ decision: 'edited', candidate: ruleCandidate(PROSE) });
+    expect(res.body.error.message).toBe(
+      'The deadline note on this candidate carries the repeat rule GrantSpotter reads to ' +
+        'generate every future date for this programme, and this edit does not carry the same ' +
+        'rule. Saving it would delete those dates, here and on every record that inherits this ' +
+        'deadline. The review queue edits the funder’s own sentences and leaves the rule alone; ' +
+        'a rule that is itself wrong is a fix to the source this record came from, not to one ' +
+        'queued candidate.',
+    );
+  });
+
+  it('refuses an edit that MOVES the rule as well as one that deletes it', async () => {
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({
+        decision: 'edited',
+        candidate: ruleCandidate(
+          `RECUR annual_window tz=America/New_York window=10-30..12-15 close=12:00 | ${PROSE}`,
+        ),
+      });
+    expect(res.status).toBe(422);
+    expect(cycleCount()).toBeGreaterThan(0);
+  });
+
+  /**
+   * A directive core cannot parse is its own value, not "no rule": it projects nothing today, but
+   * it is still the record of what the source said, and an edit is not where it disappears.
+   */
+  it('refuses to drop a directive it cannot even read', async () => {
+    db.prepare('UPDATE review_items SET candidate_json = ? WHERE id = ?').run(
+      JSON.stringify(ruleCandidate(`RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | ${PROSE}`)),
+      'ri-rule',
+    );
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({ decision: 'edited', candidate: ruleCandidate(PROSE) });
+    expect(res.status).toBe(422);
+  });
+
+  it('accepts the edit this panel exists for: the rule kept, the sentences rewritten', async () => {
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({
+        decision: 'edited',
+        candidate: ruleCandidate(`${DIRECTIVE} | Closes Dec 30, hand-checked on the ARRL portal.`),
+      });
+    expect(res.status).toBe(200);
+    expect(published(db).deadline.note).toBe(
+      `${DIRECTIVE} | Closes Dec 30, hand-checked on the ARRL portal.`,
+    );
+    // The dates survived the edit, which is the point of refusing the other one.
+    expect(cycleCount()).toBeGreaterThan(0);
+  });
+
+  it('accepts a directive written differently for the same schedule, because it is the same dates', async () => {
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({
+        decision: 'edited',
+        candidate: ruleCandidate(
+          `RECUR  annual_window   tz=America/New_York window=10-30..12-30 close=12:00 | ${PROSE}`,
+        ),
+      });
+    expect(res.status).toBe(200);
+    expect(cycleCount()).toBeGreaterThan(0);
+  });
+
+  /**
+   * DIRECTIONAL, and deliberately so. The failure being closed is the silent deletion of a rule
+   * the reviewer was never shown. A stored note carrying none has nothing to lose, and refusing
+   * that case would forbid a reviewer encoding a schedule the source states — for no reason this
+   * route could give.
+   */
+  it('lets a note that carried no rule gain one', async () => {
+    db.prepare('UPDATE review_items SET candidate_json = ? WHERE id = ?').run(
+      JSON.stringify(ruleCandidate('Closes Dec 30 at 12:00 PM EST.')),
+      'ri-rule',
+    );
+    const res = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({ decision: 'edited', candidate: ruleCandidate(`${DIRECTIVE} | ${PROSE}`) });
+    expect(res.status).toBe(200);
+    expect(published(db).deadline.note).toBe(`${DIRECTIVE} | ${PROSE}`);
+  });
+
+  it('leaves approvals and rejections alone — this is a rule about EDITS', async () => {
+    const approved = await request(buildApp(db, ADMIN))
+      .post('/api/inbox/ri-rule/decision')
+      .send({ decision: 'approved' });
+    expect(approved.status).toBe(200);
+    expect(cycleCount()).toBeGreaterThan(0);
   });
 });

@@ -159,3 +159,40 @@
   color: var(--text-muted);
   margin: 0;
 }
+
+/* The recurrence rule, INSIDE the edit panel and outside the box.
+ *
+ * It reads as a statement rather than as a field, which is the whole point: it used to be the
+ * first 70 characters of the textarea and was deleted by an administrator doing the obvious
+ * thing. It carries the panel's own surface (`--surface`, not `--surface-2`) so it reads as a
+ * card sitting on the panel and not as another control on it, and the accent rule down its left
+ * matches the one on every inbox card — this is the same kind of thing as a queued change: a fact
+ * about the record, presented, not an input. */
+.inbox-rule {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--r-1) var(--r-1) 0;
+}
+
+.inbox-rule p {
+  margin: 0;
+}
+
+.inbox-rule-head {
+  font-size: var(--fs-200);
+  font-weight: 600;
+}
+
+/* The directive verbatim. `word-break: break-all` for the same reason `.inbox-raw` carries it:
+ * `RECUR n_fixed_windows tz=America/New_York windows=02-01..02-28,06-01..06-30,10-01..10-31` is
+ * one unbreakable word to a browser, and a panel that scrolls sideways at 375px is a panel whose
+ * right-hand half nobody reads. It must not ellipse: this string is shown so that the thing being
+ * preserved is legible in full, and a truncated rule is the defect it exists to close. */
+.inbox-rule-raw {
+  font-size: var(--fs-100);
+  word-break: break-all;
+  color: var(--text-muted);
+}

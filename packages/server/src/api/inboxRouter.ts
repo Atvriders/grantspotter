@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { ChangeKind, Program, ReviewDecision, ReviewItem } from '@grantspotter/core';
-import { programSchema } from '@grantspotter/core';
+import { parseRecurrence, programSchema } from '@grantspotter/core';
 import { getReviewItem } from '../db/repositories/ingestion.js';
 // RESOLUTIONS R26: Plan 2 Task 21 owns the review pipeline. This router is the
 // only human-facing caller of it, so it delegates rather than re-implementing.
@@ -38,6 +38,27 @@ export interface InboxRow {
 }
 
 const DECISIONS: ReviewDecision[] = ['pending', 'approved', 'rejected', 'edited'];
+
+/**
+ * THE RECURRENCE RULE A `DeadlineSpec.note` ENCODES, as a value two notes can be compared by.
+ *
+ * `parseRecurrence` is the one parser and this adds none: it runs core's, and stringifies what
+ * comes back. `{"kind":"none"}` for a note with no directive, the whole rule for a note with one,
+ * and `unreadable` for a directive core throws on — which is deliberately its own value and not
+ * `none`, so that a directive nobody can read still cannot be dropped by an edit.
+ *
+ * Comparing the PARSED rule rather than the directive's bytes is the difference between a guard
+ * on the schedule and a guard on the whitespace. `RECUR n_fixed_dates tz=UTC dates=02-01` and the
+ * same directive with two spaces are the same set of future dates, and refusing the second would
+ * be this route inventing a rule about formatting.
+ */
+function recurrenceOf(note: string): string {
+  try {
+    return JSON.stringify(parseRecurrence(note.trim()));
+  } catch {
+    return 'unreadable';
+  }
+}
 
 function text(json: string | null): string | null {
   if (json === null) return null;
@@ -175,6 +196,43 @@ export function createInboxRouter(deps: RouterDeps): Router {
         return;
       }
       edited = parsed.data as Program;
+
+      /**
+       * THE ONE THING AN EDIT MAY NOT DO, CHECKED WHERE IT CANNOT BE SKIPPED.
+       *
+       * `deadline.note` carries the `RECUR` directive `expandCycles` reads, and `editReviewItem`
+       * re-projects the record's cycles from the edited note — `writeCyclesFor` deletes the old
+       * ones first. So an edit that drops the directive does not merely stop adding dates: it
+       * DELETES every future date already published for that programme, and for every record
+       * that inherits its deadline. Measured on the shipped corpus by removing the directive from
+       * one queued candidate through the Inbox: the ARRL Foundation record went from 2 projected
+       * cycles to 0, its 112 inheritors from 224 to 0, and the whole `cycles` table from 243 rows
+       * to 17 — in one press of "Save and approve", reported to the reviewer as "Edited by hand
+       * and written to the corpus."
+       *
+       * Task 23's panel no longer puts the directive in the textarea at all, which is the fix a
+       * human meets. This is the one that holds when the request does not come from that panel:
+       * the route accepts a whole Program from any administrator's HTTP client, and a corpus
+       * invariant enforced only in a browser is not enforced.
+       *
+       * It is DIRECTIONAL — a stored rule must survive, a stored note with no rule may gain one.
+       * The failure being closed is silent deletion of a rule the reviewer was never shown; a
+       * note that carries none has nothing to lose, and refusing that case would forbid the
+       * normalizer's own re-encoding of a note during review for no stated reason.
+       */
+      const storedRule = recurrenceOf(item.candidate.deadline.note);
+      if (storedRule !== '{"kind":"none"}' && recurrenceOf(edited.deadline.note) !== storedRule) {
+        next(new AppError(
+          'validation_failed',
+          'The deadline note on this candidate carries the repeat rule GrantSpotter reads to ' +
+            'generate every future date for this programme, and this edit does not carry the ' +
+            'same rule. Saving it would delete those dates, here and on every record that ' +
+            'inherits this deadline. The review queue edits the funder’s own sentences and ' +
+            'leaves the rule alone; a rule that is itself wrong is a fix to the source this ' +
+            'record came from, not to one queued candidate.',
+        ));
+        return;
+      }
     }
 
     // `published` means "the corpus was written". For an approved `vanished`
