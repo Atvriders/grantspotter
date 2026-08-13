@@ -923,6 +923,146 @@ describe('the coordinate, and what it is a geocode of', () => {
     });
   });
 
+  /**
+   * THE SWEEP, BECAUSE THE LAST FIX ENUMERATED THE OFFENDERS AND THE NEXT ONE IS FREE.
+   *
+   * The three tests above are thorough about the paragraphs this panel has TODAY. Each of them
+   * closes on a hand-written list of the sentences known to have been wrong — `/left the boxes
+   * empty/`, `/The two boxes below are empty/`, `/Leave the boxes below empty/` — and that list is
+   * the shape of the problem rather than the fix for it. The 2026-08-13 defect was not one
+   * paragraph: it was TWO, in two different components, saying the same false thing about the same
+   * two inputs, and the second was found by a person looking at the screen after the first had
+   * been fixed. A fourth paragraph added next month passes every assertion above.
+   *
+   * So this reads the WHOLE panel in each state the boxes can be in and asks one question that is
+   * not about any particular wording: does anything on screen claim the boxes are empty while they
+   * hold a position, or claim they hold one while they are empty? A new paragraph is covered on the
+   * day it is written, by nobody.
+   *
+   * WHAT MAKES IT A CHECK ON THE PRODUCT RATHER THAN ON THE COPY. It never asserts a sentence is
+   * PRESENT — only that a contradicted one is ABSENT — so rewording, reordering or deleting any
+   * paragraph here cannot fail it. Only a false one can.
+   */
+  describe('nothing in the panel contradicts what the two boxes hold', () => {
+    /*
+     * A claim that BOTH boxes are empty. "One box below is empty and the other is not" is
+     * deliberately not matched: in the half state that sentence is true, and a detector that
+     * flagged it would be teaching whoever hit it to weaken the rule.
+     */
+    const CLAIMS_BOTH_EMPTY = [
+      /(?:the )?two boxes below are empty/i,
+      /leave the boxes below empty/i,
+      /left the boxes empty/i,
+      /boxes empty rather than fill/i,
+      /leaving them that way/i,
+    ];
+
+    /** A claim that both boxes hold a position. */
+    const CLAIMS_BOTH_HOLD = [
+      /two boxes below now hold/i,
+      /two boxes below hold a coordinate/i,
+    ];
+
+    /**
+     * THE DETECTOR, WATCHED CATCHING THE REAL SENTENCES.
+     *
+     * A regex list that matches nothing is indistinguishable from a panel that says nothing wrong,
+     * and both are green. These are the exact strings the live site printed on 2026-08-13 over two
+     * full boxes, quoted from the commit that removed them, so the sweep below is known to be wired
+     * to something before it is trusted for saying "clean".
+     */
+    it('recognises the sentences that were actually false on the live site', () => {
+      const wasPrintedOverTwoFullBoxes = [
+        'GrantSpotter has left the boxes empty rather than fill them with it',
+        'Leave the boxes below empty and what you stated stays exactly as it is',
+        'The two boxes below are empty, and leaving them that way is an answer rather than a gap',
+      ];
+      for (const sentence of wasPrintedOverTwoFullBoxes) {
+        expect(
+          CLAIMS_BOTH_EMPTY.some((re) => re.test(sentence)),
+          `the sweep would not have caught: ${sentence}`,
+        ).toBe(true);
+      }
+      // And it does not fire on the half-state sentence, which is true where it appears.
+      expect(
+        CLAIMS_BOTH_EMPTY.some((re) => re.test('One box below is empty and the other is not.')),
+      ).toBe(false);
+    });
+
+    it('says nothing about empty boxes in any state the panel’s own controls can reach', async () => {
+      stubResult({ status: 'found', record: W1MX_PO_BOX });
+      const { container } = renderLookup({
+        callsign: 'W1MX',
+        target: 'organization',
+        held: { lat: '42.3601', lon: '-71.0942' },
+      });
+      await lookUp();
+      await screen.findByLabelText(/latitude to fill in/i);
+
+      const lat = (): HTMLInputElement => screen.getByLabelText(/latitude to fill in/i);
+      const lon = (): HTMLInputElement => screen.getByLabelText(/longitude to fill in/i);
+
+      /** Read the boxes and the words at the same instant, and hold them against each other. */
+      const audit = (where: string): void => {
+        const latText = lat().value.trim();
+        const lonText = lon().value.trim();
+        const words = container.textContent ?? '';
+        const hit = (list: readonly RegExp[]): string[] =>
+          list.filter((re) => re.test(words)).map((re) => re.source);
+
+        if (latText !== '' && lonText !== '') {
+          expect(
+            hit(CLAIMS_BOTH_EMPTY),
+            `${where}: the panel says the boxes are empty while they hold ${latText}, ${lonText}. ` +
+              'This is the 2026-08-13 defect: advice to leave two full boxes alone, printed ' +
+              'directly above them, which followed literally replaces the position the applicant ' +
+              'stated.',
+          ).toEqual([]);
+        }
+        if (latText === '' && lonText === '') {
+          expect(
+            hit(CLAIMS_BOTH_HOLD),
+            `${where}: the panel says the boxes hold a coordinate while both are empty.`,
+          ).toEqual([]);
+        }
+        if (latText === '' || lonText === '') {
+          expect(
+            hit(CLAIMS_BOTH_HOLD),
+            `${where}: the panel claims a whole position while one box is empty.`,
+          ).toEqual([]);
+        }
+      };
+
+      // 1 — as the panel opens: both boxes empty.
+      expect(lat()).toHaveValue('');
+      audit('on opening, with both boxes empty');
+
+      // 2 — the record's own number, put there by the panel's own button.
+      await userEvent.click(
+        screen.getByRole('button', { name: /use this coordinate anyway, in place of mine/i }),
+      );
+      expect(lat()).toHaveValue('42.34991837');
+      audit('after “Use this coordinate anyway”');
+
+      // 3 — half a position, reached by clearing one of the two.
+      await userEvent.clear(lon());
+      expect(lon()).toHaveValue('');
+      audit('with one box cleared');
+
+      // 4 — a coordinate the applicant edited, which the record does not state.
+      await userEvent.type(lon(), '-71.0942');
+      await userEvent.clear(lat());
+      await userEvent.type(lat(), '42.3601');
+      audit('after editing both boxes by hand');
+
+      // 5 — and back to empty, by the button the panel offers for it.
+      await userEvent.click(screen.getByRole('button', { name: /clear these boxes/i }));
+      expect(lat()).toHaveValue('');
+      expect(lon()).toHaveValue('');
+      audit('after “Clear these boxes”');
+    });
+  });
+
   it('withholds a coordinate the record cannot attribute to any address', async () => {
     stubResult({ status: 'found', record: NO_ADDRESS });
     renderLookup();

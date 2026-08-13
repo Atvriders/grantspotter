@@ -548,6 +548,36 @@ describe('no sentence may say when to come back', () => {
  * for that file is that every slot a template references has a label and a hint, which is a
  * different test than this one is asking for.
  *
+ * THE ACCIDENTAL CREDIT, MEASURED 2026-08-13, AND WHY A NUMBER HERE GOING DOWN IS NOT PROOF.
+ *
+ * `isAsserted` credits a sentence when any SIXTEEN-CHARACTER run of it appears inside any string
+ * or regex literal in any test file. Sixteen characters of ordinary English is not evidence that
+ * anybody looked at the sentence, and on this corpus it demonstrably is not:
+ *
+ *   `seed/load.ts`'s "duplicate funder id in the seed corpus." and "duplicate program id in the
+ *   seed corpus." were both scored ASSERTED. No test named either. The run that credited them was
+ *   " the seed corpus", which occurs in `seed/funderVoice.test.ts` inside
+ *   `/\bseed (?:record|corpus|import)\b/` — a detector for maintainer notes in a funder-voice
+ *   field. That regex was added on 2026-08-13 for an unrelated defect, and it silently retired two
+ *   entries of this file's debt on its way past.
+ *
+ * The effect is not confined to those two. Measured over the whole census on 2026-08-13: of 1,249
+ * sites scored asserted, 613 are credited by a longest single-literal run SHORTER THAN TWENTY
+ * CHARACTERS, and 745 by a run covering less than half the sentence. So a budget that falls is not
+ * by itself proof that the sentences it counted are now looked at — it may only mean somebody
+ * elsewhere wrote a literal that happens to share a fragment.
+ *
+ * IT IS LEFT AS IT IS, DELIBERATELY, AND WHAT TO DO INSTEAD. Raising the bar to a half-sentence
+ * match would re-score 745 sites at once and force a re-baseline of some seventy budget entries —
+ * a bulk re-blessing, which is the exact failure mode the top of this file exists to avoid, and
+ * which would drown the real signal for a round or more. The bar is also genuinely hard to set:
+ * a test asserting `/could not be read/i` against "Your saved profile could not be read. Re-save
+ * it from the profile editor." IS looking at that sentence, and covers 27 of its 71 characters.
+ * The rule this round adopts instead is procedural and costs nothing: WHEN A BUDGET FALLS AND
+ * NOBODY IN THE ROUND CLAIMS THE WORK, CHECK WHAT CREDITED IT BEFORE LOWERING THE NUMBER — and if
+ * the credit is an accident, write the assertion rather than bank the discount. That is what
+ * `seed/loadCorpus.test.ts` is; it took the entry to a genuine 0.
+ *
  * WHY THE TOTAL WENT UP ON 2026-08-12 WITHOUT ANYBODY WRITING A SENTENCE. It went from 335 to 413,
  * and every one of the additions was already shipping — 84 of them measured against abffd25,
  * before this tree moved under the measurement. The census could not see them: an interpolated
@@ -579,7 +609,9 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/server/src/db/repositories/applications.ts': 1,
     'packages/server/src/fetcher/index.ts': 1,
     'packages/server/src/review/index.ts': 1,
-    'packages/server/src/seed/load.ts': 4,
+    // 4 until 2026-08-13, then deleted at 0. `seed/loadCorpus.test.ts` now reads all four of the
+    // loader's refusals in the state that produces each one. Two of the four had been scored as
+    // asserted since the day before WITHOUT ANY TEST NAMING THEM — see THE ACCIDENTAL CREDIT below.
     'packages/server/src/sources/ardc-award-tables.ts': 1,
     'packages/server/src/sources/arrl-news-rss.ts': 1,
     'packages/server/src/sources/arrl-pages.ts': 1,

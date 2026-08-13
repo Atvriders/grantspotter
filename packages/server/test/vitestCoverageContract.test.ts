@@ -161,6 +161,19 @@ const NOT_A_VITEST_FILE: ReadonlyMap<string, string> = new Map<string, string>([
       '`packages/web/src/components/signedOut.css.test.ts`. `npm run test:e2e` runs it, never ' +
       '`npm test`.',
   ],
+  [
+    'e2e/exports.spec.ts',
+    'Playwright, not vitest, and the one suite here whose whole point is that it CANNOT be run ' +
+      "anywhere else: it presses the product's own export links and reads the bytes the browser " +
+      'saved to disk. `download.path()` is a Chromium concept — jsdom has no download, and a test ' +
+      'that fetched the URL itself would be asserting against a request IT built rather than the ' +
+      'one the `href` carried, which is precisely the link in the chain that was broken on the ' +
+      'live site. It parses the saved CSV, reads the saved XLSX with `exceljs`, and unfolds the ' +
+      'saved `.ics`, holding all three against the count the browse screen states. The selection ' +
+      'half of the same promise is proved without a browser in ' +
+      '`packages/server/src/exports/parityWithBrowse.test.ts`. `npm run test:e2e` runs it, never ' +
+      '`npm test`.',
+  ],
 ]);
 
 /** Config file names vitest looks for in a project directory, in its own precedence order. */

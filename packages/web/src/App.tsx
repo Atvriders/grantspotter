@@ -34,6 +34,19 @@ function AdminOnly({ children }: { children: JSX.Element }): JSX.Element {
   return user?.role === 'admin' ? children : <Navigate to="/" replace />;
 }
 
+/**
+ * `/browse` → `/`, KEEPING WHATEVER THE ADDRESS CARRIED.
+ *
+ * The alias exists for addresses that arrive from outside the app, which are exactly the addresses
+ * that carry a filter. Dropping `search` here turns "the eight ham grants I found for you" into
+ * the whole catalogue, silently. `hash` travels for the same reason: it costs nothing and an alias
+ * that edits the address it is aliasing is not an alias.
+ */
+function BrowseAlias(): JSX.Element {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: '/', search, hash }} replace />;
+}
+
 function Authenticated(): JSX.Element {
   const { user, loading, refresh } = useSession();
   const { pathname } = useLocation();
@@ -97,8 +110,22 @@ function Authenticated(): JSX.Element {
 
             `replace` so the Back button returns to wherever the user came from rather than to the
             alias, which would bounce them straight forward again.
+
+            IT CARRIES THE QUERY STRING, AND FOR TWO MONTHS IT DID NOT. `<Navigate to="/" replace />`
+            discards `search`, so the one case this route was written for — "the address a user
+            types, bookmarks or is sent by a colleague" — was the case it broke. Measured in a
+            browser against the e2e corpus on 2026-08-13:
+
+              /?klass=ham_grant        21 programmes, export links carrying ?klass=ham_grant
+              /browse?klass=ham_grant  150 programmes, export links BARE
+
+            No error, no notice: the address bar quietly became `/`, the screen said "150
+            programmes match", and a colleague who was sent a filtered view read the whole
+            catalogue believing it was the twenty-one. `App.test.tsx` asserted `pathname` and never
+            `search`, which is why nothing caught it — the same defect the round it was found in is
+            about, in the test rather than in the copy.
           */}
-          <Route path="/browse" element={<Navigate to="/" replace />} />
+          <Route path="/browse" element={<BrowseAlias />} />
           <Route path="/o/:programId" element={<Opportunity />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/exports" element={<ExportsRoute />} />

@@ -448,6 +448,40 @@ describe('App', () => {
   });
 
   /**
+   * THE HALF OF THAT REDIRECT NOBODY LOOKED AT.
+   *
+   * The assertion above checks `pathname` and stops there. `<Navigate to="/" replace />` discards
+   * `search`, so for as long as the alias has existed, every filtered `/browse?…` address has
+   * landed on the unfiltered catalogue. Measured in a browser against the e2e corpus on
+   * 2026-08-13: `/?klass=ham_grant` showed 21 programmes and put `?klass=ham_grant` on the export
+   * links; `/browse?klass=ham_grant` showed 150 and left them bare.
+   *
+   * That is the worst shape a defect can have here — it does not fail, it WIDENS, and the widened
+   * view carries the product's own "150 programmes match" over an address that asked for
+   * twenty-one. The route's comment names "the address a user types, bookmarks or is sent by a
+   * colleague" as its whole reason for existing, which is precisely the address that carries a
+   * filter.
+   *
+   * The assertion is on the ADDRESS rather than on a row count, because `renderAt` stubs the API:
+   * what this file can prove is that the filter survived the redirect, and `e2e/exports.spec.ts`
+   * proves the surviving filter reaches the screen and the downloaded file.
+   */
+  it('carries a filter through the /browse alias instead of widening it to the whole corpus', async () => {
+    stubSignedIn('member');
+    renderAt('/browse?klass=ham_grant&amountMin=5000');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Browse opportunities' }),
+    ).toBeInTheDocument();
+    await settle();
+
+    expect(window.location.pathname).toBe('/');
+    const carried = new URLSearchParams(window.location.search);
+    expect(carried.get('klass')).toBe('ham_grant');
+    expect(carried.get('amountMin')).toBe('5000');
+  });
+
+  /**
    * ONE `main` LANDMARK PER COMPOSED PAGE, counted on the tree the router actually draws.
    *
    * `/applications` shipped with two: `AppShell`'s `<main id="main">` and a second one inside
