@@ -72,10 +72,17 @@ beforeAll(() => {
 
   seedTestUser(db, 'u-member');
   seedTestUser(db, 'u-other');
+  // BOTH kinds, for `u-member`. One profile cannot tell the two orderings apart, which is why the
+  // export and the browse screen disagreed about this user for as long as they did.
   createProfileRepo(db).upsert('u-member', {
     kind: 'student',
     callsign: 'W8UM',
     licenseClass: 'GENERAL',
+  });
+  createProfileRepo(db).upsert('u-member', {
+    kind: 'organization',
+    entity: 'club_501c3',
+    orgName: 'Example Radio Club',
   });
   db.prepare(
     `INSERT INTO watches (id, user_id, program_id, notify_changes, created_at)
@@ -91,10 +98,11 @@ afterAll(() => {
 
 describe('the SQLite export data source reads what the repositories read', () => {
   /**
-   * THE FIFTH LEAK, PRE-EMPTED. `listPrograms` is the only read the ICS routes have — they do not
-   * go through `applyExportFilter` the way the CSV and XLSX routes do — so a data source that
-   * handed back everything would put the whole hazard on one filter in one route handler. The gate
-   * is here too, and it is the SHARED `isDoNotPublish` via `exportablePrograms`, never a local copy.
+   * THE FIFTH LEAK, PRE-EMPTED. Every export selects through `selectExportPrograms` now, which
+   * gates — but this read is what the application-packet routes resolve a programme id against,
+   * and a data source that handed back everything would put the whole hazard on one predicate in
+   * one place. The gate is here too, and it is the SHARED `isDoNotPublish` via
+   * `exportablePrograms`, never a local copy.
    */
   it('never returns a suppressed record, though the row is really in the table', () => {
     const stored = (db.prepare('SELECT COUNT(*) AS n FROM programs').get() as { n: number }).n;
@@ -108,7 +116,17 @@ describe('the SQLite export data source reads what the repositories read', () =>
     expect(source.listFunders().map((f) => f.id)).toEqual(['ardc']);
   });
 
-  it('returns the first profile a user saved', () => {
+  /**
+   * THE PROFILE THE SCREEN IS USING, not the one that sorts first alphabetically.
+   *
+   * This read was `profiles.listForUser(userId)[0]`, described as "the first profile a user
+   * saved". `listForUser` is `ORDER BY kind`, so for a user holding both it answered the
+   * ORGANISATION — regardless of when either was saved — while every verdict on the browse screen
+   * was computed against the STUDENT, which is what `PROFILE_KIND_PRIORITY` puts first. The
+   * eligibility report and the screen were describing two different applicants, and now that the
+   * export honours the screen's verdict filter they would also be selecting different rows.
+   */
+  it('matches against the same profile the browse screen matches against', () => {
     expect(source.getProfile('u-member')?.kind).toBe('student');
     expect(source.getProfile('u-other')).toBeUndefined();
   });

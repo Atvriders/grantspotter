@@ -11,6 +11,7 @@ import { openTestDb } from '../test/testDb.js';
 import { seedTestUser } from '../test/fixtures/programs.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
 import { createProgramRepo, withContentHash } from '../db/repositories/programs.js';
+import { reindexBrowse } from './reindex.js';
 import {
   calendarPrograms,
   createCalendarFeedRouter,
@@ -44,6 +45,12 @@ import { DO_NOT_PUBLISH_TAG } from '../normalize/index.js';
  * with one table in it.
  */
 
+/**
+ * The one clock this suite runs on. `depsFor` injects it and the browse projection is built at it,
+ * so the rows the export selects and the timestamps it stamps are answers to the same instant.
+ */
+const NOW = '2026-08-02T12:00:00.000Z';
+
 /** No money, no dates, no two-word proper noun: extractFactAssertions finds nothing to confirm. */
 const READY_MARKDOWN = '# Need statement\n\nOur club station needs a replacement transceiver.';
 /** One unconfirmed money assertion, so assertExportReady throws. */
@@ -61,8 +68,9 @@ const PROGRAMS: Program[] = [
 
 /**
  * A record the product STORES and must never publish — one of the ~553. It is in this fake's
- * `listPrograms()` on purpose, behind a switch: the two ICS routes are the only exports that do
- * not go through `applyExportFilter`, so the fake has to be able to hand them the hazard.
+ * `listPrograms()` behind a switch, and — more to the point now that every export selects through
+ * the browse projection — it is SEEDED INTO THAT PROJECTION as a stale row, so the routes meet the
+ * hazard on the path they actually take. See `fakeDataSource` below.
  */
 const SUPPRESSED: Program = makeSuppressedProgram();
 const SUPPRESSED_CYCLE: Cycle = makeCycle({
@@ -109,8 +117,28 @@ function fakeDataSource(): Fake {
   const db = openTestDb();
   openDbs.push(db);
   createFunderRepo(db).upsert(makeFunder());
-  createProgramRepo(db).upsert(withContentHash(makeProgram()));
+  const programs = createProgramRepo(db);
+  for (const program of PROGRAMS) programs.upsert(withContentHash(program));
   seedTestUser(db, 'user-1');
+
+  /**
+   * THE SUPPRESSED RECORD, PROJECTED — which is the hazard the export routes actually face now
+   * that they select rows out of `program_search` rather than out of this fake's `listPrograms`.
+   *
+   * `reindexBrowse` refuses to project a `do_not_publish` record, so seeding one and reindexing
+   * would prove nothing: the record would be absent from the table the selection reads and the
+   * gate inside `selectExportPrograms` would never be reached. What CAN happen in production is a
+   * reclassification: a record projected while it was publishable, tagged afterwards, with its
+   * projection row still standing until the next reindex. That is modelled exactly — seed it
+   * untagged, project it, then re-upsert it with the tag — rather than by hand-writing a
+   * `program_search` row here, which would be a copy of migration 030's DDL and free to drift
+   * from it.
+   */
+  programs.upsert(
+    withContentHash({ ...SUPPRESSED, tags: SUPPRESSED.tags.filter((t) => t !== DO_NOT_PUBLISH_TAG) }),
+  );
+  reindexBrowse(db, NOW);
+  programs.upsert(withContentHash(SUPPRESSED));
 
   const insertApp = db.prepare(
     `INSERT INTO applications (id, user_id, program_id, title, body_markdown, answers_json,
@@ -187,7 +215,7 @@ function depsFor(source: ExportDataSource): ExportDeps {
     requireAuth: (_req: express.Request, _res: express.Response, next: express.NextFunction) => next(),
     requireAdmin: (_req: express.Request, _res: express.Response, next: express.NextFunction) =>
       next(role === 'admin' ? undefined : new AppError('forbidden', 'Administrator role required.')),
-    now: () => '2026-08-02T12:00:00.000Z',
+    now: () => NOW,
     userIdOf: () => 'user-1',
     publicBaseUrl: () => 'http://127.0.0.1:3030',
   };
@@ -644,7 +672,7 @@ describe('no suppressed record can leave through a route', () => {
     const chosen = (watched?: ReadonlySet<string>): string[] => {
       data.suppressedVisible = true;
       try {
-        return [...calendarPrograms(depsFor(data), watched).keys()];
+        return [...calendarPrograms(data.listPrograms(), watched).keys()];
       } finally {
         data.suppressedVisible = false;
       }
@@ -822,9 +850,10 @@ describe('admin backup and restore', () => {
     const backup = (await res.json()) as { app: string; tables: Record<string, unknown[]> };
     expect(backup.app).toBe('grantspotter');
     expect(backup.tables.funders).toHaveLength(1);
-    // The backup carries the whole database, not one table: this fixture holds one funder, one
-    // programme, one user and two application drafts.
-    expect(backup.tables.programs).toHaveLength(1);
+    // The backup carries the whole database, not one table: this fixture holds one funder, THREE
+    // programmes — the two publishable ones and the suppressed record, which a backup must carry
+    // or the next restore is data loss — one user and two application drafts.
+    expect(backup.tables.programs).toHaveLength(3);
     expect(backup.tables.applications).toHaveLength(2);
     // DEVIATION FROM THE TASK BRIEF: it asserts `rowsRestored: 1`, which was never true even of
     // its own fixture — that fixture also carried two `applications` rows, and `applications` is
@@ -838,7 +867,7 @@ describe('admin backup and restore', () => {
     const result = (await restored.json()) as RestoreBody;
     role = 'member';
 
-    expect(result.rowsRestored).toBe(5); // 1 funder + 1 programme + 1 user + 2 drafts
+    expect(result.rowsRestored).toBe(7); // 1 funder + 3 programmes + 1 user + 2 drafts
     expect(result.rowsSkipped).toBe(0);
     expect(result.tablesSkipped).toEqual([]);
     // Canonical parent-before-child order, taken from BACKUP_TABLES rather than from the file.
@@ -872,8 +901,10 @@ describe('admin backup and restore', () => {
     ).json()) as RestoreBody;
     role = 'member';
 
-    expect(result.programsReindexed).toBe(1);
-    expect(result.summary).toContain('Browse index rebuilt for 1 programme(s).');
+    // TWO, not three: `reindexBrowse` projects the publishable records and refuses the suppressed
+    // one, so this number differs from the programme count in the backup on purpose.
+    expect(result.programsReindexed).toBe(2);
+    expect(result.summary).toContain('Browse index rebuilt for 2 programme(s).');
     // The copy names every exclusion, not just sessions.
     expect(result.summary).toContain('sessions');
     expect(result.summary).toContain('schema_migrations');

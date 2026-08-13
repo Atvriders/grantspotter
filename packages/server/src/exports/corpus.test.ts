@@ -9,7 +9,7 @@ import { cycleHorizonEndISO } from '../review/index.js';
 // across this boundary for the same reason: a claim about the corpus is only worth making against
 // the corpus. See `api/calendarRouter.test.ts` and `normalize/index.test.ts`.
 import { loadCorpus, PROFILE_NOW_ISO } from '../../../../scripts/profile-corpus.js';
-import { applyExportFilter } from './filter.js';
+import { exportablePrograms } from './filter.js';
 import { buildExportRows } from './rows.js';
 import { PROGRAM_CSV_COLUMNS, programsToCsv } from './csv.js';
 
@@ -157,19 +157,22 @@ describe('no suppressed record can leave the building', () => {
     expect(mixed).toBe(csv);
   });
 
-  it('refuses them through the filter as well, for every filter a user can express', () => {
+  /**
+   * THE GATE, OVER BOTH POPULATIONS AT ONCE. This used to hand the mixed list to
+   * `applyExportFilter` under half a dozen filter shapes, on the reasoning that a user-supplied
+   * filter must never be able to reach a suppressed record. That filter engine is gone — the
+   * export selects through the browse projection now, in the browse screen's own vocabulary — so
+   * the claim is made where it is still exactly true: `exportablePrograms` is what every export
+   * path runs the corpus through, it takes no argument, and there is no query that changes its
+   * answer. The route-level version of the same claim, with a real projection and every filter a
+   * user can express, is `exports/parityWithBrowse.test.ts` and `api/exportsCorpus.test.ts`.
+   */
+  it('refuses all 553 of them, and cannot be handed an argument that changes that', () => {
     const all = [...corpus.programs, ...corpus.suppressedPrograms];
-    for (const filter of [
-      {},
-      { q: 'award' },
-      { status: ['closed' as const] },
-      { tags: [DO_NOT_PUBLISH_TAG] },
-      { tags: ['past_award'] },
-      { closesAfter: '2000-01-01' },
-    ]) {
-      const kept = applyExportFilter(all, filter, cyclesByProgramId);
-      expect(kept.filter(isDoNotPublish), JSON.stringify(filter)).toEqual([]);
-    }
+    const kept = exportablePrograms(all);
+    expect(kept.filter(isDoNotPublish)).toEqual([]);
+    expect(kept).toHaveLength(corpus.programs.length);
+    expect(exportablePrograms(kept)).toEqual(kept);
   });
 });
 

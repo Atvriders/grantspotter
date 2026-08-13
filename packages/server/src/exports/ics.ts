@@ -328,7 +328,7 @@ function datingSentences(c: CalendarCycle): string[] {
  * One VEVENT, as unfolded lines. Returns `[]` for a cycle with no dates, and for a suppressed
  * programme: the gate is inside `buildIcsCalendar` too, but a direct caller must not be able to
  * route around it. That is the same belt-and-braces `buildExportRows` applies after
- * `applyExportFilter` has already run.
+ * `selectExportPrograms` has already gated what the browse projection handed back.
  */
 export function cycleToVevent(
   cycle: Cycle,
@@ -422,11 +422,13 @@ const CALDESC =
 /**
  * The calendar. THE SUPPRESSION GATE RUNS HERE AND IS NOT OPTIONAL.
  *
- * This is not defensive decoration. Task 9's `/exports/deadlines.ics` and `/calendar/:token.ics`
- * routes build `programsById` from `deps.data.listPrograms()` with NO filter — unlike the CSV and
- * XLSX routes beside them, which call `applyExportFilter`. A calendar subscription re-fetches on a
- * schedule into a device the user carries, so it is the least recoverable place one of the 553
- * suppressed records could surface. The gate belongs where it cannot be forgotten.
+ * This is not defensive decoration. `/exports/deadlines.ics` and `/calendar/:token.ics` used to
+ * build `programsById` from `deps.data.listPrograms()` with NO filter at all — which was both a
+ * gate this had to catch for and, measured on the live site, a calendar that ignored the user's
+ * filters outright. Both now select through `selectExportPrograms` like every other format, and
+ * the gate stays here regardless: a calendar subscription re-fetches on a schedule into a device
+ * the user carries, so it is the least recoverable place one of the 553 suppressed records could
+ * surface. The gate belongs where it cannot be forgotten.
  */
 export function buildIcsCalendar(input: IcsCalendarInput): string {
   const { calendarName, cycles, programsById, nowISO, alarmDaysBefore = 14 } = input;

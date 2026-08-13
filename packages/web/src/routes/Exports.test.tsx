@@ -21,7 +21,7 @@ describe('ExportMenu', () => {
     expect(csv).toHaveAttribute('href', expect.stringContaining('/api/exports/opportunities.csv?'));
     expect(csv.getAttribute('href')).toContain('q=club');
     expect(csv.getAttribute('href')).toContain('klass=ham_grant');
-    expect(csv.getAttribute('href')).toContain('applicantEntities=club_501c3');
+    expect(csv.getAttribute('href')).toContain('entity=club_501c3');
     expect(screen.getByRole('link', { name: /xlsx/i }).getAttribute('href')).toContain('opportunities.xlsx?');
   });
 

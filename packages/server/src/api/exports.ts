@@ -8,7 +8,8 @@ import { createRateLimiter, type RateLimiter } from '../auth/rateLimit.js';
 import { assertExportReady, getApplication } from '../db/repositories/applications.js';
 import type { ApplicationRow } from '../db/repositories/applications.js';
 import type { ExportDataSource } from '../exports/dataSource.js';
-import { applyExportFilter, exportablePrograms, parseExportFilter } from '../exports/filter.js';
+import { exportablePrograms } from '../exports/filter.js';
+import { parseExportQuery, selectExportPrograms } from '../exports/selection.js';
 import { CSV_UTF8_BOM, programsToCsvFile } from '../exports/csv.js';
 import { programsToXlsx } from '../exports/xlsx.js';
 import { buildIcsCalendar } from '../exports/ics.js';
@@ -86,6 +87,34 @@ function cyclesByProgram(deps: ExportDeps, nowISO: string): Map<string, Cycle[]>
 }
 
 /**
+ * THE ONE SELECTION, FOR EVERY FORMAT ON THIS ROUTER.
+ *
+ * CSV, XLSX, the eligibility report and both calendars answer the same question — "which
+ * programmes is this request about?" — so they ask it once, here, and they ask it in the browse
+ * screen's own vocabulary against the browse screen's own projection. `exports/selection.ts`
+ * records what the four used to do instead, which was four different things under one promise: the
+ * calendars ignored the query string entirely, the spreadsheets ran a private filter vocabulary
+ * that had no spelling for three of the screen's filters, and no route honoured the matcher
+ * verdict at all.
+ *
+ * The profile is loaded whether or not a verdict was asked for, because "did the user ask for a
+ * verdict filter" is a question `selectExportPrograms` answers and this function must not have a
+ * second opinion about. It is one indexed row.
+ */
+function selectedPrograms(
+  deps: ExportDeps,
+  req: Request,
+  userId: string | undefined,
+  nowISO: string,
+): Program[] {
+  const filters = parseExportQuery(req.query as Record<string, unknown>);
+  return selectExportPrograms(deps.data.rawDb(), filters, {
+    profile: userId === undefined ? undefined : deps.data.getProfile(userId),
+    nowISO,
+  });
+}
+
+/**
  * WHICH CALENDAR A URL MEANS — decided by the URL, and by nothing else.
  *
  * Both calendar surfaces spell the choice identically: the plain URL is every publishable deadline,
@@ -120,14 +149,20 @@ function calendarScope(req: Request, canReadWatchlist: boolean): CalendarScope {
 }
 
 /**
- * The programme map a calendar is built from.
+ * The programme map a calendar is built from: the request's OWN selection, narrowed to the
+ * watchlist when the URL asked for it.
  *
- * `exportablePrograms` FIRST, and unconditionally — before the watch filter, not after it. The CSV
- * and XLSX routes reach the gate through `applyExportFilter`; the calendar routes have no such
- * filter, which is precisely what Task 3's report flagged. `buildIcsCalendar` gates again and
- * `cycleToVevent` gates a third time, and `createSqliteExportDataSource.listPrograms` gates before
- * any of them — four layers for one boundary is not paranoia here, it is the count of times this
- * boundary has leaked.
+ * THE SELECTION IS A PARAMETER NOW. It used to be `deps.data.listPrograms()` — every publishable
+ * record, whatever the URL said — and that is the whole of defect 1: on the live site
+ * `/api/exports/deadlines.ics?klass=ham_grant` returned 252 VEVENTs over 121 programmes beside a
+ * screen reading 8, byte-identical to the unfiltered feed but for its timestamps. A calendar is
+ * the export a user checks LEAST, because it arrives as notifications on a phone rather than as a
+ * file they open; "it ignored your filter" is not a thing that surface can say out loud.
+ *
+ * `exportablePrograms` FIRST, and unconditionally — before the watch filter, not after it.
+ * `buildIcsCalendar` gates again and `cycleToVevent` gates a third time, and
+ * `selectExportPrograms` gates what it read out of the projection before any of them — four layers
+ * for one boundary is not paranoia here, it is the count of times this boundary has leaked.
  *
  * The order matters on its own account now that a subscriber can ask for their watchlist: a star
  * outlives a reclassification, so a watchlist can name a record that has since become
@@ -146,10 +181,10 @@ function calendarScope(req: Request, canReadWatchlist: boolean): CalendarScope {
  * it, and no behaviour changed to make that possible.
  */
 export function calendarPrograms(
-  deps: ExportDeps,
+  selected: readonly Program[],
   watched?: ReadonlySet<string>,
 ): Map<string, Program> {
-  const publishable = exportablePrograms(deps.data.listPrograms());
+  const publishable = exportablePrograms(selected);
   const chosen = watched === undefined ? publishable : publishable.filter((p) => watched.has(p.id));
   return new Map(chosen.map((p) => [p.id, p]));
 }
@@ -183,7 +218,8 @@ function renderCalendar(
   const watched = scope.watchedOnly
     ? new Set(deps.data.listWatchedProgramIds(userId as string))
     : undefined;
-  return calendarFor(deps, calendarPrograms(deps, watched), scope.name, nowISO);
+  const selected = selectedPrograms(deps, req, userId, nowISO);
+  return calendarFor(deps, calendarPrograms(selected, watched), scope.name, nowISO);
 }
 
 function attach(res: Response, filename: string, contentType: string): void {
@@ -277,11 +313,7 @@ export function createExportsRouter(deps: ExportDeps): Router {
   router.get('/exports/opportunities.csv', deps.requireAuth, (req, res) => {
     const now = deps.now();
     const cycles = cyclesByProgram(deps, now);
-    const programs = applyExportFilter(
-      deps.data.listPrograms(),
-      parseExportFilter(req.query as Record<string, unknown>),
-      cycles,
-    );
+    const programs = selectedPrograms(deps, req, deps.userIdOf(req), now);
     attach(res, `grantspotter-opportunities-${stamp(now)}.csv`, 'text/csv; charset=utf-8');
     res.send(programsToCsvFile(programs, deps.data.listFunders(), cycles));
   });
@@ -292,11 +324,7 @@ export function createExportsRouter(deps: ExportDeps): Router {
     asyncHandler(async (req, res) => {
       const now = deps.now();
       const cycles = cyclesByProgram(deps, now);
-      const programs = applyExportFilter(
-        deps.data.listPrograms(),
-        parseExportFilter(req.query as Record<string, unknown>),
-        cycles,
-      );
+      const programs = selectedPrograms(deps, req, deps.userIdOf(req), now);
       const buffer = await programsToXlsx(programs, deps.data.listFunders(), cycles);
       attach(
         res,
@@ -314,11 +342,7 @@ export function createExportsRouter(deps: ExportDeps): Router {
     if (profile === undefined) return undefined;
     const now = deps.now();
     const cycles = cyclesByProgram(deps, now);
-    const programs = applyExportFilter(
-      deps.data.listPrograms(),
-      parseExportFilter(req.query as Record<string, unknown>),
-      cycles,
-    );
+    const programs = selectedPrograms(deps, req, userId, now);
     return buildEligibilityReport(profile, programs, deps.data.listFunders(), cycles, now);
   };
 

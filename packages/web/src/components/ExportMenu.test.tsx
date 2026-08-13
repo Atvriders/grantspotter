@@ -37,6 +37,52 @@ describe('ExportMenu', () => {
     }
   });
 
+  /**
+   * THE THREE FILTERS THE LINKS USED TO DROP. On the live site, Award amount Min = 5000 produced
+   * three BARE export URLs beside a screen reading 17 programmes, and the CSV behind them held the
+   * whole corpus. The `.ics` is listed here with the other two on purpose: it was the link that
+   * ignored its query string even when the query string was right.
+   */
+  it('carries the amount, the verdict and the rolling checkbox into every link, the .ics included', () => {
+    render(
+      <ExportMenu
+        filters={{
+          ...EMPTY_FILTERS,
+          amountMin: 5000,
+          verdict: ['ineligible'],
+          includeRolling: false,
+          deadlineFrom: '2026-09-01',
+        }}
+      />,
+    );
+    for (const label of ['CSV', 'XLSX', 'Deadlines (.ics)']) {
+      const href = screen.getByRole('link', { name: label }).getAttribute('href') ?? '';
+      expect(href, label).toContain('amountMin=5000');
+      expect(href, label).toContain('verdict=ineligible');
+      expect(href, label).toContain('includeRolling=false');
+      expect(href, label).toContain('deadlineFrom=2026-09-01');
+    }
+  });
+
+  /** Every match, not the fifty rows on screen — and the page number is the one key left behind. */
+  it('never sends the page the user happens to be looking at', () => {
+    render(<ExportMenu filters={{ ...EMPTY_FILTERS, page: 3, q: 'club' }} />);
+    const href = screen.getByRole('link', { name: 'CSV' }).getAttribute('href') ?? '';
+    expect(href).toContain('q=club');
+    expect(href).not.toContain('page=');
+  });
+
+  it('says what the file contains that the page does not, and what a calendar cannot carry', () => {
+    renderMenu();
+    const note = screen.getByText(/exports exactly what the filters above are showing/i);
+    // The two things the sentence was silent about while it was true of nothing.
+    expect(note).toHaveTextContent(/every match, not just the page on screen/i);
+    expect(note).toHaveTextContent(/a calendar can only carry what has a date/i);
+    expect(
+      screen.getByText(/matcher-verdict filter is honoured/i),
+    ).toHaveTextContent(/with no profile saved, filtering by verdict exports nothing/i);
+  });
+
   it('keeps the published/projected distinction in the note', () => {
     renderMenu();
     const note = screen.getByText(/every date in the calendar file/i);

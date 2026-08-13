@@ -30,13 +30,38 @@ export function ExportMenu({ filters }: { filters: UiFilters }): JSX.Element {
         `Calendar` prints the funder-published/projected split it counted from the rows it holds.
         `test/cycleCountCopy.test.ts` fails if a literal count comes back to this file.
       */}
+      {/*
+        THE SENTENCE, AND THE THREE WAYS THE FILES USED TO BREAK IT.
+
+        "Exports exactly what the filters above are showing" was measured false on the live site in
+        every direction it could be false: the `.ics` ignored the query string outright (Ham grant:
+        eight programmes on screen, a calendar covering a hundred and twenty-one), the CSV and XLSX
+        had no spelling for the rolling/undated checkbox and so dropped rows the DEFAULT filter
+        state was showing, and the award-amount and matcher-verdict filters reached the export
+        links as nothing at all — bare URLs, the whole corpus, under a heading that said otherwise.
+
+        The claim is kept rather than softened, because the alternative sentence — "exports the
+        whole corpus, ignoring your filters" — describes a product nobody would use to decide where
+        to spend an application fee, and because the fix that makes it true (`api/exports.ts` sends
+        the browse query itself, `exports/selection.ts` answers it with the browse selection) is
+        also the fix that stops the next filter from falling off. What the copy adds is the two
+        things that are true and were unsaid: an export is every match rather than the page on
+        screen, and a calendar cannot carry a programme that has no date.
+      */}
       <p className="export-note">
-        Exports exactly what the filters above are showing, with the funder name, the next close
-        date and each record&rsquo;s last-verified provenance. The XLSX carries a second
-        Provenance sheet so the source URL travels with the file. Every date in the calendar file
-        says which of the two kinds it is — a window the funder published, or one GrantSpotter
-        projected from the recurrence that program has followed — so no projection leaves here
-        looking like a date somebody promised you.
+        Exports exactly what the filters above are showing — every match, not just the page on
+        screen — with the funder name, the next close date and each record&rsquo;s last-verified
+        provenance. The XLSX carries a second Provenance sheet so the source URL travels with the
+        file. A calendar can only carry what has a date, so a matching programme whose deadline is
+        rolling or unpublished is in the CSV and the XLSX and in no <code>.ics</code>. Every date
+        in the calendar file says which of the two kinds it is — a window the funder published, or
+        one GrantSpotter projected from the recurrence that program has followed — so no projection
+        leaves here looking like a date somebody promised you.
+      </p>
+      <p className="export-note">
+        A matcher-verdict filter is honoured as well, which means the file is computed against your
+        profile and is yours rather than the catalogue&rsquo;s: with no profile saved, filtering by
+        verdict exports nothing, the same as it shows nothing here.
       </p>
     </div>
   );

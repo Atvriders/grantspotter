@@ -1,4 +1,4 @@
-import type { UiFilters } from '../lib/filterState.js';
+import { filtersToSearchParams, type UiFilters } from '../lib/filterState.js';
 import { apiSend } from './client.js';
 
 /**
@@ -16,20 +16,36 @@ export class ExportError extends Error {
 }
 
 /**
- * Browse and export use different query vocabularies on purpose: Plan 3 owns the browse
- * filter, Task 1 owns ExportFilter. This is the only translation between them.
- * Browse-only keys (verdict, sort, page, includeRolling, amountMin/Max) are dropped —
- * the export endpoint would ignore them and a stray key hides a real mismatch.
+ * THE EXPORT ASKS THE QUESTION THE SCREEN ASKED, IN THE SAME WORDS.
+ *
+ * There is no translation here any more, and that is the point. This function used to restate the
+ * browse filter one key at a time in a second vocabulary — `applicantEntities` for `entity`,
+ * `closesAfter`/`closesBefore` for `deadlineFrom`/`deadlineTo` — and then dropped everything it
+ * had no second spelling for, under the comment "the export endpoint would ignore them and a stray
+ * key hides a real mismatch". Three filters were dropped that way and the panel beside them went
+ * on promising "exports exactly what the filters above are showing". Measured on the live site:
+ *
+ *   - Award amount Min = 5000 → 17 programmes on screen, all three export links BARE, 143 rows in
+ *     the CSV. `amountMin` had no export spelling, so nothing at all was carried.
+ *   - Matcher verdict = Ineligible → the same, for the same reason.
+ *   - From 2026-09-01 / To 2026-12-31 with "Keep rolling and undated programs" CHECKED, the
+ *     DEFAULT → 139 on screen, 117 in the CSV. `includeRolling` had no export spelling, so the
+ *     window arrived without the one flag that says what to do with a programme that has no date.
+ *
+ * `filtersToSearchParams` is what the browse screen puts in the address bar and sends to
+ * `GET /api/programs`, so handing its output straight to the export endpoint makes the two
+ * requests the same request. A filter added to `UiFilters` reaches the export the moment it
+ * reaches the URL, with nothing here to update — which is the only version of this function that
+ * cannot fall behind the screen again.
+ *
+ * `page` is the one key removed, and `exports.test.ts` fails if this list grows without a reason
+ * beside it: an export is every match, so "page 1 of 3" would ship 50 of 139 rows to someone who
+ * had not asked for a page at all. `sort` is KEPT and is honoured — the server selects through the
+ * browse projection, which orders by it, so the rows arrive in the order they were read on screen.
  */
 export function browseFiltersToExportQuery(filters: UiFilters): URLSearchParams {
-  const query = new URLSearchParams();
-  if (filters.q) query.set('q', filters.q);
-  if (filters.klass.length > 0) query.set('klass', filters.klass.join(','));
-  if (filters.status.length > 0) query.set('status', filters.status.join(','));
-  if (filters.instrument.length > 0) query.set('instrument', filters.instrument.join(','));
-  if (filters.entity.length > 0) query.set('applicantEntities', filters.entity.join(','));
-  if (filters.deadlineFrom) query.set('closesAfter', filters.deadlineFrom);
-  if (filters.deadlineTo) query.set('closesBefore', filters.deadlineTo);
+  const query = filtersToSearchParams(filters);
+  query.delete('page');
   return query;
 }
 

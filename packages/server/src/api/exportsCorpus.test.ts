@@ -9,16 +9,26 @@
  * leakage".
  *
  * Task 3 tested that property of `buildIcsCalendar`. This tests it of the ROUTES, which is a
- * different claim: `/api/exports/deadlines.ics` and `/calendar/:token` assemble their own
- * programme map and their own cycle list before the calendar writer ever sees them, and Task 3's
- * report says in as many words that those two handlers were the reason it put a gate inside the
- * writer. Four layers now gate this boundary; this file is what proves the outermost one.
+ * different claim: `/api/exports/deadlines.ics` and `/calendar/:token` assemble a programme map
+ * and a cycle list before the calendar writer ever sees them, and Task 3's report says in as many
+ * words that those two handlers were the reason it put a gate inside the writer. Four layers now
+ * gate this boundary; this file is what proves the outermost one.
+ *
+ * The programme map is no longer built from `listPrograms()` — every export selects through the
+ * browse projection now, so that the file and the screen answer the same query — which changes
+ * WHERE the hazard has to be planted, not whether it exists. See `source()` below: all 553
+ * suppressed records are projected into `program_search` and only the gate stands between them and
+ * these bytes.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
+import { openTestDb } from '../test/testDb.js';
+import { createFunderRepo } from '../db/repositories/funders.js';
+import { createProgramRepo, withContentHash } from '../db/repositories/programs.js';
+import { reindexBrowse } from './reindex.js';
 import type { Cycle, Program } from '@grantspotter/core';
 import { createCalendarFeedRouter, createExportsRouter, type ExportDeps } from './exports.js';
 import { errorHandler, requestIdMiddleware } from './errors.js';
@@ -48,10 +58,54 @@ let watching: string[] = [];
 let server: Server;
 let base: string;
 let token: string;
+const openDbs: Database.Database[] = [];
 
+/**
+ * THE PROJECTION THE EXPORT ROUTES NOW SELECT THROUGH, WITH ALL 553 HIDDEN RECORDS STANDING IN IT.
+ *
+ * This fake used to hand the routes a bare `:memory:` handle with one hand-written table, because
+ * the routes only ever read programmes out of `listPrograms()`. They no longer do: the selection
+ * runs `queryProgramIds` over `program_search`, so a database with no projection has nothing to
+ * export and this suite would measure an empty file.
+ *
+ * The suppressed population is projected ON PURPOSE, and it is why this is a real migrated schema
+ * seeded through the product's own repositories rather than a hand-built table. `reindexBrowse`
+ * refuses to project a `do_not_publish` record, so seeding them tagged would leave the gate inside
+ * `selectExportPrograms` unreached and this whole file passing for the wrong reason. Seeding them
+ * UNTAGGED, projecting, and then re-upserting them tagged reproduces the one state a live database
+ * really reaches — 553 records reclassified since the last reindex, 553 projection rows still
+ * standing — and puts every export route in this suite behind that gate on every single call.
+ */
 function source(): ExportDataSource {
-  const db = new Database(':memory:');
-  db.exec('CREATE TABLE funders (id TEXT PRIMARY KEY, name TEXT, homepage TEXT)');
+  const db = openTestDb();
+  openDbs.push(db);
+  const funders = createFunderRepo(db);
+  const named = new Map(corpus.funders.map((f) => [f.id, f]));
+  for (const program of [...corpus.programs, ...corpus.suppressedPrograms]) {
+    funders.upsert(
+      named.get(program.funderId) ?? {
+        id: program.funderId,
+        name: `Funder ${program.funderId}`,
+        homepage: 'https://example.com/',
+      },
+    );
+  }
+  const programs = createProgramRepo(db);
+  for (const program of corpus.programs) programs.upsert(withContentHash(program));
+  for (const program of corpus.suppressedPrograms) {
+    programs.upsert(
+      withContentHash({ ...program, tags: program.tags.filter((t) => t !== DO_NOT_PUBLISH_TAG) }),
+    );
+  }
+  reindexBrowse(db, corpus.now);
+  const projected = (
+    db.prepare('SELECT COUNT(*) AS n FROM program_search').get() as { n: number }
+  ).n;
+  // The hazard has to be real for the rest of this file to mean anything: all 703 are in the table
+  // the selection reads, and only the gate stands between them and a file.
+  expect(projected).toBe(corpus.programs.length + corpus.suppressedPrograms.length);
+  for (const program of corpus.suppressedPrograms) programs.upsert(withContentHash(program));
+
   const hashes = new Map<string, string>();
   return {
     listPrograms: (): Program[] =>
@@ -116,6 +170,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+  for (const db of openDbs) db.close();
 });
 
 async function body(path: string, withSuppressed: boolean): Promise<string> {

@@ -3,7 +3,7 @@ import type { Cycle, Funder, Profile, Program } from '@grantspotter/core';
 import { expandCycles, observedCycles } from '@grantspotter/core';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { createFunderRepo } from '../db/repositories/funders.js';
-import { createProfileRepo } from '../db/repositories/profiles.js';
+import { loadActiveProfile } from '../api/profileStore.js';
 import { watchedProgramIds } from '../api/watchRouter.js';
 import { exportablePrograms } from './filter.js';
 
@@ -40,8 +40,11 @@ export interface ExportDataSource {
  *
  * Repositories are factories (RESOLUTIONS R8): `createProgramRepo(db)` exposes `.list(filter?)` /
  * `.get(id)` / `.upsert(program)`, `createFunderRepo(db)` exposes `.list()` / `.upsert(funder)`,
- * and `createProfileRepo(db)` exposes `.get(userId, kind)` / `.listForUser(userId)`. There are no
- * free `listPrograms` / `listFunders` / `getProfileForUser` functions, and there is no
+ * and `createProfileRepo(db)` exposes `.get(userId, kind)` / `.listForUser(userId)` — though the
+ * profile is read through `api/profileStore.ts`'s `loadActiveProfile` rather than off the repo, so
+ * that the export and the browse screen cannot pick different profiles for one user (see
+ * `getProfile` below). There are no free `listPrograms` / `listFunders` / `getProfileForUser`
+ * functions, and there is no
  * `db/repositories/watches.ts` — watch queries live in Plan 3's `api/watchRouter.ts` as
  * `watchedProgramIds(db, userId)`. Everything else in Plan 5, and every test in it, sees only
  * `ExportDataSource`.
@@ -50,11 +53,11 @@ export interface ExportDataSource {
  * once elsewhere:
  *
  * 1. **`listPrograms` applies the suppression gate.** The brief returns `programs.list()` raw. The
- *    CSV and XLSX routes would survive that — they go through `applyExportFilter` and
- *    `buildExportRows`, which gate — but the two ICS routes build their programme map from
- *    `listPrograms()` directly, and a calendar SUBSCRIPTION re-fetches on a schedule into a device
- *    the user carries, which is the least recoverable place one of the ~553 suppressed records
- *    could surface. This boundary has leaked four times in this repository and every time the
+ *    export routes reach the gate anyway — `selectExportPrograms` runs `exportablePrograms` on
+ *    what the browse projection hands back, and `buildExportRows` gates again — but this read is
+ *    also what `readDraft` resolves a programme id against, and a calendar SUBSCRIPTION re-fetches
+ *    on a schedule into a device the user carries, which is the least recoverable place one of the
+ *    ~553 suppressed records could surface. This boundary has leaked four times in this repository and every time the
  *    leaking read path had rolled its own filter, so this one calls the shared
  *    `exportablePrograms` (which calls the shared `isDoNotPublish`) and the routes gate again on
  *    top. The belt is free: the gate is idempotent.
@@ -73,7 +76,6 @@ export interface ExportDataSource {
 export function createSqliteExportDataSource(db: Database): ExportDataSource {
   const programs = createProgramRepo(db);
   const funders = createFunderRepo(db);
-  const profiles = createProfileRepo(db);
 
   const publishable = (): Program[] => exportablePrograms(programs.list());
 
@@ -87,9 +89,25 @@ export function createSqliteExportDataSource(db: Database): ExportDataSource {
         ...observedCycles(p, all, fromISO, toISO),
       ]);
     },
-    // A user may hold both a student and an organisation profile; the export report matches
-    // against the first one they saved, which is what Plan 3's browse does too.
-    getProfile: (userId: string) => profiles.listForUser(userId)[0],
+    /**
+     * The profile the BROWSE SCREEN would match this user against, through the browse screen's own
+     * loader.
+     *
+     * This was `profiles.listForUser(userId)[0]`, under the comment "the first one they saved,
+     * which is what Plan 3's browse does too". Both halves were false. `listForUser` is
+     * `ORDER BY kind`, so `[0]` is whichever kind sorts first alphabetically — `organization` —
+     * regardless of when either was saved; and browse resolves the same question through
+     * `loadActiveProfile`, whose documented order is `PROFILE_KIND_PRIORITY`, which puts `student`
+     * FIRST because the corpus is scholarship-heavy. For a user holding both profiles — the exact
+     * case the sentence was written about — the eligibility export was computed against their club
+     * while the verdicts on screen were computed against them, and nothing on either surface said
+     * so.
+     *
+     * That divergence stopped being merely wrong and became load-bearing when the export began
+     * honouring the screen's verdict filter (`exports/selection.ts`): "Ineligible" would have
+     * selected rows by one profile's verdicts and reported them under the other's.
+     */
+    getProfile: (userId: string) => loadActiveProfile(db, userId)?.profile,
     listWatchedProgramIds: (userId: string) => watchedProgramIds(db, userId),
     getUserIdForTokenHash(hash: string): string | undefined {
       const row = db
