@@ -591,11 +591,26 @@ export function Watchlist({ now }: { now?: string }): JSX.Element {
 
       <section className="card wl-panel wl-channels" aria-labelledby="wl-delivery-h">
         <h2 id="wl-delivery-h">Delivery</h2>
+        {/*
+          "AND NO ADDRESS IS STORED" WAS PRINTED TWO INCHES BELOW THE STORED ADDRESS.
+
+          The header of this very page reads `<your email> · MEMBER`: registration takes an email,
+          it is the sign-in identifier, `users.email` holds it, and the account header renders it on
+          every screen in the product. Whatever that clause was written to promise — almost
+          certainly "no mailing list, no digest in your inbox" — as printed it denied storing the
+          thing the reader could see on screen, which discredits every other privacy claim this
+          page makes, including the true ones.
+
+          The true claims, kept: GrantSpotter runs no mail server and sends no email to anybody,
+          and no delivery target below is an address. Those are properties of the software. What
+          the account holds is a separate fact and is now stated rather than contradicted.
+        */}
         <p className="wl-lede">
           The in-app digest is always on and is the only channel GrantSpotter guarantees. Everything
-          below is optional and is delivered to a destination you own. Email is optional and is not
-          required by GrantSpotter — there is no mail server to configure here, and no address is
-          stored.
+          below is optional and is delivered to a destination you own. There is no email channel at
+          all: no mail server to configure, no digest sent to an inbox, and no field below that
+          takes an address. The address you signed in with is stored as your account identifier and
+          is used for signing in — nothing is ever delivered to it.
         </p>
 
         <label className="wl-field" htmlFor="ch-webhook">

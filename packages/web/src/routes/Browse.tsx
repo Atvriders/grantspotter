@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../store/useApi.js';
 import { FilterPanel } from '../components/FilterPanel.js';
@@ -46,12 +46,48 @@ export interface BrowseResponse {
   profileApplied: 'student' | 'organization' | null;
 }
 
-function Census({ summary, filters }: { summary: BrowseSummary; filters: UiFilters }): JSX.Element {
+/**
+ * THE POPULATION THE CENSUS COUNTS, AND WHY IT IS NOT ALWAYS THE LIST UNDERNEATH IT.
+ *
+ * `summary` is computed by the server BEFORE the verdict filter is applied — `programsRouter`
+ * builds it from `found`, and only then cuts `visible` down to the verdicts asked for. That is the
+ * right population for a census: the verdict filter is a VIEW of the match, not a change to what
+ * was matched, and a breakdown of a set already restricted to one verdict says nothing at all
+ * ("59 ineligible, 0 of everything else").
+ *
+ * WHAT WAS FALSE UNTIL 2026-08-13. This card printed `summary.total` as "N IN VIEW" whatever the
+ * filters were, so `/?verdict=ineligible` — the destination of this card's OWN link — showed
+ * "143 IN VIEW" above a pager reading "Page 2 of 2 · 59 programmes match", on the same screen,
+ * with every visible row ineligible. Two numbers for one set, one of them wrong, on the state the
+ * product routes the reader into.
+ *
+ * So the card now names both sets and never conflates them: the four counters and `matched`
+ * describe the population the matcher ran over, `shown` is what the verdict filter left, and
+ * `shown` is the pager's number by construction — it is `data.total`, the exact value `Pager` is
+ * handed. The only way they can disagree again is if one of them stops coming from the response.
+ */
+function Census({
+  summary,
+  filters,
+  shown,
+}: {
+  summary: BrowseSummary;
+  filters: UiFilters;
+  shown: number;
+}): JSX.Element {
+  const matched = summary.total;
+  const verdictFiltered = filters.verdict.length > 0;
   const ineligibleHref = `/?${filtersToSearchParams({
     ...filters,
     verdict: ['ineligible'],
     page: 1,
   }).toString()}`;
+  // No drill-down out of the drill-down: on a view that is already exactly the ineligible ones,
+  // "see the specific constraint for each" points at the screen the reader is standing on.
+  const alreadyIneligibleOnly = filters.verdict.length === 1 && filters.verdict[0] === 'ineligible';
+
+  /** The set the four counters are about, named the same way in every sentence on this card. */
+  const population = verdictFiltered ? 'that match your other filters' : 'in view';
 
   return (
     <section className="census card" aria-label="Eligibility summary">
@@ -60,8 +96,9 @@ function Census({ summary, filters }: { summary: BrowseSummary; filters: UiFilte
         {summary.ineligible}
       </span>
       <span className="census-lede">
-        You are ineligible for {summary.ineligible} of these
-        {summary.ineligible > 0 && (
+        You are ineligible for {summary.ineligible} of{' '}
+        {verdictFiltered ? <>the {matched} {population}</> : <>these</>}
+        {summary.ineligible > 0 && !alreadyIneligibleOnly && (
           <>
             {' — '}
             <Link to={ineligibleHref}>see the specific constraint for each</Link>
@@ -70,8 +107,11 @@ function Census({ summary, filters }: { summary: BrowseSummary; filters: UiFilte
         .
       </span>
       <span className="eyebrow">
-        {summary.eligible} eligible · {summary.preferred} preferred · {summary.unknown} unknown ·{' '}
-        {summary.total} in view
+        {summary.eligible} eligible · {summary.preferred} preferred · {summary.ineligible}{' '}
+        ineligible · {summary.unknown} unknown ·{' '}
+        {verdictFiltered
+          ? `${matched} matched, of which the verdict filter is showing ${shown}`
+          : `${matched} in view`}
       </span>
       {/*
         WHOSE GAP IT IS, AND WHY THIS PARAGRAPH NO LONGER GUESSES.
@@ -99,14 +139,29 @@ function Census({ summary, filters }: { summary: BrowseSummary; filters: UiFilte
         <span className="census-note">
           Unknown is not a &quot;no&quot;. It means something the matcher could not work out —
           either your profile has not answered it, or the record itself never stated it — so{' '}
-          {summary.unknown} of the {summary.total} in view are waiting on an answer rather than
-          ruling you out. Open one to see which.
+          {summary.unknown} of the {matched} {population}{' '}
+          {summary.unknown === 1 ? 'is' : 'are'} waiting on an answer rather than ruling you out.
+          Open one to see which.
         </span>
       )}
     </section>
   );
 }
 
+/**
+ * WHY THIS CONTROL CAN SAY "PAST THE END" AT ALL.
+ *
+ * `page` is whatever the URL asked for, and the URL is the shareable source of truth for this
+ * screen (`lib/filterState.ts`). A link shared from page 3 of one reader's result set lands
+ * somebody with a narrower profile — or a corpus one crawl older — on a page that no longer
+ * exists. Until 2026-08-13 that state printed "Page 4 of 3 · 143 programmes match" over "No
+ * opportunities match these filters.": a page number that cannot exist, above a claim that
+ * nothing matched while the same line said 143 did.
+ *
+ * Nothing is clamped or redirected, because the reader asked for a specific page and being moved
+ * silently is how a shared link stops meaning what it said. The state is named instead, and
+ * Previous walks back to the last page that exists rather than to another empty one.
+ */
 function Pager({
   page,
   pageCount,
@@ -118,19 +173,29 @@ function Pager({
   total: number;
   onPage: (next: number) => void;
 }): JSX.Element {
+  const pastEnd = page > pageCount;
   return (
     <nav className="pager" aria-label="Pagination">
       <button
         type="button"
         className="btn"
-        onClick={() => onPage(page - 1)}
+        onClick={() => onPage(Math.min(page - 1, pageCount))}
         disabled={page <= 1}
         aria-label="Previous page"
       >
         Previous
       </button>
       <span className="pager-status">
-        Page {page} of {pageCount} · {total} programmes match
+        {pastEnd ? (
+          <>
+            Page {page} is past the end · {total} programmes match, on {pageCount}{' '}
+            {pageCount === 1 ? 'page' : 'pages'}
+          </>
+        ) : (
+          <>
+            Page {page} of {pageCount} · {total} programmes match
+          </>
+        )}
       </span>
       <button
         type="button"
@@ -179,6 +244,107 @@ export function activeFilterCount(f: UiFilters): number {
   return count;
 }
 
+/** `$1,500`, for a bound the reader typed as a bare number. */
+function money(amount: number): string {
+  return `$${amount.toLocaleString('en-US')}`;
+}
+
+/**
+ * WHAT IS ACTUALLY NARROWING THIS VIEW, in words, so an empty result can name its own cause.
+ *
+ * The empty state used to prescribe two remedies from a fixed string — "Widen the deadline window
+ * or clear a verdict filter" — regardless of what was set. Searching `zzzznotathing` with nothing
+ * else on produced exactly that: the two things that could not help, and no mention of the search
+ * box that had emptied the list. A remedy for a filter nobody set is worse than no remedy, because
+ * the reader goes looking for a control that is already at its default.
+ *
+ * SORT IS DELIBERATELY ABSENT even though `activeFilterCount` counts it. A sort changes what is on
+ * top, never what is in the set, so it can never be the reason nothing matched — and naming it here
+ * would send the reader to the one control that cannot bring a row back.
+ *
+ * `includeRolling` is named only through `hidesRollingPrograms`: unticked with no deadline window
+ * it narrows nothing, because the server only applies it inside one.
+ */
+export function narrowingFilters(f: UiFilters): string[] {
+  const out: string[] = [];
+  // The search first: it is the narrowest thing on this screen and the likeliest single cause.
+  if (f.q !== undefined && f.q !== '') out.push(`the search “${f.q}”`);
+  for (const facet of FACETS) {
+    const values: readonly string[] = f[facet.key];
+    if (values.length === 0) continue;
+    const labels: Record<string, string> = facet.labels;
+    out.push(`${facet.legend.toLowerCase()} — ${values.map((v) => labels[v] ?? v).join(', ')}`);
+  }
+  if (f.deadlineFrom !== undefined || f.deadlineTo !== undefined) {
+    out.push(
+      `a deadline window (${f.deadlineFrom ?? 'any date'} to ${f.deadlineTo ?? 'any date'})`,
+    );
+  }
+  if (hidesRollingPrograms(f)) out.push('rolling and undated programmes excluded from that window');
+  if (f.amountMin !== undefined) out.push(`a minimum award of ${money(f.amountMin)}`);
+  if (f.amountMax !== undefined) out.push(`a maximum award of ${money(f.amountMax)}`);
+  return out;
+}
+
+/**
+ * The empty result, saying which of the two empties it is.
+ *
+ * It lives here rather than in `ProgramTable` because naming the cause needs the filters, and
+ * `ProgramTable` is handed rows and nothing else. Its own empty state stays where it is for its
+ * other callers; this route no longer reaches it.
+ */
+function EmptyResults({
+  filters,
+  page,
+  pageCount,
+  total,
+  pastEnd,
+  note,
+  onPage,
+}: {
+  filters: UiFilters;
+  page: number;
+  pageCount: number;
+  total: number;
+  pastEnd: boolean;
+  note?: ReactNode;
+  onPage: (next: number) => void;
+}): JSX.Element {
+  const narrowing = narrowingFilters(filters);
+  return (
+    <div className="table-wrap">
+      <div className="empty-state">
+        {pastEnd ? (
+          <>
+            <p>
+              There is no page {page}. {total} programmes match these filters, on {pageCount}{' '}
+              {pageCount === 1 ? 'page' : 'pages'} — the link you followed points past the end of
+              them.
+            </p>
+            <p>
+              <button type="button" className="btn" onClick={() => onPage(pageCount)}>
+                Go to page {pageCount}
+              </button>
+            </p>
+          </>
+        ) : narrowing.length === 0 ? (
+          <p>
+            No opportunities match. No filter is set, so this is the whole corpus as GrantSpotter
+            holds it.
+          </p>
+        ) : (
+          <p>
+            No opportunities match these filters. What is narrowing this view:{' '}
+            {narrowing.join('; ')}. Change or clear{' '}
+            {narrowing.length === 1 ? 'it' : 'one of those'} to widen it.
+          </p>
+        )}
+        {note !== undefined && <p className="empty-note">{note}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function Browse({ now }: { now?: string }): JSX.Element {
   const nowISO = now ?? new Date().toISOString();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -193,12 +359,57 @@ export function Browse({ now }: { now?: string }): JSX.Element {
     `/api/programs${query === '' ? '' : `?${query}`}`,
   );
 
+  /**
+   * HOW MANY PROGRAMMES THE DEADLINE WINDOW IS ACTUALLY HIDING.
+   *
+   * The warning below used to name two funders — "NCDXF and SARA accept applications year-round"
+   * — as if they were the set. Measured against the corpus this build serves, unticking the box
+   * over a nine-month window moves the total by 28, of which those two are 2: the three YLRL
+   * memorial scholarships, the Yasme Foundation and twenty-odd others were hidden and unnamed
+   * while the sentence read like a complete list.
+   *
+   * A count cannot be written down, because it is a function of the window, every other filter and
+   * the corpus installed. So it is MEASURED: the same query with the box ticked, whose `total` is
+   * the same unpaginated figure as this one's. One extra request, only while the box is unticked
+   * inside a window, and never on the default view.
+   *
+   * When either request is in flight the count is `null` and the sentence states no number rather
+   * than a number belonging to the previous filters — `useApi` keeps the last body while the next
+   * one loads, which is exactly how a stale figure would get printed as a fresh one.
+   */
+  const rollingIsHiding = hidesRollingPrograms(filters);
+  const withRollingQuery = useMemo(
+    () => filtersToSearchParams({ ...filters, includeRolling: true }).toString(),
+    [filters],
+  );
+  const rollingProbe = useApi<BrowseResponse>(
+    rollingIsHiding ? `/api/programs?${withRollingQuery}` : null,
+  );
+  const rollingHiddenCount = ((): number | null => {
+    if (data === null || loading) return null;
+    if (rollingProbe.data === null || rollingProbe.loading || rollingProbe.error !== null) {
+      return null;
+    }
+    const difference = rollingProbe.data.total - data.total;
+    // A negative difference cannot happen — ticking the box only ever adds records — so it means
+    // the two answers describe different filters. Say nothing rather than say something backwards.
+    return difference < 0 ? null : difference;
+  })();
+
   function update(next: UiFilters, options?: { replace?: boolean }): void {
     setSearchParams(filtersToSearchParams(next), { replace: options?.replace === true });
   }
 
   const pageCount =
     data === null ? 1 : Math.max(1, Math.ceil(data.total / Math.max(1, data.pageSize)));
+
+  /**
+   * A page number beyond the last one that exists, on a result set that is not itself empty.
+   *
+   * `total === 0` is deliberately NOT this state: nothing matched, the page number is beside the
+   * point, and telling a reader their page is past the end of nothing explains nothing.
+   */
+  const pastEnd = data !== null && data.total > 0 && data.page > pageCount;
 
   /**
    * Why nothing matched, when the reason is knowable. A verdict filter with no profile behind it
@@ -247,10 +458,25 @@ export function Browse({ now }: { now?: string }): JSX.Element {
         )}
 
         <div className={stackedRows ? 'browse-results browse-results-stacked' : 'browse-results'}>
-          {hidesRollingPrograms(filters) && (
+          {rollingIsHiding && (
             <p className="row-warning" style={{ maxWidth: 'none' }}>
-              Rolling and undated programs are hidden while a deadline window is set. NCDXF and SARA
-              accept applications year-round and have no date to match against.
+              {rollingHiddenCount === null
+                ? 'Rolling and undated programs are hidden while a deadline window is set: a ' +
+                  'programme that accepts applications year-round has no date to match against, ' +
+                  'so it drops out of any window. Tick “Keep rolling and undated programs” to put ' +
+                  'them back.'
+                : rollingHiddenCount === 0
+                  ? 'Rolling and undated programs are hidden while a deadline window is set, but ' +
+                    'none of the programmes matching your other filters is one — so nothing is ' +
+                    'missing from this list because of it.'
+                  : `Rolling and undated programs are hidden while a deadline window is set: ` +
+                    `${String(rollingHiddenCount)} ${
+                      rollingHiddenCount === 1
+                        ? 'programme that matches your other filters is'
+                        : 'programmes that match your other filters are'
+                    } not in this list. Tick “Keep rolling and undated programs” to put ${
+                      rollingHiddenCount === 1 ? 'it' : 'them'
+                    } back.`}
             </p>
           )}
 
@@ -262,7 +488,7 @@ export function Browse({ now }: { now?: string }): JSX.Element {
           )}
 
           {data !== null && data.profileApplied !== null && (
-            <Census summary={data.summary} filters={filters} />
+            <Census summary={data.summary} filters={filters} shown={data.total} />
           )}
 
           <ExportMenu filters={filters} />
@@ -277,14 +503,27 @@ export function Browse({ now }: { now?: string }): JSX.Element {
 
           {data !== null && (
             <>
-              <ProgramTable
-                rows={data.rows}
-                now={nowISO}
-                expandedId={expandedId}
-                emptyNote={emptyNote}
-                onExplain={(id) => setExpandedId((current) => (current === id ? null : id))}
-              />
-              {pageCount > 1 && (
+              {data.rows.length === 0 ? (
+                <EmptyResults
+                  filters={filters}
+                  page={data.page}
+                  pageCount={pageCount}
+                  total={data.total}
+                  pastEnd={pastEnd}
+                  note={emptyNote}
+                  onPage={(next) => update({ ...filters, page: next })}
+                />
+              ) : (
+                <ProgramTable
+                  rows={data.rows}
+                  now={nowISO}
+                  expandedId={expandedId}
+                  onExplain={(id) => setExpandedId((current) => (current === id ? null : id))}
+                />
+              )}
+              {/* Shown past the end even when there is only one page, because "there is no page 4"
+                  needs the control that walks back to a page there is. */}
+              {(pageCount > 1 || pastEnd) && (
                 <Pager
                   page={data.page}
                   pageCount={pageCount}

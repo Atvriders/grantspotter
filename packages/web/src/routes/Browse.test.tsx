@@ -132,10 +132,114 @@ describe('Browse', () => {
     expect(screen.queryByText(/rolling and undated programs are hidden/i)).not.toBeInTheDocument();
   });
 
+  /**
+   * THE WARNING NAMED TWO FUNDERS AND HID TWENTY-TWO PROGRAMMES.
+   *
+   * It read "NCDXF and SARA accept applications year-round and have no date to match against."
+   * Measured on the live site 2026-08-13, unticking the box moved the total by 22, of which those
+   * two were 2 — the three YLRL memorial scholarships, the Yasme Foundation and the rest were
+   * hidden and unnamed while the sentence read like a complete list. Measured again locally on the
+   * corpus this build serves, over 2026-09-01 to 2027-06-01: 148 with the box ticked, 120 without.
+   *
+   * The count cannot be a constant — it is a function of the window, the other filters and the
+   * corpus — so the route measures it, and these assert it is MEASURED rather than asserting the
+   * figure.
+   */
+  describe('the rolling-programs warning', () => {
+    function stubTwo(inWindow: number, withRolling: number) {
+      const fetchMock = vi.fn().mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () =>
+            makeResponse({
+              rows: [ARRL_GRANTS_ROW],
+              total: String(url).includes('includeRolling=false') ? inWindow : withRolling,
+            }),
+        }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    it('names no funder as if it were the whole hidden set', async () => {
+      stubTwo(120, 148);
+      renderBrowse('/?deadlineFrom=2026-09-01&deadlineTo=2027-06-01&includeRolling=false');
+      const warning = await screen.findByText(/rolling and undated programs are hidden/i);
+      await waitFor(() => {
+        expect((warning.textContent ?? '').replace(/\s+/g, ' ')).toBe(
+          'Rolling and undated programs are hidden while a deadline window is set: ' +
+            '28 programmes that match your other filters are not in this list. ' +
+            'Tick “Keep rolling and undated programs” to put them back.',
+        );
+      });
+      expect(warning.textContent ?? '', 'the warning still names an example as the set').not.toMatch(
+        /NCDXF|SARA|Yasme|YLRL/,
+      );
+    });
+
+    it('says one programme in the singular', async () => {
+      stubTwo(120, 121);
+      renderBrowse('/?deadlineFrom=2026-09-01&includeRolling=false');
+      const warning = await screen.findByText(/rolling and undated programs are hidden/i);
+      await waitFor(() => {
+        expect(warning.textContent ?? '').toMatch(/1 programme that matches your other filters is/);
+      });
+    });
+
+    it('states no count when the window is hiding nothing, rather than a bare zero', async () => {
+      stubTwo(120, 120);
+      renderBrowse('/?deadlineFrom=2026-09-01&includeRolling=false');
+      const warning = await screen.findByText(/rolling and undated programs are hidden/i);
+      await waitFor(() => {
+        expect(warning.textContent ?? '').toMatch(/nothing is missing from this list/i);
+      });
+    });
+
+    it('asks for the same query with rolling programmes kept, and only then', async () => {
+      const fetchMock = stubTwo(120, 148);
+      renderBrowse('/?klass=ham_grant&deadlineFrom=2026-09-01&includeRolling=false');
+      await waitFor(() => {
+        const probe = requestedUrls(fetchMock).filter((u) => !u.includes('includeRolling=false'));
+        expect(probe.length).toBeGreaterThan(0);
+        // The probe differs from the view in exactly one filter, or the difference it measures is
+        // not the one the sentence names.
+        expect(probe[0]).toContain('klass=ham_grant');
+        expect(probe[0]).toContain('deadlineFrom=2026-09-01');
+      });
+    });
+
+    it('asks for nothing extra on a view where the box is not hiding anything', async () => {
+      const fetchMock = stubFetch();
+      renderBrowse('/?deadlineFrom=2026-09-01');
+      await screen.findByRole('table', { name: /opportunities/i });
+      expect(requestedUrls(fetchMock)).toHaveLength(1);
+    });
+  });
+
   it('tells the user when no profile is applied instead of showing silent nulls', async () => {
     stubFetch(makeResponse({ ...RESPONSE, profileApplied: null }));
     renderBrowse();
-    expect(await screen.findByRole('link', { name: /set up a profile/i })).toBeInTheDocument();
+    const link = await screen.findByRole('link', { name: /set up a profile/i });
+    // The whole sentence, because "no verdicts are shown" without the reason reads as a claim
+    // about the corpus rather than about the reader's profile.
+    expect((link.parentElement?.textContent ?? '').replace(/\s+/g, ' ')).toBe(
+      'No profile is set, so no eligibility verdicts are shown. Set up a profile to see what you qualify for.',
+    );
+  });
+
+  /**
+   * The one state where "nothing here" is not a claim about the corpus at all.
+   *
+   * Asserted with a pattern rather than the literal string on purpose: the copy contract's
+   * assertion corpus is repository-wide, and quoting this particular word verbatim would mark
+   * every other component's identical loading line as covered by a test that never rendered it.
+   */
+  it('says it is loading rather than showing an empty screen while it waits', () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => undefined)));
+    renderBrowse();
+    expect(screen.getByText(/^Loading/)).toBeInTheDocument();
+    expect(screen.queryByText(/no opportunities match/i)).not.toBeInTheDocument();
   });
 
   it('does not render the verdict census when nobody has been matched', async () => {
@@ -145,7 +249,14 @@ describe('Browse', () => {
     expect(screen.queryByText(/you are ineligible for/i)).not.toBeInTheDocument();
   });
 
-  it('shows an empty state rather than a bare table', async () => {
+  /**
+   * AN EMPTY RESULT WITH NO FILTERS ON IT MAY NOT SAY "THESE FILTERS".
+   *
+   * The empty state used to open with "No opportunities match these filters." unconditionally, on
+   * a screen where the filter rail is untouched. There are no filters in that state, so the one
+   * sentence explaining the emptiness pointed at controls that are all at their defaults.
+   */
+  it('shows an empty state rather than a bare table, and names no filter when none is set', async () => {
     stubFetch(
       makeResponse({
         rows: [],
@@ -154,7 +265,75 @@ describe('Browse', () => {
       }),
     );
     renderBrowse();
-    expect(await screen.findByText(/no opportunities match these filters/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no opportunities match/i)).toBeInTheDocument();
+    expect(screen.getByText(/no filter is set/i)).toBeInTheDocument();
+    expect(screen.queryByText(/these filters/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE EMPTY STATE HAS TO NAME WHAT IS ACTUALLY NARROWING THE VIEW.
+ *
+ * Reproduced on the live site 2026-08-13: `/?q=zzzznotathing`, the search box the only thing set,
+ * printed "No opportunities match these filters. Widen the deadline window or clear a verdict
+ * filter." — the two controls that could not have caused it, and no mention of the one that did.
+ * A reader who follows that instruction finds a deadline window that is empty and a verdict filter
+ * with nothing ticked, and concludes the corpus has nothing rather than that they mistyped.
+ *
+ * The remedies are asserted as a PROHIBITION on naming an unset control, plus a requirement to
+ * name the set one, so the wording stays free to change and the defect cannot come back.
+ */
+describe('Browse empty state', () => {
+  const EMPTY = makeResponse({
+    rows: [],
+    summary: { ...RESPONSE.summary, total: 0, eligible: 0, preferred: 0, ineligible: 0, unknown: 0 },
+    total: 0,
+  });
+
+  it('names the search term that emptied the list, and prescribes nothing else', async () => {
+    stubFetch(EMPTY);
+    renderBrowse('/?q=zzzznotathing');
+    const empty = await screen.findByText(/no opportunities match these filters/i);
+    const text = empty.textContent ?? '';
+    expect(text.replace(/\s+/g, ' ')).toBe(
+      'No opportunities match these filters. What is narrowing this view: ' +
+        'the search “zzzznotathing”. Change or clear it to widen it.',
+    );
+    expect(text, 'the empty state prescribes a deadline window nobody set').not.toMatch(
+      /deadline window/i,
+    );
+    expect(text, 'the empty state prescribes a verdict filter nobody set').not.toMatch(
+      /verdict/i,
+    );
+  });
+
+  it('names a facet, a window and both amount bounds when those are what is set', async () => {
+    stubFetch(EMPTY);
+    renderBrowse('/?klass=ham_grant&deadlineFrom=2026-09-01&amountMin=5000&amountMax=9000');
+    const empty = await screen.findByText(/no opportunities match these filters/i);
+    const text = (empty.textContent ?? '').replace(/\s+/g, ' ');
+    expect(text).toMatch(/opportunity class — Ham grant/i);
+    // An open-ended window says so on the end that is open, rather than printing "undefined".
+    expect(text).toContain('a deadline window (2026-09-01 to any date)');
+    expect(text).toContain('a minimum award of $5,000');
+    expect(text).toContain('a maximum award of $9,000');
+  });
+
+  it('names the excluded rolling programmes as their own reason, not as the window', async () => {
+    stubFetch(EMPTY);
+    renderBrowse('/?deadlineTo=2027-06-01&includeRolling=false');
+    const empty = await screen.findByText(/no opportunities match these filters/i);
+    const text = (empty.textContent ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain('a deadline window (any date to 2027-06-01)');
+    expect(text).toContain('rolling and undated programmes excluded from that window');
+  });
+
+  /** A sort reorders; it can never be why nothing matched, so it is never offered as a remedy. */
+  it('does not offer the sort as something to change', async () => {
+    stubFetch(EMPTY);
+    renderBrowse('/?q=zzzznotathing&sort=name');
+    const empty = await screen.findByText(/no opportunities match these filters/i);
+    expect(empty.textContent ?? '').not.toMatch(/sort/i);
   });
 });
 
@@ -259,6 +438,131 @@ describe('Browse census honesty', () => {
       screen.queryByRole('link', { name: /see the specific constraint for each/i }),
     ).not.toBeInTheDocument();
   });
+
+  it('says "is waiting" when exactly one record is unknown', async () => {
+    stubFetch(
+      makeResponse({
+        rows: [ARRL_GRANTS_ROW],
+        summary: {
+          total: 8,
+          eligible: 4,
+          preferred: 0,
+          ineligible: 3,
+          unknown: 1,
+          ineligibleByAxis: [],
+          unknownByField: [],
+        },
+        total: 8,
+      }),
+    );
+    renderBrowse('/?klass=ham_grant');
+    const note = await screen.findByText(/waiting on an answer rather than ruling you out/i);
+    expect(note.textContent ?? '').toMatch(/1 of the 8 in view is waiting/);
+  });
+});
+
+/**
+ * THE CENSUS AND THE PAGER DESCRIBE SETS THAT ARE NAMED, AND THE NUMBER THEY SHARE AGREES.
+ *
+ * Reproduced on the live site 2026-08-13, on the state the census's OWN link routes into:
+ * `/?verdict=ineligible` showed "39 ELIGIBLE · 4 PREFERRED · 41 UNKNOWN · 143 IN VIEW" above a
+ * pager reading "Page 2 of 2 · 59 programmes match", every visible row ineligible.
+ *
+ * The server computes `summary` over the match BEFORE the verdict filter and `total` after it
+ * (`programsRouter.ts`), which is the right split — a breakdown of a set already narrowed to one
+ * verdict says nothing. What was wrong was the words: `summary.total` was printed as "in view"
+ * when the view was something else. These assert the two figures against `data.total`, which is
+ * the pager's own input, under every verdict filter.
+ */
+describe('Browse census and pager describe the same set', () => {
+  const MATCHED = 143;
+  const SUMMARY = {
+    total: MATCHED,
+    eligible: 39,
+    preferred: 4,
+    ineligible: 59,
+    unknown: 41,
+    ineligibleByAxis: [{ axis: 'geography', count: 20 }],
+    unknownByField: [{ field: 'gpa', count: 7 }],
+  };
+
+  function filtered(shown: number) {
+    return makeResponse({
+      rows: [ARRL_GRANTS_ROW],
+      summary: SUMMARY,
+      page: 1,
+      pageSize: 50,
+      total: shown,
+      profileApplied: 'student',
+    });
+  }
+
+  it.each([
+    ['ineligible', 59],
+    ['eligible', 39],
+    ['eligible_preferred', 4],
+    ['unknown', 41],
+  ])('never calls the wider match "in view" under verdict=%s', async (verdict, shown) => {
+    stubFetch(filtered(shown));
+    renderBrowse(`/?verdict=${verdict}`);
+    const census = await screen.findByRole('region', { name: /eligibility summary/i });
+    const text = (census.textContent ?? '').replace(/\s+/g, ' ');
+
+    // The one claim that was false: the pre-filter population announced as what is on screen.
+    expect(text, 'the census calls the pre-filter population "in view"').not.toMatch(
+      new RegExp(`${String(MATCHED)} in view`),
+    );
+    // Both sets are named, and the second number is the pager's own.
+    expect(text).toContain(`${String(MATCHED)} matched`);
+    expect(text).toContain(`showing ${String(shown)}`);
+  });
+
+  it('reads out every counter, and they sum to the population', async () => {
+    stubFetch(filtered(59));
+    renderBrowse('/?verdict=ineligible');
+    const census = await screen.findByRole('region', { name: /eligibility summary/i });
+    const text = (census.textContent ?? '').replace(/\s+/g, ' ');
+    // Every counter is on screen — the ineligible one was missing from this line until
+    // 2026-08-13, which is what made the four numbers un-addable by the reader.
+    for (const [label, n] of [
+      ['eligible', SUMMARY.eligible],
+      ['preferred', SUMMARY.preferred],
+      ['ineligible', SUMMARY.ineligible],
+      ['unknown', SUMMARY.unknown],
+    ] as const) {
+      expect(text).toContain(`${String(n)} ${label}`);
+    }
+    expect(text).toContain('matched, of which the verdict filter is showing 59');
+    // They add up to the population, which is the arithmetic the card is inviting.
+    expect(SUMMARY.eligible + SUMMARY.preferred + SUMMARY.ineligible + SUMMARY.unknown).toBe(
+      MATCHED,
+    );
+  });
+
+  it('states the pager total and the census total as the same number for the same set', async () => {
+    stubFetch({ ...filtered(59), page: 2, total: 59 });
+    renderBrowse('/?verdict=ineligible&page=2');
+    const pager = await screen.findByRole('navigation', { name: /pagination/i });
+    const census = screen.getByRole('region', { name: /eligibility summary/i });
+    expect(pager.textContent ?? '').toContain('59 programmes match');
+    expect((census.textContent ?? '').replace(/\s+/g, ' ')).toContain('showing 59');
+  });
+
+  it('does not offer a drill-down into the view the reader is already on', async () => {
+    stubFetch(filtered(59));
+    renderBrowse('/?verdict=ineligible');
+    await screen.findByRole('region', { name: /eligibility summary/i });
+    expect(
+      screen.queryByRole('link', { name: /see the specific constraint for each/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still says "in view" when no verdict filter narrows the match', async () => {
+    stubFetch(filtered(MATCHED));
+    renderBrowse();
+    const census = await screen.findByRole('region', { name: /eligibility summary/i });
+    expect((census.textContent ?? '').replace(/\s+/g, ' ')).toContain(`${String(MATCHED)} in view`);
+  });
 });
 
 describe('Browse pagination', () => {
@@ -306,6 +610,72 @@ describe('Browse pagination', () => {
     renderBrowse();
     await screen.findByRole('table', { name: /opportunities/i });
     expect(screen.queryByRole('button', { name: /next page/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * "PAGE 4 OF 3", AND THE SECOND FALSE SENTENCE STANDING UNDER IT.
+   *
+   * Reproduced on the live site 2026-08-13: `/?page=4` printed "No opportunities match these
+   * filters." directly above "Page 4 of 3 · 143 programmes match". Nothing matched AND 143
+   * matched, on one screen, and a page number that cannot exist above both. `lib/filterState.ts`
+   * documents the URL as the shareable source of truth for this screen, so a link shared from page
+   * 3 of a wider result set lands a reader here.
+   */
+  describe('a page past the end of the result set', () => {
+    const PAST_END = { ...PAGED, page: 4 as const, rows: [] };
+
+    it('does not claim nothing matched when 150 did', async () => {
+      stubFetch(PAST_END);
+      renderBrowse('/?page=4');
+      await screen.findByRole('navigation', { name: /pagination/i });
+      expect(screen.queryByText(/no opportunities match/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/there is no page 4/i)).toBeInTheDocument();
+    });
+
+    it('does not print a page number past the last one as if it existed', async () => {
+      stubFetch(PAST_END);
+      renderBrowse('/?page=4');
+      const pager = await screen.findByRole('navigation', { name: /pagination/i });
+      const status = (pager.textContent ?? '').replace(/\s+/g, ' ');
+      expect(status, 'the pager states a page count it has just contradicted').not.toMatch(
+        /page 4 of 3/i,
+      );
+      expect(status).toContain('Page 4 is past the end · 150 programmes match, on 3 pages');
+    });
+
+    it('offers the last page that exists, and asks the API for it', async () => {
+      const fetchMock = stubFetch(PAST_END);
+      renderBrowse('/?page=4');
+      await userEvent.click(await screen.findByRole('button', { name: /go to page 3/i }));
+      await waitFor(() => {
+        expect(requestedUrls(fetchMock).some((u) => u.includes('page=3'))).toBe(true);
+      });
+    });
+
+    it('walks Previous back to the last page that exists, not to another empty one', async () => {
+      const fetchMock = stubFetch({ ...PAGED, page: 9 as const, rows: [] });
+      renderBrowse('/?page=9');
+      await userEvent.click(await screen.findByRole('button', { name: /previous page/i }));
+      await waitFor(() => {
+        expect(requestedUrls(fetchMock).some((u) => u.includes('page=3'))).toBe(true);
+      });
+      expect(requestedUrls(fetchMock).some((u) => u.includes('page=8'))).toBe(false);
+    });
+
+    /** An empty result set has no "end" to be past, and its page number explains nothing. */
+    it('reads an empty result as empty rather than as a page past the end', async () => {
+      stubFetch(
+        makeResponse({
+          rows: [],
+          summary: { ...RESPONSE.summary, total: 0, eligible: 0, ineligible: 0 },
+          total: 0,
+          page: 4,
+        }),
+      );
+      renderBrowse('/?q=zzzznotathing&page=4');
+      expect(await screen.findByText(/no opportunities match these filters/i)).toBeInTheDocument();
+      expect(screen.queryByText(/past the end/i)).not.toBeInTheDocument();
+    });
   });
 
   it('resets to page 1 when a filter changes, so page 3 of an old query is not requested', async () => {
@@ -370,7 +740,10 @@ describe('Browse failure states', () => {
   it('explains an empty result caused by a verdict filter with no profile', async () => {
     stubFetch(makeResponse({ rows: [], total: 0, profileApplied: null }));
     renderBrowse('/?verdict=eligible');
-    expect(await screen.findByText(/no profile is set, so no verdict can match/i)).toBeInTheDocument();
+    const note = await screen.findByText(/no profile is set, so no verdict can match/i);
+    expect((note.textContent ?? '').replace(/\s+/g, ' ')).toBe(
+      'No profile is set, so no verdict can match. Clear the verdict filter, or set up a profile to be matched against these programmes.',
+    );
   });
 });
 

@@ -549,12 +549,32 @@ describe('Watchlist — delivery channels', () => {
     expect(within(settings).getByLabelText(/ntfy topic/i)).toBeInTheDocument();
   });
 
-  it('says email is optional and not configured here, rather than showing a dead field', async () => {
+  /**
+   * THE PAGE MAY SAY GRANTSPOTTER SENDS NO EMAIL. IT MAY NOT SAY NO ADDRESS IS STORED.
+   *
+   * Until 2026-08-13 this panel read "Email is optional and is not required by GrantSpotter —
+   * there is no mail server to configure here, and no address is stored", on a page whose own
+   * header, two inches above, reads `<your email> · MEMBER`. Registration takes an email, it is
+   * the sign-in identifier, and `users.email` holds it: the sentence denied storing something the
+   * reader could see on screen.
+   *
+   * Both halves are asserted — the true claim has to survive, and the false one may not come back
+   * in any wording, which is why the prohibition is on the claim rather than on the old string.
+   */
+  it('says GrantSpotter sends no email, without denying that the account address is stored', async () => {
     stubApi();
     renderWatchlist();
     const settings = await screen.findByRole('region', { name: /delivery/i });
-    expect(within(settings).getByText(/email is optional and is not required/i)).toBeInTheDocument();
+    const text = (settings.textContent ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toMatch(/no email channel|no mail server/i);
     expect(within(settings).queryByLabelText(/smtp/i)).toBeNull();
+
+    expect(text, 'the delivery panel denies storing the address the reader signed in with').not.toMatch(
+      /no (?:e-?mail )?address is stored|does not store (?:your |any )?(?:e-?mail )?address|nothing is stored/i,
+    );
+    // ...and it says what is true of the address instead of staying silent about it.
+    expect(text).toMatch(/stored/i);
   });
 
   it('surfaces a refused webhook URL as an explanation, and offers no way to override it', async () => {

@@ -249,6 +249,80 @@ describe('Sources — an unset minimum reads as unset', () => {
  * omits its clause when the value is null; this page must not fill the gap with a figure of its
  * own, and must say why the comparison it CANNOT make is missing.
  */
+/**
+ * AN INSTANCE WITH NO SOURCES IS THE COMMON CASE, NOT AN EXOTIC ONE.
+ *
+ * MEASURED 2026-08-13. Live, `GET https://grant.waterburp.com/api/sources/health` answers
+ * `{"rows":[],"summary":{"total":0,"healthy":0,"unhealthy":0},"canConfigure":false}`. Locally,
+ * against the same build seeded by `e2e/seed.ts` — which polls every source module through
+ * `recordPollStart` — the same endpoint answers 27 rows. The difference is not the code: `sources`
+ * rows are written by a crawl, and `packages/server/src/seed/import.ts` writes none, so every
+ * installation looks like the live one until its first crawl runs.
+ *
+ * The page was drawn for the 27-row case and asserted it in prose regardless: "About twenty-five
+ * sources are polled nightly", "what make one bad source findable among twenty-five", "Every
+ * enabled source has a minimum configured", and a stat card reading "0 of 0 sources need
+ * attention" — four claims about a fleet, over a table with a header row and no body.
+ *
+ * These pin the zero case, which nothing tested before.
+ */
+describe('Sources — an instance whose fleet is empty', () => {
+  function stubEmpty(): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          rows: [],
+          summary: { total: 0, healthy: 0, unhealthy: 0 },
+          canConfigure: false,
+        }),
+      }),
+    );
+  }
+
+  it('never reads "0 of 0 need attention" as an all-clear', async () => {
+    stubEmpty();
+    renderSources();
+    expect(await screen.findByText(/no sources are registered/i)).toBeInTheDocument();
+    expect(screen.queryByText(/0 of 0 sources need attention/i)).not.toBeInTheDocument();
+  });
+
+  it('states no fleet size anywhere on a page that is showing none', async () => {
+    stubEmpty();
+    renderSources();
+    await screen.findByText(/no sources are registered/i);
+    const page = document.body.textContent ?? '';
+    expect(page, 'the page asserts a fleet size it is not showing').not.toMatch(
+      /twenty-five|twenty five/i,
+    );
+  });
+
+  it('draws no header row over an empty body', async () => {
+    stubEmpty();
+    renderSources();
+    await screen.findByText(/no sources are registered/i);
+    expect(screen.queryByRole('table', { name: /source health/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/no health matrix to draw yet/i)).toBeInTheDocument();
+  });
+
+  it('does not promise that every source has a yield alarm when there are no sources', async () => {
+    stubEmpty();
+    renderSources();
+    await screen.findByText(/no sources are registered/i);
+    expect(screen.queryByText(/every enabled source has a minimum configured/i)).toBeNull();
+    expect(screen.getByText(/nothing on this instance is being watched/i)).toBeInTheDocument();
+  });
+
+  it('takes the fleet size from the rows once there are some', async () => {
+    stubFetch(false);
+    renderSources();
+    await screen.findByRole('table', { name: /source health/i });
+    expect(screen.getByText(/findable among the 3 below/i)).toBeInTheDocument();
+  });
+});
+
 describe('Sources — the dormant historical baseline', () => {
   it('prints no historical yield figure while nothing writes one', async () => {
     renderSources();
