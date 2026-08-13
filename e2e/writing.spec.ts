@@ -123,6 +123,7 @@ interface TemplateSummary {
 interface TemplateList {
   components: TemplateSummary[];
   overlays: TemplateSummary[];
+  libraryOverlays: TemplateSummary[];
   playbooks: TemplateSummary[];
 }
 interface FilledTemplate {
@@ -154,6 +155,9 @@ interface Readiness {
   unconfirmed: number;
   openTodos: number;
   items: FactItem[];
+  /** Values the draft quotes verbatim from a shipped template — not on `items`, counted instead. */
+  shippedFacts: number;
+  shippedTemplates: string[];
 }
 
 async function signIn(api: APIRequestContext, email: string, password: string): Promise<void> {
@@ -229,6 +233,15 @@ test.describe('the writing desk over HTTP', () => {
 
     // And it is not smuggled in as an overlay: overlays are funder-bound, playbooks are not.
     expect(bare.overlays).toEqual([]);
+
+    // THE OTHER HALF OF THAT SENTENCE, which the library screen was getting wrong. `overlays` is
+    // empty because nothing named a funder — and `/templates` is reached from the nav rail with no
+    // query string, so the screen printed "No overlay has been written for this funder yet." with
+    // no funder in context over a library holding eight. `libraryOverlays` answers the question
+    // that screen is actually asking, is never narrowed, and never carries a playbook.
+    expect(bare.libraryOverlays.map((o) => o.id)).toContain('funder-ardc');
+    expect(bare.libraryOverlays.length).toBeGreaterThanOrEqual(8);
+    expect(bare.libraryOverlays.map((o) => o.id)).not.toContain('funder-campus-sga');
     const body = await json<{ body: string }>(request.get('/api/templates/funder-campus-sga'));
     expect(body.body).toContain('capital equipment');
   });
@@ -312,6 +325,71 @@ test.describe('the writing desk over HTTP', () => {
       expect(filled.markdown).toContain(item.text);
       expect(item.text).not.toContain('TODO');
     }
+  });
+
+  /**
+   * THE PRODUCT'S OWN OVERLAY, INSERTED BY THE PRODUCT'S OWN BUTTON, IS NOT A LIST OF THINGS THE
+   * APPLICANT HAS TO SWEAR TO.
+   *
+   * Walked live on 2026-08-13: one press of "Insert ARDC Grants Program — funder overlay" into an
+   * empty draft produced a fact checklist of 120 items, every one of them labelled "NOT
+   * ATTRIBUTED TO ANY STATED VALUE / Not traceable to any stated value" — about text GrantSpotter
+   * wrote and cites three ARDC pages for, on the same screen. The applicant's own assertions, the
+   * only ones the panel is for, were unfindable underneath it.
+   *
+   * This drives the same path the button drives (`POST /:id/fill`, then `PATCH` the body) against
+   * the real server and the real `content/` on disk, because the checklist is computed from the
+   * shipped template library at runtime and no component test can see that.
+   */
+  test('inserting the product’s own overlay does not fill the checklist with the product’s own prose', async ({
+    request,
+  }) => {
+    await signIn(request, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const programId = programIdByName(ARDC_PROGRAM_NAME);
+    const { program } = await json<{ program: unknown }>(request.get(`/api/programs/${programId}`));
+
+    const filled = await json<FilledTemplate>(
+      request.post('/api/templates/funder-ardc/fill', { data: { program } }),
+    );
+    const draft = await json<Application>(
+      request.post('/api/applications', { data: { title: 'ARDC overlay draft', programId } }),
+    );
+    await json<Application>(
+      request.patch(`/api/applications/${draft.id}`, { data: { bodyMarkdown: filled.markdown } }),
+    );
+
+    const readiness = await json<Readiness>(
+      request.get(`/api/applications/${draft.id}/export-readiness`),
+    );
+
+    // Recognised as the product's, named, and counted rather than dropped in silence.
+    expect(readiness.shippedTemplates).toEqual(['ARDC Grants Program — funder overlay']);
+    expect(readiness.shippedFacts).toBeGreaterThan(50);
+    // What is left is what the applicant would have to sign for, and it is a handful at most.
+    expect(readiness.items.length).toBeLessThan(5);
+
+    // AND THE GATE IS UNCHANGED. The overlay leaves `[TODO: …]` markers only the applicant can
+    // answer; taking assertions off the checklist must not take a gap off the export gate.
+    expect(readiness.openTodos).toBe(filled.unresolvedSlots.length);
+    expect(readiness.openTodos).toBeGreaterThan(0);
+    expect(readiness.ready).toBe(false);
+
+    // A sentence the applicant writes into that material is theirs again, immediately.
+    const edited = filled.markdown.replace(
+      'ARDC publishes no maximum award.',
+      'W8UM has asked ARDC for $12,500 since 2019.',
+    );
+    expect(edited).not.toBe(filled.markdown);
+    await json<Application>(
+      request.patch(`/api/applications/${draft.id}`, { data: { bodyMarkdown: edited } }),
+    );
+    const after = await json<Readiness>(
+      request.get(`/api/applications/${draft.id}/export-readiness`),
+    );
+    const texts = after.items.map((i) => i.text);
+    expect(texts).toContain('W8UM');
+    expect(texts).toContain('$12,500');
+    expect(texts).toContain('2019');
   });
 
   test('a confirmation dies when the value it confirms is edited, and export stays shut', async ({
@@ -591,6 +669,19 @@ test.describe('the writing desk in a browser', () => {
     // The overlay bound to this funder, pre-selected — the deep link carrying programId, klass and
     // funderId all the way through `selectTemplates` to a button the applicant can press.
     await expect(page.getByRole('button', { name: /Insert ARDC Grants Program/ })).toBeVisible();
+
+    /*
+     * WHAT PRESSING IT DOES IS PROVEN OVER HTTP, NOT HERE — see "inserting the product's own
+     * overlay does not fill the checklist with the product's own prose" in the section above.
+     *
+     * Not for want of trying: the ARDC overlay quotes ARDC's own R&D guidance, which contains the
+     * phrase "avoids jargon or undefined acronyms", and `renderedHoles.ts` refuses any rendered
+     * "undefined" anywhere on the page. Inserting the overlay puts that sentence in the draft
+     * textarea — whose `defaultValue` IS its text content — and the sweep fires on the funder's
+     * own English. That is a false positive in a shared guard rather than a defect in this
+     * screen, and narrowing the guard is not this territory's to do, so the assertion about the
+     * checklist is made against the same server through the API instead.
+     */
   });
 
   test('the template library shows components, playbooks and their citations', async ({ page }) => {
@@ -612,6 +703,33 @@ test.describe('the writing desk in a browser', () => {
     await always.getByRole('button', { name: /Campus student government playbook/ }).click();
     // The template's own words, unaltered — the trap this playbook exists to name.
     await expect(page.getByText(/capital equipment is frequently barred/i)).toBeVisible();
+  });
+
+  /**
+   * THE SCREEN THE RAIL LINKS TO, WHICH IS THIS ONE WITH NOTHING IN THE QUERY.
+   *
+   * Walked live on 2026-08-13: the FUNDER OVERLAYS group printed "No overlay has been written for
+   * this funder yet." on a page with no funder in context, two inches under a paragraph promising
+   * "the overlays written against a particular funder's published criteria", while eight overlays
+   * sat in the library. This drives the same route in a browser rather than asking the API.
+   */
+  test('the templates screen indexes the overlay library instead of reporting none', async ({
+    page,
+  }) => {
+    await signInBrowser(page);
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Templates' }).click();
+    await expect(page).toHaveURL(/\/templates$/);
+
+    const overlays = page.getByRole('region', { name: 'Funder overlays' });
+    await expect(overlays.getByRole('button', { name: /ARDC Grants Program/ })).toBeVisible();
+    expect(await overlays.getByRole('button').count()).toBeGreaterThanOrEqual(8);
+    await expect(page.getByText(/No overlay has been written for this funder yet/i)).toHaveCount(0);
+
+    // Opening one and reading its body is NOT asserted here: the ARDC overlay quotes ARDC on
+    // "undefined acronyms", and `renderedHoles.ts` fails any page whose text contains the word
+    // "undefined". The overlay's own citation count — three pages cited, and it claimed two until
+    // 2026-08-13 — is asserted against the shipped file in `templates/content.test.ts`.
+    await expect(overlays.getByRole('link', { name: /ARDC — 2026 Grants/ })).toBeVisible();
   });
 
   test('a draft fills from a template, shows its gaps beside the checklist, and gates export', async ({

@@ -121,6 +121,22 @@ describe('templates router', () => {
     expect(body.components[0].body).toBeUndefined(); // summaries only
   });
 
+  /**
+   * The bare request the nav rail makes. `overlays` is empty — nothing named a funder, and the
+   * writing desk must not be handed another funder's criteria as "yours" — while the library it
+   * ships is reported in full, because "none applies here" and "none exists" are different
+   * answers and `/templates` was printing the second one.
+   */
+  it('reports the whole overlay library even when the query names no funder', async () => {
+    const { body } = await get('/api/templates');
+    expect(body.overlays).toEqual([]);
+    const ids = body.libraryOverlays.map((t: { id: string }) => t.id);
+    expect(ids).toContain('funder-ardc');
+    expect(ids.length).toBeGreaterThanOrEqual(8);
+    expect(ids).not.toContain('funder-campus-sga'); // a playbook is not an overlay
+    expect(body.libraryOverlays[0].body).toBeUndefined(); // summaries only
+  });
+
   it('refuses an unknown klass rather than silently narrowing the library', async () => {
     // `selectTemplates` keeps only components whose `appliesTo` includes the klass, so an
     // unrecognised value does not fail — it returns the handful with an empty `appliesTo` and

@@ -27,6 +27,31 @@ export interface PromptContext {
 }
 
 /**
+ * A section the brief was ASKED for and does not contain, with the reason.
+ *
+ * The subtitle beside the copy button enumerates the brief's contents — spec §10.2 requires the
+ * enumeration — and it was a constant, so it recited "your profile facts" to every reader
+ * including the ones who have no profile. Measured on the live site on 2026-08-13: a member with
+ * no profile copied a 21,145-character prompt containing no "## Facts about me that you may use"
+ * section at all, under a sentence promising one. An enumeration that is right most of the time is
+ * worse than none, because the times it is wrong are exactly the times a reader would have acted
+ * on it — this reader would have saved a profile if the screen had said their facts were missing.
+ */
+export interface OmittedSection {
+  /** The clause as the subtitle would have printed it: "your profile facts". */
+  clause: string;
+  /** Why it is not there, in the same voice: "you have not saved a profile". */
+  reason: string;
+}
+
+export interface PromptContents {
+  prompt: string;
+  /** Every clause the enumeration may claim, in the order the brief presents them. */
+  included: string[];
+  omitted: OmittedSection[];
+}
+
+/**
  * Rules first, then the reasoning, then the two rules that outrank everything. `why-these-rules`
  * sits after the style rules because it explains them; `never-invent` and the brevity pass sit
  * last because they are the passes the model runs over its own finished draft.
@@ -285,10 +310,18 @@ function profileFacts(profile: Profile): string[] {
  * avoidance" because the brief bars the constructions the cited research measured; the brief
  * itself says in its own words that it will not make a classifier report "human", and no wording
  * in this module may say otherwise.
+ *
+ * IT ALSO REPORTS WHAT IT PUT IN, and the enumeration is built HERE rather than beside the button,
+ * at the same `if` that decides whether the section is written. A second list maintained elsewhere
+ * is a list that drifts, and the drift is invisible: the screen says "your profile facts" and the
+ * prompt has no such heading. `included` / `omitted` name the clauses the subtitle prints, so the
+ * enumeration cannot describe a prompt this function did not compose.
  */
-export function composePrompt(ctx: PromptContext): string {
+export function composePromptContents(ctx: PromptContext): PromptContents {
   const { program, profile, templateId, includeDisclosure } = ctx;
   const out: string[] = [];
+  const included: string[] = [];
+  const omitted: OmittedSection[] = [];
 
   out.push(`# Application drafting brief — ${program.name}`);
   out.push('');
@@ -319,11 +352,14 @@ export function composePrompt(ctx: PromptContext): string {
   );
   if (program.trust.staleMirrorWarning) out.push(`- ${program.trust.staleMirrorWarning}`);
   out.push('');
+  // Always present: the record itself is what this brief is built from.
+  included.push('this funder’s published criteria');
 
   if (program.fundingRestrictions.length > 0) {
     out.push('### This funder will not fund');
     for (const r of program.fundingRestrictions) out.push(`- ${r}`);
     out.push('');
+    included.push('what they will not fund, in their words');
   }
 
   const obligations = obligationLines(program);
@@ -331,6 +367,7 @@ export function composePrompt(ctx: PromptContext): string {
     out.push('### Obligations attached to the award');
     out.push(...obligations);
     out.push('');
+    included.push('the obligations attached to the award');
   }
 
   if (program.constraints.length > 0) {
@@ -358,22 +395,45 @@ export function composePrompt(ctx: PromptContext): string {
   if (program.aiPolicy.stance === 'unaddressed') {
     out.push(`${program.name} has not published a policy on applicants using AI.`);
     out.push(disclosureNote('unaddressed'));
+    // The section is there and says the truthful thing; what is NOT there is a quote, because
+    // there is nothing to quote. "their AI policy, quoted, with the source URL" would be a
+    // sentence about a page this funder has never published.
+    omitted.push({
+      clause: 'their AI policy, quoted, with the source URL',
+      reason: `${program.name} has published no position on applicants using AI — the brief says so instead`,
+    });
   } else {
     out.push(disclosureNote(program.aiPolicy.stance));
     if (program.aiPolicy.quote) out.push('', `> ${program.aiPolicy.quote}`);
     if (program.aiPolicy.url) out.push('', `Source: ${program.aiPolicy.url}`);
+    const quoted = Boolean(program.aiPolicy.quote);
+    const sourced = Boolean(program.aiPolicy.url);
+    included.push(
+      quoted && sourced
+        ? 'their AI policy, quoted, with the source URL'
+        : quoted
+          ? 'their AI policy, quoted'
+          : 'their stated AI position',
+    );
   }
   out.push('');
 
-  if (profile) {
-    const facts = profileFacts(profile);
-    if (facts.length > 0) {
-      out.push('## Facts about me that you may use');
-      out.push('These are the only facts you have about me. Do not add to them; ask me instead.');
-      out.push('');
-      out.push(...facts);
-      out.push('');
-    }
+  const facts = profile === undefined ? [] : profileFacts(profile);
+  if (facts.length > 0) {
+    out.push('## Facts about me that you may use');
+    out.push('These are the only facts you have about me. Do not add to them; ask me instead.');
+    out.push('');
+    out.push(...facts);
+    out.push('');
+    included.push(`your profile facts (${String(facts.length)})`);
+  } else {
+    omitted.push({
+      clause: 'your profile facts',
+      reason:
+        profile === undefined
+          ? 'you have no saved profile, so the brief carries no fact about you and the model is told to ask'
+          : 'your profile has no filled-in field to carry, so the brief carries no fact about you and the model is told to ask',
+    });
   }
 
   if (templateId !== undefined) {
@@ -395,12 +455,26 @@ export function composePrompt(ctx: PromptContext): string {
       }
       out.push('');
     }
+    included.push(`the “${template.title}” skeleton, with every unsupplied fact left as a gap`);
   }
 
   for (const id of FRAGMENT_ORDER) {
     out.push(loadFragment(id));
     out.push('');
   }
+  /*
+   * FRAGMENT_ORDER is not conditional — every one of these six is loaded from disk on every
+   * compose, and `loadFragment` throws rather than returning empty if a file is missing, so a
+   * clause here cannot outlive its fragment. They are enumerated in the order the brief presents
+   * them, which is the order a reader checking the claim would find them in.
+   */
+  included.push(
+    'an interview-first rule so the model asks before it drafts',
+    'the specificity ruleset (named subjects, proper nouns, figures, dates)',
+    'banned stock transitions, openers and closers',
+    'a brevity pass',
+    'a never-invent-a-citation rule',
+  );
 
   if (includeDisclosure) {
     out.push('## AI-use disclosure');
@@ -410,6 +484,12 @@ export function composePrompt(ctx: PromptContext): string {
     out.push('');
     out.push(`> ${disclosureSentence({ stance: program.aiPolicy.stance, funderName: program.name })}`);
     out.push('');
+    included.push('an editable AI-use disclosure sentence');
+  } else {
+    omitted.push({
+      clause: 'an editable AI-use disclosure sentence',
+      reason: 'you switched it off — the funder’s own AI policy above is unaffected by that switch',
+    });
   }
 
   out.push('## Before you hand the draft back');
@@ -417,5 +497,10 @@ export function composePrompt(ctx: PromptContext): string {
     'End with the "Facts to verify" list. I will confirm every entry in it by hand before this document is exported or submitted; the funder holds me accountable for each one, not you.',
   );
 
-  return out.join('\n');
+  return { prompt: out.join('\n'), included, omitted };
+}
+
+/** The prompt alone, for the callers that only ever wanted the text. */
+export function composePrompt(ctx: PromptContext): string {
+  return composePromptContents(ctx).prompt;
 }

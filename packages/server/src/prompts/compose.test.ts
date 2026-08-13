@@ -7,7 +7,7 @@ import { RECURRENCE_BY_SOURCE } from '../normalize/deadline.js';
 import { analyzeProse } from '../prose/index.js';
 import { loadSeedCorpus, seedDir } from '../seed/load.js';
 import { BANNED_TRANSITIONS, STOCK_CLOSERS, STOCK_OPENERS } from '../prose/lexicon.js';
-import { composePrompt } from './compose.js';
+import { composePrompt, composePromptContents } from './compose.js';
 import { DISCLOSURE_DEFAULT_ON, disclosureNote, disclosureSentence } from './disclosure.js';
 import { FRAGMENT_IDS, loadFragment } from './fragments.js';
 
@@ -584,5 +584,135 @@ describe('composePrompt', () => {
 
   it('is deterministic', () => {
     expect(composePrompt({ program: ARDC, profile: PROFILE, includeDisclosure: true })).toBe(prompt);
+  });
+});
+
+/**
+ * THE ENUMERATION BESIDE THE BUTTON HAS TO BE AN ENUMERATION OF THIS BRIEF.
+ *
+ * Spec §10.2 requires the copy button to say what the prompt includes, and that sentence was a
+ * constant: it recited "your profile facts" to a member with no profile — measured on the live
+ * site on 2026-08-13, 21,145 characters with no "## Facts about me that you may use" heading in
+ * them — and "their AI policy, quoted, with the source URL" for the 142 of 143 shipped records
+ * that have published no AI policy at all. The clauses below are built at the same `if` that
+ * writes each section; these tests hold the two to each other, in both directions, so a claim
+ * cannot survive the section it describes.
+ */
+describe('what the brief says it contains', () => {
+  const heading = '## Facts about me that you may use';
+  const claimsProfileFacts = (included: string[]): boolean =>
+    included.some((c) => /profile facts/i.test(c));
+
+  it('claims the profile section when, and only when, the prompt has one', () => {
+    for (const profile of [undefined, PROFILE]) {
+      const c = composePromptContents({ program: ARDC, profile, includeDisclosure: true });
+      expect(claimsProfileFacts(c.included), String(profile !== undefined)).toBe(
+        c.prompt.includes(heading),
+      );
+    }
+  });
+
+  it('names the missing profile as missing, with the reason, rather than staying quiet', () => {
+    const c = composePromptContents({ program: ARDC, includeDisclosure: true });
+    expect(c.prompt).not.toContain(heading);
+    const omission = c.omitted.find((o) => /profile facts/i.test(o.clause));
+    expect(omission, 'a section the subtitle enumerates went missing silently').toBeDefined();
+    expect(omission?.reason).toMatch(/no saved profile/i);
+  });
+
+  /**
+   * A profile that exists and holds nothing is a different sentence from no profile at all, and
+   * the applicant's next move is different too: one is "save a profile", the other is "fill it
+   * in". `profileFacts` drops every empty field, so an all-blank profile produces no section
+   * either way — and the old copy claimed one in both cases.
+   */
+  it('separates an empty profile from an absent one, in the reason it gives', () => {
+    // Every field empty — `profileFacts` drops each one, so the section is never written.
+    const blank = { kind: 'organization' } as unknown as Profile;
+    const c = composePromptContents({ program: ARDC, profile: blank, includeDisclosure: true });
+    expect(c.prompt).not.toContain(heading);
+    const omission = c.omitted.find((o) => /profile facts/i.test(o.clause));
+    expect(omission?.reason).toMatch(/no filled-in field/i);
+    expect(omission?.reason).not.toMatch(/no saved profile/i);
+  });
+
+  it('counts the profile facts it actually carried', () => {
+    const c = composePromptContents({ program: ARDC, profile: PROFILE, includeDisclosure: true });
+    const clause = c.included.find((x) => /profile facts/i.test(x)) ?? '';
+    const stated = Number(/\((\d+)\)/.exec(clause)?.[1]);
+    // Every fact line in the section, counted off the prompt itself.
+    const section = c.prompt.slice(c.prompt.indexOf(heading));
+    const lines = section.slice(0, section.indexOf('\n\n##')).split('\n').filter((l) => l.startsWith('- '));
+    expect(stated).toBe(lines.length);
+    expect(stated).toBeGreaterThan(0);
+  });
+
+  it('does not claim a quoted AI policy for a funder that has published none', () => {
+    const c = composePromptContents({ program: UNADDRESSED, profile: PROFILE, includeDisclosure: true });
+    expect(c.included.some((x) => /AI policy/i.test(x))).toBe(false);
+    const omission = c.omitted.find((o) => /AI policy/i.test(o.clause));
+    expect(omission?.reason).toContain('published no position');
+    // The section is still there, saying the true thing.
+    expect(c.prompt).toContain('has not published a policy on applicants using AI');
+  });
+
+  it('claims the quoted policy and its URL only when both are in the brief', () => {
+    const c = composePromptContents({ program: ARDC, profile: PROFILE, includeDisclosure: true });
+    expect(c.included).toContain('their AI policy, quoted, with the source URL');
+    expect(c.prompt).toContain(ARDC.aiPolicy.quote as string);
+    expect(c.prompt).toContain(`Source: ${ARDC.aiPolicy.url as string}`);
+
+    const noUrl = { ...ARDC, aiPolicy: { ...ARDC.aiPolicy, url: undefined } } as unknown as Program;
+    const d = composePromptContents({ program: noUrl, profile: PROFILE, includeDisclosure: true });
+    expect(d.included).toContain('their AI policy, quoted');
+    expect(d.included).not.toContain('their AI policy, quoted, with the source URL');
+  });
+
+  it('reports the disclosure sentence as included or as switched off, matching the brief', () => {
+    for (const includeDisclosure of [true, false]) {
+      const c = composePromptContents({ program: ARDC, profile: PROFILE, includeDisclosure });
+      const claimed = c.included.some((x) => /disclosure sentence/i.test(x));
+      expect(claimed).toBe(includeDisclosure);
+      expect(claimed).toBe(c.prompt.includes('## AI-use disclosure'));
+      if (!includeDisclosure) {
+        expect(c.omitted.find((o) => /disclosure sentence/i.test(o.clause))?.reason).toMatch(
+          /switched it off/i,
+        );
+      }
+    }
+  });
+
+  it('names the skeleton it inlined, by the template’s own title', () => {
+    const c = composePromptContents({
+      program: ARDC,
+      profile: PROFILE,
+      templateId: 'need-statement',
+      includeDisclosure: false,
+    });
+    const clause = c.included.find((x) => /skeleton/i.test(x)) ?? '';
+    expect(clause).toContain('Need statement');
+    expect(c.prompt).toContain('## The section I need: Need statement');
+  });
+
+  /** The five rule fragments are unconditional, and so is the claim about them. */
+  it('claims the rule fragments that are always loaded, and nothing more', () => {
+    const c = composePromptContents({ program: ARDC, profile: PROFILE, includeDisclosure: true });
+    for (const clause of [
+      'an interview-first rule so the model asks before it drafts',
+      'the specificity ruleset (named subjects, proper nouns, figures, dates)',
+      'banned stock transitions, openers and closers',
+      'a brevity pass',
+      'a never-invent-a-citation rule',
+    ]) {
+      expect(c.included, clause).toContain(clause);
+    }
+    // No clause is stated twice, and none is stated both ways at once.
+    expect(new Set(c.included).size).toBe(c.included.length);
+    for (const o of c.omitted) expect(c.included).not.toContain(o.clause);
+  });
+
+  it('leaves `composePrompt` returning exactly the same text it always did', () => {
+    const ctx = { program: ARDC, profile: PROFILE, templateId: 'need-statement', includeDisclosure: true };
+    expect(composePrompt(ctx)).toBe(composePromptContents(ctx).prompt);
   });
 });

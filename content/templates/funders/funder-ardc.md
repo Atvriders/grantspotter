@@ -17,8 +17,10 @@ sources:
     url: https://www.ardc.net/apply/grants/2026-grants/
 ---
 
-Every requirement below is quoted from one of the two ARDC pages cited above. Where ARDC is
-silent, this overlay says so rather than filling the silence.
+Every requirement below is quoted from one of the three ARDC pages cited above — the apply page,
+the application instructions, and the list of grants ARDC actually made this year, which is where
+the award figures further down come from. Where ARDC is silent, this overlay says so rather than
+filling the silence.
 
 ## The two requirements applicants most often miss
 

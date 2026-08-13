@@ -49,6 +49,61 @@ describe('template corpus invariants', () => {
       expect(t.body.trim().length).toBeGreaterThan(400);
     }
   });
+
+  /**
+   * AN OVERLAY THAT COUNTS ITS OWN CITED PAGES HAS TO COUNT THEM RIGHT.
+   *
+   * The ARDC overlay opened with "quoted from one of the TWO ARDC pages cited above" while its
+   * frontmatter cited THREE and its own award figures ("$1,285 … to $258,000") are quoted from
+   * the third. A reader who counts the links is told the overlay quotes something it does not
+   * cite; a reader who trusts the sentence stops at two and never opens the page the money came
+   * from. The number is derived from `sources` here, so adding or dropping a citation fails this
+   * rather than leaving a stale count in the prose.
+   */
+  it('states a citation count that matches the citations it ships', () => {
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
+    const offenders: string[] = [];
+    for (const t of all) {
+      const claim = /\b(?:the|one of the)\s+([a-z]+)\s+[A-Z][A-Za-z-]*\s+pages cited above/.exec(t.body);
+      if (claim === null) continue;
+      const expected = WORDS[t.sources.length];
+      if (claim[1] !== expected) {
+        offenders.push(`${t.id} says "${String(claim[1])}" and cites ${String(t.sources.length)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * THE FACT CHECKLIST MAKES THIS CLAIM ON SCREEN, so it has to be true of the corpus.
+   *
+   * When a draft quotes a shipped overlay the panel stops asking the applicant to sign for its
+   * values, and says instead: "Every funder overlay carries the sources it was read from; open it
+   * under Templates and check them." An overlay shipped with an empty `sources` list would make
+   * that sentence false in exactly the state it is printed in — and would put unsourced funder
+   * requirements into an application with nothing pointing at where they came from.
+   */
+  it('gives every funder overlay at least one source to be checked against', () => {
+    const overlays = all.filter((t) => t.layer === 'funder');
+    expect(overlays.length).toBeGreaterThanOrEqual(8);
+    for (const t of overlays) {
+      expect(t.sources.length, `${t.id} ships no source`).toBeGreaterThan(0);
+      for (const source of t.sources) {
+        expect(source.url, t.id).toMatch(/^https?:\/\//);
+        expect(source.label.length, t.id).toBeGreaterThan(3);
+      }
+    }
+  });
+
+  /** The singular form of the same claim: "the … page cited above" needs exactly one source. */
+  it('says "page", singular, only where one page is cited', () => {
+    const offenders: string[] = [];
+    for (const t of all) {
+      if (!/\b[A-Za-z-]+ page cited above/.test(t.body)) continue;
+      if (t.sources.length !== 1) offenders.push(`${t.id} cites ${String(t.sources.length)}`);
+    }
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe('component layer', () => {

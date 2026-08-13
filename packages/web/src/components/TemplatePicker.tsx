@@ -9,6 +9,13 @@ interface Props {
   onSelect: (id: string) => void;
   /** What an empty group MEANS. A blank space would imply the group does not exist. */
   emptyMessage: string;
+  /**
+   * What the group IS, when the heading alone would be read as a claim about the reader's own
+   * application. "Funder overlays" on `/templates` lists every overlay in the library; the same
+   * heading in the writing desk lists the ones written for the funder being applied to. Rendered
+   * whether or not the group has anything in it, because the sentence is about the group.
+   */
+  note?: string;
 }
 
 /**
@@ -27,10 +34,12 @@ export function TemplatePicker({
   selectedId,
   onSelect,
   emptyMessage,
+  note,
 }: Props): JSX.Element {
   return (
     <section className="template-group" aria-label={heading}>
       <h2>{heading}</h2>
+      {note === undefined ? null : <p className="muted template-group-note">{note}</p>}
       {templates.length === 0 ? (
         <p className="muted">{emptyMessage}</p>
       ) : (

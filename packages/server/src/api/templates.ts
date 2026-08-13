@@ -105,6 +105,11 @@ export function createTemplatesRouter(
       components: selection.components.map(summarize),
       overlays: selection.overlays.map(summarize),
       playbooks: selection.playbooks.map(summarize),
+      // What the library holds, which no query narrows — see `TemplateSelection.libraryOverlays`.
+      // `overlays` stays the funder-bound answer, empty when no funder was named, because the
+      // writing desk reads `overlays[0]` as "this applicant's funder overlay" and inserting
+      // another funder's criteria from that position would be a fabricated requirement.
+      libraryOverlays: selection.libraryOverlays.map(summarize),
     });
   });
 

@@ -75,41 +75,83 @@ export function ProseCheckPanel({ report, densities }: Props): JSX.Element {
         </p>
       ))}
 
-      <table className="grid-table prose-paragraphs">
-        <thead>
-          <tr>
-            <th scope="col">Paragraph</th>
-            <th scope="col" className="num">
-              Style words per 100 words
-            </th>
-            <th scope="col" className="num">
-              Proper nouns + figures per 100 words
-            </th>
-            <th scope="col" className="num">
-              Tricolons
-            </th>
-            <th scope="col" className="num">
-              Trailing participials
-            </th>
-            <th scope="col">Reads as</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.paragraphs.map((p) => {
-            const d = densityFor(p.index);
-            return (
-              <tr key={p.index} className={`verdict-${p.verdict}`}>
-                <th scope="row">Paragraph {p.index + 1}</th>
-                <td className="num data">{d ? round(d.styleDensity) : '—'}</td>
-                <td className="num data">{d ? round(d.referentDensity) : '—'}</td>
-                <td className="num data">{p.tricolonCount}</td>
-                <td className="num data">{p.trailingParticipialCount}</td>
-                <td>{VERDICT_LABEL[p.verdict] ?? p.verdict}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {/*
+        THE VERDICT IS THE SECOND COLUMN, AND THE TABLE SCROLLS IN A BOX OF ITS OWN.
+
+        Both halves fix one measurement. Six `white-space: nowrap` column heads give this table a
+        min-content of 1,053px; the editor column at a 1400px window is 818px. "Reads as" was the
+        LAST column, so the one cell that says what the panel is for — "style words, no
+        counterweight" / "carries its own specifics" — sat at x=1509..1626 in a 1400px window: off
+        screen, with the header cut mid-word at "TRAILI…" and the row backgrounds running flush to
+        the card's border. The panel itself carried `overflow-x: auto`, which is why nothing
+        overflowed the PAGE, but a padded card is the wrong scrollport: its right padding is not
+        preserved at the scroll end, so the clipped column looked like a broken layout rather than
+        like something to scroll, and there was no affordance saying otherwise.
+
+        So the verdict moves to the front, where it is visible at every width this product
+        supports, and the numbers — which are the detail behind it — are what scrolls. The wrapper
+        is `.prose-table-wrap`, built like every other table wrapper in this app
+        (`display: grid; grid-template-columns: minmax(0, 1fr); overflow-x: auto`, pinned by
+        `denseLayout.css.test.ts`), and it is a labelled `region` with `tabIndex={0}` so a keyboard
+        can reach the scroll it creates. Measured after, same 1400px window: the table is 1,102px
+        (the verdict column is given 20ch so the longest of the three labels takes two lines rather
+        than three), the wrapper is 784px of visible width against a 1,102px `scrollWidth`, the
+        `.prose-check` card no longer scrolls at all (818 = 818), and the verdict cell ends at
+        x=859 — on screen, before anything is scrolled.
+      */}
+      {/*
+        Said in words, because a clipped column with no visible scrollbar reads as a bug rather
+        than as a box with more in it. Phrased for BOTH states: this panel is 818px wide in the
+        editor column at 1400px and the table needs 1,102, but it fits on a wide monitor, and a
+        sentence that announced scrolling would then be describing something that is not
+        happening — the defect this file's neighbours keep being fixed for.
+      */}
+      <p className="prose-scroll-note">
+        The measurements sit in a box of their own: where they do not fit, they scroll sideways in
+        it rather than moving the page. The verdict beside each paragraph is never one of them.
+      </p>
+      <div
+        className="prose-table-wrap"
+        role="region"
+        aria-label="Per-paragraph measurements, scrollable"
+        tabIndex={0}
+      >
+        <table className="grid-table prose-paragraphs">
+          <thead>
+            <tr>
+              <th scope="col">Paragraph</th>
+              <th scope="col">Reads as</th>
+              <th scope="col" className="num">
+                Style words per 100 words
+              </th>
+              <th scope="col" className="num">
+                Proper nouns + figures per 100 words
+              </th>
+              <th scope="col" className="num">
+                Tricolons
+              </th>
+              <th scope="col" className="num">
+                Trailing participials
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.paragraphs.map((p) => {
+              const d = densityFor(p.index);
+              return (
+                <tr key={p.index} className={`verdict-${p.verdict}`}>
+                  <th scope="row">Paragraph {p.index + 1}</th>
+                  <td className="verdict-text">{VERDICT_LABEL[p.verdict] ?? p.verdict}</td>
+                  <td className="num data">{d ? round(d.styleDensity) : '—'}</td>
+                  <td className="num data">{d ? round(d.referentDensity) : '—'}</td>
+                  <td className="num data">{p.tricolonCount}</td>
+                  <td className="num data">{p.trailingParticipialCount}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <ol className="prose-paragraph-detail">
         {report.paragraphs.map((p) => (

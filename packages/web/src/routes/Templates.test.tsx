@@ -18,7 +18,15 @@ const LIST = {
   playbooks: [
     { id: 'funder-campus-sga', title: 'Campus student government playbook', layer: 'funder', order: 80, appliesTo: [], requires: [], programIds: [], alwaysAvailable: true, sources: [{ label: 'FSU SGA', url: 'https://sga.fsu.edu/accounting/funding-your-rso' }], slots: [] },
   ],
+  /** What the server answers whatever the query narrows to — see `TemplateListDTO`. */
+  libraryOverlays: [
+    { id: 'funder-ardc', title: 'ARDC Grants Program — funder overlay', layer: 'funder', order: 10, appliesTo: ['ham_grant'], requires: ['need-statement'], programIds: ['ardc-grants'], alwaysAvailable: false, sources: [{ label: 'ARDC apply page', url: 'https://www.ardc.net/apply/' }], slots: [] },
+    { id: 'funder-nasa-space-grant', title: 'NASA Space Grant — funder overlay', layer: 'funder', order: 40, appliesTo: ['adjacent_stem'], requires: [], programIds: ['nasa-space-grant'], alwaysAvailable: false, sources: [{ label: 'NASA Space Grant', url: 'https://www.nasa.gov/stem/spacegrant/' }], slots: [] },
+  ],
 };
+
+/** The bare list the nav rail's own link produces: nothing names a funder, so nothing binds. */
+const BARE_LIST = { ...LIST, overlays: [] };
 
 const DETAIL = { ...LIST.components[0], body: '## What this section has to do\n\n{{club.name}} needs it.' };
 
@@ -144,6 +152,69 @@ describe('TemplatesRoute', () => {
     await waitFor(() => expect(screen.getByText('Campus student government playbook')).toBeTruthy());
     // Empty is stated, never implied by a blank space.
     expect(screen.getByText(/No overlay has been written for this funder yet/i)).toBeTruthy();
+  });
+
+  /**
+   * THE ROUTE THE NAV RAIL ACTUALLY LINKS TO, WHICH IS THIS ONE WITH NOTHING IN THE QUERY.
+   *
+   * Measured on the live site on 2026-08-13: `/templates`, opened from the rail, printed "No
+   * overlay has been written for this funder yet." with no funder in context and eight overlays
+   * shipped. The sentence was not wrong about the array it was given — `overlays` really is empty
+   * when nothing names a funder — it was wrong about the world, which is the harder kind to see.
+   */
+  describe('opened with no funder in the query, the way the rail opens it', () => {
+    function stubBare(): void {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo) => {
+        const url = String(input);
+        const payload = url.includes('/api/templates/need-statement') ? DETAIL : BARE_LIST;
+        return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }));
+    }
+
+    it('indexes every overlay in the library rather than reporting none', async () => {
+      stubBare();
+      render(<TemplatesRoute />);
+      await waitFor(() => expect(screen.getByText('Need statement')).toBeTruthy());
+      const group = screen.getByRole('region', { name: 'Funder overlays' });
+      expect(group.textContent).toContain('ARDC Grants Program — funder overlay');
+      expect(group.textContent).toContain('NASA Space Grant — funder overlay');
+    });
+
+    it('never claims an overlay has not been written when no funder was named', async () => {
+      stubBare();
+      render(<TemplatesRoute />);
+      await waitFor(() => expect(screen.getByText('Need statement')).toBeTruthy());
+      expect(screen.queryByText(/No overlay has been written for this funder yet/i)).toBeNull();
+      // And it says what the list IS, so "Funder overlays" is not read as "your funder's".
+      expect(screen.getByRole('region', { name: 'Funder overlays' }).textContent).toMatch(
+        /Every overlay in the library/i,
+      );
+    });
+
+    /** An empty LIBRARY still has to be sayable — and it is a different sentence. */
+    it('distinguishes an empty library from a funder with no overlay', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () =>
+        new Response(JSON.stringify({ ...LIST, overlays: [], libraryOverlays: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ));
+      render(<TemplatesRoute />);
+      await waitFor(() => expect(screen.getByText('Need statement')).toBeTruthy());
+      expect(screen.getByText(/ships no funder overlay at all/i)).toBeTruthy();
+      expect(screen.queryByText(/No overlay has been written for this funder yet/i)).toBeNull();
+    });
+
+    /** With a funder named, the funder-bound list is still what is shown, and the sentence is true. */
+    it('goes back to the funder-bound answer as soon as the query names one', async () => {
+      stubFetch();
+      render(<TemplatesRoute funderId="ardc" />);
+      await waitFor(() => expect(screen.getByText('Need statement')).toBeTruthy());
+      const group = screen.getByRole('region', { name: 'Funder overlays' });
+      expect(group.textContent).toContain('ARDC Grants Program — funder overlay');
+      expect(group.textContent).not.toContain('NASA Space Grant — funder overlay');
+      expect(group.textContent).not.toMatch(/Every overlay in the library/i);
+    });
   });
 
   /** The screen must not assert anything about a funder. Only the template's own text may. */

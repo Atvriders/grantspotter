@@ -1,7 +1,7 @@
 import type { AiStance, Profile, Program } from '@grantspotter/core';
 import { Router } from 'express';
 import { z } from 'zod';
-import { composePrompt } from '../prompts/compose.js';
+import { type PromptContents, composePromptContents } from '../prompts/compose.js';
 import { DISCLOSURE_DEFAULT_ON, disclosureNote, disclosureSentence } from '../prompts/disclosure.js';
 import { TemplateNotFoundError } from '../templates/load.js';
 import type { RouterDeps } from './deps.js';
@@ -10,8 +10,22 @@ import { profileInput, programInput } from './writingSchemas.js';
 
 /** The exact copy required by the contract. Asserted by an e2e test. */
 export const COPY_PROMPT_LABEL = 'Copy AI Prompt — includes AI-detection avoidance';
+
+/**
+ * The enumeration spec §10.2 requires, printed BEFORE anything is composed — so every clause in it
+ * has to be true of every prompt this endpoint can produce.
+ *
+ * Two of them were not. "their AI policy, quoted, with the source URL" is a description of a page
+ * 142 of the 143 shipped records have never published, and "your profile facts" was recited to
+ * readers with no profile: measured on the live site on 2026-08-13, a member who had saved nothing
+ * copied 21,145 characters containing no "## Facts about me that you may use" section at all. Both
+ * are now stated as the conditions they are, and the exact contents of the copied brief come back
+ * from `composePromptContents` in `included` / `omitted`, built at the same `if` that writes each
+ * section. The button prints those after the copy, so the reader learns what actually went in
+ * rather than what usually does.
+ */
 export const COPY_PROMPT_SUBTITLE =
-  'Includes: this funder’s published criteria, restrictions and obligations · their AI policy, quoted, with the source URL · your profile facts · an interview-first rule so the model asks before it drafts · the specificity ruleset (named subjects, proper nouns, figures, dates) · banned stock transitions, openers and closers · a brevity pass · a never-invent-a-citation rule';
+  'Includes: this funder’s published criteria, restrictions and obligations · their AI policy, quoted with the source URL, where they have published one · the facts on your profile, if you have saved any · an interview-first rule so the model asks before it drafts · the specificity ruleset (named subjects, proper nouns, figures, dates) · banned stock transitions, openers and closers · a brevity pass · a never-invent-a-citation rule. Copying it reports exactly which of these went in.';
 
 const composeBody = z.object({
   program: programInput,
@@ -39,9 +53,9 @@ export function createPromptsRouter(deps: RouterDeps): Router {
       next(new AppError('validation_failed', 'That prompt request is not valid.', parsed.error.issues));
       return;
     }
-    let prompt: string;
+    let composed: PromptContents;
     try {
-      prompt = composePrompt({
+      composed = composePromptContents({
         program: parsed.data.program as unknown as Program,
         profile: parsed.data.profile as Profile | undefined,
         templateId: parsed.data.templateId,
@@ -59,7 +73,15 @@ export function createPromptsRouter(deps: RouterDeps): Router {
       }
       throw err;
     }
-    res.json({ prompt, label: COPY_PROMPT_LABEL, subtitle: COPY_PROMPT_SUBTITLE });
+    res.json({
+      prompt: composed.prompt,
+      label: COPY_PROMPT_LABEL,
+      subtitle: COPY_PROMPT_SUBTITLE,
+      // What THIS brief contains, and what it does not, from the composer itself. The screen
+      // prints them after the copy; nothing here re-derives the list from the prompt text.
+      included: composed.included,
+      omitted: composed.omitted,
+    });
   });
 
   router.post('/disclosure', (req, res, next) => {

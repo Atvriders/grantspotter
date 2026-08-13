@@ -125,6 +125,43 @@ export interface FactChecklistItem extends FactAssertion, Omit<FactConfirmation,
   staleConfirmation: boolean;
 }
 
+/**
+ * A template GrantSpotter ships, as the text of it — the input that lets this module tell material
+ * the product wrote from prose the applicant wrote.
+ *
+ * WHY THIS EXISTS. Pressing the product's own one-click "Insert ARDC Grants Program — funder
+ * overlay" put GrantSpotter's shipped, source-cited overlay into an empty draft, and the checklist
+ * immediately demanded 120 confirmations, every one of them labelled "not attributed to any stated
+ * value — this is prose you or a model wrote". None of it was. It is quoted from three ARDC pages
+ * the overlay cites by URL beside the button that inserted it, and `funderCaptures.test.ts` pins
+ * requirement phrases in it to the committed bytes of those captures. The panel was accusing the
+ * product of its own worst failure mode, 120 times, and — worse than the noise — it buried the
+ * items that ARE the applicant's under a wall of items that are not.
+ *
+ * `lines` is the template's own body, line by line, trimmed. Matching is verbatim and whole-line,
+ * which is what keeps this from blinding the checklist: edit a shipped sentence and it stops
+ * matching, so every fact in it comes back onto the list to be confirmed as the applicant's own.
+ * Lines carrying a `{{slot}}` are excluded by the caller, because what lands in the document at
+ * that line is a VALUE, and a value is exactly what the checklist is for.
+ */
+export interface ShippedTemplateText {
+  id: string;
+  title: string;
+  lines: readonly string[];
+}
+
+/**
+ * A run of shipped lines has to be a PASSAGE, not a line that happens to coincide.
+ *
+ * "## When" and "- **February 1**" are shipped lines and are also things an applicant might type.
+ * Either threshold alone admits them; a run of three lines, or 200 characters of unbroken
+ * agreement, is the shape of pasted material rather than of a collision. Both numbers are floors
+ * on what is EXCLUDED from the checklist, so being wrong about them costs a checkbox nobody
+ * needed, never a missing one — the direction this module errs in everywhere else.
+ */
+const MIN_SHIPPED_RUN_LINES = 3;
+const MIN_SHIPPED_RUN_CHARS = 200;
+
 export interface ExportReadiness {
   ready: boolean;
   unconfirmed: number;
@@ -140,6 +177,17 @@ export interface ExportReadiness {
   /** Every distinct slot path found by `rawSlots`, sorted — what the export-blocked message names. */
   rawSlotPaths: string[];
   items: FactChecklistItem[];
+  /**
+   * Assertions found inside passages this draft quotes verbatim from a template GrantSpotter
+   * ships. They are NOT in `items` and they do not block export: the product wrote them, cited
+   * them, and pins them to captures of the funder's own pages — so demanding the applicant's
+   * signature on each one says the opposite of what is true about them. Reported as a number
+   * rather than dropped in silence, because a checklist that quietly stopped listing things would
+   * be the worse defect of the two.
+   */
+  shippedFacts: number;
+  /** The titles of the templates those passages came from, sorted. Empty when none were found. */
+  shippedTemplates: string[];
 }
 
 const MONTHS =
@@ -439,31 +487,152 @@ function attribute(
   return { origin, slots, provenance: provenanceSentence(origin, slots) };
 }
 
+/** One line of the draft, with the offsets its characters occupy in the whole text. */
+interface DraftLine {
+  start: number;
+  end: number;
+  body: string;
+}
+
+function draftLines(text: string): DraftLine[] {
+  const out: DraftLine[] = [];
+  let at = 0;
+  for (const raw of text.split('\n')) {
+    out.push({ start: at, end: at + raw.length, body: raw.trim() });
+    at += raw.length + 1;
+  }
+  return out;
+}
+
+export interface ShippedPassage {
+  start: number;
+  end: number;
+  /** Every shipped template a line in this passage was matched against, sorted. */
+  titles: string[];
+}
+
+/**
+ * The passages of `text` that are, line for line, text a shipped template already contains.
+ *
+ * A BLANK LINE IS NEUTRAL. Markdown separates its paragraphs with them, and a run broken at every
+ * blank line would be three one-line runs where the document has one nine-line section. A line the
+ * applicant wrote ends the run; a line they left empty does not.
+ *
+ * Exported for the tests, which measure this against the real shipped overlay rather than against
+ * a fixture that agrees with it by construction.
+ */
+export function shippedPassages(
+  text: string,
+  shipped: readonly ShippedTemplateText[],
+): ShippedPassage[] {
+  if (shipped.length === 0) return [];
+  const byLine = new Map<string, string>();
+  for (const template of shipped) {
+    for (const line of template.lines) {
+      const key = line.trim();
+      if (key === '') continue;
+      if (!byLine.has(key)) byLine.set(key, template.title);
+    }
+  }
+
+  const lines = draftLines(text);
+  const out: ShippedPassage[] = [];
+  let run: DraftLine[] = [];
+  const titles = new Set<string>();
+
+  const close = (): void => {
+    // Trailing blanks belong to whatever comes next, not to this passage.
+    while (run.length > 0 && (run[run.length - 1] as DraftLine).body === '') run.pop();
+    const shippedLines = run.filter((l) => l.body !== '');
+    const chars = shippedLines.reduce((n, l) => n + l.body.length, 0);
+    if (
+      shippedLines.length >= MIN_SHIPPED_RUN_LINES ||
+      (shippedLines.length > 0 && chars >= MIN_SHIPPED_RUN_CHARS)
+    ) {
+      out.push({
+        start: (run[0] as DraftLine).start,
+        end: (run[run.length - 1] as DraftLine).end,
+        titles: [...titles].sort(),
+      });
+    }
+    run = [];
+    titles.clear();
+  };
+
+  for (const line of lines) {
+    if (line.body === '') {
+      if (run.length > 0) run.push(line);
+      continue;
+    }
+    const title = byLine.get(line.body);
+    if (title === undefined) {
+      close();
+      continue;
+    }
+    titles.add(title);
+    run.push(line);
+  }
+  close();
+  return out;
+}
+
 export function buildFactChecklist(
   text: string,
   confirmations: Record<string, FactConfirmation> = {},
   sources: readonly FactSource[] = [],
+  shipped: readonly ShippedTemplateText[] = [],
 ): FactChecklistItem[] {
+  return factChecklistWithShipped(text, confirmations, sources, shipped).items;
+}
+
+/**
+ * The checklist, plus what was left off it and why — one pass, so the two can never disagree.
+ *
+ * A fact lying entirely inside a shipped passage is the product's own sentence, not the
+ * applicant's. It is dropped from the list rather than listed with a softer label: the panel is a
+ * list of things a person has to sign, and 120 rows nobody has to sign is what made the six that
+ * mattered unfindable. The count and the template titles go back to the caller so the panel can
+ * say so in words — an unexplained shortfall would be the same silence in the other direction.
+ */
+function factChecklistWithShipped(
+  text: string,
+  confirmations: Record<string, FactConfirmation>,
+  sources: readonly FactSource[],
+  shipped: readonly ShippedTemplateText[],
+): { items: FactChecklistItem[]; shippedFacts: number; shippedTemplates: string[] } {
   const spans = sources.flatMap((source) =>
     occurrences(text, source.value).map((span) => ({ ...span, source })),
   );
+  const passages = shippedPassages(text, shipped);
+  const quotedTemplates = new Set<string>();
+  let shippedFacts = 0;
 
-  return extractFactAssertions(text).map((fact) => {
-    const stored = confirmations[fact.id];
-    // A confirmation that names a different fact is not a confirmation of this one. The note is
-    // kept: the applicant wrote it, and it is evidence about the item even after the value moved.
-    const stale =
-      stored !== undefined &&
-      stored.fingerprint !== undefined &&
-      stored.fingerprint !== fact.fingerprint;
-    return {
-      ...fact,
-      ...attribute(fact, spans),
-      confirmed: stale ? false : stored?.confirmed === true,
-      note: stored?.note ?? '',
-      staleConfirmation: stale,
-    };
-  });
+  const items = extractFactAssertions(text)
+    .filter((fact) => {
+      const passage = passages.find((p) => fact.start >= p.start && fact.end <= p.end);
+      if (passage === undefined) return true;
+      shippedFacts += 1;
+      for (const title of passage.titles) quotedTemplates.add(title);
+      return false;
+    })
+    .map((fact) => {
+      const stored = confirmations[fact.id];
+      // A confirmation that names a different fact is not a confirmation of this one. The note is
+      // kept: the applicant wrote it, and it is evidence about the item even after the value moved.
+      const stale =
+        stored !== undefined &&
+        stored.fingerprint !== undefined &&
+        stored.fingerprint !== fact.fingerprint;
+      return {
+        ...fact,
+        ...attribute(fact, spans),
+        confirmed: stale ? false : stored?.confirmed === true,
+        note: stored?.note ?? '',
+        staleConfirmation: stale,
+      };
+    });
+
+  return { items, shippedFacts, shippedTemplates: [...quotedTemplates].sort() };
 }
 
 export function unconfirmedCount(items: FactChecklistItem[]): number {
@@ -480,14 +649,20 @@ export function unconfirmedCount(items: FactChecklistItem[]): number {
  * written to say so. Left uncounted, it is arguably the worse gap of the two: `[TODO: club.callsign
  * — your club's FCC callsign, e.g. W8UM]` at least reads as unfinished, where `{{club.callsign}}`
  * can look like a stray formatting artefact the reader is meant to ignore.
+ *
+ * A GAP INSIDE SHIPPED MATERIAL STILL BLOCKS. `shipped` takes assertions off the checklist; it
+ * takes nothing off `openTodos` or `rawSlots`. The overlay's `[TODO: project.openLicense — …]`
+ * markers are holes the product deliberately left for the applicant, and shipping them to a funder
+ * unfilled is the failure both counts exist to prevent.
  */
 export function exportReadiness(
   text: string,
   confirmations: Record<string, FactConfirmation> = {},
   sources: readonly FactSource[] = [],
+  shipped: readonly ShippedTemplateText[] = [],
 ): ExportReadiness {
-  const items = buildFactChecklist(text, confirmations, sources);
-  const unconfirmed = unconfirmedCount(items);
+  const checklist = factChecklistWithShipped(text, confirmations, sources, shipped);
+  const unconfirmed = unconfirmedCount(checklist.items);
   const openTodos = [...text.matchAll(TODO_MARKER)].length;
   const rawSlotMatches = [...text.matchAll(RAW_SLOT_MARKER)];
   const rawSlots = rawSlotMatches.length;
@@ -498,6 +673,8 @@ export function exportReadiness(
     openTodos,
     rawSlots,
     rawSlotPaths,
-    items,
+    items: checklist.items,
+    shippedFacts: checklist.shippedFacts,
+    shippedTemplates: checklist.shippedTemplates,
   };
 }

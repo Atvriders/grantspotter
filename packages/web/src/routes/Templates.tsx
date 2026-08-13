@@ -56,6 +56,12 @@ function libraryFailure(err: unknown): string {
 }
 
 export function TemplatesRoute({ programId, klass, funderId }: Props): JSX.Element {
+  /**
+   * Whether anything in the query names a funder to be answered ABOUT. `selectTemplates` binds an
+   * overlay by `funderId` or by naming this programme in `programIds`, so either one puts a funder
+   * in context; neither leaves the overlay group with nothing to be about.
+   */
+  const funderInContext = funderId !== undefined || programId !== undefined;
   const [library, setLibrary] = useState<TemplateListDTO | undefined>();
   const [selected, setSelected] = useState<TemplateDetailDTO | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -123,12 +129,38 @@ export function TemplatesRoute({ programId, klass, funderId }: Props): JSX.Eleme
               onSelect={select}
               emptyMessage="No component templates apply to this opportunity class."
             />
+            {/*
+              THE GROUP ANSWERS THE QUESTION THE SCREEN WAS ACTUALLY ASKED.
+
+              This screen is reached two ways, and until 2026-08-13 it answered both with the
+              funder-bound list and one sentence. The nav rail links to `/templates` with NO query
+              string, so `overlays` came back empty — correctly, since nothing named a funder — and
+              the group printed "No overlay has been written for this funder yet." on a page with
+              no funder in context, two inches under a paragraph promising "the overlays written
+              against a particular funder's published criteria". Eight overlays existed the whole
+              time (ARDC, ARISS, ARRL x3, IEEE MTT-S, NASA, Yaesu). A reader who took the sentence
+              at face value learned that GrantSpotter has written none.
+
+              With a funder in the query the funder-bound list is still what is shown, and the
+              sentence is then true of it. With no funder, this is an index of the library and says
+              so. `libraryOverlays` never reaches `overlays[0]`, which is the writing desk's claim
+              about the applicant's OWN funder.
+            */}
             <TemplatePicker
               heading="Funder overlays"
-              templates={library.overlays}
+              templates={funderInContext ? library.overlays : library.libraryOverlays}
               selectedId={selected?.id}
               onSelect={select}
-              emptyMessage="No overlay has been written for this funder yet."
+              note={
+                funderInContext
+                  ? undefined
+                  : 'Every overlay in the library, whoever the funder. Open the opportunity you are applying to and start an application there to get the one written against its funder’s criteria.'
+              }
+              emptyMessage={
+                funderInContext
+                  ? 'No overlay has been written for this funder yet.'
+                  : 'The library ships no funder overlay at all — this is not a filter hiding them.'
+              }
             />
             {/*
               Bound to `playbooks` and to nothing else. These are the templates whose frontmatter

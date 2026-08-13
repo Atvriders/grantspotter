@@ -66,6 +66,19 @@ export interface TemplateSelection {
   overlays: TemplateDoc[];
   components: TemplateDoc[];
   playbooks: TemplateDoc[];
+  /**
+   * EVERY overlay in the library, whatever was asked for — the answer to "what has been written",
+   * where `overlays` answers "what applies to this funder". They are different questions and were
+   * being answered by one array, so `/templates` with no funder in the query (the only link the
+   * nav rail has) printed "No overlay has been written for this funder yet." on a page with no
+   * funder in context, while eight overlays sat in the library the paragraph above it advertises.
+   *
+   * It is NOT the funder-bound list widened. `overlays[0]` is a claim about the applicant's own
+   * funder (see `selectTemplates`), and this list must never reach that position: a screen that
+   * inserts from it is inserting another funder's published criteria into this funder's
+   * application.
+   */
+  libraryOverlays: TemplateDoc[];
 }
 
 /**
@@ -312,14 +325,22 @@ export function selectTemplates(all: TemplateDoc[], q: TemplateQuery): TemplateS
   const isForThisProgram = (t: TemplateDoc): boolean =>
     q.programId !== undefined && t.programIds.includes(q.programId);
 
+  /** An overlay is funder-layer and NOT always-available; a playbook is the always-available half. */
+  const isOverlay = (t: TemplateDoc): boolean => t.layer === 'funder' && !t.alwaysAvailable;
+
   const overlays = all
-    .filter((t) => t.layer === 'funder' && !t.alwaysAvailable)
+    .filter(isOverlay)
     .filter(
       (t) =>
         isForThisProgram(t) ||
         (q.funderId !== undefined && t.funderId === q.funderId && fitsClass(t)),
     )
     .sort((a, b) => Number(isForThisProgram(b)) - Number(isForThisProgram(a)) || byOrder(a, b));
+
+  // The same predicate, unfiltered: what the library HOLDS, which no query narrows. Sorted by
+  // title rather than by `order`, because `order` ranks overlays against one funder's application
+  // and means nothing across funders — an index reads alphabetically.
+  const libraryOverlays = all.filter(isOverlay).sort((a, b) => a.title.localeCompare(b.title));
 
   const playbooks = all.filter((t) => t.layer === 'funder' && t.alwaysAvailable).sort(byOrder);
 
@@ -328,5 +349,5 @@ export function selectTemplates(all: TemplateDoc[], q: TemplateQuery): TemplateS
     .filter(fitsClass)
     .sort(byOrder);
 
-  return { overlays, components, playbooks };
+  return { overlays, components, playbooks, libraryOverlays };
 }

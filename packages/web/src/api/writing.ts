@@ -58,8 +58,17 @@ export interface TemplateDetailDTO extends TemplateSummaryDTO {
 
 export interface TemplateListDTO {
   components: TemplateSummaryDTO[];
+  /** The overlays written for the funder or programme in the query. Empty when neither was given. */
   overlays: TemplateSummaryDTO[];
   playbooks: TemplateSummaryDTO[];
+  /**
+   * Every overlay the product ships, whatever was asked for. `/templates` is reached from the nav
+   * rail with NO query string, so `overlays` is empty there and the group printed "No overlay has
+   * been written for this funder yet." — on a page with no funder, about a library holding eight.
+   * This is the list that screen indexes. It must never be treated as the applicant's own funder's
+   * overlay; see the note on the server's `TemplateSelection.libraryOverlays`.
+   */
+  libraryOverlays: TemplateSummaryDTO[];
 }
 
 export interface SlotDefDTO {
@@ -184,6 +193,16 @@ export interface ExportReadinessDTO {
   /** Every distinct slot path found by `rawSlots`, sorted — what the export-blocked message names. */
   rawSlotPaths: string[];
   items: FactItemDTO[];
+  /**
+   * Assertions the server left OFF `items` because the draft quotes them, line for line, from a
+   * template GrantSpotter ships. Pressing "Insert ARDC Grants Program — funder overlay" used to
+   * produce 120 of these as ordinary checklist rows labelled "not attributed to any stated
+   * value", which is the product calling its own cited material unsourced — and burying the
+   * applicant's own assertions under it. The panel prints the count and the titles, because a
+   * list that silently stopped listing things would be the worse defect.
+   */
+  shippedFacts: number;
+  shippedTemplates: string[];
 }
 
 // ---- drafts -----------------------------------------------------------------
@@ -270,13 +289,27 @@ export const extractFacts = (body: {
 
 // ---- prompts -------------------------------------------------------------------
 
+/** A clause the subtitle enumerates that this particular brief does not carry, and why. */
+export interface OmittedSectionDTO {
+  clause: string;
+  reason: string;
+}
+
+export interface ComposedPromptDTO {
+  prompt: string;
+  label: string;
+  subtitle: string;
+  /** What THIS brief contains, built by the composer at the `if` that writes each section. */
+  included: string[];
+  omitted: OmittedSectionDTO[];
+}
+
 export const composePromptRemote = (body: {
   program: unknown;
   profile?: unknown;
   templateId?: string;
   includeDisclosure: boolean;
-}): Promise<{ prompt: string; label: string; subtitle: string }> =>
-  apiFetch('/api/prompts/compose', { method: 'POST', body });
+}): Promise<ComposedPromptDTO> => apiFetch('/api/prompts/compose', { method: 'POST', body });
 
 /**
  * `includeDisclosure: false` removes the SUGGESTED SENTENCE and nothing else. A funder whose

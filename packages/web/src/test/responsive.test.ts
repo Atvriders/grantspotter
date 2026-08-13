@@ -234,8 +234,13 @@ const TABLES: ReadonlyArray<{ file: string; container: string }> = [
   // `components/EnrollmentCodes.tsx` was here until enrolment codes were retired (2026-08-11).
   // The count assertion under this list is what makes deleting the entry safe: it fails if the
   // file is still shipping a table this list has stopped naming.
-  // The one table with no wrapper element of its own, so the panel around it is the container.
-  { file: 'components/ProseCheckPanel.tsx', container: 'prose-check' },
+  // It was the one table with no wrapper of its own, and the padded `.prose-check` card was the
+  // container — which kept the page from sliding sideways and nothing else: content scrolled to
+  // the end of a padded box sits flush against its border, so a 1,053px table in an 818px column
+  // read as a broken layout (header cut at "TRAILI…") rather than as something to scroll, and the
+  // verdict column was off screen at x=1509 in a 1400px window. It has a wrapper now, like every
+  // other table here.
+  { file: 'components/ProseCheckPanel.tsx', container: 'prose-table-wrap' },
   { file: 'components/MonthGrid.tsx', container: 'month-frame' },
   { file: 'routes/Watchlist.tsx', container: 'wl-scroll' },
   { file: 'routes/Sources.tsx', container: 'sources-table-wrap' },

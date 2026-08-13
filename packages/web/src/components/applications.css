@@ -134,6 +134,25 @@
   font-size: var(--fs-200);
 }
 
+/* What the brief that just reached the clipboard actually contained. Same size as the subtitle
+   above it, because it is the same kind of statement — only this one is about a real artefact. */
+.copy-prompt-contents {
+  margin-top: var(--s-2);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  max-width: 68ch;
+}
+
+.copy-prompt-omitted {
+  margin: var(--s-1) 0 0;
+  padding-left: var(--s-4);
+}
+
+/* An omission is the half a reader can act on — it is not fine print, so it is not greyed out. */
+.copy-prompt-omitted > li {
+  color: var(--text);
+}
+
 .copy-prompt [role='alert'] {
   color: var(--no);
   font-size: var(--fs-200);
@@ -151,15 +170,49 @@
 }
 
 /*
-  `.prose-paragraphs` is the one `<table>` in this app with no wrapper element of its own, and its
-  six `white-space: nowrap` column heads ("Proper nouns + figures per 100 words") give it a
-  min-content width of about 900px — wider than the editor column at any viewport this product
-  supports. The scroll container therefore has to be the panel itself. It costs nothing when the
-  table fits, and when it does not the numbers scroll under the reader's thumb instead of the
-  whole page sliding sideways.
+  THE TABLE GETS ITS OWN SCROLLPORT, AND THE PADDED CARD STOPS BEING ONE.
+
+  `.prose-paragraphs` used to be the one `<table>` in this app with no wrapper of its own: its six
+  `white-space: nowrap` column heads ("Proper nouns + figures per 100 words") give it a min-content
+  of 1,053px — measured — against an 818px editor column at a 1400px window, and `overflow-x: auto`
+  sat here, on the panel. That kept the PAGE from sliding sideways and did nothing else well. A
+  padded card is the wrong scrollport: content scrolled to the end sits flush against the border
+  because the right padding is not preserved past the content edge, so the table read as a broken
+  layout ("TRAILI…", row backgrounds bleeding into the border) rather than as something to scroll,
+  and the last column — the verdict, which is the point of the panel — was off screen at x=1509
+  with no affordance pointing at it.
+
+  So the wrapper below is the scrollport, built exactly like `.table-wrap`, `.sources-table-wrap`
+  and `.admin-table-wrap` — `display: grid` with one `minmax(0, 1fr)` track, because `overflow-x`
+  alone clips at paint time while a grid item's automatic minimum width is its min-content at
+  layout time — and `ProseCheckPanel` moves the verdict to the second column so the words are
+  visible before anything is scrolled. `denseLayout.css.test.ts` holds all of it.
 */
-.prose-check {
+.prose-table-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+
+.prose-table-wrap:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-1);
+}
+
+/* The verdict is prose, not a measurement: it may wrap, and it is never clipped. 20ch holds
+   "style words, no counterweight" — the longest of the three — in two lines at --fs-300. */
+.prose-paragraphs td.verdict-text {
+  white-space: normal;
+  min-width: 20ch;
+}
+
+.prose-scroll-note {
+  margin-top: var(--s-3);
+  font-size: var(--fs-200);
+  color: var(--text-muted);
 }
 
 .prose-warning {

@@ -18,6 +18,13 @@
  *   hands back `staleConfirmation`. This panel says which item went stale and why, and never
  *   re-ticks it on the applicant's behalf.
  *
+ *   THE PRODUCT'S OWN WORDS ARE NOT THE APPLICANT'S TO SIGN. A draft that quotes a shipped
+ *   template verbatim used to fill this panel with the product's own sourced prose — 120 rows for
+ *   one press of "Insert ARDC Grants Program — funder overlay", each reading "not attributed to
+ *   any stated value — this is prose you or a model wrote". The server keeps those off `items`
+ *   now and reports them as a count, which this panel prints with the template named: a shorter
+ *   list with no explanation would be the same silent assertion pointing the other way.
+ *
  *   THE LIST IS NOT EXHAUSTIVE AND SAYS SO. `extractFactAssertions` returns nothing for claims
  *   made entirely in words — superlatives, universals, causal claims, and the role half of
  *   "Elena Ruiz, faculty advisor" — and a test pins that, so nobody replaces the honest sentence
@@ -35,6 +42,13 @@ interface Props {
   items: FactItemDTO[];
   openTodos: number;
   /**
+   * Assertions inside passages the draft quotes verbatim from a shipped template, which the server
+   * kept off `items`. Printed as a sentence naming the templates: the panel may not simply be
+   * shorter than the draft with no explanation.
+   */
+  shippedFacts?: number;
+  shippedTemplates?: string[];
+  /**
    * The fingerprint is deliberately NOT sent from here. This component is handed the item it is
    * rendering, so it could — but the route holds the checklist the server issued, and echoing the
    * fingerprint from there keeps one owner for "which value was on screen when the box was ticked".
@@ -49,7 +63,13 @@ const ORIGIN_LABEL: Record<FactOriginDTO, string> = {
   unattributed: 'not attributed to any stated value',
 };
 
-export function FactChecklist({ items, openTodos, onChange }: Props): JSX.Element {
+export function FactChecklist({
+  items,
+  openTodos,
+  shippedFacts = 0,
+  shippedTemplates = [],
+  onChange,
+}: Props): JSX.Element {
   const unconfirmed = items.filter((i) => !i.confirmed).length;
   const stale = items.filter((i) => i.staleConfirmation);
   const clear = unconfirmed === 0 && openTodos === 0;
@@ -58,9 +78,33 @@ export function FactChecklist({ items, openTodos, onChange }: Props): JSX.Elemen
     <section className="fact-checklist" aria-labelledby="fact-checklist-heading">
       <h3 id="fact-checklist-heading">Fact checklist</h3>
       <p className="muted">
-        Confirm every figure, date, name, callsign, citation and URL below before exporting. The funder holds you
-        responsible for each one.
+        Confirm every figure, date, name, callsign, citation and URL below before exporting — these are the ones
+        this draft asserts in your own words. The funder holds you responsible for each one.
       </p>
+      {/*
+        WHAT IS DELIBERATELY NOT ON THE LIST, said in words and with a number.
+
+        Inserting the ARDC overlay used to put 120 rows here, every one of them labelled "not
+        attributed to any stated value — this is prose you or a model wrote", about text
+        GrantSpotter wrote, cited to three ARDC pages named beside the insert button. The panel
+        was accusing the product's own sourced material of being unsourced, and the applicant's
+        real assertions were unfindable underneath it. Those rows are gone; a panel that was
+        simply shorter with no explanation would be the same silence pointing the other way, so
+        the count and the template are printed. The last sentence is the property that makes the
+        rest safe, and it is literally true: matching is verbatim and whole-line.
+      */}
+      {shippedFacts > 0 ? (
+        <p className="muted checklist-shipped">
+          {shippedFacts === 1
+            ? 'One value in this draft is'
+            : `${shippedFacts} values in this draft are`}{' '}
+          quoted, word for word, from material GrantSpotter ships
+          {shippedTemplates.length > 0 ? ` — ${shippedTemplates.join(', ')}` : ''}: the product’s wording rather
+          than yours, so {shippedFacts === 1 ? 'it is' : 'they are'} not listed below for your signature. Every
+          funder overlay carries the sources it was read from; open it under Templates and check them as you would
+          any quotation. Edit any of that material and every value in the part you changed appears here.
+        </p>
+      ) : null}
       <p className="muted checklist-scope">
         This lists the specifics a funder can look up. It cannot list a claim made only in words — a superlative such
         as “the only collegiate club in the state”, a universal such as “every member is licensed”, a causal claim

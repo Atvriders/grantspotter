@@ -52,6 +52,10 @@ const SCROLL_WRAPPERS: Array<[string, string]> = [
   ['admin.css', '.admin-table-wrap'],
   ['watchlist.css', '.wl-scroll'],
   ['calendar.css', '.month-frame'],
+  // The prose check's per-paragraph table. It had no wrapper at all until 2026-08-13 — the padded
+  // `.prose-check` card was the scrollport, which clipped a 1,053px table inside an 818px column
+  // flush against its own border and left the verdict column off screen at a 1400px window.
+  ['applications.css', '.prose-table-wrap'],
 ];
 
 describe('a dense table scrolls inside its own box, and the page does not', () => {

@@ -24,7 +24,7 @@ import {
   putFactConfirmations,
 } from '../api/writing.js';
 import { downloadDraftExport } from '../api/exports.js';
-import { COPY_PROMPT_DISCLOSURE_OFF, CopyPromptButton } from '../components/CopyPromptButton.js';
+import { type CopiedPrompt, CopyPromptButton } from '../components/CopyPromptButton.js';
 import { type DraftGap, DraftGaps, extractGaps } from '../components/DraftGaps.js';
 import { FactChecklist } from '../components/FactChecklist.js';
 import { ProseCheckPanel } from '../components/ProseCheckPanel.js';
@@ -205,8 +205,15 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
       });
   };
 
+  /**
+   * The whole answer, not just the text. `included` / `omitted` are built by the composer at the
+   * same `if` that writes each section, and the button prints them beside the character count —
+   * so the reader is told what went into THIS brief rather than what the subtitle says usually
+   * does. Returning `composed.prompt` alone is what left a member with no profile reading "your
+   * profile facts" over a prompt that had none.
+   */
   const getPrompt = useMemo(
-    () => async (): Promise<string> => {
+    () => async (): Promise<CopiedPrompt> => {
       if (!program) {
         throw new Error(
           'open this draft from an opportunity so the funder’s criteria and AI policy can be included',
@@ -218,7 +225,7 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
         templateId: suggestedOverlay?.id,
         includeDisclosure: current?.includeDisclosure ?? true,
       });
-      return composed.prompt;
+      return { prompt: composed.prompt, included: composed.included, omitted: composed.omitted };
     },
     [program, profile, suggestedOverlay?.id, current?.includeDisclosure],
   );
@@ -275,12 +282,27 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
                 onSelect={insertTemplate}
                 emptyMessage="No component templates apply here."
               />
+              {/*
+                THE SAME SENTENCE THE TEMPLATES SCREEN WAS PRINTING WITH NOTHING TO PRINT IT ABOUT.
+
+                The rail links to `/applications` with no query string, so no funder is named, so
+                `overlays` is empty — and this group said "No overlay has been written for this
+                funder yet." about a funder nobody had mentioned. It is the funder-bound list and
+                it stays the funder-bound list: an overlay quotes ONE funder's published criteria,
+                and offering the whole library for one-click insertion here would put another
+                funder's requirements into this application. What changes is that the empty
+                sentence now says which of the two situations the reader is in.
+              */}
               <TemplatePicker
                 heading="Funder overlays"
                 templates={library.overlays}
                 selectedId={suggestedOverlay?.id}
                 onSelect={insertTemplate}
-                emptyMessage="No overlay has been written for this funder yet."
+                emptyMessage={
+                  funderId === undefined && programId === undefined
+                    ? 'No funder yet: an overlay quotes one funder’s published criteria, so it is chosen by the opportunity. Open one from Browse and press “Start an application for this program”. The whole library is readable under Templates.'
+                    : 'No overlay has been written for this funder yet.'
+                }
               />
               <TemplatePicker
                 heading="Always available"
@@ -330,24 +352,32 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
                   />
                   Include an AI-use disclosure sentence
                 </label>
-                {current.includeDisclosure ? (
-                  <p className="muted">
-                    {/*
-                      "and several ask to be told" until 2026-08-12, which was false: counted from
-                      `data/seed`, ZERO of the 143 shipped records asks to be told, 142 have
-                      published nothing about AI at all, and the one that has (ARDC) permits it.
-                      The clause was pushing a student toward a disclosure with a requirement no
-                      funder here has ever made. `Applications.test.tsx` recomputes the census on
-                      every run, so this sentence goes red rather than stale if a batch adds a
-                      funder that does require one.
-                    */}
-                    The sentence is yours to edit before you send it. No funder in this corpus prohibits AI
-                    assistance and none asks to be told, so including it is your call rather than anyone’s
-                    rule. Where a funder has published a position, the prompt carries their own words.
-                  </p>
-                ) : (
-                  <p className="muted">{COPY_PROMPT_DISCLOSURE_OFF}</p>
-                )}
+                {/*
+                  ONE OWNER FOR THE ON/OFF SENTENCE, AND IT IS THE BUTTON.
+
+                  This branch used to render `COPY_PROMPT_DISCLOSURE_OFF` in its else arm —
+                  the identical paragraph `CopyPromptButton` already renders from the same
+                  constant, so switching the toggle off printed it twice, verbatim, six lines
+                  apart. Two copies of one sentence read as two facts, and the reader looks for
+                  the difference between them. The button states what is and is not in the
+                  prompt in both states; what is left here is the thing the button does NOT say —
+                  the census of the corpus, which is about whether to include the sentence at all
+                  and is just as true with it switched off. `Applications.test.tsx` counts the
+                  renders of both strings in both states.
+
+                  "and several ask to be told" until 2026-08-12, which was false: counted from
+                  `data/seed`, ZERO of the 143 shipped records asks to be told, 142 have
+                  published nothing about AI at all, and the one that has (ARDC) permits it. The
+                  clause was pushing a student toward a disclosure with a requirement no funder
+                  here has ever made. `Applications.test.tsx` recomputes the census on every run,
+                  so this sentence goes red rather than stale if a batch adds a funder that does
+                  require one.
+                */}
+                <p className="muted">
+                  No funder in this corpus prohibits AI assistance and none asks to be told, so including the
+                  sentence is your call rather than anyone’s rule. Where a funder has published a position, the
+                  prompt carries their own words.
+                </p>
 
                 <CopyPromptButton getPrompt={getPrompt} includeDisclosure={current.includeDisclosure} />
               </div>
@@ -427,7 +457,13 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
               <div className="before-export">
                 <DraftGaps gaps={gaps} />
                 {readiness ? (
-                  <FactChecklist items={readiness.items} openTodos={readiness.openTodos} onChange={confirmFact} />
+                  <FactChecklist
+                    items={readiness.items}
+                    openTodos={readiness.openTodos}
+                    shippedFacts={readiness.shippedFacts}
+                    shippedTemplates={readiness.shippedTemplates}
+                    onChange={confirmFact}
+                  />
                 ) : (
                   <p className="muted">The fact checklist loads with the draft.</p>
                 )}

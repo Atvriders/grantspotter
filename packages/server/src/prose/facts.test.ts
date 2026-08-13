@@ -1,6 +1,10 @@
 import type { Funder, OrgProfile, Program } from '@grantspotter/core';
 import { describe, expect, it } from 'vitest';
 import { TODO_MARKER_SCAN, extractSlots, fillTemplate, renderSlotValue } from '../templates/fill.js';
+// The real library, and the seam that turns it into the line lists this module matches against.
+// A test that built its own "shipped" fixture would be testing the matcher against itself.
+import { getTemplate } from '../templates/load.js';
+import { shippedTemplateText } from '../templates/shippedText.js';
 import { buildSlotContext, describeSlotKnowledge } from '../templates/slots.js';
 import { buildDocIndex, isFigureToken, tokenize } from './features.js';
 import {
@@ -11,6 +15,7 @@ import {
   exportReadiness,
   extractFactAssertions,
   factSourcesFromKnowledge,
+  shippedPassages,
   unconfirmedCount,
 } from './facts.js';
 
@@ -664,5 +669,103 @@ describe('a stored confirmation does not survive an edit to the fact it confirme
     expect(b.fingerprint).toBe(a.fingerprint);
     expect(b.id).not.toBe(a.id);
     expect(c.fingerprint).not.toBe(a.fingerprint);
+  });
+});
+
+/**
+ * THE PRODUCT'S OWN CITED MATERIAL IS NOT AN ACCUSATION AGAINST THE APPLICANT.
+ *
+ * Measured on the live site on 2026-08-13: pressing GrantSpotter's own one-click "Insert ARDC
+ * Grants Program — funder overlay" into an empty draft produced a checklist of 120 items, every
+ * one of them "not attributed to any stated value — this is prose you or a model wrote". Every
+ * word of that draft was GrantSpotter's, quoted from three ARDC pages the same overlay cites by
+ * URL two inches from the button. The panel exists to stop an applicant signing something nobody
+ * checked; a wall of 120 rows nobody has to sign is how the six that ARE theirs become invisible.
+ *
+ * These run against the REAL shipped overlay, filled through the real slot pipeline — a fixture
+ * built for the purpose would agree with the matcher by construction and prove nothing about the
+ * text an applicant actually gets.
+ */
+describe('material the product ships, inserted by the product', () => {
+  const overlay = getTemplate('funder-ardc');
+  const inserted = fillTemplate(overlay.body, buildSlotContext({})).markdown;
+  const shipped = shippedTemplateText();
+
+  it('put every value in the shipped overlay on the checklist before this existed', () => {
+    // The defect, held as a measurement so the fix cannot be mistaken for a smaller one.
+    const before = exportReadiness(inserted);
+    expect(before.items.length).toBeGreaterThan(100);
+    expect(before.items.every((i) => i.origin === 'unattributed')).toBe(true);
+  });
+
+  it('leaves almost nothing to confirm once the shipped text is recognised', () => {
+    const before = exportReadiness(inserted);
+    const after = exportReadiness(inserted, {}, [], shipped);
+    expect(after.items.length).toBeLessThan(5);
+    expect(after.shippedFacts).toBe(before.items.length - after.items.length);
+    expect(after.shippedTemplates).toEqual(['ARDC Grants Program — funder overlay']);
+  });
+
+  it('still refuses the export while the overlay’s own gaps are open', () => {
+    const after = exportReadiness(inserted, {}, [], shipped);
+    // The overlay leaves `[TODO: …]` markers where only the applicant can answer. Taking
+    // assertions off the checklist must not take those off the gate.
+    expect(after.openTodos).toBeGreaterThan(0);
+    expect(after.ready).toBe(false);
+  });
+
+  it('brings every value back the moment the applicant edits the passage', () => {
+    const edited = inserted.replace(
+      'ARDC publishes no maximum award.',
+      'W8UM has asked ARDC for $12,500 since 2019.',
+    );
+    const after = exportReadiness(edited, {}, [], shipped);
+    const texts = after.items.map((i) => i.text);
+    expect(texts).toContain('W8UM');
+    expect(texts).toContain('$12,500');
+    expect(texts).toContain('2019');
+  });
+
+  it('never treats a draft the applicant wrote as shipped material', () => {
+    const withShipped = buildFactChecklist(DRAFT, {}, [], shipped);
+    expect(withShipped.map((i) => i.text)).toEqual(buildFactChecklist(DRAFT).map((i) => i.text));
+    expect(exportReadiness(DRAFT, {}, [], shipped).shippedFacts).toBe(0);
+  });
+
+  /**
+   * A LINE IS NOT A PASSAGE. "## When" and "- **February 1**" are lines the overlay ships and
+   * lines an applicant might type; recognising either on its own would blind the checklist to
+   * text somebody really wrote, which is the failure this whole mechanism must not cause.
+   */
+  it('does not excuse a single coincidental line surrounded by the applicant’s own words', () => {
+    const draft = [
+      'Our club meets in Room 214 of the Engineering Building.',
+      '',
+      '## When',
+      '',
+      'W8UM will run four sessions in 2027 at a cost of $1,450.',
+    ].join('\n');
+    const items = buildFactChecklist(draft, {}, [], shipped);
+    for (const text of ['W8UM', '$1,450', '2027', '214']) {
+      expect(items.map((i) => i.text), text).toContain(text);
+    }
+    expect(exportReadiness(draft, {}, [], shipped).shippedFacts).toBe(0);
+  });
+
+  it('reads a blank line between two shipped paragraphs as part of the same passage', () => {
+    const lines = overlay.body.split('\n').filter((l) => l.trim() !== '' && !l.includes('{{'));
+    const passage = [lines[0], '', lines[1], '', lines[2]].join('\n');
+    expect(shippedPassages(passage, shipped)).toHaveLength(1);
+  });
+
+  it('says which template it recognised, so the sentence on screen can name it', () => {
+    const after = exportReadiness(inserted, {}, [], shipped);
+    expect(after.shippedTemplates).toEqual([overlay.title]);
+    expect(after.shippedFacts).toBeGreaterThan(50);
+  });
+
+  it('recognises nothing at all when it is handed no shipped text', () => {
+    expect(shippedPassages(inserted, [])).toEqual([]);
+    expect(exportReadiness(inserted).shippedFacts).toBe(0);
   });
 });

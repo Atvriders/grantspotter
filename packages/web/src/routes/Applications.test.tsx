@@ -108,6 +108,55 @@ describe('CopyPromptButton', () => {
     fireEvent.click(screen.getByRole('button', { name: COPY_PROMPT_LABEL }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/boom/));
   });
+
+  /**
+   * THE SUBTITLE DESCRIBES WHAT THE BRIEF CAN CARRY; THIS DESCRIBES WHAT THIS ONE DID.
+   *
+   * Measured on the live site on 2026-08-13: a member with no profile copied 21,145 characters
+   * under "Includes: … your profile facts …", and the prompt had no "## Facts about me that you
+   * may use" section at all. The composer now hands back what it wrote and what it left out, and
+   * the omission is printed as plainly as the inclusion — a reader one saved form away from a
+   * brief that knows who they are must not be told it already does.
+   */
+  it('reports what the copied brief actually contained, omissions included', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    render(
+      <CopyPromptButton
+        getPrompt={async () => ({
+          prompt: 'THE PROMPT',
+          included: ['this funder’s published criteria', 'a brevity pass'],
+          omitted: [{ clause: 'your profile facts', reason: 'you have no saved profile' }],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: COPY_PROMPT_LABEL }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/copied/i));
+    expect(screen.getByText(/In the brief you just copied/).textContent).toContain('a brevity pass');
+    expect(screen.getByText(/Not in it: your profile facts/).textContent).toMatch(
+      /no saved profile/i,
+    );
+  });
+
+  it('claims nothing about the contents when the caller reports none', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    render(<CopyPromptButton getPrompt={async () => 'THE PROMPT'} />);
+    fireEvent.click(screen.getByRole('button', { name: COPY_PROMPT_LABEL }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/copied/i));
+    expect(screen.queryByText(/In the brief you just copied/)).toBeNull();
+  });
+
+  /**
+   * The pre-click sentence is printed before anything is composed, so every clause in it has to
+   * survive the worst case: no profile, and a funder that has published nothing about AI. Both
+   * conditional clauses are stated AS conditions, and this is what says so.
+   */
+  it('states the two conditional clauses as conditions, not as promises', () => {
+    expect(COPY_PROMPT_SUBTITLE).toMatch(/where they have published one/i);
+    expect(COPY_PROMPT_SUBTITLE).toMatch(/if you have saved any/i);
+    expect(COPY_PROMPT_SUBTITLE).not.toMatch(/·\s*your profile facts\s*·/);
+  });
 });
 
 /**
@@ -261,6 +310,54 @@ describe('ProseCheckPanel', () => {
     expect(screen.getAllByText(/proper nouns \+ figures per 100 words/i)).toHaveLength(1);
   });
 
+  /**
+   * THE VERDICT IS THE POINT OF THE PANEL, AND IT WAS THE COLUMN THAT WENT OFF SCREEN.
+   *
+   * Six `nowrap` heads make this table 1,053px wide; the editor column is 818px at a 1400px
+   * window. With "Reads as" last, its cell was drawn at x=1509 — outside the window entirely —
+   * so the one cell that says "style words, no counterweight" or "carries its own specifics" was
+   * the single thing a reader could not see, while five measurements they had not asked for
+   * were. Position is asserted rather than mere presence: `getByText` passed the whole time it
+   * was invisible.
+   */
+  it('puts the verdict in the second column, before any measurement', () => {
+    const { container } = render(<ProseCheckPanel report={REPORT} densities={DENSITIES} />);
+    const heads = [...container.querySelectorAll('.prose-paragraphs thead th')].map(
+      (th) => th.textContent ?? '',
+    );
+    expect(heads[0]).toMatch(/paragraph/i);
+    expect(heads[1]).toMatch(/reads as/i);
+
+    const firstRow = container.querySelector('.prose-paragraphs tbody tr');
+    const cells = [...(firstRow?.children ?? [])].map((c) => c.textContent ?? '');
+    expect(cells[1]).toBe('style words, no counterweight');
+  });
+
+  /**
+   * And the numbers it pushed right scroll in a box of their own, reachable by keyboard. The
+   * panel itself must NOT be that box: `.prose-check` is padded, so content scrolled to its end
+   * sits flush against the card border and reads as a broken layout rather than as a scroll.
+   */
+  it('scrolls the table inside a labelled region rather than inside the padded card', () => {
+    const { container } = render(<ProseCheckPanel report={REPORT} densities={DENSITIES} />);
+    const wrap = container.querySelector('.prose-table-wrap');
+    expect(wrap, 'the table has no scroll wrapper').not.toBeNull();
+    expect(wrap?.getAttribute('role')).toBe('region');
+    expect(wrap?.getAttribute('aria-label')).toMatch(/scrollable/i);
+    expect(wrap?.getAttribute('tabindex')).toBe('0');
+    expect(wrap?.querySelector('table.prose-paragraphs')).not.toBeNull();
+
+    /*
+     * The note above it is true whether or not the table overflows today's window — jsdom
+     * computes no layout, and a browser at 1900px would fit the whole table. A sentence
+     * announcing that something IS scrolling would be false in that state, which is the exact
+     * defect class this pass exists to remove, so it is asserted as a conditional.
+     */
+    const note = screen.getByText(/box of their own/i).textContent ?? '';
+    expect(note).toMatch(/where they do not fit/i);
+    expect(note).not.toMatch(/\bis scrolling\b|\bscrolls sideways\b/i);
+  });
+
   it('refuses to say a passage was machine-written', () => {
     const { container } = render(<ProseCheckPanel report={REPORT} densities={DENSITIES} />);
     for (const text of visibleTexts(container)) {
@@ -302,6 +399,61 @@ describe('FactChecklist', () => {
     render(<FactChecklist items={FACTS} openTodos={0} onChange={onChange} />);
     fireEvent.click(screen.getAllByRole('checkbox')[0]!);
     expect(onChange).toHaveBeenCalledWith('money:12', { confirmed: true, note: '' });
+  });
+
+  /**
+   * A SHORTER LIST HAS TO SAY WHY IT IS SHORTER.
+   *
+   * The server now keeps assertions quoted verbatim from a shipped template off `items` — 120 of
+   * them for a draft that is nothing but the ARDC overlay. That is right, and it is exactly the
+   * kind of silent subtraction this repository keeps finding: the panel has to name the count and
+   * the template, and it has to say what brings them back.
+   */
+  it('says how many values it left off, and which shipped material they came from', () => {
+    render(
+      <FactChecklist
+        items={FACTS}
+        openTodos={0}
+        shippedFacts={120}
+        shippedTemplates={['ARDC Grants Program — funder overlay']}
+        onChange={() => undefined}
+      />,
+    );
+    const note = screen.getByText(/120 values in this draft/i);
+    expect(note.textContent).toMatch(/the product’s wording rather than yours/i);
+    expect(note.textContent).toContain('ARDC Grants Program — funder overlay');
+    // The claim about sources is made about OVERLAYS, which all carry them — a component template
+    // ships no `sources`, and a sentence promising a cited funder page for every piece of shipped
+    // material would be false the moment somebody inserts "Need statement".
+    expect(note.textContent).toMatch(/Every funder overlay carries the sources it was read from/i);
+    expect(note.textContent).toMatch(/Edit any of that material/i);
+  });
+
+  /** One is not "1 values", and one row is not "they". */
+  it('counts one quoted value in the singular', () => {
+    render(
+      <FactChecklist
+        items={FACTS}
+        openTodos={0}
+        shippedFacts={1}
+        shippedTemplates={['ARDC Grants Program — funder overlay']}
+        onChange={() => undefined}
+      />,
+    );
+    const note = screen.getByText(/One value in this draft is quoted/i);
+    expect(note.textContent).toMatch(/so it is not listed below/i);
+    expect(note.textContent).not.toMatch(/1 values|they are not listed/i);
+  });
+
+  it('says nothing about shipped material when none was recognised', () => {
+    render(<FactChecklist items={FACTS} openTodos={0} shippedFacts={0} onChange={() => undefined} />);
+    expect(screen.queryByText(/quoted, word for word/i)).toBeNull();
+  });
+
+  /** The lead sentence must not promise a list of every assertion when it is a list of theirs. */
+  it('scopes its own opening sentence to what the list actually holds', () => {
+    render(<FactChecklist items={FACTS} openTodos={0} onChange={() => undefined} />);
+    expect(screen.getByText(/in your own words/i)).toBeTruthy();
   });
 });
 
@@ -483,7 +635,7 @@ interface Call {
 
 /** One fetch stub for the whole screen, recording every call so a test can assert what was sent. */
 function stubScreenFetch(
-  options: { putStatus?: number; exportStatus?: number; readiness?: unknown } = {},
+  options: { putStatus?: number; exportStatus?: number; readiness?: unknown; templates?: unknown } = {},
 ): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal(
@@ -503,7 +655,7 @@ function stubScreenFetch(
           ],
         });
       }
-      if (url.startsWith('/api/templates')) return json(OVERLAY_LIBRARY);
+      if (url.startsWith('/api/templates')) return json(options.templates ?? OVERLAY_LIBRARY);
       if (url === '/api/applications') return json({ applications: [DRAFT] });
       if (url.endsWith('/facts') && method === 'PUT') {
         if (options.putStatus === 422) {
@@ -785,6 +937,29 @@ describe('the whole screen', () => {
     expect(auditA11y(document.body)).toEqual([]);
   });
 
+  /**
+   * THE SENTENCE THE TEMPLATES SCREEN WAS ALSO PRINTING, in the one other place it appears.
+   *
+   * The rail links to `/applications` with no query string, so nothing names a funder and
+   * `overlays` is empty — and this group said "No overlay has been written for this funder yet."
+   * about a funder the reader had not chosen. The list stays funder-bound here (inserting another
+   * funder's criteria into this application would be a fabricated requirement); what changes is
+   * that the sentence says which situation the reader is in and where the library is.
+   */
+  it('does not blame a missing overlay on a funder nobody has named', async () => {
+    // The list the server really answers with when nothing names a funder: no overlay binds.
+    stubScreenFetch({ templates: { ...OVERLAY_LIBRARY, overlays: [] } });
+    render(
+      <MemoryRouter initialEntries={['/applications']}>
+        <ApplicationsScreen />
+      </MemoryRouter>,
+    );
+    const group = await screen.findByRole('region', { name: 'Funder overlays' });
+    expect(group.textContent).toMatch(/No funder yet/i);
+    expect(group.textContent).toMatch(/Start an application for this program/);
+    expect(group.textContent).not.toMatch(/No overlay has been written for this funder yet/i);
+  });
+
   it('shows the copy-prompt button grounded in the funder arrived from', async () => {
     stubScreenFetch();
     renderScreen();
@@ -793,12 +968,27 @@ describe('the whole screen', () => {
     expect(screen.getByText(/Drafting for/).textContent).toMatch(/ARDC Grants Program/);
   });
 
-  it('says a disclosure switched off leaves the funder’s own requirement in place', async () => {
+  /**
+   * ONCE. `toBeGreaterThan(0)` is what let this ship: the route rendered
+   * `COPY_PROMPT_DISCLOSURE_OFF` in the else arm of its own toggle and `CopyPromptButton`
+   * rendered the identical constant six lines below, so switching the sentence off printed the
+   * same paragraph twice, verbatim — measured on the live site on 2026-08-13, two renders. Two
+   * copies of one sentence read as two facts, and a reader hunts for the difference. The count is
+   * the assertion now, in both states, for both strings.
+   */
+  it('says a disclosure switched off leaves the funder’s own requirement in place, exactly once', async () => {
     stubScreenFetch();
     renderScreen();
     await openTheDraft();
+    expect(screen.queryAllByText(COPY_PROMPT_DISCLOSURE_OFF)).toHaveLength(0);
+    expect(screen.getAllByText(COPY_PROMPT_DISCLOSURE_ON)).toHaveLength(1);
+
     fireEvent.click(screen.getByLabelText(/Include an AI-use disclosure sentence/i));
-    await waitFor(() => expect(screen.getAllByText(COPY_PROMPT_DISCLOSURE_OFF).length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText(COPY_PROMPT_DISCLOSURE_OFF)).toHaveLength(1));
+    expect(screen.queryAllByText(COPY_PROMPT_DISCLOSURE_ON)).toHaveLength(0);
+    // And the corpus census — a different sentence, about whether to include one at all — survives
+    // the switch rather than being replaced by a second copy of the off-state paragraph.
+    expect(screen.getAllByText(/No funder in this corpus/i)).toHaveLength(1);
   });
 
   /**

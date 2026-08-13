@@ -413,6 +413,28 @@ describe('selectTemplates — ordering and the empty-appliesTo rule', () => {
     ]);
   });
 
+  /**
+   * "NO OVERLAY APPLIES HERE" AND "NO OVERLAY EXISTS" ARE DIFFERENT ANSWERS, AND THE SECOND ONE
+   * WAS BEING GIVEN BY A SCREEN THAT ONLY HAD THE FIRST.
+   *
+   * `overlays` is empty whenever nothing names a funder, which is correct and is what the
+   * writing desk reads. `/templates` has no funder to name — the nav rail links to it bare — so
+   * it printed "No overlay has been written for this funder yet." over a library holding eight.
+   * `libraryOverlays` is the other question, answered whatever the query says.
+   */
+  it('still reports the whole overlay library when the query names no funder', () => {
+    const sel = selectTemplates(docs(), { klass: 'ham_grant' });
+    expect(sel.overlays).toEqual([]);
+    expect(sel.libraryOverlays.map((t) => t.id)).toEqual(['funder-ardc']);
+  });
+
+  it('keeps the library list out of the funder-bound one, and playbooks out of both', () => {
+    const sel = selectTemplates(docs(), { funderId: 'ardc' });
+    // `overlays[0]` is a claim about the applicant's funder; the library index is not that claim.
+    expect(sel.libraryOverlays.map((t) => t.id)).not.toContain('funder-campus-sga');
+    expect(sel.playbooks.map((t) => t.id)).toEqual(['funder-campus-sga']);
+  });
+
   it('never returns an always-available playbook as an overlay, even on a funderId hit', () => {
     const sel = selectTemplates(docs(), { funderId: 'ardc', programId: 'ardc-grants' });
     expect(sel.overlays.map((t) => t.id)).toEqual(['funder-ardc']);

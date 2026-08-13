@@ -11,6 +11,7 @@ import {
   factSourcesFromKnowledge,
 } from '../../prose/facts.js';
 import { renderSlotValue } from '../../templates/fill.js';
+import { shippedTemplateText } from '../../templates/shippedText.js';
 import { type SlotContextInput, describeSlotKnowledge } from '../../templates/slots.js';
 import type { Db } from '../migrate.js';
 import { createFunderRepo } from './funders.js';
@@ -345,12 +346,32 @@ export function applicationFactSources(db: Db, app: ApplicationRow): FactSource[
   );
 }
 
+/**
+ * THE FOURTH ARGUMENT IS THE PRODUCT'S OWN WORDS, and leaving it off is what put 120 confirmations
+ * in front of an applicant who had written none of them.
+ *
+ * `insertTemplate` appends a shipped overlay verbatim into the draft body, and every figure, date
+ * and proper noun in it then arrived on the checklist as "not attributed to any stated value —
+ * this is prose you or a model wrote". It is quoted from pages the same overlay cites by URL.
+ * `shippedTemplateText` hands `buildFactChecklist` the library as text so it can tell the two
+ * apart; anything the applicant edits stops matching and comes straight back onto the list.
+ */
 export function applicationChecklist(db: Db, app: ApplicationRow): FactChecklistItem[] {
-  return buildFactChecklist(app.bodyMarkdown, app.factConfirmations, applicationFactSources(db, app));
+  return buildFactChecklist(
+    app.bodyMarkdown,
+    app.factConfirmations,
+    applicationFactSources(db, app),
+    shippedTemplateText(),
+  );
 }
 
 export function applicationReadiness(db: Db, app: ApplicationRow): ExportReadiness {
-  return exportReadiness(app.bodyMarkdown, app.factConfirmations, applicationFactSources(db, app));
+  return exportReadiness(
+    app.bodyMarkdown,
+    app.factConfirmations,
+    applicationFactSources(db, app),
+    shippedTemplateText(),
+  );
 }
 
 /**

@@ -34,9 +34,16 @@ export const COPY_PROMPT_LABEL = 'Copy AI Prompt — includes AI-detection avoid
  * `POST /api/prompts/compose` returns beside the prompt. The web package may not import server
  * code, so the duplication is deliberate — and a test reads that file as text and compares, because
  * the only other thing that would notice the drift is an e2e suite this plan cannot run.
+ *
+ * IT IS PRINTED BEFORE ANYTHING IS COMPOSED, so every clause has to hold for every prompt the
+ * endpoint can produce. Two did not until 2026-08-13: it recited "your profile facts" to readers
+ * with no profile (measured live: a 21,145-character prompt with no "## Facts about me that you
+ * may use" section under a sentence promising one) and "their AI policy, quoted, with the source
+ * URL" for the 142 of 143 records that have published no AI policy at all. Both are conditions
+ * now, and the composer reports what actually went in — see `CopiedPrompt` below.
  */
 export const COPY_PROMPT_SUBTITLE =
-  'Includes: this funder’s published criteria, restrictions and obligations · their AI policy, quoted, with the source URL · your profile facts · an interview-first rule so the model asks before it drafts · the specificity ruleset (named subjects, proper nouns, figures, dates) · banned stock transitions, openers and closers · a brevity pass · a never-invent-a-citation rule';
+  'Includes: this funder’s published criteria, restrictions and obligations · their AI policy, quoted with the source URL, where they have published one · the facts on your profile, if you have saved any · an interview-first rule so the model asks before it drafts · the specificity ruleset (named subjects, proper nouns, figures, dates) · banned stock transitions, openers and closers · a brevity pass · a never-invent-a-citation rule. Copying it reports exactly which of these went in.';
 
 export const COPY_PROMPT_HONESTY =
   'What that label means: nothing in this prompt will make an AI-detection classifier report “human”, and nothing here tries to. It does not defeat, evade or bypass a detector. It works the other way round, by forcing specificity — named people, callsigns, model numbers, room numbers, dates and figures. Kobak et al. (Science Advances, 2025) measured 2024’s excess vocabulary as 66% verbs and 14% adjectives, where the Covid-era shift was 79% nouns: a real event changes the nouns, and a language model changes the verbs and adjectives. Synonym-swapping, injected typos and invisible characters are deliberately excluded — they degrade the writing, and a reviewer notices bad writing long before a classifier notices a machine.';
@@ -46,8 +53,21 @@ export const COPY_PROMPT_DISCLOSURE_ON = 'Also included: an editable AI-use disc
 export const COPY_PROMPT_DISCLOSURE_OFF =
   'The AI-use disclosure sentence is switched off, so it is not included. This funder’s own AI policy, and any disclosure they require, are still in the prompt — switching the sentence off does not switch off their rule.';
 
+/**
+ * What the composer says it put in this particular brief, and what it left out.
+ *
+ * `getPrompt` used to resolve a bare string, which is why the only enumeration on this screen was
+ * a constant that could not know. A caller may still hand back just the text — the report is then
+ * the character count alone, and no claim is made about contents.
+ */
+export interface CopiedPrompt {
+  prompt: string;
+  included?: string[];
+  omitted?: Array<{ clause: string; reason: string }>;
+}
+
 interface Props {
-  getPrompt: () => Promise<string>;
+  getPrompt: () => Promise<CopiedPrompt | string>;
   disabled?: boolean;
   /** Defaults to on, as the disclosure sentence itself does. */
   includeDisclosure?: boolean;
@@ -74,17 +94,23 @@ async function copyToClipboard(text: string): Promise<void> {
 
 export function CopyPromptButton({ getPrompt, disabled, includeDisclosure = true }: Props): JSX.Element {
   const [status, setStatus] = useState<string | undefined>();
+  const [copied, setCopied] = useState<CopiedPrompt | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
   const onClick = async (): Promise<void> => {
     setError(undefined);
     setStatus(undefined);
+    setCopied(undefined);
     setBusy(true);
     try {
-      const prompt = await getPrompt();
-      await copyToClipboard(prompt);
-      setStatus(`Copied ${prompt.length.toLocaleString()} characters. Paste it into your assistant.`);
+      const answer = await getPrompt();
+      const result: CopiedPrompt = typeof answer === 'string' ? { prompt: answer } : answer;
+      await copyToClipboard(result.prompt);
+      setCopied(result);
+      setStatus(
+        `Copied ${result.prompt.length.toLocaleString()} characters. Paste it into your assistant.`,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -108,6 +134,27 @@ export function CopyPromptButton({ getPrompt, disabled, includeDisclosure = true
       </p>
       <p className="copy-prompt-honesty">{COPY_PROMPT_HONESTY}</p>
       {status ? <p role="status">{status}</p> : null}
+      {/*
+        THE ENUMERATION OF WHAT WAS ACTUALLY COPIED, which is the only one that can be checked
+        against the thing on the clipboard. The subtitle above describes what the brief can carry;
+        this describes what this one does. The omissions are printed as loudly as the inclusions:
+        a reader with no profile is one saved form away from a brief that knows who they are, and
+        the old copy told them their facts were already in it.
+      */}
+      {copied?.included !== undefined && copied.included.length > 0 ? (
+        <div className="copy-prompt-contents">
+          <p className="copy-prompt-included">In the brief you just copied: {copied.included.join(' · ')}.</p>
+          {copied.omitted !== undefined && copied.omitted.length > 0 ? (
+            <ul className="copy-prompt-omitted">
+              {copied.omitted.map((o) => (
+                <li key={o.clause}>
+                  Not in it: {o.clause} — {o.reason}.
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {error ? <p role="alert">Could not copy the prompt: {error}</p> : null}
     </div>
   );
