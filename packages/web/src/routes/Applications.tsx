@@ -276,10 +276,23 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
           </ul>
           {library ? (
             <>
+              {/*
+                DISABLED UNTIL THERE IS A DRAFT TO INSERT INTO, because `insertTemplate` opens
+                `if (!current) return;` and that early return USED TO BE INVISIBLE. The library
+                loads on mount and does not wait for a draft, so every one of these buttons was
+                live the instant the screen painted — including the whole time the "New draft"
+                POST was still in flight. Pressing one then did nothing at all: no insert, no
+                error, no banner, and a draft body that stayed empty with no explanation for why.
+                Reproduced in a browser by delaying `POST /api/applications` by 1.5s, which is one
+                slow connection: the "Need statement" press was swallowed and the textarea read
+                "". The editor beside this rail already says "Start a new draft or open an
+                existing one", so an off control is the honest state and needs no new sentence.
+              */}
               <TemplatePicker
                 heading="Insert a section"
                 templates={library.components}
                 onSelect={insertTemplate}
+                disabled={!current}
                 emptyMessage="No component templates apply here."
               />
               {/*
@@ -298,6 +311,7 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
                 templates={library.overlays}
                 selectedId={suggestedOverlay?.id}
                 onSelect={insertTemplate}
+                disabled={!current}
                 emptyMessage={
                   funderId === undefined && programId === undefined
                     ? 'No funder yet: an overlay quotes one funder’s published criteria, so it is chosen by the opportunity. Open one from Browse and press “Start an application for this program”. The whole library is readable under Templates.'
@@ -308,6 +322,7 @@ export function ApplicationsRoute({ program, profile, programId, funderId, klass
                 heading="Always available"
                 templates={library.playbooks}
                 onSelect={insertTemplate}
+                disabled={!current}
                 emptyMessage="No playbooks."
               />
             </>

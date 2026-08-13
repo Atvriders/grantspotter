@@ -1046,6 +1046,123 @@ describe('the whole screen', () => {
   });
 });
 
+/**
+ * THE PRESS THAT WENT NOWHERE, AND THE SIX THOUSAND UNIT TESTS THAT COULD NOT SEE IT.
+ *
+ * `e2e/writing.spec.ts:735` reads the draft body after pressing "Need statement" and went red on
+ * 2026-08-13 with `Received string: ""` — an empty textarea. The fill was innocent: the filled
+ * `need-statement` body is byte-identical before and after the three commits that touched the
+ * writing path (`templates/renderedFill.test.ts` now pins it). The defect was here.
+ *
+ * `insertTemplate` opens `if (!current) return;`. The template library is fetched on mount and
+ * does not wait for a draft, so every button in these three groups was LIVE from the moment the
+ * screen painted — including the whole time the "New draft" POST was in flight, and including
+ * before anyone had pressed "New draft" at all. A press in that window was discarded in silence:
+ * no insert, no `role="alert"`, no console line, nothing for the student to read except a draft
+ * body that stayed empty. Reproduced in a browser by delaying `POST /api/applications` by 1.5s,
+ * which is one slow connection or one loaded server, and the e2e failure came back exactly.
+ *
+ * These tests hold the two halves of the fix: the control is OFF while the press would be
+ * discarded, and it works the moment there is a draft to insert into. A `disabled` button is also
+ * what makes the browser test deterministic rather than a race that passes on a fast laptop —
+ * Playwright's actionability check waits for enabled, so the click can no longer arrive early.
+ */
+describe('a section cannot be inserted into a draft that does not exist yet', () => {
+  /** The screen's fetches, with `POST /api/applications` held open until the test releases it. */
+  function stubWithDeferredCreate(): {
+    calls: Call[];
+    releaseCreate: () => void;
+  } {
+    const calls: Call[] = [];
+    let release = (): void => undefined;
+    const created = new Promise<void>((resolve) => {
+      release = () => {
+        resolve();
+      };
+    });
+    const json = (payload: unknown): Response =>
+      new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        calls.push({ url, method, body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+        if (url.startsWith('/api/templates/slots')) return json({ all: [], userAnswerable: [] });
+        if (url.endsWith('/fill') && method === 'POST') {
+          return json({
+            templateId: 'need-statement',
+            title: 'Need statement',
+            markdown: '[TODO: club.callsign — the club’s callsign, e.g. W8UM]',
+            unresolvedSlots: ['club.callsign'],
+          });
+        }
+        if (url.startsWith('/api/templates')) return json(OVERLAY_LIBRARY);
+        if (url === '/api/applications' && method === 'POST') {
+          await created;
+          return json({ ...DRAFT, id: 'app-new', bodyMarkdown: '' });
+        }
+        if (url === '/api/applications') return json({ applications: [] });
+        if (url.endsWith('/export-readiness')) return json(READINESS);
+        if (method === 'PATCH') return json({ ...DRAFT, id: 'app-new', bodyMarkdown: String((JSON.parse(String(init?.body)) as { bodyMarkdown?: string }).bodyMarkdown ?? '') });
+        return json({});
+      }),
+    );
+    return { calls, releaseCreate: () => { release(); } };
+  }
+
+  function renderPlain(): void {
+    render(
+      <MemoryRouter initialEntries={['/applications']}>
+        <ApplicationsScreen />
+      </MemoryRouter>,
+    );
+  }
+
+  it('offers the section buttons switched off while no draft is open', async () => {
+    stubWithDeferredCreate();
+    renderPlain();
+    const sections = await screen.findByRole('region', { name: 'Insert a section' });
+    const button = within(sections).getByRole('button', { name: /Need statement/ });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    // The screen still explains itself; the off control is not the only thing the reader gets.
+    expect(screen.getByText('Start a new draft or open an existing one.')).toBeTruthy();
+  });
+
+  it('discards no press while the new draft is still being created', async () => {
+    const { calls, releaseCreate } = stubWithDeferredCreate();
+    renderPlain();
+    const sections = await screen.findByRole('region', { name: 'Insert a section' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New draft' }));
+    // The POST is in flight and `current` is still undefined — the exact window in which the
+    // press used to be swallowed.
+    const button = within(sections).getByRole('button', { name: /Need statement/ });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(calls.filter((c) => c.url.endsWith('/fill'))).toHaveLength(0);
+
+    releaseCreate();
+    await waitFor(() => {
+      expect((within(sections).getByRole('button', { name: /Need statement/ }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    fireEvent.click(within(sections).getByRole('button', { name: /Need statement/ }));
+    await waitFor(() => {
+      expect(calls.filter((c) => c.url.endsWith('/fill'))).toHaveLength(1);
+    });
+    // And the fill reaches the draft: the PATCH carries the marker the browser test reads back
+    // out of the textarea, so "the button works again" is asserted on the text, not on the call.
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH');
+      expect((patch?.body as { bodyMarkdown?: string } | undefined)?.bodyMarkdown).toContain(
+        '[TODO: club.callsign — ',
+      );
+    });
+  });
+});
+
 describe('ApplicationsScreen deep link', () => {
   function stubDeepLinkFetch(): void {
     vi.stubGlobal(

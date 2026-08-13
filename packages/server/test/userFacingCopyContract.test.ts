@@ -656,7 +656,13 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/web/src/lib/profileFields.ts': 13,
     'packages/web/src/lib/safety.ts': 1,
     'packages/web/src/routes/Admin.tsx': 15,
-    'packages/web/src/routes/Applications.tsx': 10,
+    // 10 until 2026-08-13, then 9. "Start a new draft or open an existing one." is now read by a
+    // test — `Applications.test.tsx`'s "offers the section buttons switched off while no draft is
+    // open" — because that sentence became load-bearing: the three template groups are disabled
+    // while no draft exists, and it is the sentence that says why. An off control with nothing
+    // explaining it would be the same silence in a different shape, so the test asserts the
+    // control and the sentence together. One sentence off the debt, so the budget moves.
+    'packages/web/src/routes/Applications.tsx': 9,
     'packages/web/src/routes/Browse.tsx': 4,
     'packages/web/src/routes/Calendar.tsx': 9,
     'packages/web/src/routes/Enroll.tsx': 2,

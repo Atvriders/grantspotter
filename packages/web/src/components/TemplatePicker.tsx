@@ -16,6 +16,15 @@ interface Props {
    * whether or not the group has anything in it, because the sentence is about the group.
    */
   note?: string;
+  /**
+   * Turns every button in the group off. The writing desk sets this while no draft is open,
+   * because `insertTemplate` cannot insert into a draft that does not exist yet and used to
+   * DROP the press — `if (!current) return;`, no error, no banner, nothing on screen. A student
+   * whose "New draft" POST had not landed yet pressed "Need statement" and got silence, and the
+   * only visible consequence was a draft body that stayed empty. A disabled control says the same
+   * thing honestly, next to the editor's own "Start a new draft or open an existing one."
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -35,6 +44,7 @@ export function TemplatePicker({
   onSelect,
   emptyMessage,
   note,
+  disabled = false,
 }: Props): JSX.Element {
   return (
     <section className="template-group" aria-label={heading}>
@@ -48,6 +58,7 @@ export function TemplatePicker({
             <li key={t.id} className={t.id === selectedId ? 'selected' : undefined}>
               <button
                 type="button"
+                disabled={disabled}
                 onClick={() => {
                   onSelect(t.id);
                 }}
