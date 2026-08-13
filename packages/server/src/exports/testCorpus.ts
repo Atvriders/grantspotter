@@ -18,6 +18,7 @@
 import type { Cycle, Funder, Program } from '@grantspotter/core';
 import { expandCycles, observedCycles } from '@grantspotter/core';
 import { cycleHorizonEndISO } from '../review/index.js';
+import { loadSeedCorpus, publishableSeedPrograms } from '../seed/load.js';
 import { loadCorpus, PROFILE_NOW_ISO } from '../../../../scripts/profile-corpus.js';
 
 export interface ExportCorpus {
@@ -63,4 +64,52 @@ export function loadExportCorpus(): Promise<ExportCorpus> {
     now: PROFILE_NOW_ISO,
   }));
   return cached;
+}
+
+/**
+ * THE OTHER CORPUS — the one a real deployment actually serves.
+ *
+ * `loadExportCorpus` above is the FIXTURE corpus: 703 records normalized out of `fixtures/`, which
+ * is what every byte-proof in this directory is measured against and what the e2e database is
+ * seeded from. It is not what a student sees. A container booted on an empty DATA_DIR runs
+ * `importSeedIfEmpty` over `data/seed/` and reports "Imported 143 programs (143 publishable, 0
+ * suppressed) from 26 funders" — a different population, drawn from different files, with a
+ * different set of records carrying a `RECUR` directive in their deadline note (7, against the
+ * fixtures' 6).
+ *
+ * A claim about "the corpus" that is only checked against the fixtures is a claim about the test
+ * data. `deadlineNoteCorpus.test.ts` is the first assertion in this directory to read the shipped
+ * records, and it exists because the defect it pins was found in the shipped file, not the fixture
+ * one.
+ *
+ * `loadSeedCorpus` is the loader the SERVER boots through, and `publishableSeedPrograms` is its own
+ * suppression gate — neither is re-implemented here. The clock is fixed for the same reason
+ * `PROFILE_NOW_ISO` is: a projected cycle count that moves with the wall clock makes a test that
+ * fails on a Tuesday.
+ */
+export const SHIPPED_NOW_ISO = '2026-08-04T00:00:00.000Z';
+
+export interface ShippedExportCorpus {
+  /** The 143 records a fresh install publishes. */
+  programs: Program[];
+  /** The seed's own funder rows — real names, because the file a user opens carries them. */
+  funders: Funder[];
+  cyclesByProgramId: Map<string, Cycle[]>;
+  now: string;
+}
+
+let cachedShipped: ShippedExportCorpus | undefined;
+
+export function loadShippedExportCorpus(): ShippedExportCorpus {
+  if (cachedShipped === undefined) {
+    const seed = loadSeedCorpus();
+    const programs = publishableSeedPrograms(seed.programs);
+    cachedShipped = {
+      programs,
+      funders: seed.funders,
+      cyclesByProgramId: projectCycles(programs, SHIPPED_NOW_ISO),
+      now: SHIPPED_NOW_ISO,
+    };
+  }
+  return cachedShipped;
 }

@@ -27,6 +27,11 @@ export {
 } from './deadline.js';
 export type { DateWindow, MonthDay, ObservedWindow, Recurrence, TimeOfDay } from './deadline.js';
 
+// CONTRACT §4 — the same notation READ BACK OUT, for the surfaces that print `DeadlineSpec.note`
+// to a person. `deadlineNote.ts` states why this is core's business and not each package's.
+export { describeRecurrence, readDeadlineNote } from './deadlineNote.js';
+export type { DeadlineNote } from './deadlineNote.js';
+
 // CONTRACT §4 — geography.
 export {
   callDistrictFromCallsign,

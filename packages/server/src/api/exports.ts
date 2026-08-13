@@ -14,7 +14,7 @@ import { CSV_UTF8_BOM, programsToCsvFile } from '../exports/csv.js';
 import { programsToXlsx } from '../exports/xlsx.js';
 import { buildIcsCalendar } from '../exports/ics.js';
 import { buildEligibilityReport, eligibilityReportToCsv } from '../exports/eligibility.js';
-import { renderEligibilityReportHtml } from '../exports/html.js';
+import { renderEligibilityReportHtml, renderNoProfileHtml } from '../exports/html.js';
 import { markdownToDraft, draftToMarkdown } from '../exports/draft.js';
 import { draftToDocx } from '../exports/docx.js';
 import { buildApplicationPacket } from '../exports/zip.js';
@@ -228,6 +228,38 @@ function attach(res: Response, filename: string, contentType: string): void {
   res.setHeader('Cache-Control', 'no-store');
 }
 
+/**
+ * HOW MANY RECORDS ARE IN THE FILE, STATED ON THE RESPONSE.
+ *
+ * PLAN-LOCAL, and it exists for one browser-side sentence: "nothing matched, so nothing was
+ * saved". A download control that cannot look at a response cannot say that — `<a download>` hands
+ * the bytes to the browser and returns nothing to the page — so `/exports` now fetches its own
+ * files (`web/src/api/exports.ts`'s `downloadExport`) and needs a count it can trust. It cannot
+ * derive one: an XLSX is a ZIP, and counting CSV lines means writing a second RFC 4180 reader in
+ * the browser that would disagree with this one about a quoted newline the first time a funder
+ * wrote one.
+ *
+ * IT IS NOT A HINT AND IT IS NOT COSMETIC. `0` is the difference between "the export worked and
+ * your filters match nothing" and "the export is broken", which is the whole reason the empty file
+ * was worth stopping. It is therefore taken from the SAME value the body is rendered from, at the
+ * point the body is rendered, never recomputed from a second query.
+ *
+ * A header rather than a body field because four of these routes have bodies that are not JSON and
+ * one of them is a binary workbook. Same-origin fetch reads any response header, so nothing needs
+ * exposing; a caller that ignores it (curl, a calendar client, an older browser bundle) is
+ * unaffected.
+ */
+export const EXPORT_ROWS_HEADER = 'X-GrantSpotter-Rows';
+
+function countRows(res: Response, rows: number): void {
+  res.setHeader(EXPORT_ROWS_HEADER, String(rows));
+}
+
+/** VEVENTs in a rendered calendar — what a subscriber would see, counted off the bytes sent. */
+function veventCount(calendar: string): number {
+  return calendar.split('BEGIN:VEVENT').length - 1;
+}
+
 function stamp(nowISO: string): string {
   return nowISO.slice(0, 10);
 }
@@ -315,6 +347,10 @@ export function createExportsRouter(deps: ExportDeps): Router {
     const cycles = cyclesByProgram(deps, now);
     const programs = selectedPrograms(deps, req, deps.userIdOf(req), now);
     attach(res, `grantspotter-opportunities-${stamp(now)}.csv`, 'text/csv; charset=utf-8');
+    // `exportablePrograms`, not `programs.length`: the suppression gate inside `buildExportRows`
+    // decides how many rows the file actually has, and a count taken before it would be a
+    // different number from the one in the bytes on exactly the requests that matter most.
+    countRows(res, exportablePrograms(programs).length);
     res.send(programsToCsvFile(programs, deps.data.listFunders(), cycles));
   });
 
@@ -331,6 +367,7 @@ export function createExportsRouter(deps: ExportDeps): Router {
         `grantspotter-opportunities-${stamp(now)}.xlsx`,
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
+      countRows(res, exportablePrograms(programs).length);
       res.send(buffer);
     }),
   );
@@ -351,29 +388,57 @@ export function createExportsRouter(deps: ExportDeps): Router {
   router.get('/exports/eligibility.csv', deps.requireAuth, (req, res, next) => {
     const report = eligibility(req);
     if (report === undefined) {
+      // NO `attach()` ON THIS PATH, and that is the half that used to be missing in the browser
+      // rather than here: the JSON refusal below is correct for a caller that reads it, and the
+      // page in front of it now does (`web/src/api/exports.ts`). What it must never be is a
+      // response the browser saves, so the refusal carries no Content-Disposition and no
+      // `.csv` name — see the note on the HTML route below.
       next(new AppError('conflict', NO_PROFILE));
       return;
     }
     attach(res, `grantspotter-eligibility-${stamp(deps.now())}.csv`, 'text/csv; charset=utf-8');
+    countRows(res, report.rows.length);
     // Same BOM decision as the opportunity CSV, for the same Excel-on-Windows reason.
     res.send(CSV_UTF8_BOM + eligibilityReportToCsv(report));
   });
 
-  router.get('/exports/eligibility.html', deps.requireAuth, (req, res, next) => {
+  /**
+   * THE ONE ROUTE ON THIS ROUTER WHOSE REFUSAL IS A PAGE, because its success is a page.
+   *
+   * `/exports` links here with `target="_blank"` under the promise "opens in a new tab with its own
+   * Print / Save as PDF button". For a member with no profile it opened a tab containing
+   * `{"error":{"code":"conflict","message":"Set up a profile first; …"},"requestId":"…"}` — the
+   * JSON error envelope every other route answers with, rendered by a browser as the raw text it
+   * is, to a student who asked for a report. The envelope is right for `fetch` callers and wrong
+   * for the one route a human navigates to directly.
+   *
+   * So this handler answers the refusal ITSELF instead of handing it to `errorHandler`: still 409,
+   * still the same sentence, in a document with a link back to the profile form. Nothing else
+   * changes shape — `eligibility.csv` above keeps the JSON envelope, because nobody navigates to a
+   * CSV endpoint expecting to read it.
+   */
+  router.get('/exports/eligibility.html', deps.requireAuth, (req, res) => {
     const report = eligibility(req);
-    if (report === undefined) {
-      next(new AppError('conflict', NO_PROFILE));
-      return;
-    }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
+    if (report === undefined) {
+      res.status(409).send(renderNoProfileHtml(NO_PROFILE));
+      return;
+    }
+    countRows(res, report.rows.length);
     res.send(renderEligibilityReportHtml(report));
   });
 
   router.get('/exports/deadlines.ics', deps.requireAuth, (req, res) => {
     const now = deps.now();
+    const calendar = renderCalendar(deps, req, deps.userIdOf(req), now);
     attach(res, `grantspotter-deadlines-${stamp(now)}.ics`, 'text/calendar; charset=utf-8');
-    res.send(renderCalendar(deps, req, deps.userIdOf(req), now));
+    // DATES, not programmes: an `.ics` with a valid VCALENDAR wrapper and no VEVENT in it is a
+    // file with nothing in it, and `?watched=1` on an empty watchlist produces exactly that. The
+    // count is taken off the bytes being sent rather than from the programme map they came from,
+    // because a programme with no dated cycle contributes no event.
+    countRows(res, veventCount(calendar));
+    res.send(calendar);
   });
 
   /**

@@ -117,6 +117,75 @@ function filenameFrom(response: Response, fallback: string): string {
   return /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallback;
 }
 
+/**
+ * The header `packages/server/src/api/exports.ts` states the record count on
+ * (`EXPORT_ROWS_HEADER`). Retyped rather than imported because `web` never imports `server`;
+ * `api/exports.test.ts` there pins the string, so a rename breaks on the side that owns it.
+ */
+const ROWS_HEADER = 'x-grantspotter-rows';
+
+/** What an export actually did, in the terms the screen has to report. */
+export interface ExportOutcome {
+  /** The file that landed on disk, or `null` when nothing was saved. */
+  filename: string | null;
+  /** Records in the file, or `null` when this server did not say. */
+  rows: number | null;
+}
+
+/**
+ * PRESS THE CONTROL, INSPECT THE ANSWER, THEN DECIDE WHETHER A FILE IS WORTH WRITING.
+ *
+ * THE CONTROL SHAPE WAS THE DEFECT. `/exports` offered `<a download href="/api/exports/…">`, and
+ * an anchor cannot look at a response — the browser saves whatever comes back, under the name in
+ * the URL, and the page the user is looking at never learns that anything happened. Two things
+ * followed from that, both measured on the built product:
+ *
+ *   1. A member with NO PROFILE pressed "Eligibility report (CSV)" and Chromium saved a file
+ *      called `eligibility.csv` whose entire contents were
+ *      `{"error":{"code":"conflict","message":"Set up a profile first; …"}}` — a 409 JSON body
+ *      with no Content-Disposition, named as though it were the report, with nothing on screen
+ *      changing to say otherwise.
+ *   2. A verdict-filtered or watchlist-scoped export that legitimately matches nothing saved a
+ *      file with a header row and no rows, equally silently. "It worked and matched nothing" and
+ *      "it is broken" are different sentences, and an empty file in a downloads folder says
+ *      neither.
+ *
+ * So the response is fetched, and only a response that IS the file gets written:
+ *
+ *   - not `ok` — nothing is saved, and the server's own sentence is thrown for the screen to
+ *     print. `<a download>` had no way to do either.
+ *   - `0` records — nothing is saved, and the caller is told the count so it can say WHY in the
+ *     words of the control that was pressed. Deliberately not "saved an empty file and mentioned
+ *     it": a file on disk is a thing the user will open later, out of this context, believing it
+ *     to be an answer.
+ *   - anything else — saved, under the filename the SERVER chose (`Content-Disposition`), which is
+ *     the stamped one the file is meant to have rather than the last path segment of the URL.
+ *
+ * A server that does not send the count (an older build, a route with nothing to count) yields
+ * `rows: null`, and a null count never suppresses a download: unknown is not zero.
+ */
+export async function downloadExport(
+  path: string,
+  query?: URLSearchParams,
+  fallbackFilename = 'grantspotter-export',
+): Promise<ExportOutcome> {
+  const response = await fetch(exportHref(path, query), {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers: { accept: '*/*' },
+  });
+  if (!response.ok) throw await toExportError(response);
+
+  const header = response.headers.get(ROWS_HEADER);
+  const parsed = header === null ? Number.NaN : Number.parseInt(header, 10);
+  const rows = Number.isFinite(parsed) ? parsed : null;
+  if (rows === 0) return { filename: null, rows: 0 };
+
+  const filename = filenameFrom(response, fallbackFilename);
+  saveBlob(await response.blob(), filename);
+  return { filename, rows };
+}
+
 /** The server reads the draft from the applications row; this sends only the id. */
 export async function downloadDraftExport(kind: 'docx' | 'md' | 'zip', body: DraftExportBody): Promise<void> {
   const response = await fetch(DRAFT_PATHS[kind], {

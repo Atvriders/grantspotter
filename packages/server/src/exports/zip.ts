@@ -27,7 +27,7 @@
  */
 import { zipSync, strToU8 } from 'fflate';
 import type { Funder, Program } from '@grantspotter/core';
-import { obligationState } from '@grantspotter/core';
+import { obligationState, readDeadlineNote } from '@grantspotter/core';
 import { redactBlockedLinks } from '../api/notify.js';
 import { toCsv } from './csv.js';
 import { draftToMarkdown } from './draft.js';
@@ -214,7 +214,22 @@ export function requirementsChecklistMarkdown(program: Program, funder: Funder |
   out.push(`- Method: ${program.applyVia}`);
   if (program.applyUrl !== undefined) out.push(`- Apply at: ${program.applyUrl}`);
   if (program.applyContact !== undefined) out.push(`- Contact: ${program.applyContact}`);
-  out.push(`- Deadline pattern: ${program.deadline.kind}. ${program.deadline.note}`);
+  /*
+    THE PACKET BRIEF WAS THE OTHER FILE PRINTING THE DIRECTIVE. This line was
+    `${program.deadline.kind}. ${program.deadline.note}`, so an applicant's own packet — the
+    document they read while writing the application — carried
+    `RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,…` on the same 7 shipped records the
+    spreadsheets did. `readDeadlineNote` is core's reader, shared with `rows.ts` and the record
+    page, so all three say one thing about one schedule.
+
+    `deadline.kind` is still the stored identifier here, and that is a separate defect with a
+    separate fix (the record page reads it through `DEADLINE_KIND_WORDS`, which lives in `web`);
+    it is named in the handover rather than half-fixed by a fourth translation table.
+  */
+  const deadlineNote = readDeadlineNote(program.deadline.note);
+  out.push(`- Deadline pattern: ${program.deadline.kind}.`);
+  if (deadlineNote.rule !== undefined) out.push(`- Repeats: ${deadlineNote.rule}.`);
+  if (deadlineNote.prose !== '') out.push(`- The funder's own note: ${deadlineNote.prose}`);
   if (program.deadline.source.kind === 'inherited') {
     out.push(
       `- This programme does not set its own deadline: it inherits the one published for ` +

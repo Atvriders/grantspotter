@@ -451,9 +451,14 @@ test('spec §14: log in, profile, browse, star, calendar, ICS, template, prompt,
   // 6 — export ICS, through the UI a user actually has
   await page.getByRole('link', { name: 'Exports', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Take it with you' })).toBeVisible();
+  // A BUTTON, NOT A LINK, AND THE JOURNEY IS WHERE THAT CHANGE IS FELT. An `<a download>` hands
+  // the response to the browser unread: on `/exports` that is how a 409 JSON body came to be saved
+  // as `eligibility.csv`, and how an empty watchlist calendar was saved as though it were an
+  // answer. These controls fetch, check, and only then write — the file that lands is unchanged,
+  // including the server-stamped name asserted below.
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('link', { name: /one-off \.ics$/i }).click(),
+    page.getByRole('button', { name: /one-off \.ics$/i }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/^grantspotter-deadlines-\d{4}-\d{2}-\d{2}\.ics$/);
   const icsPath = await download.path();

@@ -16,6 +16,7 @@ import {
   calendarPrograms,
   createCalendarFeedRouter,
   createExportsRouter,
+  EXPORT_ROWS_HEADER,
   type ExportDeps,
   type FeedLimits,
 } from './exports.js';
@@ -295,6 +296,130 @@ describe('eligibility exports', () => {
       expect((await res.json() as { error: { code: string } }).error.code).toBe('conflict');
     } finally {
       await new Promise<void>((resolve) => alt.server.close(() => resolve()));
+    }
+  });
+
+  /**
+   * THE REFUSAL MUST NOT BE SAVEABLE AS THE REPORT.
+   *
+   * Measured on the built product: a member with no profile pressed "Eligibility report (CSV)" —
+   * `<a download href="/api/exports/eligibility.csv">` — and Chromium wrote a file called
+   * `eligibility.csv` containing `{"error":{"code":"conflict","message":"Set up a profile first;
+   * there is nothing to match against."}}`. The browser named it from the URL because the 409
+   * carried no `Content-Disposition`; the anchor could not read the status, so the page said
+   * nothing. The control is a button now and reads the response, and this is the server half:
+   * a refusal carries no attachment header and no report filename, so nothing downstream can
+   * mistake it for a file.
+   */
+  it('sends no attachment header on the refusal, so no browser saves it as the report', async () => {
+    const noProfile = fakeDataSource();
+    noProfile.getProfile = () => undefined;
+    const alt = await startApp(depsFor(noProfile));
+    try {
+      const res = await fetch(`${alt.base}/api/exports/eligibility.csv`);
+      expect(res.headers.get('content-disposition')).toBeNull();
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(res.headers.get(EXPORT_ROWS_HEADER)).toBeNull();
+      expect(await res.text()).not.toContain('grantspotter-eligibility');
+    } finally {
+      await new Promise<void>((resolve) => alt.server.close(() => resolve()));
+    }
+  });
+
+  /**
+   * THE ONE ROUTE A HUMAN NAVIGATES TO ANSWERS IN HUMAN. `/exports` links here with
+   * `target="_blank"` promising "opens in a new tab with its own Print / Save as PDF button"; with
+   * no profile it opened a tab of the raw JSON error envelope. Same status, same sentence, in a
+   * document.
+   */
+  it('answers the printable report’s refusal as a readable page, not as JSON in a tab', async () => {
+    const noProfile = fakeDataSource();
+    noProfile.getProfile = () => undefined;
+    const alt = await startApp(depsFor(noProfile));
+    try {
+      const res = await fetch(`${alt.base}/api/exports/eligibility.html`);
+      expect(res.status).toBe(409);
+      expect(res.headers.get('content-type')).toContain('text/html');
+      const body = await res.text();
+      expect(body.startsWith('<!doctype html>')).toBe(true);
+      // The route's own sentence, and the way out of the state it describes.
+      expect(body).toContain('Set up a profile first; there is nothing to match against.');
+      expect(body).toContain('href="/profile"');
+      // Not the envelope. A reader must never meet `{"error":{"code":…` in a tab they opened.
+      expect(body).not.toContain('"error"');
+      expect(body).not.toContain('requestId');
+    } finally {
+      await new Promise<void>((resolve) => alt.server.close(() => resolve()));
+    }
+  });
+});
+
+/**
+ * HOW MANY RECORDS ARE IN THE FILE — the fact a `<a download>` control could never learn.
+ *
+ * `/exports` writes nothing to disk unless the response is the file, and it tells the user what
+ * landed and how much is in it. Both sentences are built on this header, so it is asserted per
+ * route, against the rows actually in the body rather than against a number computed twice.
+ */
+describe('the record count on the response', () => {
+  it('is spelled exactly as the browser bundle reads it', () => {
+    expect(EXPORT_ROWS_HEADER).toBe('X-GrantSpotter-Rows');
+  });
+
+  it('counts the CSV’s data rows, matching the bytes sent', async () => {
+    const res = await fetch(`${base}/api/exports/opportunities.csv`);
+    const rows = (await res.text()).split('\r\n').filter((l) => l !== '').length - 1;
+    expect(res.headers.get(EXPORT_ROWS_HEADER)).toBe(String(rows));
+    expect(rows).toBe(2);
+  });
+
+  it('counts the same programmes for the workbook', async () => {
+    const res = await fetch(`${base}/api/exports/opportunities.xlsx`);
+    expect(res.headers.get(EXPORT_ROWS_HEADER)).toBe('2');
+  });
+
+  it('counts the eligibility report’s rows', async () => {
+    const res = await fetch(`${base}/api/exports/eligibility.csv`);
+    expect(res.headers.get(EXPORT_ROWS_HEADER)).toBe('2');
+  });
+
+  /**
+   * DATES, NOT PROGRAMMES — and the number that matters is 0. A watchlist holding nothing produces
+   * a valid VCALENDAR with no VEVENT in it, which as a silent download is a file a student opens
+   * next week and reads as "there are no deadlines".
+   */
+  it('counts the calendar’s events, and says 0 when the watchlist is empty', async () => {
+    const full = await fetch(`${base}/api/exports/deadlines.ics`);
+    const body = await full.text();
+    expect(full.headers.get(EXPORT_ROWS_HEADER)).toBe(String(body.split('BEGIN:VEVENT').length - 1));
+    expect(full.headers.get(EXPORT_ROWS_HEADER)).toBe('2');
+
+    const previous = data.watching;
+    data.watching = [];
+    try {
+      const empty = await fetch(`${base}/api/exports/deadlines.ics?watched=1`);
+      expect(empty.headers.get(EXPORT_ROWS_HEADER)).toBe('0');
+      expect(await empty.text()).not.toContain('BEGIN:VEVENT');
+    } finally {
+      data.watching = previous;
+    }
+  });
+
+  /**
+   * The gate decides how many rows the file has, so the count is taken AFTER it. A suppressed
+   * record projected into the browse table (the reclassification hazard this suite models) must
+   * not be counted into a header either — a count that disagreed with the file would be the
+   * screen reporting a row nobody can see.
+   */
+  it('counts what survived the suppression gate, never what was selected before it', async () => {
+    data.suppressedVisible = true;
+    try {
+      const res = await fetch(`${base}/api/exports/opportunities.csv`);
+      const body = await res.text();
+      expect(res.headers.get(EXPORT_ROWS_HEADER)).toBe('2');
+      expect(body).not.toContain(SUPPRESSED.id);
+    } finally {
+      data.suppressedVisible = false;
     }
   });
 });

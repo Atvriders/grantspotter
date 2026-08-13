@@ -52,6 +52,7 @@ export const XLSX_NUMERIC_FIELDS: ReadonlySet<ExportField> = new Set<ExportField
 const WIDE_FIELDS: ReadonlySet<ExportField> = new Set<ExportField>([
   'name',
   'summary',
+  'deadlineRule',
   'deadlineNote',
   'restrictions',
   'deadlineBasis',

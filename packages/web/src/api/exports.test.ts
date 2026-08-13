@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EMPTY_FILTERS, filtersToSearchParams } from '../lib/filterState.js';
 import {
   browseFiltersToExportQuery, exportHref, getIcsToken, createIcsToken, revokeIcsToken,
-  downloadDraftExport, restoreFromBackup,
+  downloadDraftExport, downloadExport, restoreFromBackup,
 } from './exports.js';
 
 describe('browseFiltersToExportQuery', () => {
@@ -164,6 +164,100 @@ describe('downloadDraftExport', () => {
     ));
     await expect(downloadDraftExport('docx', { applicationId: 'a-1', programId: 'ardc-grants' }))
       .rejects.toThrow(/unconfirmed factual assertion/);
+  });
+});
+
+/**
+ * THE CONTROL SHAPE THAT MADE A JSON ERROR LAND ON DISK UNDER THE NAME OF THE REPORT.
+ *
+ * `/exports` offered `<a download href="/api/exports/eligibility.csv">`. For a member with no
+ * profile that route answers 409 with a JSON body and no `Content-Disposition`, so Chromium saved
+ * a file called `eligibility.csv` whose entire contents were the error envelope — and the page the
+ * user was looking at did not change. An anchor cannot inspect a response; that is the defect, and
+ * `downloadExport` is the shape that can.
+ */
+describe('downloadExport', () => {
+  const created: string[] = [];
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    created.length = 0;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      created.push('blob');
+      return 'blob:test';
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function fileResponse(rows: number | null, filename = 'grantspotter-opportunities-2026-08-13.csv'): Response {
+    const headers: Record<string, string> = {
+      'content-type': 'text/csv',
+      'content-disposition': `attachment; filename="${filename}"`,
+    };
+    if (rows !== null) headers['x-grantspotter-rows'] = String(rows);
+    return new Response('id,funder\r\nardc-grants,ARDC\r\n', { status: 200, headers });
+  }
+
+  it('saves under the filename the server chose, and reports the count', async () => {
+    vi.mocked(fetch).mockResolvedValue(fileResponse(143));
+    const outcome = await downloadExport('/api/exports/opportunities.csv');
+    expect(outcome).toEqual({ filename: 'grantspotter-opportunities-2026-08-13.csv', rows: 143 });
+    expect(created).toHaveLength(1);
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/exports/opportunities.csv');
+    expect(init.credentials).toBe('same-origin');
+  });
+
+  it('carries the query through, so a scoped export is the scoped one', async () => {
+    vi.mocked(fetch).mockResolvedValue(fileResponse(5, 'grantspotter-deadlines-2026-08-13.ics'));
+    await downloadExport('/api/exports/deadlines.ics', new URLSearchParams({ watched: '1' }));
+    const [requested] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    expect(requested).toBe('/api/exports/deadlines.ics?watched=1');
+  });
+
+  it('saves NOTHING on a refusal, and carries the server’s own sentence for the screen', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(
+      JSON.stringify({
+        error: { code: 'conflict', message: 'Set up a profile first; there is nothing to match against.' },
+        requestId: 'r1',
+      }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    ));
+    await expect(downloadExport('/api/exports/eligibility.csv')).rejects.toThrow(/set up a profile first/i);
+    expect(created).toEqual([]);
+  });
+
+  /** A real answer with nothing in it. The file would be a header row, read later as an answer. */
+  it('writes no file when the export matched nothing, and says so with a count of 0', async () => {
+    vi.mocked(fetch).mockResolvedValue(fileResponse(0));
+    expect(await downloadExport('/api/exports/opportunities.csv')).toEqual({ filename: null, rows: 0 });
+    expect(created).toEqual([]);
+  });
+
+  /**
+   * UNKNOWN IS NOT ZERO. A server that sends no count — an older build, a route with nothing to
+   * count — must still hand the user their file; suppressing a download on a missing header would
+   * turn a silent empty file into a silent missing one, which is the same failure inverted.
+   */
+  it('still saves when the server sent no count at all', async () => {
+    vi.mocked(fetch).mockResolvedValue(fileResponse(null));
+    expect(await downloadExport('/api/exports/opportunities.csv')).toEqual({
+      filename: 'grantspotter-opportunities-2026-08-13.csv',
+      rows: null,
+    });
+    expect(created).toHaveLength(1);
+  });
+
+  it('falls back to the caller’s filename when the server named none', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response('x', {
+      status: 200,
+      headers: { 'content-type': 'text/csv', 'x-grantspotter-rows': '3' },
+    }));
+    const outcome = await downloadExport('/api/exports/opportunities.csv', undefined, 'fallback.csv');
+    expect(outcome.filename).toBe('fallback.csv');
   });
 });
 

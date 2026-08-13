@@ -206,3 +206,43 @@ ${rows}
 </html>
 `;
 }
+
+/**
+ * THE REFUSAL, AS A PAGE, because this route's success is a page and a browser is the only thing
+ * that opens it.
+ *
+ * A member with no profile pressed "Printable eligibility report" on `/exports` and got a new tab
+ * containing `{"error":{"code":"conflict","message":"Set up a profile first; there is nothing to
+ * match against."},"requestId":"…"}`. Every word of that is true and none of it is addressed to a
+ * person: the JSON envelope is what `fetch` callers parse, and this is the one export route a
+ * human navigates to with `target="_blank"`.
+ *
+ * IT SAYS THE SAME SENTENCE, and the sentence is passed in rather than retyped here — the route
+ * owns the wording and this file must not become a second place it can be changed.
+ *
+ * `/profile` IS AN SPA ROUTE and this document is deliberately self-contained, which is not a
+ * contradiction: the link is an ordinary same-origin `href` the browser navigates to, not an asset
+ * this page loads. The report above it inlines its stylesheet for the same reason and links out to
+ * funders in exactly this way.
+ */
+export function renderNoProfileHtml(message: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GrantSpotter eligibility report — no profile yet</title>
+<style>${PRINT_CSS}</style>
+</head>
+<body>
+<header class="report-head">
+  <h1>There is no report to print yet</h1>
+  <p class="subtitle">${escapeHtml(message)}</p>
+</header>
+<p>This report is one sentence per programme: <em>here is what I am eligible for, and the specific constraint that excludes me from the rest</em>. Every verdict in it is computed against your own profile, so with no profile on file there is nothing to compute and nothing that could honestly be printed.</p>
+<p><a href="/profile">Set up your profile</a>, then open this report again.</p>
+<p class="provenance">Nothing was saved to your computer. GrantSpotter answered this request with a refusal rather than an empty report, because an eligibility report with no verdicts in it reads as &ldquo;you qualify for nothing&rdquo;, which is a claim this software has no basis for making.</p>
+</body>
+</html>
+`;
+}

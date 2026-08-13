@@ -97,6 +97,68 @@ describe('buildExportRows', () => {
 });
 
 /**
+ * THE MACHINE DIRECTIVE, AND THE SPREADSHEET IT WAS LEAVING THE BUILDING IN.
+ *
+ * `DeadlineSpec.note` really holds `RECUR n_fixed_dates tz=… dates=02-01,… | <prose>` on the
+ * records whose schedule this pipeline encodes: 7 of the 143 a fresh install serves, 6 of the 150
+ * the fixtures produce. `cc64182` took it off the record page and left it in the CSV, the XLSX and
+ * the packet brief, which is where a student's copy gets forwarded to somebody who was never going
+ * to ask what `dates=02-01` meant.
+ */
+describe('the deadline note, split', () => {
+  const withDirective = (note: string) => rowFor(makeProgram({
+    deadline: { kind: 'n_fixed_dates', source: { kind: 'self' }, note },
+  })).cells;
+
+  it('writes the funder’s prose in the note column and the directive nowhere', () => {
+    const cells = withDirective(
+      'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | ' +
+        'Applications arriving after Sep 1 roll to the next Feb 1 cycle.',
+    );
+    expect(cells.deadlineNote).toBe('Applications arriving after Sep 1 roll to the next Feb 1 cycle.');
+    expect(cells.deadlineNote).not.toContain('RECUR');
+    expect(Object.values(cells).join('\n')).not.toContain('RECUR ');
+  });
+
+  /**
+   * THE SCHEDULE IS NOT THROWN AWAY WITH THE ENCODING. The dated columns beside this one carry
+   * only the NEXT cycle, so deleting the directive alone would delete "the first of February,
+   * April, July and September, every year" from the file entirely. It moves to its own column, in
+   * the words the record page's "Repeats" row prints.
+   */
+  it('renders the schedule the directive encodes, in English, in its own column', () => {
+    expect(
+      withDirective('RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | x').deadlineRule,
+    ).toBe('February 1, April 1, July 1, September 1 each year, closing at 23:59 America/Los_Angeles');
+    expect(
+      withDirective('RECUR annual_window tz=America/New_York window=10-30..12-30 close=12:00 | x').deadlineRule,
+    ).toBe('October 30 to December 30 each year, 00:00 to 12:00 America/New_York');
+  });
+
+  it('leaves an ordinary note exactly as the funder wrote it, in the column it has always been in', () => {
+    const cells = rowFor().cells;
+    expect(cells.deadlineNote).toBe('February 1, April 1, July 1, September 1.');
+    expect(cells.deadlineRule).toBe('');
+  });
+
+  /**
+   * A directive nobody can parse is DROPPED, not printed. Half-understood is the one thing a
+   * schedule may not be rendered as; `deadlineKind` still says how the deadline repeats.
+   */
+  it('drops a directive that does not parse rather than printing it raw', () => {
+    const cells = withDirective('RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask them.');
+    expect(cells.deadlineNote).toBe('Ask them.');
+    expect(cells.deadlineRule).toBe('');
+  });
+
+  it('leaves an empty note column when the record carried nothing but a directive', () => {
+    const cells = withDirective('RECUR n_fixed_dates tz=UTC dates=02-01');
+    expect(cells.deadlineNote).toBe('');
+    expect(cells.deadlineRule).toBe('February 1 each year, closing at 23:59 UTC');
+  });
+});
+
+/**
  * Almost every exported deadline is computed from a recurrence rule rather than published by its
  * funder. A projected date exported without that distinction becomes an authoritative-looking
  * deadline in someone's spreadsheet.

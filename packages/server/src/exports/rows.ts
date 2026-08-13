@@ -20,7 +20,7 @@
  * chance to decide.
  */
 import type { Cycle, Funder, Program } from '@grantspotter/core';
-import { obligationState } from '@grantspotter/core';
+import { obligationState, readDeadlineNote } from '@grantspotter/core';
 import { exportablePrograms } from './filter.js';
 
 /**
@@ -47,6 +47,7 @@ export const EXPORT_FIELDS = [
   'nextClosesUtc',
   'timezone',
   'cycleLabel',
+  'deadlineRule',
   'deadlineNote',
   'costShareRequired',
   'coFunderPreference',
@@ -86,6 +87,7 @@ export const EXPORT_FIELD_LABELS: Readonly<Record<ExportField, string>> = Object
   nextClosesUtc: 'Next closes (UTC instant)',
   timezone: 'Funder time zone',
   cycleLabel: 'Cycle',
+  deadlineRule: 'Repeats',
   deadlineNote: 'Deadline note',
   costShareRequired: 'Cost share',
   coFunderPreference: 'Co-funder',
@@ -223,6 +225,25 @@ function nextCycle(cycles: readonly Cycle[] | undefined): Cycle | undefined {
 
 function buildRow(program: Program, funderName: string, cycles: readonly Cycle[] | undefined): ExportRow {
   const next = nextCycle(cycles);
+  /*
+    THE MACHINE DIRECTIVE DOES NOT GO IN THE FILE, AND THE SCHEDULE IT ENCODES DOES.
+
+    `deadlineNote` was `program.deadline.note` — the whole string — so the cell a student reads
+    began `RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 |` on 7 of the
+    143 rows a fresh install exports and 6 of the 150 the fixtures produce, in the CSV and in the
+    XLSX alike. `cc64182` took that identifier off the record page; a spreadsheet is where the same
+    record gets forwarded to a faculty advisor, so it was the surface with the widest audience and
+    the least chance of anybody asking what `dates=02-01` meant.
+
+    Dropping the directive alone would have thrown the schedule away with it — the dated columns
+    beside this one carry only the NEXT cycle, so "the first of February, April, July and
+    September, every year" exists nowhere else in the file. So the two halves are separated rather
+    than one being deleted: `deadlineRule` is the rule in English (`readDeadlineNote`, core's
+    reader, the same sentence the record page's "Repeats" row prints), `deadlineNote` is what the
+    funder actually wrote. Both are empty when there is nothing to say; a note with no directive is
+    unchanged prose in the column it has always been in.
+  */
+  const note = readDeadlineNote(program.deadline.note);
   const cells: Record<ExportField, string> = {
     id: program.id,
     funder: funderName,
@@ -244,7 +265,8 @@ function buildRow(program: Program, funderName: string, cycles: readonly Cycle[]
     nextClosesUtc: next?.closesAt ?? '',
     timezone: next?.timezone ?? '',
     cycleLabel: next?.label ?? '',
-    deadlineNote: program.deadline.note,
+    deadlineRule: note.rule ?? '',
+    deadlineNote: note.prose,
     costShareRequired: renderObligation(program.obligations.costShareRequired, 'required', 'not required'),
     coFunderPreference: renderObligation(
       program.obligations.coFunderPreference,

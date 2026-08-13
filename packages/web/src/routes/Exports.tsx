@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  createIcsToken, getIcsToken, revokeIcsToken, exportHref,
+  createIcsToken, getIcsToken, revokeIcsToken, downloadExport, exportHref,
   type IcsTokenCreated,
 } from '../api/exports.js';
+import { apiGet } from '../api/client.js';
 import '../components/exports.css';
 
 /**
@@ -13,16 +14,182 @@ import '../components/exports.css';
  */
 const WATCHED_ONLY_QUERY = '?watched=1';
 
+/** The three panels, so a message about a download lands beside the control that made it. */
+type Panel = 'opportunities' | 'eligibility' | 'calendar';
+
+interface PanelMessage {
+  panel: Panel;
+  /** `refused` is the server saying no; `empty` is a real answer with nothing in it. */
+  kind: 'saved' | 'empty' | 'refused';
+  text: string;
+}
+
+/**
+ * WHAT A DOWNLOAD CONTROL IS, ON THIS SCREEN.
+ *
+ * `noun` and `nothing` exist because "0" is only meaningful in the words of the thing pressed: an
+ * opportunities export with no rows means the corpus or the filters matched nothing, while a
+ * watchlist calendar with no events means the user has not starred anything — same number, two
+ * unrelated instructions to the reader. The sentence is therefore written per control rather than
+ * assembled from a template, and none of them says "an error occurred".
+ */
+interface ExportControl {
+  label: string;
+  panel: Panel;
+  path: string;
+  query?: URLSearchParams;
+  fallbackFilename: string;
+  noun: string;
+  nothing: string;
+}
+
+const CONTROLS: ExportControl[] = [
+  {
+    label: 'Opportunities (CSV)',
+    panel: 'opportunities',
+    path: '/api/exports/opportunities.csv',
+    fallbackFilename: 'grantspotter-opportunities.csv',
+    noun: 'programmes',
+    nothing:
+      'There is nothing to export: this GrantSpotter is publishing no programmes at all, ' +
+      'so no file was written.',
+  },
+  {
+    label: 'Opportunities (XLSX)',
+    panel: 'opportunities',
+    path: '/api/exports/opportunities.xlsx',
+    fallbackFilename: 'grantspotter-opportunities.xlsx',
+    noun: 'programmes',
+    nothing:
+      'There is nothing to export: this GrantSpotter is publishing no programmes at all, ' +
+      'so no file was written.',
+  },
+  {
+    label: 'Eligibility report (CSV)',
+    panel: 'eligibility',
+    path: '/api/exports/eligibility.csv',
+    fallbackFilename: 'grantspotter-eligibility.csv',
+    noun: 'programmes',
+    nothing:
+      'The report came back with no programmes in it at all, which is not the same as ' +
+      '“you qualify for nothing” — an empty report would read that way, so no file was written.',
+  },
+  {
+    label: 'One-off .ics',
+    panel: 'calendar',
+    path: '/api/exports/deadlines.ics',
+    fallbackFilename: 'grantspotter-deadlines.ics',
+    noun: 'dates',
+    nothing:
+      'That calendar would have contained no dates, so no file was written. Every publishable ' +
+      'deadline here is either undated or outside the window this file covers.',
+  },
+  {
+    label: 'One-off .ics (watchlist only)',
+    panel: 'calendar',
+    path: '/api/exports/deadlines.ics',
+    query: new URLSearchParams({ watched: '1' }),
+    fallbackFilename: 'grantspotter-deadlines.ics',
+    noun: 'dates',
+    nothing:
+      'Your watchlist has no dated deadlines in it, so that calendar would have been empty and ' +
+      'no file was written. Star an opportunity and it will appear here.',
+  },
+];
+
+interface ProfilesResponse {
+  student: unknown | null;
+  organization: unknown | null;
+}
+
 export function ExportsRoute(): JSX.Element {
   const [hasToken, setHasToken] = useState<boolean | null>(null);
   const [created, setCreated] = useState<IcsTokenCreated | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<PanelMessage | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * `null` while unknown, and unknown is NOT "no": a probe that failed must never be the reason a
+   * control refuses to run. The server is the authority on whether a report can be built — this
+   * only lets the screen say so before the user presses anything, instead of after.
+   */
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
 
   useEffect(() => {
     getIcsToken()
       .then((status) => setHasToken(status !== null))
       .catch((err: Error) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    apiGet<ProfilesResponse>('/api/profiles')
+      .then((body) => setHasProfile(body.student !== null || body.organization !== null))
+      // Deliberately silent, and deliberately not `false`. The eligibility controls stay live and
+      // the server answers for itself; a failed probe is not news the user can act on.
+      .catch(() => setHasProfile(null));
+  }, []);
+
+  /**
+   * PRESS, THEN REPORT — the whole of the fix on this side.
+   *
+   * Every outcome ends in a sentence on this page: the file that landed and how much is in it, the
+   * reason there is no file, or the server's own refusal. `downloadExport` writes nothing unless
+   * the response is the file, so "the screen says nothing happened" and "nothing happened" cannot
+   * come apart the way they did when these were `<a download>` anchors.
+   */
+  async function run(control: ExportControl): Promise<void> {
+    setBusy(control.label);
+    setMessage(null);
+    try {
+      const outcome = await downloadExport(control.path, control.query, control.fallbackFilename);
+      if (outcome.rows === 0) {
+        setMessage({ panel: control.panel, kind: 'empty', text: control.nothing });
+        return;
+      }
+      const count = outcome.rows === null ? '' : ` — ${String(outcome.rows)} ${control.noun}`;
+      setMessage({
+        panel: control.panel,
+        kind: 'saved',
+        text: `Saved ${outcome.filename ?? control.fallbackFilename}${count}.`,
+      });
+    } catch (err) {
+      setMessage({ panel: control.panel, kind: 'refused', text: (err as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /*
+    ONE DOWNLOAD AT A TIME, because there is one message. Two exports in flight would leave the
+    reader with one sentence about one of them and no way to tell which — and the whole point of
+    this screen's rebuild is that what it says and what happened cannot come apart. The pressed
+    control also renames itself while it works, so a slow corpus does not read as a dead button.
+  */
+  function controlsFor(panel: Panel): JSX.Element[] {
+    return CONTROLS.filter((c) => c.panel === panel).map((control) => (
+      <button
+        key={control.label}
+        type="button"
+        className="btn"
+        disabled={busy !== null || (control.panel === 'eligibility' && hasProfile === false)}
+        onClick={() => { void run(control); }}
+      >
+        {busy === control.label ? `${control.label}…` : control.label}
+      </button>
+    ));
+  }
+
+  function messageFor(panel: Panel): JSX.Element | null {
+    if (message === null || message.panel !== panel) return null;
+    return (
+      <p
+        className={message.kind === 'saved' ? 'export-note' : 'row-warning'}
+        role={message.kind === 'refused' ? 'alert' : 'status'}
+      >
+        {message.text}
+      </p>
+    );
+  }
 
   async function create(): Promise<void> {
     setError(null);
@@ -61,10 +228,8 @@ export function ExportsRoute(): JSX.Element {
           These download the whole corpus. To export a narrower slice, set the filters on{' '}
           <Link to="/">Browse</Link> and use the export row there.
         </p>
-        <div className="export-links">
-          <a className="btn" download href={exportHref('/api/exports/opportunities.csv')}>Opportunities (CSV)</a>
-          <a className="btn" download href={exportHref('/api/exports/opportunities.xlsx')}>Opportunities (XLSX)</a>
-        </div>
+        <div className="export-links">{controlsFor('opportunities')}</div>
+        {messageFor('opportunities')}
       </section>
 
       <section className="panel card" aria-label="Eligibility report">
@@ -74,12 +239,41 @@ export function ExportsRoute(): JSX.Element {
           the rest.&rdquo; It needs a profile — the report is computed against yours, so{' '}
           <Link to="/profile">set one up</Link> first if you have not.
         </p>
+        {/*
+          THE STATE THIS SECTION USED TO PROMISE ITS WAY THROUGH. The paragraph above already said
+          "it needs a profile — set one up first if you have not", and then both controls fired
+          anyway: the CSV anchor saved a 409 JSON body to disk under the name `eligibility.csv`,
+          and the printable link opened a tab of that same raw JSON where a report had been
+          promised. Saying it and then doing the other thing is worse than not saying it. With no
+          profile on file the controls are OFF and the reason is on the screen — and the server
+          refuses both routes on its own account besides (`api/exports.ts`), because this state can
+          also be reached by URL and from a second tab.
+        */}
+        {hasProfile === false && (
+          <p className="row-warning" role="status">
+            There is no profile on this account yet, so there is no report to make: every verdict
+            in it is computed against yours. <Link to="/profile">Set one up</Link> and both
+            controls here start working.
+          </p>
+        )}
         <div className="export-links">
-          <a className="btn" download href={exportHref('/api/exports/eligibility.csv')}>Eligibility report (CSV)</a>
-          <a className="btn" target="_blank" rel="noopener noreferrer" href={exportHref('/api/exports/eligibility.html')}>
-            Printable eligibility report
-          </a>
+          {controlsFor('eligibility')}
+          {hasProfile === false ? (
+            <button type="button" className="btn" disabled>Printable eligibility report</button>
+          ) : (
+            <a className="btn" target="_blank" rel="noopener noreferrer" href={exportHref('/api/exports/eligibility.html')}>
+              Printable eligibility report
+            </a>
+          )}
         </div>
+        {messageFor('eligibility')}
+        {/*
+          THE PRINTABLE REPORT STAYS AN ANCHOR, and that is a decision rather than an oversight.
+          Its whole job is to open a page in a tab, which is what an anchor does with the click the
+          user actually made; a button that fetched first and called `window.open` afterwards would
+          be opening a window outside the gesture, which is the shape browsers block. What it does
+          not do any more is open a tab of JSON: the route answers its refusal as a readable page.
+        */}
         <p className="export-note">
           The printable report opens in a new tab with its own <strong>Print / Save as PDF</strong>{' '}
           button. There is no server-side PDF renderer and deliberately no headless browser in the
@@ -145,12 +339,8 @@ export function ExportsRoute(): JSX.Element {
           tentative status, a custom property and a note in its description — so nothing here reads
           as a promise the funder made.
         </p>
-        <div className="export-links">
-          <a className="btn" download href={exportHref('/api/exports/deadlines.ics')}>One-off .ics</a>
-          <a className="btn" download href={exportHref('/api/exports/deadlines.ics', new URLSearchParams({ watched: '1' }))}>
-            One-off .ics (watchlist only)
-          </a>
-        </div>
+        <div className="export-links">{controlsFor('calendar')}</div>
+        {messageFor('calendar')}
 
         {hasToken === null && <p className="eyebrow">Checking…</p>}
 
