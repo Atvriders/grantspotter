@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { Cycle, Obligations } from '@grantspotter/core';
 import { Opportunity } from './Opportunity.js';
+import { INSTRUMENT_LABELS } from '../lib/filterState.js';
 
 /**
  * The detail page is where spec §8's honesty surfaces all land at once, so most of what is
@@ -1241,5 +1242,196 @@ describe('Opportunity detail — a refused fetch', () => {
     for (const link of screen.queryAllByRole('link')) {
       expect(link.getAttribute('href') ?? '').not.toMatch(/farweb\.org/i);
     }
+  });
+});
+
+/**
+ * NOTHING ON THIS PAGE IS AN IDENTIFIER OUT OF THE DATABASE.
+ *
+ * MEASURED on the deployed build, signed in as a member, before these tests existed: the record
+ * page's Deadline panel read `Pattern: n_fixed_dates` and `Note: RECUR n_fixed_dates
+ * tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | …`; its Award panel read `Instrument:
+ * cash_range`; its Source panel read `Method: live_fetch`; and its AI panel read `Stance:
+ * unaddressed`. Four of the five were in `.data`, the monospaced class this product reserves for a
+ * figure a reader copies — so they were not merely untranslated, they were presented as values.
+ *
+ * `Pattern` and `Instrument` are the sharp ones. Browse's facet list has rendered the SAME
+ * `Instrument` enum as "Cash range" since Plan 3, and the calendar's undated list has rendered the
+ * same `DeadlineKind` in words for as long: the app owned the translation and this screen — the one
+ * a student reads before spending an application fee — did not use it.
+ *
+ * These tests render a state and read the words. Six of the seven would have failed against the
+ * build that shipped.
+ */
+describe('Opportunity — every stored token reaches the reader as English', () => {
+  const RECURRING = {
+    ...CLUB_GRANT_DETAIL,
+    program: {
+      ...CLUB_GRANT_DETAIL.program,
+      deadline: {
+        kind: 'n_fixed_dates',
+        source: { kind: 'self' },
+        note:
+          'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01 | ' +
+          'Applications arriving after Sep 1 roll to the next Feb 1 cycle.',
+      },
+    },
+  };
+
+  /** The `<dd>` that follows the `<dt>` with this exact label. */
+  function valueOf(label: string): string {
+    const dt = screen.getAllByRole('term').find((t) => t.textContent?.trim() === label);
+    expect(dt, `no <dt> reads "${label}"`).toBeDefined();
+    return dt?.nextElementSibling?.textContent?.trim() ?? '';
+  }
+
+  it('says how a deadline repeats instead of printing its kind', async () => {
+    stubFetch(RECURRING);
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Pattern')).toBe('Fixed dates each year');
+    expect(screen.queryByText(/n_fixed_dates/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the funder’s own note and drops the machine directive in front of it', async () => {
+    stubFetch(RECURRING);
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Note')).toBe(
+      'Applications arriving after Sep 1 roll to the next Feb 1 cycle.',
+    );
+    expect(screen.queryByText(/RECUR/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dates=/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tz=/)).not.toBeInTheDocument();
+  });
+
+  it('states the dates that directive encodes, in English, on its own row', async () => {
+    stubFetch(RECURRING);
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Repeats')).toBe(
+      'February 1, April 1, July 1, September 1 each year, closing at 23:59 America/Los_Angeles',
+    );
+  });
+
+  /**
+   * A DIRECTIVE THAT DOES NOT PARSE IS DROPPED, NOT GUESSED AT. `parseRecurrence` throws on an
+   * unknown zone; a half-understood schedule rendered as though it were understood is the
+   * plausible-looking fact this product exists not to publish. What survives is the kind — which
+   * says how the deadline repeats without claiming to know when — and the funder's own sentence.
+   */
+  it('shows no schedule at all when the directive cannot be parsed', async () => {
+    stubFetch({
+      ...RECURRING,
+      program: {
+        ...RECURRING.program,
+        deadline: {
+          ...RECURRING.program.deadline,
+          note: 'RECUR n_fixed_dates tz=Mars/Olympus dates=02-01 | Ask the funder.',
+        },
+      },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(screen.queryByText('Repeats')).not.toBeInTheDocument();
+    expect(valueOf('Note')).toBe('Ask the funder.');
+    expect(valueOf('Pattern')).toBe('Fixed dates each year');
+  });
+
+  /** A note that is ONLY a directive leaves the funder having said nothing — never a blank cell. */
+  it('says the funder stated no note when the directive was the whole of it', async () => {
+    stubFetch({
+      ...RECURRING,
+      program: {
+        ...RECURRING.program,
+        deadline: {
+          ...RECURRING.program.deadline,
+          note: 'RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01',
+        },
+      },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Note')).toBe('Not stated on the page.');
+  });
+
+  it('names the award instrument the way the Browse facet beside it does', async () => {
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Instrument')).toBe(INSTRUMENT_LABELS.cash_range);
+    expect(valueOf('Instrument')).toBe('Cash range');
+    expect(screen.queryByText(/cash_range/)).not.toBeInTheDocument();
+  });
+
+  it('says where the record came from rather than naming a pipeline stage', async () => {
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    expect(valueOf('Method')).toBe('Entered by hand from the funder’s page');
+    expect(screen.queryByText(/manual_curation/)).not.toBeInTheDocument();
+  });
+
+  it('says the funder’s AI position in a sentence, never as a stance token', async () => {
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    const panel = screen.getByLabelText('AI policy');
+    expect(panel).toHaveTextContent('This funder permits applicants to use AI.');
+    expect(panel).not.toHaveTextContent(/Stance:/);
+    expect(panel).not.toHaveTextContent(/permitted_with_disclosure|unaddressed/);
+  });
+
+  /**
+   * THE CONTRADICTION THIS BRANCH CLOSES. The "has not published a policy" paragraph was keyed on
+   * whether a QUOTE existed, not on the stance, so a record that states a position with no
+   * sentence recorded printed both "This funder permits applicants to use AI" and "This funder has
+   * not published a policy on applicants using AI" on one card. The shipped corpus does not
+   * produce that pair — 1 record `permitted` with a quote, 149 `unaddressed` with none — which is
+   * exactly why it could sit here unseen; the schema makes `quote` optional on every stance.
+   */
+  it('does not tell a reader a funder published nothing when the funder took a position', async () => {
+    stubFetch({
+      ...CLUB_GRANT_DETAIL,
+      program: {
+        ...CLUB_GRANT_DETAIL.program,
+        aiPolicy: { stance: 'prohibited' },
+      },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    const panel = screen.getByLabelText('AI policy');
+    expect(panel).toHaveTextContent('This funder prohibits applicants from using AI.');
+    expect(panel).not.toHaveTextContent(/has published no position|not published a policy/i);
+    expect(panel).toHaveTextContent(/No sentence of the funder’s was recorded for this position/);
+  });
+
+  it('still says silence is not permission where the funder said nothing', async () => {
+    stubFetch({
+      ...CLUB_GRANT_DETAIL,
+      program: { ...CLUB_GRANT_DETAIL.program, aiPolicy: { stance: 'unaddressed' } },
+    });
+    renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    const panel = screen.getByLabelText('AI policy');
+    expect(panel).toHaveTextContent(
+      'This funder has published no position on applicants using AI.',
+    );
+    expect(panel).toHaveTextContent(/not permission and not a prohibition/);
+  });
+
+  /**
+   * THE SWEEP, because the five rows above are the five that were found and the union has more
+   * members than anybody checked one at a time. Any `snake_case` token in the rendered text is an
+   * identifier that escaped a translation table.
+   */
+  it('renders no snake_case identifier anywhere on the page', async () => {
+    stubFetch(RECURRING);
+    const { container } = renderDetail();
+    await screen.findByRole('heading', { name: /ARRL Club Grant Program/ });
+    const text = container.textContent ?? '';
+    // Not vacuous: this record renders every panel on the page, and an empty string would satisfy
+    // the assertion below without looking at anything.
+    expect(text.length).toBeGreaterThan(2000);
+    // `[TODO: …]` markers and URLs are not on this page; a hash is hex. What is left is enums.
+    const tokens = [...text.matchAll(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g)].map((m) => m[0]);
+    expect(tokens).toEqual([]);
   });
 });

@@ -10,6 +10,13 @@ import {
 import { MonthGrid } from '../components/MonthGrid.js';
 import { StatusPill } from '../components/StatusPill.js';
 import { TrustBadge } from '../components/TrustBadge.js';
+/*
+  The deadline-pattern words moved to `lib/programWords.ts` so the record page could read the same
+  table — it was printing `n_fixed_dates` raw — and so they could be typed `Record<DeadlineKind,
+  string>`. The local copy was `Record<string, string>` with a `?? kind` fallback, which meant a
+  kind nobody had written words for reached this list as a bare identifier and nothing failed.
+*/
+import { deadlineKindWords } from '../lib/programWords.js';
 import '../components/calendar.css';
 
 /** PLAN-LOCAL mirror of the server's `CalendarResponse` (`api/calendarRouter.ts`). */
@@ -46,19 +53,6 @@ const LEGEND = [
   { className: 'inst-unknown', label: 'Instrument unknown' },
 ];
 
-const DEADLINE_KIND_WORDS: Record<string, string> = {
-  rolling: 'Rolling — accepts applications year-round',
-  unpublished: 'No deadline published',
-  no_application_exists: 'No application exists',
-  dormant: 'Dormant — no live cycle',
-  ad_hoc: 'Ad hoc — announced when it happens',
-  inherited: 'Inherits another program’s deadline',
-  quarterly_rewritten: 'Rewritten quarterly',
-  n_fixed_dates: 'Fixed dates',
-  n_fixed_windows: 'Fixed windows',
-  annual_window: 'Annual window',
-};
-
 /**
  * How much of this window is one date wearing many hats.
  *
@@ -89,13 +83,6 @@ function ridership(entries: CalendarEntry[]): {
     if (top === null || owner.count > top.count) top = owner;
   }
   return { total, top };
-}
-
-function monthBounds(year: number, month: number): { start: number; end: number } {
-  return {
-    start: Date.UTC(year, month - 1, 1),
-    end: Date.UTC(year, month, 1) - 1,
-  };
 }
 
 /**
@@ -173,10 +160,6 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
   const published = data?.entries.filter((e) => !e.isEstimated).length ?? 0;
   const projected = data?.entries.filter((e) => e.isEstimated).length ?? 0;
   const riding = ridership(data?.entries ?? []);
-
-  const bounds = monthBounds(cursor.year, cursor.month);
-  const outsideWindow =
-    data !== null && (bounds.end < Date.parse(data.from) || bounds.start > Date.parse(data.to));
 
   return (
     <>
@@ -292,19 +275,25 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
               <span className="cal-month-name">{monthTitle}</span>
             </div>
 
-            {outsideWindow && (
-              <p className="cal-notice">
-                {monthTitle} is outside the window this page asked the API for (
-                {formatDate(data.from)} to {formatDate(data.to)}). An empty grid here means nobody
-                asked, not that no funder has a date that month.
-              </p>
-            )}
+            {/*
+              THE "OUTSIDE THE WINDOW" NOTICE THAT STOOD HERE IS NOW `MonthGrid`'s, and it is the
+              same sentence — see `MonthGrid`'s `monthCoverage`.
 
+              It fired only when the month was ENTIRELY outside the requested window, and the
+              months at each END of that window are the ones the reader actually meets: a 365-day
+              request opens and closes mid-month, so August 2027 had 18 of its 31 days never asked
+              about, no banner, and a grid that said "that is what this window returned". One
+              component now answers "how much of this month was asked about" for all three cases —
+              all of it, some of it, none of it — because two components each holding half of that
+              answer is how the straddling case came to belong to neither.
+            */}
             <MonthGrid
               year={cursor.year}
               month={cursor.month}
               entries={data.entries}
               now={nowISO}
+              windowFrom={data.from}
+              windowTo={data.to}
             />
           </>
         )}
@@ -327,7 +316,7 @@ export function Calendar({ now }: { now?: string }): JSX.Element {
                 <div className="meta">
                   <span>{program.funderName}</span>
                   <span className="data">
-                    {DEADLINE_KIND_WORDS[program.deadlineKind] ?? program.deadlineKind}
+                    {deadlineKindWords(program.deadlineKind)}
                   </span>
                   <StatusPill status={program.status} />
                   <TrustBadge lastVerifiedAt={program.lastVerifiedAt} now={nowISO} />

@@ -164,6 +164,20 @@
   font-weight: 700;
 }
 
+/*
+  How much of the month was asked about, ABOVE the grid because it governs how the grid may be read.
+  Quiet by default: the partly-covered case is the ordinary one at each end of a 365-day window and
+  the grid below it is still answering. The zero-coverage case adds `.cal-notice`, whose amber and
+  border are declared later in this file and win on source order, and which is the case where the
+  grid answers nothing at all.
+*/
+.month-coverage {
+  margin: 0 0 var(--s-2);
+  max-width: 70ch;
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+}
+
 /* Both notes stand under the frame rather than inside it — see `MonthGrid.tsx` for why. */
 .month-scroll-note {
   margin: var(--s-2) 0 0;
@@ -194,8 +208,60 @@
   border-left: 3px solid currentColor;
   text-decoration: none;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/*
+  ---------- what truncates, and what may not ----------
+
+  MEASURED before this block existed, Chromium against the shipped corpus on October 2026: 4 of 4
+  marks clipped at a 1400px viewport (147px of cell against 174-342px of text), and 4 of 4 at 900px
+  and 375px, where the grid is at its 672px `min-width` and each cell gives its marks 80px. The
+  cells read "IEEE M…", "Start pre…" and "ARRL A…" — and "Start pre…" is a prep mark whose text was
+  "Start preparing (projected date): …", so the ellipsis fell INSIDE the word "preparing" and the
+  projected/funder-published qualifier never rendered at any width. That qualifier is the
+  distinction the calendar exists to draw.
+
+  No cell width fixes it: seven columns wide enough for a programme name is a month behind two
+  screens of sideways scrolling. So the mark is three boxes with different truncation rules.
+
+  `.mark-kind` and `.mark-flag` WRAP. They are short fixed strings — "Closes", "Opens", "Start
+  preparing", "Projected date", "Funder-published" — and the longest of them wraps to two lines in
+  an 80px cell rather than losing a word. `overflow-wrap: anywhere` because "Funder-published" is
+  one word to the line breaker and would otherwise set the cell's min-content floor.
+
+  `.mark-name` is the one box that still ellipses, because a programme name is unbounded. Its full
+  text is in the link's accessible name, in its `title`, and spelled out in the Agenda tab.
+*/
+.mark-kind,
+.mark-flag,
+.mark-name {
+  display: block;
+}
+
+.mark-kind,
+.mark-flag {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/*
+  NOT UPPERCASE, AND NOT LETTER-SPACED, though every other micro-label in this app is.
+
+  MEASURED at 375px, where the grid is at its 672px `min-width` and a cell gives its marks 76px:
+  "PROJECTED DATE" set in caps at `--tracking-caps` does not fit "PROJECTED" on one line, so
+  `overflow-wrap` broke it as "PROJECT / ED DATE". The qualifier was legible — it is no longer
+  truncated — and it read as a typographic accident. The `.eyebrow` treatment is for labels sitting
+  in prose at 15px; this one lives in the narrowest box this product draws, and weight alone
+  separates it from the kind above it without spending a third of the line on tracking.
+*/
+.mark-flag {
+  font-weight: 700;
+}
+
+.mark-name {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chip:focus-visible {
@@ -311,7 +377,8 @@
   line-height: var(--lh-normal);
 }
 
-/* The overlay: where the work starts, and where a published window opens. */
+/* The overlay: where the work starts, and where a published window opens. Truncation is the three
+   `.mark-*` boxes' business now — see the block above `.mark-kind`. */
 .prep-mark,
 .opens-mark {
   display: block;
@@ -322,8 +389,6 @@
   padding: 2px var(--s-2);
   margin-bottom: var(--s-1);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .prep-mark {

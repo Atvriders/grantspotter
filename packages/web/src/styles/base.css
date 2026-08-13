@@ -179,6 +179,64 @@ a:hover { color: var(--accent-hover); }
 
 .grid-table tbody tr:hover td { background: var(--surface-2); }
 
+/*
+  WHAT A `<button>` WITH NO CLASS ON IT LOOKS LIKE — which until now was "whatever Chromium draws".
+
+  THE DEFECT, MEASURED in Chromium at 1280x900 against the shipped corpus, on /applications:
+  "Download DOCX", "Download Markdown", "Download application packet (ZIP)" and every row of the
+  draft list rendered at 21px tall with a 2px `outset` border, inches from `.btn` controls measured
+  at 40.5px. Those are UA defaults, and a UA default is not a neutral starting point — it is a
+  different design, from a different decade, with its own palette.
+
+  AND ITS PALETTE IS NOT THEME-AWARE IN THE WAY THIS ONE IS. `html { color-scheme: light dark }`
+  makes Chromium paint `ButtonFace` as #efefef in light and #6b6b6b in dark, and the app's own
+  accent is what several rules put ON that face: `.draft-list li.selected > button` sets
+  `color: var(--accent)`, so the SELECTED draft — the one row in that list whose whole job is to be
+  identifiable — measured 5.11:1 in light (#0f6f7a on #efefef, passing) and 2.20:1 in dark
+  (#3fb6c0 on #6b6b6b, failing 4.5:1 by a wide margin). Neither theme's tokens ever defined that
+  background, so no palette review could have caught it: the failing colour was the browser's.
+  This rule is the fix, and it is a one-line one — an unclassed button now sits on `--surface`,
+  which both themes define and `lib/contrast.test.ts` already asserts `--accent` against.
+
+  WHY THE ELEMENT AND NOT A CLASS. Three of the five controls above live in the writing desk's
+  markup, which this pass does not own, and a defect whose fix is "remember to add a class" comes
+  back the next time somebody writes a button. Styling the element makes the app's own look the
+  default and a bare `<button>` correct wherever one is written.
+
+  SPECIFICITY IS THE WHOLE SAFETY ARGUMENT. This is a single type selector (0,0,1), so every
+  existing component rule that paints a button — `.cal-tabs button`, `.profile-tabs button`,
+  `button.badge`, `.template-list > li > button`, `.inbox-filter button[aria-pressed]` — still
+  wins on every property it declares, and the tab rows and badges are unchanged. What those rules
+  do NOT declare, they now inherit from the product rather than from Chromium.
+
+  NO `min-height` HERE. `button.badge` is a 24px inline verdict control inside a results table; a
+  floor stated on the element would inflate it. 40.5px comes from the padding, which is what makes
+  `.btn` 40.5px, and the `pointer: coarse` block below already raises every button to 44px where
+  the pointer is a thumb.
+*/
+button {
+  font: inherit;
+  font-weight: 560;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-1);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/*
+  `:where()` on the two STATE rules, deliberately, and not on the block above.
+
+  A bare `button:hover` would be (0,1,1) — the same specificity as `.profile-tabs button` and
+  `.cal-tabs button`, which declare their own backgrounds — so which one painted a hovered tab
+  would come down to the order Vite happened to concatenate the stylesheets in. `:where()`
+  contributes nothing to specificity, so these stay at (0,0,1) and every class rule in the app
+  wins against them by construction rather than by luck.
+*/
+button:where(:hover) { background: var(--surface-2); }
+button:where([disabled]) { opacity: 0.55; cursor: not-allowed; }
+
 .btn {
   font: inherit;
   font-weight: 560;

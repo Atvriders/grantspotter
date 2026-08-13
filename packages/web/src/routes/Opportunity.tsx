@@ -16,6 +16,22 @@ import { PrintButton } from '../components/PrintButton.js';
 import { linkRefusal, type LinkRefusal } from '../lib/safety.js';
 import { profileFieldHelp, profileFieldHref, profileFieldLabel } from '../lib/profileFields.js';
 import { formatDate } from '../lib/trust.js';
+/*
+  THE TRANSLATION TABLES THIS SCREEN OWNED AND DID NOT USE.
+
+  `INSTRUMENT_LABELS` is Browse's facet list — the same enum, rendered as "Cash range", one click
+  away from this page, since Plan 3. It is imported rather than restated: a second copy is how the
+  facet list and the record page come to disagree about what `cash_tiered_blocks` is called, and
+  `lib/filterState.ts` is already the file that fails to compile when a new `Instrument` arrives.
+  (`web -> core` and web-to-web only; nothing here reaches into `server`.)
+*/
+import { INSTRUMENT_LABELS } from '../lib/filterState.js';
+import {
+  AI_STANCE_WORDS,
+  DEADLINE_KIND_WORDS,
+  VERIFICATION_METHOD_WORDS,
+  readDeadlineNote,
+} from '../lib/programWords.js';
 import '../components/detail.css';
 
 /** Mirrors `packages/server/src/api/browseTypes.ts`. Restated: `web` never imports `server`. */
@@ -359,6 +375,7 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
   const unrepresented = program.constraints.filter(
     (constraint) => constraint.spec.orUnrepresented !== undefined,
   );
+  const deadlineNote = readDeadlineNote(program.deadline.note);
 
   async function toggleWatch(): Promise<void> {
     setWatchError(null);
@@ -458,9 +475,33 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
             <h2>Deadline</h2>
             <dl>
               <dt>Pattern</dt>
-              <dd className="data">{program.deadline.kind}</dd>
+              {/* Was `{program.deadline.kind}` in `.data`, the monospaced class this app reserves
+                  for figures a reader copies — so `n_fixed_dates` was not merely raw, it was
+                  presented as a value. `DEADLINE_KIND_WORDS` is the same table the calendar's
+                  undated list reads, now typed against `DeadlineKind` so a new kind cannot reach
+                  a reader as an identifier. */}
+              <dd>{DEADLINE_KIND_WORDS[program.deadline.kind]}</dd>
+              {deadlineNote.rule !== undefined && (
+                <>
+                  <dt>Repeats</dt>
+                  <dd>{deadlineNote.rule}</dd>
+                </>
+              )}
               <dt>Note</dt>
-              <dd>{orNotStated(program.deadline.note)}</dd>
+              {/*
+                The FUNDER-FACING half of `deadline.note`, never the `RECUR …` directive in front of
+                it. On the six publishable records that carry a directive the note began
+                `RECUR n_fixed_dates tz=America/Los_Angeles dates=02-01,04-01,07-01,09-01`, and a
+                reader who cannot parse that has been shown a schedule they cannot read on the one
+                screen where they decide whether to spend an application fee. The dates it encodes
+                are not lost: they are the "Repeats" row above, in English, and only when the
+                directive actually parsed.
+
+                A note that is ONLY a directive leaves nothing behind, so it takes `NOT_STATED`
+                rather than an empty cell — this file's standing rule, and true here: the funder
+                wrote no note, GrantSpotter wrote a rule.
+              */}
+              <dd>{orNotStated(deadlineNote.prose)}</dd>
               {deadlineOwner !== null && (
                 <>
                   <dt>Inherited</dt>
@@ -845,7 +886,10 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
             <h2>Award</h2>
             <dl>
               <dt>Instrument</dt>
-              <dd className="data">{program.amount.instrument}</dd>
+              {/* Browse's facet list has called this "Cash range" since Plan 3; this cell called it
+                  `cash_range`, in the monospaced `.data` class, one click away. Same map, so the
+                  two surfaces cannot drift. */}
+              <dd>{INSTRUMENT_LABELS[program.amount.instrument]}</dd>
               <dt>Amount, verbatim</dt>
               <dd className="data">{orNotStated(program.amount.amountRaw)}</dd>
               <dt>Number of awards</dt>
@@ -860,7 +904,12 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
           */}
           <section className="panel card" aria-label="AI policy">
             <h2>This funder&rsquo;s AI policy</h2>
-            <p className="eyebrow">Stance: {program.aiPolicy.stance}</p>
+            {/*
+              Was "Stance: {stance}", which printed `permitted_with_disclosure` verbatim and — on
+              149 of the 150 publishable records — `unaddressed`, a token that reads as a position
+              the funder took. It is the absence of one.
+            */}
+            <p>{AI_STANCE_WORDS[program.aiPolicy.stance]}</p>
             {program.aiPolicy.quote !== undefined && (
               <p className="verbatim">{program.aiPolicy.quote}</p>
             )}
@@ -869,12 +918,38 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                 <SourceLink href={program.aiPolicy.url} />
               </p>
             )}
-            {program.aiPolicy.quote === undefined && (
+            {/*
+              KEYED ON THE STANCE, NOT ON WHETHER A QUOTE EXISTS, and that was a latent
+              contradiction rather than a tidy-up.
+
+              "This funder has not published a policy on applicants using AI" was printed whenever
+              `quote` was absent — including for a record whose stance is `permitted`,
+              `discouraged` or `prohibited` with no sentence recorded. The line above would then
+              say the funder permits it and this one would say they have published nothing, on the
+              same card, about the same funder. The shipped corpus does not produce that pair
+              (measured: 1 record `permitted` with a quote, 149 `unaddressed` with none), which is
+              exactly why it could sit here unnoticed — the schema makes `quote` optional on every
+              stance, so nothing but this branch stops it.
+
+              The second sentence is unchanged and still belongs only to `unaddressed`: silence is
+              not permission and not a prohibition.
+            */}
+            {program.aiPolicy.stance === 'unaddressed' ? (
               <p>
-                This funder has not published a policy on applicants using AI. That is not
-                permission and not a prohibition — you remain accountable for every claim you
-                make.
+                That is not permission and not a prohibition — you remain accountable for every
+                claim you make.
               </p>
+            ) : (
+              program.aiPolicy.quote === undefined && (
+                <p className="authored">
+                  <span className="authored-by">
+                    GrantSpotter&rsquo;s words, not the funder&rsquo;s
+                  </span>
+                  No sentence of the funder&rsquo;s was recorded for this position, so the line
+                  above is this pipeline&rsquo;s reading rather than a quotation. Read their own
+                  page before you rely on it.
+                </p>
+              )
             )}
           </section>
 
@@ -886,7 +961,9 @@ export function Opportunity({ now }: { now?: string }): JSX.Element | null {
                 <SourceLink href={program.trust.sourceUrl} />
               </dd>
               <dt>Method</dt>
-              <dd className="data">{program.trust.verificationMethod}</dd>
+              {/* `seed_import` and `live_fetch` are pipeline stages. What a reader needs from this
+                  row is how much to trust it, which is what the words say. */}
+              <dd>{VERIFICATION_METHOD_WORDS[program.trust.verificationMethod]}</dd>
               <dt>Content hash</dt>
               <dd className="data">{program.trust.contentHash.slice(0, 16)}…</dd>
             </dl>

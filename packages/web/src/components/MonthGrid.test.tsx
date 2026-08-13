@@ -2,10 +2,24 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { GROUP_MIN, MonthGrid, groupByDeadlineOwner, monthMatrix } from './MonthGrid.js';
+import {
+  GROUP_MIN,
+  MonthGrid,
+  groupByDeadlineOwner,
+  monthCoverage,
+  monthMatrix,
+} from './MonthGrid.js';
 import type { CalendarEntry } from './AgendaList.js';
 
 const NOW = '2026-08-02T12:00:00.000Z';
+
+/**
+ * A window WIDER than every month these tests render, so `monthCoverage` reports full coverage and
+ * the notes about part-covered months stay out of the way of the assertions that are not about
+ * them. The straddling and outside cases get their own explicit windows, below.
+ */
+const WINDOW_FROM = '2025-01-01T00:00:00.000Z';
+const WINDOW_TO = '2028-01-01T00:00:00.000Z';
 
 /**
  * Four entries chosen to exercise the four things a month cell can hold, and NOT the brief's two.
@@ -135,7 +149,7 @@ const entries: CalendarEntry[] = [
 function renderGrid(year = 2026, month = 12) {
   return render(
     <MemoryRouter>
-      <MonthGrid year={year} month={month} entries={entries} now={NOW} />
+      <MonthGrid year={year} month={month} entries={entries} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
     </MemoryRouter>,
   );
 }
@@ -231,7 +245,7 @@ describe('MonthGrid', () => {
 
     const { unmount } = render(
       <MemoryRouter>
-        <MonthGrid year={2027} month={2} entries={[late]} now={NOW} />
+        <MonthGrid year={2027} month={2} entries={[late]} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const feb = screen.getByRole('cell', { name: /28 February 2027/ });
@@ -240,7 +254,7 @@ describe('MonthGrid', () => {
 
     render(
       <MemoryRouter>
-        <MonthGrid year={2027} month={3} entries={[late]} now={NOW} />
+        <MonthGrid year={2027} month={3} entries={[late]} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     expect(screen.queryByText(/ARRL Amateur Radio Grants/)).not.toBeInTheDocument();
@@ -268,7 +282,7 @@ describe('MonthGrid', () => {
   it('renders an empty month as a labelled emptiness rather than a blank slab', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={9} entries={[]} now={NOW} />
+        <MonthGrid year={2026} month={9} entries={[]} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     expect(screen.getByText(/nothing falls in September 2026/i)).toBeInTheDocument();
@@ -357,7 +371,7 @@ describe('MonthGrid — a day 113 entries deep', () => {
   function renderDense() {
     return render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={12} entries={denseDecember()} now={NOW} />
+        <MonthGrid year={2026} month={12} entries={denseDecember()} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
   }
@@ -432,7 +446,7 @@ describe('MonthGrid — a day 113 entries deep', () => {
   it('folds the prep overlay on the day 113 runways start', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} />
+        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
@@ -465,6 +479,8 @@ describe('MonthGrid — a day 113 entries deep', () => {
           month={12}
           entries={[dense[0]!, ...published, ...dense.slice(11)]}
           now={NOW}
+          windowFrom={WINDOW_FROM}
+          windowTo={WINDOW_TO}
         />
       </MemoryRouter>,
     );
@@ -517,7 +533,7 @@ describe('MonthGrid — a prep mark never hides that its date is projected', () 
   it('does not call a funder-published prep mark projected', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={11} entries={entries} now={NOW} />
+        <MonthGrid year={2026} month={11} entries={entries} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
@@ -532,7 +548,7 @@ describe('MonthGrid — a prep mark never hides that its date is projected', () 
   it('keeps the marker on every prep mark inside a fold', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} />
+        <MonthGrid year={2026} month={11} entries={denseDecember()} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const cell = screen.getByRole('cell', { name: /^30 November 2026$/ });
@@ -559,7 +575,7 @@ describe('MonthGrid scrolling frame', () => {
   it('is a named region a keyboard can reach', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={12} entries={entries} now={NOW} />
+        <MonthGrid year={2026} month={12} entries={entries} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const region = screen.getByRole('region', { name: /December 2026, scrollable/i });
@@ -570,10 +586,217 @@ describe('MonthGrid scrolling frame', () => {
   it('still contains the month table rather than replacing it', () => {
     render(
       <MemoryRouter>
-        <MonthGrid year={2026} month={12} entries={entries} now={NOW} />
+        <MonthGrid year={2026} month={12} entries={entries} now={NOW} windowFrom={WINDOW_FROM} windowTo={WINDOW_TO} />
       </MemoryRouter>,
     );
     const region = screen.getByRole('region', { name: /December 2026, scrollable/i });
     expect(within(region).getByRole('table', { name: 'December 2026' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * WHAT SURVIVES A CELL TOO NARROW FOR THE MARK — the half of Task 20's claim that was never true.
+ *
+ * `PrepMark`'s doc-comment said the marker had been moved in front of the programme name "so it
+ * would survive truncation". MEASURED in Chromium against the shipped corpus, October 2026: 4 of 4
+ * marks were clipped at a 1400px viewport (147px of cell against 174-342px of text) and 4 of 4 at
+ * 900px and 375px, where the grid sits at its 672px `min-width` and each cell gives its marks 80px.
+ * The cells read "IEEE M…", "Start pre…", "ARRL A…" — the ellipsis fell INSIDE the word
+ * "preparing", so the projected/funder-published qualifier rendered at no width at all. Moving a
+ * word to the front of a string does not protect it from a truncation that begins before the word
+ * ends.
+ *
+ * jsdom lays nothing out, so these tests assert the STRUCTURE that makes the qualifier safe rather
+ * than the pixels: the qualifier and the mark's kind are in boxes of their own, and the only box
+ * carrying an unbounded string — the programme name — is the only one `calendar.css` ellipses.
+ * `styles/controls.test.ts` holds the CSS side of that division.
+ */
+describe('MonthGrid — the qualifier is in a box that does not truncate', () => {
+  it('gives a prep mark its kind, its provenance and its name as three boxes', () => {
+    renderGrid();
+    const cell = screen.getByRole('cell', { name: /^16 December 2026$/ });
+    const mark = within(cell).getByRole('link', { name: /start preparing/i });
+    expect(mark.querySelector('.mark-kind')).toHaveTextContent('Start preparing');
+    expect(mark.querySelector('.mark-flag')).toHaveTextContent('Projected date');
+    expect(mark.querySelector('.mark-name')).toHaveTextContent('NCDXF Grants');
+  });
+
+  it('keeps the programme name reachable in full even though its box is the one that ellipses', () => {
+    renderGrid();
+    const cell = screen.getByRole('cell', { name: /^16 December 2026$/ });
+    const name = within(cell)
+      .getByRole('link', { name: /start preparing/i })
+      .querySelector('.mark-name');
+    // The `title` is what a pointer user gets back; the accessible name is what everyone else does.
+    expect(name).toHaveAttribute('title', 'NCDXF Grants');
+  });
+
+  /**
+   * A CLOSE CHIP NOW SAYS IT IN WORDS TOO. It carried the distinction in a 1px dashed outline and
+   * in its accessible name, and nowhere a sighted reader could read it: in a 12-month window that
+   * is 123 projected marks styled a hairline apart from the 4 the funder published.
+   */
+  it('says on a close chip whether the date was projected or published', () => {
+    renderGrid();
+    const projected = within(screen.getByRole('cell', { name: /^1 December 2026$/ })).getByRole(
+      'link',
+      { name: /ARDC Grants Program/ },
+    );
+    expect(projected.querySelector('.mark-kind')).toHaveTextContent('Closes');
+    expect(projected.querySelector('.mark-flag')).toHaveTextContent('Projected date');
+
+    const published = within(screen.getByRole('cell', { name: /^30 December 2026$/ })).getByRole(
+      'link',
+      { name: /ARRL Foundation Scholarship Program/ },
+    );
+    expect(published.querySelector('.mark-flag')).toHaveTextContent('Funder-published');
+    expect(published.querySelector('.mark-flag')).not.toHaveTextContent(/projected/i);
+  });
+
+  it('marks an opening as funder-published, which is the only kind it ever draws', () => {
+    renderGrid();
+    const cell = screen.getByRole('cell', { name: /^7 December 2026$/ });
+    const mark = within(cell).getByRole('link', { name: /window opens today/i });
+    expect(mark.querySelector('.mark-kind')).toHaveTextContent('Opens');
+    expect(mark.querySelector('.mark-flag')).toHaveTextContent('Funder-published');
+  });
+
+  /** Every mark on the page, not the three sampled above. */
+  it('gives every mark in the month a kind and a provenance word', () => {
+    const { container } = renderGrid();
+    const marks = container.querySelectorAll('a.chip, a.prep-mark, a.opens-mark');
+    expect(marks.length).toBeGreaterThan(2);
+    for (const mark of marks) {
+      expect(mark.querySelector('.mark-kind')?.textContent ?? '').toMatch(
+        /^(Closes|Opens|Start preparing)$/,
+      );
+      expect(mark.querySelector('.mark-flag')?.textContent ?? '').toMatch(
+        /^(Projected date|Funder-published)$/,
+      );
+    }
+  });
+});
+
+/**
+ * HOW MUCH OF THE MONTH WAS ASKED ABOUT — close-out finding: the reassurance over-claimed at the
+ * edge of the window.
+ *
+ * MEASURED on the deployed build on 2026-08-13: the calendar requested 2026-08-13 to 2027-08-13
+ * and the grid for August 2027 printed "Nothing falls in August 2027 — no deadline, no window
+ * opening and no prep start. That is what this window returned, not a claim that no funder has a
+ * date here." Eighteen of that month's thirty-one days had never been asked about, and the
+ * "outside the window" banner did not fire because the month is not outside the window — it
+ * straddles the edge, the one case neither surface had.
+ */
+describe('monthCoverage', () => {
+  it('counts every day of a month the window contains whole', () => {
+    expect(monthCoverage(2026, 12, WINDOW_FROM, WINDOW_TO)).toEqual({
+      askedDays: 31,
+      totalDays: 31,
+      firstAsked: 1,
+      lastAsked: 31,
+    });
+  });
+
+  it('counts only the days a window that ends mid-month reached', () => {
+    // The measured case, to the day: a 365-day window opened on 2026-08-13.
+    expect(
+      monthCoverage(2027, 8, '2026-08-13T19:27:00.000Z', '2027-08-13T19:27:00.000Z'),
+    ).toEqual({ askedDays: 13, totalDays: 31, firstAsked: 1, lastAsked: 13 });
+  });
+
+  it('counts only the days a window that opens mid-month reached', () => {
+    expect(
+      monthCoverage(2026, 8, '2026-08-13T19:27:00.000Z', '2027-08-13T19:27:00.000Z'),
+    ).toEqual({ askedDays: 19, totalDays: 31, firstAsked: 13, lastAsked: 31 });
+  });
+
+  it('counts nothing for a month the window never reached', () => {
+    expect(
+      monthCoverage(2026, 7, '2026-08-13T19:27:00.000Z', '2027-08-13T19:27:00.000Z'),
+    ).toEqual({ askedDays: 0, totalDays: 31, firstAsked: null, lastAsked: null });
+  });
+
+  it('treats a window it cannot parse as no reason to qualify anything', () => {
+    expect(monthCoverage(2026, 2, 'not-a-date', 'nor-this').askedDays).toBe(28);
+  });
+});
+
+describe('MonthGrid — the empty-month reassurance vouches only for the days that were asked about', () => {
+  const EDGE_FROM = '2026-08-13T19:27:00.000Z';
+  const EDGE_TO = '2027-08-13T19:27:00.000Z';
+
+  function renderEdge(year: number, month: number) {
+    return render(
+      <MemoryRouter>
+        <MonthGrid
+          year={year}
+          month={month}
+          entries={entries}
+          now={NOW}
+          windowFrom={EDGE_FROM}
+          windowTo={EDGE_TO}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('says how many days of a straddling month were never requested', () => {
+    renderEdge(2027, 8);
+    expect(
+      screen.getByText(
+        /Of August 2027, this page asked the API about 1–13 only\. The other 18 days were never requested/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('narrows the reassurance to the covered part rather than to the month', () => {
+    renderEdge(2027, 8);
+    const empty = screen.getByText(/Nothing falls in/);
+    expect(empty).toHaveTextContent('Nothing falls in the part of August 2027 this window covers');
+    expect(empty.textContent ?? '').not.toContain('Nothing falls in August 2027 —');
+  });
+
+  it('makes no reassurance at all about a month nothing was asked about', () => {
+    renderEdge(2026, 7);
+    expect(screen.queryByText(/Nothing falls in/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/July 2026 is outside the window this page asked the API for/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/An empty grid here means nobody asked/)).toBeInTheDocument();
+  });
+
+  it('qualifies nothing when the window covers the month end to end', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid
+          year={2026}
+          month={9}
+          entries={[]}
+          now={NOW}
+          windowFrom={WINDOW_FROM}
+          windowTo={WINDOW_TO}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(/were never requested/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing falls in September 2026 —/)).toBeInTheDocument();
+  });
+
+  /** Singular, because "1 days" is the tell that nobody rendered the branch. */
+  it('says day, not days, when exactly one was left out', () => {
+    render(
+      <MemoryRouter>
+        <MonthGrid
+          year={2026}
+          month={9}
+          entries={[]}
+          now={NOW}
+          windowFrom="2026-09-01T00:00:00.000Z"
+          windowTo="2026-09-30T00:00:00.000Z"
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/The other 1 day were never requested/)).toBeInTheDocument();
   });
 });

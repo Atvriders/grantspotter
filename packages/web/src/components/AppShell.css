@@ -257,9 +257,26 @@
   background: var(--surface);
   border-right: 1px solid var(--border);
   box-shadow: var(--shadow-2);
-  overflow-y: auto;
-  /* A flick that reaches the end of this list must not start scrolling the page underneath it. */
-  overscroll-behavior: contain;
+  /*
+    THE PANEL DOES NOT SCROLL. THE LIST OF DESTINATIONS INSIDE IT DOES.
+
+    This was `overflow-y: auto` on the panel, and the panel is `inset: 0 auto 0 0` — exactly as
+    tall as the viewport. Measured in Chromium against the shipped corpus with a member signed in:
+    the eleven destinations, the brand row and the account foot come to a scrollHeight of 690px, so
+    at 375x667 "Sign out" was laid out from y=630 to y=674 against a 667px window and at 360x640
+    from 630 to 674 against 640 — sliced by the bottom edge in both. Scrolling recovered it, and
+    nothing said so: the first thing a new member saw of their own account controls was a cut-off
+    word, and the affordance that there was more was the clipped word itself.
+
+    Making the NAV the scrollport fixes it structurally rather than by finding 25 spare pixels.
+    The head and the foot are now always on screen at any viewport height, and what gives way is
+    the middle of a list of eleven links — where a half-visible row IS the affordance, and where
+    the reader is looking for a destination rather than for the control that ends their session.
+
+    `overflow: hidden` on the panel, not `visible`: a `visible` cross-axis computes to `auto` when
+    the other axis is not `visible`, which would put the old scrollport back.
+  */
+  overflow: hidden;
   animation: shell-drawer-in 160ms ease-out;
 }
 
@@ -276,9 +293,20 @@
 }
 
 /* Eleven destinations, each a thumb-sized target. The 3px keel and the accent-soft current row
-   are the rail's own rules, unchanged — this is the same navigation, not a second design. */
+   are the rail's own rules, unchanged — this is the same navigation, not a second design.
+
+   IT IS ALSO THE PANEL'S SCROLLPORT — see `.shell-drawer` above for why the panel itself no longer
+   is. `min-height: 0` is the load-bearing half of that: a flex item's `min-height` defaults to
+   `auto`, which resolves to its content height, so `flex: 1` alone would leave this list exactly
+   as tall as its eleven rows and push the account foot back off the bottom edge. Same trap
+   `.shell > *` documents with `min-width`, on the other axis. */
 .shell-drawer .shell-nav {
   gap: var(--s-1);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* A flick that reaches the end of this list must not start scrolling the page underneath it. */
+  overscroll-behavior: contain;
 }
 
 .shell-drawer .shell-nav a {
