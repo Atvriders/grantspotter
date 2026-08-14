@@ -155,19 +155,37 @@ function payloadFor(sourceId: string, file: string, url: string): FetchedPayload
 }
 
 /**
- * Every candidate Program the committed fixtures can produce, normalized exactly as the crawler
- * does, MINUS the records the review queue suppresses — BOTH gates, in the product's own order
- * (see the file header). Both excluded counts are carried out rather than silently dropped, so the
- * tool reports what it left out instead of quietly shrinking or, as it did until this fix, quietly
- * inflating.
+ * WHAT EACH SOURCE'S COMMITTED FIXTURES PARSE TO, before any normalization or suppression.
+ *
+ * Split out of `loadCorpus` (2026-08-14) so that `seed/constraintProvenance.test.ts` can read the
+ * FUNDER'S OWN CAPTURED TEXT — `RawOpportunity.rawText`, which `normalizeRaw` consumes and does not
+ * carry forward whole — through this loader rather than a second copy of it. The fixture-to-request
+ * pairing here is not obvious (positional `NN-` ordering, a follow-up phase, three legacy names,
+ * the signal-source skip), and a second implementation of it in a test would be a guard measuring
+ * a corpus slightly different from the one the product is measured on. `loadCorpus` now calls this
+ * and normalizes what it returns; nothing about its output changed.
+ *
+ * `hasCapture` is the one fact a provenance check cannot do without: `manual-tier-d` produces its
+ * records from a hand-written array in the module, so its `rawText` is GrantSpotter's own research
+ * brief, not a funder's page. Checking a quotation against it would be checking our prose against
+ * our prose and calling the pass evidence. Sources with no `NN-` fixture file are therefore marked
+ * here as carrying no capture, and provenance over them is UNMEASURABLE rather than satisfied.
  */
-export async function loadCorpus(): Promise<CorpusLoad> {
-  const programs: Program[] = [];
-  const suppressedPrograms: Program[] = [];
-  const loaded: CorpusLoad['loaded'] = [];
-  const skipped: CorpusLoad['skipped'] = [];
-  let suppressed = 0;
-  let belowAdjacency = 0;
+export interface SourceRaws {
+  sourceId: string;
+  /** True when the source's records come from committed captures of the funder's own pages. */
+  hasCapture: boolean;
+  raws: RawOpportunity[];
+}
+
+export interface RawLoad {
+  bySource: SourceRaws[];
+  skipped: Array<{ sourceId: string; why: string }>;
+}
+
+export async function loadRawOpportunities(): Promise<RawLoad> {
+  const bySource: SourceRaws[] = [];
+  const skipped: RawLoad['skipped'] = [];
 
   for (const source of SOURCES) {
     const dir = path.join(FIXTURE_ROOT, source.id);
@@ -220,6 +238,30 @@ export async function loadCorpus(): Promise<CorpusLoad> {
       skipped.push({ sourceId: source.id, why: `parse threw: ${String(err)}` });
       continue;
     }
+    bySource.push({ sourceId: source.id, hasCapture: payloads.length > 0, raws });
+  }
+
+  return { bySource, skipped };
+}
+
+/**
+ * Every candidate Program the committed fixtures can produce, normalized exactly as the crawler
+ * does, MINUS the records the review queue suppresses — BOTH gates, in the product's own order
+ * (see the file header). Both excluded counts are carried out rather than silently dropped, so the
+ * tool reports what it left out instead of quietly shrinking or, as it did until this fix, quietly
+ * inflating.
+ */
+export async function loadCorpus(): Promise<CorpusLoad> {
+  const programs: Program[] = [];
+  const suppressedPrograms: Program[] = [];
+  const loaded: CorpusLoad['loaded'] = [];
+  let suppressed = 0;
+  let belowAdjacency = 0;
+
+  const { bySource, skipped } = await loadRawOpportunities();
+  for (const { sourceId, raws } of bySource) {
+    const source = SOURCES.find((s) => s.id === sourceId);
+    if (source === undefined) continue;
     const ctx = contextForSource(source, PROFILE_NOW_ISO);
     const produced = raws.map((raw) => normalizeRaw(raw, ctx));
     // The two suppressions the product applies, applied here with the product's own predicates,
