@@ -17,6 +17,9 @@ import { createVerifyRunner } from './api/verify.js';
 import { reindexBrowse } from './api/reindex.js';
 import { drainChangeEvents } from './api/notify.js';
 import { importSeedIfEmpty } from './seed/import.js';
+// The other half of the seed import's refusal: a shipped DATA correction, applied only where the
+// stored bytes are provably still the ones this project shipped. See seed/corrections.ts.
+import { applySeedCorrections, formatSeedCorrectionReport } from './seed/corrections.js';
 import { SOURCES } from './sources/registry.js';
 // Plan 2's optional transport wiring. It must be identical on the scheduled and
 // the admin-triggered path (RESOLUTIONS R23), which is why the one fetcher that
@@ -111,7 +114,26 @@ function main(): void {
   const seedResult = importSeedIfEmpty(db);
   console.log(`[seed] ${seedResult.reason}`);
 
+  // AND THE OTHER HALF OF THAT SENTENCE. The line above says an operator's reviewed data was left
+  // alone, and it means it — which is exactly why a CORRECTION to shipped seed data could never
+  // reach a running deployment. On 2026-08-13 that cost a student something real: 31 records whose
+  // panel is headed "reproduced exactly" were printing this project's own notes as though the
+  // funder had written them, the fix was committed, the image was pulled, and every one of those
+  // records was still wrong on the live site.
+  //
+  // So a correction runs here, under a rule that cannot destroy curation: a field is rewritten
+  // only when it still holds, byte for byte, the text GrantSpotter shipped (proved by
+  // data/seed/shipped-values.tsv), and only when the rewrite changes what the record SAYS and not
+  // what it MEANS. Anything else is left exactly as it is and named in the lines below.
+  //
+  // The position, again, is load-bearing. AFTER importSeedIfEmpty, so a fresh install has already
+  // stored the current corpus and this finds nothing to do. BEFORE reindexBrowse() further down,
+  // so a corrected summary reaches the browse projection and a corrected deadline note is
+  // reprojected onto the calendar in the same boot.
   const now = (): string => new Date().toISOString();
+
+  const corrections = applySeedCorrections(db, { nowISO: now() });
+  for (const line of formatSeedCorrectionReport(corrections)) console.log(line);
 
   // ONE fetcher for the whole process — the nightly scheduler (Plan 2), "Verify
   // now" (Task 10) and the admin crawl trigger (Task 14) all share it.

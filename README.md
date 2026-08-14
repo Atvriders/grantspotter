@@ -814,6 +814,78 @@ this layout was meant to be rid of, so it is the answer for a tracked fork rathe
 workflow. The build workflow includes `workflow_dispatch` for exactly that case — trigger it once by
 hand from the Actions tab, and subsequent pushes behave normally.
 
+### What `docker compose pull` does to the data you already have
+
+**It does not re-seed you.** The shipped corpus is imported once, into an empty database, and after
+that the importer refuses:
+
+```
+[seed] The programs table already holds 703 records; the seed import does not overwrite reviewed data.
+```
+
+That refusal is the guarantee that an image upgrade cannot destroy your curation, your edits or
+your review decisions, and it is not going away.
+
+It also had a cost, which is what the second line at boot is about. When this project ships a
+**correction to a record it got wrong**, that refusal is what stopped the correction from ever
+reaching you: on 2026-08-13, 31 records whose "Unstructured requirements, verbatim" panel is headed
+*"reproduced exactly"* turned out to be printing this project's own notes in this project's own
+voice. The fix was released, operators pulled it, and every one of those records stayed wrong on
+every running instance — while students read invented text presented as a funder's own words.
+
+So an upgrade now also runs a reconcile, under one rule:
+
+> **A field is rewritten only when it still holds, byte for byte, exactly the text GrantSpotter
+> shipped.** If it matches, nobody has touched it and the correction is safe. If it differs by a
+> single character, somebody here has been in that field, and it is left exactly as it is.
+
+`data/seed/shipped-values.tsv` in the image is what proves it: a SHA-256 of every value the corpus
+has ever carried, so the check is arithmetic, not judgement. It records digests and never text.
+
+It says what it did, per record, in the log:
+
+```
+[seed] Shipped-data corrections: 11 field(s) on 4 record(s) rewritten, 2 left alone, out of 143
+       shipped records checked. A field is rewritten only when it still holds, byte for byte, the
+       text GrantSpotter shipped.
+[seed]   corrected arrl-club-grant: summary, rawOtherText
+[seed]   corrected arrl-etp-grants: summary, rawOtherText, amount.amountRaw, amount.awardCountRaw, deadline.note
+[seed]   left alone ardc-grants rawOtherText — your copy is not the text GrantSpotter shipped —
+         somebody here edited it … — so the correction was not applied
+[seed]   left alone arrl-club-grant constraints — the shipped corpus changed this record's
+         constraints. A correction may change what a record says, never what it means …
+```
+
+Every one of those lines is also written to `audit_log` under that record's own id, and the applied
+ones carry **the full text that was replaced**, so nothing is lost and any change can be undone:
+
+```bash
+docker compose exec grantspotter sqlite3 /data/grantspotter.sqlite \
+  "SELECT at, action, entity_id, detail FROM audit_log WHERE action LIKE 'seed_correction%' ORDER BY id;"
+```
+
+`left alone` is not a failure — it is the mechanism working. It means your copy of that field is
+yours, and the newer text is in the release notes and in `data/seed/MAINTAINER-NOTES.md` if you want
+to apply it yourself (Admin → full backup, edit, restore).
+
+What it will never do, enforced in code and covered by the suite, not promised in a comment:
+
+- never write a value it cannot prove this project shipped;
+- never change what a record **means** — only the prose it prints. Eligibility constraints,
+  entities, class, amounts, statuses, the `RECUR` recurrence and the funder-stated dates in a
+  deadline note are all compared before and after, and a rewrite that would move any of them is
+  refused and reported (so the three constraints the 2026-08-13 correction deletes are reported to
+  you and left for you to decide);
+- never insert or delete a program, funder, constraint or cycle, and never put back a record you
+  deleted;
+- never touch `trust` beyond recomputing the derived content hash;
+- never touch a record that is not in the shipped corpus at all;
+- never do any of it silently, and never stop the server from starting if it cannot run.
+
+A fresh install sees `[seed] Shipped-data corrections: none outstanding.` — there is nothing to
+correct on a database that was just seeded — and a second restart changes nothing, because after a
+correction the stored value **is** the shipped value.
+
 ### Environment
 
 | Var | Required | Default | Notes |
@@ -941,7 +1013,14 @@ npm run test:e2e       # Playwright
 npm run profile-corpus # print the corpus profile the numbers above come from
 npm run verify-sources # LIVE, warn-only, never a CI gate
 npm run seed:arrl      # regenerate the ARRL catalog seed from the committed fixture
+npm run seed:shipped-values # re-record data/seed digests after ANY edit to data/seed/*.json
 ```
+
+`seed:shipped-values` is the second half of editing the corpus, and the suite fails without it: it
+unions the values `data/seed` now carries into `data/seed/shipped-values.tsv`, which is what lets a
+correction to a record reach a deployment that already holds the old text
+([what an upgrade does](#what-docker-compose-pull-does-to-the-data-you-already-have)). It never
+forgets a digest, so the old values stay provable forever.
 
 Every source parser is tested against committed real payloads under `fixtures/`. All of them verify
 with zero network access, and refreshing a fixture is a deliberate, reviewable act rather than

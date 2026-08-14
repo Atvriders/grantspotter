@@ -61,6 +61,41 @@ as something the funder wrote. The generated ARRL catalogue has kept that conven
 written: *"an entry whose page states no count keeps the empty string rather than a sentence we
 wrote."* Twenty-four award fields were brought into line with it in round two.
 
+## Editing a record is two steps, and the second one is not optional
+
+```bash
+# 1. edit data/seed/*.json
+# 2.
+npm run seed:shipped-values
+```
+
+**Why.** The seed import runs once, into an empty database, and then refuses forever — which is
+what stops an image upgrade from destroying an operator's curation. It also meant, until
+2026-08-14, that a *correction* could never reach a running deployment: the 31 records above were
+fixed, released, pulled, and stayed wrong on every live instance, because nothing in the boot path
+was allowed to write into a database that already held programs.
+
+`packages/server/src/seed/corrections.ts` now reconciles at boot under one rule: **a field is
+rewritten only when it still holds, byte for byte, exactly the text we shipped.** The proof that a
+value is ours is `data/seed/shipped-values.tsv` — a SHA-256 per value, unioned across every release
+this corpus has ever had. Step 2 is what adds the values you just wrote to it. It never removes a
+digest, so the text you are replacing stays provable, which is the only reason it can be corrected
+out on somebody else's disk.
+
+`shippedValues.test.ts` fails, naming the record, if you skip step 2. Do not "fix" it by editing
+the `.tsv` by hand; run the script.
+
+**What the reconcile will not do for you**, so plan the edit accordingly:
+
+- It will not change anything the matcher or the calendar reads. Only `summary`, `rawOtherText`,
+  `amount.amountRaw`, `amount.awardCountRaw`, `deadline.note`, `aiPolicy.quote` and
+  `fundingRestrictions` can be corrected, and a `deadline.note` whose `RECUR` directive or
+  funder-stated dates would move is refused. **Deleting or rewriting a `constraint` is a change to
+  what a record means**, so it is reported to the operator and left for them — the three
+  constraints round two deleted are still on every deployment that had them, by design.
+- It will not touch a field somebody there has edited. That is the point, and it means a record an
+  operator has curated keeps whatever they wrote, correction or no correction.
+
 Notes below are ordered by seed file, then by record id. Each is the text that was removed from
 that record's `rawOtherText`, verbatim.
 

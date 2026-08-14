@@ -133,6 +133,26 @@ them.
    is a fact about *these fixtures*. A rule that is silent today may be silent because the shape it
    catches is not in the corpus yet, not because the product handles it.
 
+7. **A record that is wrong on a deployment can only be corrected where nobody has touched it.**
+   `seed/corrections.ts` rewrites a shipped value at boot only when the stored bytes hash to
+   something in `data/seed/shipped-values.tsv`, which proves we wrote them. Three consequences,
+   all of them live:
+
+   - a record an operator has **edited** keeps their text, correction or no correction. That is
+     the right default — it is their instance — but it means a fixed defect can survive on a
+     deployment indefinitely, and the only thing that tells them so is a boot line and an
+     `audit_log` row.
+   - a correction that **deletes** something is never applied. The three invented eligibility
+     constraints round two removed (`club-grant-affiliated`, `sga-rso`, `mtts-field`) are still
+     on every instance that had them, being reasoned over by the matcher, and will be until an
+     operator acts. The alternative — deleting a hard constraint on somebody else's database at
+     boot, silently changing who is told they are eligible — is worse, but "reported" is not
+     "fixed".
+   - a database seeded by a release **older than the ledger's oldest recorded revision** cannot be
+     corrected at all: nothing proves what it holds is ours. The ledger currently reaches back to
+     the first commit of `data/seed`, so this is theoretical today and stops being theoretical the
+     moment somebody prunes the file.
+
 ---
 
 ## The recurring defect class, stated once

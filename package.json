@@ -22,6 +22,7 @@
     "verify-sources": "tsx scripts/verify-sources.ts",
     "measure-pacing": "tsx scripts/measure-pacing.ts",
     "seed:arrl": "tsx scripts/generate-arrl-seed.ts",
+    "seed:shipped-values": "tsx scripts/record-shipped-values.ts",
     "profile-corpus": "tsx scripts/profile-corpus.ts"
   },
   "devDependencies": {
