@@ -168,7 +168,8 @@
       "constraints": [
         { "id": "ncdxf-stake", "hard": true, "fallbackRank": 0, "rawText": "A basic philosophy of the NCDXF is that expedition participants themselves should have a significant financial stake in their expedition and that the expedition should be likely to proceed even without financial support from the NCDXF.", "spec": { "axis": "other", "note": "The applicant must carry a significant financial stake; NCDXF does not fund the whole cost." } },
         { "id": "ncdxf-purpose", "hard": true, "fallbackRank": 0, "rawText": "The Northern California DX Foundation (NCDXF) is a US non-profit organization which provides financial support to individuals and groups who use amateur radio communications to advance and promote education, science and international goodwill.", "spec": { "axis": "other", "note": "The project must advance education, science or international goodwill through amateur radio." } },
-        { "id": "ncdxf-contributor", "hard": false, "fallbackRank": 0, "rawText": "The NCDXF encourages applicants to be active financial contributors to the Foundation.", "spec": { "axis": "other", "note": "Being an active financial contributor to NCDXF is encouraged." } }
+        { "id": "ncdxf-contributor", "hard": false, "fallbackRank": 0, "rawText": "The NCDXF encourages applicants to be active financial contributors to the Foundation.", "spec": { "axis": "other", "note": "Being an active financial contributor to NCDXF is encouraged." } },
+        { "id": "ncdxf-major-support", "hard": false, "fallbackRank": 0, "rawText": "Major support is normally restricted to expeditions that generate world-wide interest by going to locations high on the most-wanted lists published by various organizations around the world.", "spec": { "axis": "other", "note": "The largest awards normally go to expeditions to locations high on the most-wanted lists; smaller amounts go to other projects." } }
       ],
       "fundingRestrictions": [
         "With the exception of excess baggage charges, we do not consider commercially available transportation costs when we are working on a grant request approval.",
@@ -245,7 +246,8 @@
       "applyUrl": "https://www.radio-astronomy.org/grants",
       "applyContact": "Email the completed form to grants at radio-astronomy.org",
       "constraints": [
-        { "id": "sara-stage", "hard": false, "fallbackRank": 0, "rawText": "Preference will be given to students 5th grade through college and to new and innovative ideas.", "spec": { "axis": "age_stage", "stages": ["HS_SENIOR", "UNDERGRAD", "GRAD"] } },
+        { "id": "sara-stage", "hard": false, "fallbackRank": 0, "rawText": "Preference will be given to students 5th grade through college and to new and innovative ideas.", "spec": { "axis": "age_stage", "stages": ["HS_SENIOR", "UNDERGRAD"] } },
+        { "id": "sara-innovation", "hard": false, "fallbackRank": 0, "rawText": "Preference will be given to students 5th grade through college and to new and innovative ideas.", "spec": { "axis": "other", "note": "New and innovative ideas are preferred." } },
         { "id": "sara-teachers", "hard": false, "fallbackRank": 0, "rawText": "UPDATE: Teachers are now eligible to apply for grants to bring radio astronomy to the classroom.", "spec": { "axis": "other", "note": "Teachers became eligible by a later update line on the same page." } }
       ],
       "fundingRestrictions": [],

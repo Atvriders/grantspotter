@@ -15,7 +15,8 @@
       "applyUrl": "https://grants.ardc.net",
       "constraints": [
         { "id": "ardc-entity", "hard": true, "fallbackRank": 0, "rawText": "Applicants are generally US 501(c)(3) nonprofits or international equivalents; government entities, schools and universities may apply directly. Clubs and individuals must apply through a fiscal sponsor. For-profit entities are not eligible.", "spec": { "axis": "other", "note": "Eligible entities: US 501(c)(3), government, school, university, international nonprofit or university; clubs and individuals via fiscal sponsor only; for-profits excluded." } },
-        { "id": "ardc-open-access", "hard": true, "fallbackRank": 0, "rawText": "Because ARDC works with and for the public, we require that the work of the projects we fund be freely available to everyone who can benefit and to everyone who can contribute.", "spec": { "axis": "other", "note": "Funded output must be released open-source or open-access." } }
+        { "id": "ardc-open-access", "hard": true, "fallbackRank": 0, "rawText": "Because ARDC works with and for the public, we require that the work of the projects we fund be freely available to everyone who can benefit and to everyone who can contribute.", "spec": { "axis": "other", "note": "Funded output must be released open-source or open-access." } },
+        { "id": "ardc-fiscal-sponsor", "hard": true, "fallbackRank": 0, "rawText": "Radio clubs and groups who are NOT nonprofits, as well as individual applicants, are not eligible for a grant unless they have a nonprofit fiscal sponsor.", "spec": { "axis": "other", "note": "A radio club or group that is not a nonprofit, and an individual applicant, must have a nonprofit fiscal sponsor." } }
       ],
       "fundingRestrictions": [
         "For-profit entities are not eligible.",
@@ -51,7 +52,11 @@
       "applyUrl": "https://www.arrl.org/amateur-radio-grants",
       "constraints": [
         { "id": "arrl-arg-org-only", "hard": true, "fallbackRank": 0, "rawText": "Grants are awarded only to organizations, not individuals.", "spec": { "axis": "other", "note": "US organisations only; individuals are not eligible for this programme." } },
-        { "id": "arrl-arg-cofund", "hard": false, "fallbackRank": 0, "rawText": "The ARRL Foundation does not wish to be the sole funder of a proposal and gives preference to groups that provide evidence of other successful fundraising conducted prior to proposal submission.", "spec": { "axis": "other", "note": "Co-funded projects are preferred." } }
+        { "id": "arrl-arg-cofund", "hard": false, "fallbackRank": 0, "rawText": "The ARRL Foundation does not wish to be the sole funder of a proposal and gives preference to groups that provide evidence of other successful fundraising conducted prior to proposal submission.", "spec": { "axis": "other", "note": "Co-funded projects are preferred." } },
+        { "id": "arrl-arg-us-only", "hard": true, "fallbackRank": 0, "rawText": "Only programs and initiatives conducted within the United States are eligible for consideration.", "spec": { "axis": "geography", "geo": { "type": "any", "values": [] } } },
+        { "id": "arrl-arg-youth", "hard": false, "fallbackRank": 0, "rawText": "Youth-based projects and initiatives are especially encouraged.", "spec": { "axis": "other", "note": "Youth-based projects and initiatives are especially encouraged." } },
+        { "id": "arrl-arg-sustainability", "hard": false, "fallbackRank": 0, "rawText": "Proposals for projects with a high likelihood of sustainability or expansion are encouraged and preferred.", "spec": { "axis": "other", "note": "A project likely to be sustained or expanded is preferred." } },
+        { "id": "arrl-arg-local-support", "hard": false, "fallbackRank": 0, "rawText": "Proposals for projects with demonstrated support of the local amateur radio community or clubs are encouraged and preferred.", "spec": { "axis": "other", "note": "Demonstrated support from the local amateur radio community or clubs is preferred." } }
       ],
       "fundingRestrictions": [
         "Does not fund emergency communications equipment.",
