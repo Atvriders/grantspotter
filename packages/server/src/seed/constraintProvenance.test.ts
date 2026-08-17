@@ -176,8 +176,27 @@ interface Checkable {
   siblings: Map<string, string[]>;
 }
 
+/**
+ * One record's `rawOtherText`, paired with the capture it claims to reproduce.
+ *
+ * A SECOND FIELD ON THE SAME PROMISE. Everything above is about `constraints[].rawText`, which the
+ * record page prints under "as the funder wrote it". `rawOtherText` is printed on the same page,
+ * under `<h2>Unstructured requirements, verbatim</h2>` and the sentence "Text from the source that
+ * no field on this page models. It is reproduced exactly, because paraphrasing is where a
+ * requirement that was never written down gets invented." That is the same promise, made in
+ * stronger words, over a field nothing in this repository had ever checked.
+ */
+interface RawOther {
+  programId: string;
+  text: string;
+  /** Words of the funder capture for THIS record. */
+  own: string[];
+}
+
 interface SeedProvenance {
   checkable: Checkable[];
+  /** Every publishable seed record carrying non-empty `rawOtherText`, with its capture. */
+  rawOther: RawOther[];
   /** Constraint count on records whose source ships no capture of the funder's page. */
   noCapture: Array<{ programId: string; sourceId: string; constraints: number }>;
   /** Constraint count on records that name no source at all. */
@@ -192,6 +211,7 @@ async function seedProvenance(): Promise<SeedProvenance> {
     const corpus = loadSeedCorpus();
     const out: SeedProvenance = {
       checkable: [],
+      rawOther: [],
       noCapture: [],
       noSourceKey: [],
       totalConstraints: 0,
@@ -246,6 +266,11 @@ async function seedProvenance(): Promise<SeedProvenance> {
           wholeCapture,
           siblings,
         });
+      }
+      // Collected in the SAME walk as the constraints, off the same `sourceKeys` pairing, so the
+      // two rules cannot disagree about which capture a record belongs to.
+      if (program.rawOtherText.trim() !== '') {
+        out.rawOther.push({ programId: program.id, text: program.rawOtherText.trim(), own: ownWords });
       }
     }
     return out;
@@ -528,6 +553,97 @@ describe('what the seed corpus puts beyond this check, named rather than counted
     expect(noSourceKey.map((r) => `${r.programId} (${r.constraints})`)).toEqual([
       'austin-arc-greenwood (2)',
     ]);
+  });
+});
+
+/**
+ * THE SECOND VERBATIM PROMISE ON THE RECORD PAGE, WHICH NOTHING HAD EVER CHECKED.
+ *
+ * `Opportunity.tsx` renders `program.rawOtherText` inside a panel headed "Unstructured
+ * requirements, verbatim", above the sentence: "Text from the source that no field on this page
+ * models. It is reproduced exactly, because paraphrasing is where a requirement that was never
+ * written down gets invented." Every argument in this file's header for checking
+ * `constraints[].rawText` applies to it word for word, and until 2026-08-16 no rule read it —
+ * FOUR ROUNDS OF WORK ON FABRICATED FUNDER TEXT, all of it aimed at the field next to this one.
+ *
+ * Measured on 2026-08-16 over the seed corpus a fresh install serves: 118 records carry the field,
+ * 115 of them are ONE verbatim run of their own funder capture, and THREE are not. They are
+ * registered below rather than deleted, because inventing a replacement sentence for a funder is
+ * the defect itself and this agent cannot read the funders' pages. The register is the handoff.
+ */
+describe('the other panel that promises the funder’s words: rawOtherText', () => {
+  /**
+   * THE THREE RECORDS WHOSE "verbatim" PANEL IS NOT VERBATIM, EACH WITH WHAT IS WRONG WITH IT.
+   *
+   * A register, not an exemption list: every entry is a live defect on grant.waterburp.com, and
+   * the rule below fails the moment a FOURTH appears or a listed one is fixed without being
+   * removed from here. The same discipline as `SPLICED` above.
+   *
+   * · `ariss-iss-contact` — the clearest, and the same shape as the three sentences a5dda09
+   *   removed from `constraints[].rawText`. "SPARKI is named once on this page as a companion
+   *   programme, and the proposal-window sentence is rewritten each quarter at a stable URL" is a
+   *   sentence ABOUT the funder's page, in GrantSpotter's voice, printed as the funder's text. The
+   *   passage's own "Selection timing, in ARISS's words:" concedes that what precedes it is not.
+   * · `ieee-mtts-chapter-support` — "In addition to the chapter activity support above, MTT-S
+   *   offers …". "In addition to … above" is a connective referring to another part of OUR record;
+   *   the funder's page cannot contain a cross-reference to a GrantSpotter layout. A composed
+   *   summary, whatever the underlying figures are worth.
+   * · `ardc-grants` — a coherent paragraph of ARDC guidance about proposal scope and roadmaps that
+   *   reads as genuine ARDC copy, but appears nowhere in the ARDC page this record is keyed to. It
+   *   is most likely real text lifted from a DIFFERENT ARDC page, which is a provenance failure
+   *   rather than an invention — and is indistinguishable from one here, which is the point: under
+   *   a heading that says "reproduced exactly", unverifiable and false cost the reader the same.
+   */
+  const NOT_VERBATIM = ['ardc-grants', 'ariss-iss-contact', 'ieee-mtts-chapter-support'];
+
+  it('reproduces the funder’s own captured page, on every record but the registered three', async () => {
+    const { rawOther } = await seedProvenance();
+
+    const offenders = rawOther
+      .filter((r) => runsNeeded(words(r.text), r.own) !== 1)
+      .map((r) => r.programId)
+      .sort((a, b) => a.localeCompare(b));
+
+    // Equality, not containment: a record that gets fixed must leave the register in the same
+    // commit, or the next author reads three live defects where there are two.
+    expect(offenders).toEqual(NOT_VERBATIM);
+    // Vacuity guard. Measured 2026-08-16: 118 records carry the field, 115 are verbatim.
+    expect(rawOther.length).toBe(118);
+  });
+
+  it('names, for each registered record, the words its own funder capture does not contain', async () => {
+    const { rawOther } = await seedProvenance();
+    const missingFor = (programId: string): string[] => {
+      const record = rawOther.find((r) => r.programId === programId);
+      if (record === undefined) throw new Error(`${programId} no longer carries rawOtherText`);
+      return [...new Set(words(record.text).filter((w) => !record.own.includes(w)))];
+    };
+
+    // The concrete evidence, so "not verbatim" is a reading anybody can check rather than a label.
+    // GrantSpotter's own meta-commentary about the funder's page:
+    expect(missingFor('ariss-iss-contact')).toContain('rewritten');
+    expect(missingFor('ariss-iss-contact')).toContain('companion');
+    // A cross-reference to this product's own layout, which no funder page can contain:
+    expect(missingFor('ieee-mtts-chapter-support')).toEqual(['addition', 'above', 'offers', 'condition']);
+    // Prose that is plausibly the funder's, from a page this record is not keyed to:
+    expect(missingFor('ardc-grants')).toContain('roadmap');
+  });
+
+  it('goes red on a fourth record, planted on a real one that passes today', async () => {
+    const { rawOther } = await seedProvenance();
+    const clean = rawOther.find((r) => !NOT_VERBATIM.includes(r.programId));
+    if (clean === undefined) throw new Error('no verbatim record left to plant on');
+
+    const planted = rawOther.map((r) =>
+      r === clean ? { ...r, text: `${r.text} This clause was written by nobody.` } : r,
+    );
+    const offenders = planted
+      .filter((r) => runsNeeded(words(r.text), r.own) !== 1)
+      .map((r) => r.programId)
+      .sort((a, b) => a.localeCompare(b));
+
+    expect(offenders).not.toEqual(NOT_VERBATIM);
+    expect(offenders).toContain(clean.programId);
   });
 });
 

@@ -60,14 +60,19 @@ import {
 } from './shippedSeed.js';
 
 /**
- * A port and a DATA_DIR of this file's own, for the reason `bootShippedServer` refuses to share
- * one. 3135 continues the contiguous block that starts at `E2E_PORT` (3131) and runs through
- * `shippedSeed.ts`'s 3132 and 3133 and `responsive.spec.ts`'s 3134; the directory nests inside the
- * gitignored `e2e/.tmp/`, which `seed.ts` wipes before any spec starts.
+ * A server and a DATA_DIR of this file's own, for the reason `bootShippedServer` refuses to share
+ * one. The directory nests inside the gitignored `e2e/.tmp/`, which `seed.ts` wipes before any
+ * spec starts.
+ *
+ * THE PORT IS NO LONGER A NUMBER IN THIS FILE — it was 3135, "continuing the contiguous block".
+ * See the same note in `responsive.spec.ts` and `reserveLoopbackPort` in e2e/shippedSeed.ts: a
+ * committed port number is a bet that no other project on the developer's machine wants it, and
+ * on 2026-08-16 that bet lost.
  */
-const PORT = 3135;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 const DATA_DIR = 'e2e/.tmp/signed-out';
+
+/** Set in `beforeAll` from the port the kernel handed the boot; read only after it. */
+let BASE_URL = '';
 
 /** The seven widths the responsive contract names, plus the two sides of this design's breakpoint. */
 const WIDTHS = [320, 360, 390, 480, 481, 768, 1024, 1440, 1920] as const;
@@ -375,7 +380,8 @@ test.beforeAll(async ({ browser }) => {
   // A first boot every time: the first-run screen only exists while the users table is empty, and
   // that is the screen this file is mostly about.
   rmSync(DATA_DIR, { recursive: true, force: true });
-  server = await bootShippedServer({ port: PORT, dataDir: DATA_DIR });
+  server = await bootShippedServer({ dataDir: DATA_DIR });
+  BASE_URL = `http://127.0.0.1:${server.port}`;
 
   context = await browser.newContext({
     baseURL: BASE_URL,

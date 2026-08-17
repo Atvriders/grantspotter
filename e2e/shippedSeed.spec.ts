@@ -31,7 +31,6 @@ import {
   SHIPPED_BASE_URL,
   SHIPPED_DATA_DIR,
   SHIPPED_PORT,
-  SHIPPED_SECOND_BOOT_PORT,
   shippedCorpusCounts,
   shippedProgramRowsNamed,
   shippedUserRowFor,
@@ -273,11 +272,17 @@ test('a second boot against the same DATA_DIR imports nothing and duplicates not
 
   // A second real process, the same entrypoint, the same DATA_DIR — a container restart. It gets
   // its own port because the first one is still listening; nothing else about it differs.
-  const restart = await bootShippedServer({
-    port: SHIPPED_SECOND_BOOT_PORT,
-    dataDir: SHIPPED_DATA_DIR,
-  });
+  //
+  // The port is the kernel's choice, not this file's. It was 3133 by name until 2026-08-16, when
+  // an unrelated project's server on that port made this the one spec in the suite that could not
+  // run at all — see `reserveLoopbackPort` in e2e/shippedSeed.ts.
+  const restart = await bootShippedServer({ dataDir: SHIPPED_DATA_DIR });
   try {
+    // The whole spec is worthless if both boots are the same listener: every assertion below would
+    // then be the FIRST server answering about itself, and a duplicating import would pass. Cheap
+    // to state, and the only thing standing between an OS-assigned port and that silent collapse.
+    expect(restart.port).not.toBe(SHIPPED_PORT);
+
     const log = restart.output();
     expect(log).toMatch(new RegExp(`already holds ${SHIPPED_PROGRAMS} records`));
     expect(log).toContain('does not overwrite reviewed data');

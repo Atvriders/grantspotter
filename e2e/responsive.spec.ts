@@ -69,15 +69,21 @@ import {
 } from './shippedSeed.js';
 
 /**
- * A port and a DATA_DIR of this file's own, for the reason `bootShippedServer` refuses to share
+ * A server and a DATA_DIR of this file's own, for the reason `bootShippedServer` refuses to share
  * one: two servers answering the same `/api/health` is a suite that measures whichever process
- * happened to be listening. 3134 continues the contiguous block that starts at `E2E_PORT` (3131)
- * and runs through `shippedSeed.ts`'s 3132 and 3133; the directory nests inside the gitignored
- * `e2e/.tmp/`, which `seed.ts` wipes before any spec starts.
+ * happened to be listening. The directory nests inside the gitignored `e2e/.tmp/`, which `seed.ts`
+ * wipes before any spec starts.
+ *
+ * THE PORT IS NO LONGER A NUMBER IN THIS FILE. It was 3134, "continuing the contiguous block"
+ * from 3131 — and on 2026-08-16 an unrelated project holding one of that block's ports made a
+ * sibling spec unrunnable, with an error message that blamed a GrantSpotter orphan. A tidy
+ * numbering scheme is worth nothing next to a suite that runs on any machine, so this boot takes
+ * whatever the kernel says is free. See `reserveLoopbackPort` in e2e/shippedSeed.ts.
  */
-const RESPONSIVE_PORT = 3134;
-const RESPONSIVE_BASE_URL = `http://127.0.0.1:${RESPONSIVE_PORT}`;
 const RESPONSIVE_DATA_DIR = 'e2e/.tmp/responsive';
+
+/** Set in `beforeAll` from the port the kernel handed the boot; read only after it. */
+let RESPONSIVE_BASE_URL = '';
 
 /**
  * The widths `packages/web/src/test/responsive.test.ts` names, and therefore the widths this file
@@ -325,7 +331,8 @@ test.beforeAll(async ({ browser }) => {
   // A first boot every time: `importSeedIfEmpty` only does anything to an empty DATA_DIR, and the
   // one-time bootstrap token is only printed while the users table is empty.
   rmSync(RESPONSIVE_DATA_DIR, { recursive: true, force: true });
-  server = await bootShippedServer({ port: RESPONSIVE_PORT, dataDir: RESPONSIVE_DATA_DIR });
+  server = await bootShippedServer({ dataDir: RESPONSIVE_DATA_DIR });
+  RESPONSIVE_BASE_URL = `http://127.0.0.1:${server.port}`;
   await bootstrapAdmin(RESPONSIVE_BASE_URL, await bootstrapTokenFrom(server));
 
   context = await browser.newContext({

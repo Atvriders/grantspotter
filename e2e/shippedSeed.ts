@@ -63,6 +63,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import Database from 'better-sqlite3';
@@ -75,11 +76,16 @@ import { FIRST_RUN_TOKEN_FILE } from '../packages/server/src/auth/bootstrap.js';
 import { normalizeEmail } from '../packages/server/src/db/repositories/users.js';
 
 /**
- * Ports for the two boots, chosen next to `E2E_PORT` (3131) so the whole suite occupies one
- * contiguous block. Both must differ from it: the fixture server is still listening throughout.
+ * The port for this file's long-lived first boot, chosen next to `E2E_PORT` (3131) so the suite's
+ * fixed ports stay a short contiguous block. It must differ from it: the fixture server is still
+ * listening throughout.
+ *
+ * FIXED ONLY BECAUSE IT HAS TO BE. `shippedSeed.spec.ts` sets `test.use({ baseURL })` at module
+ * scope, which Playwright evaluates while collecting, before any `beforeAll` has run — so this one
+ * number cannot be learned from the OS. Every boot that is NOT pinned this way takes an
+ * OS-assigned port instead; see `reserveLoopbackPort`.
  */
 export const SHIPPED_PORT = 3132;
-export const SHIPPED_SECOND_BOOT_PORT = 3133;
 export const SHIPPED_BASE_URL = `http://127.0.0.1:${SHIPPED_PORT}`;
 
 /**
@@ -127,6 +133,14 @@ export interface BootedServer {
    * rather than resolved, so a failure message names the path the spec wrote.
    */
   dataDir: string;
+  /**
+   * The port this process is actually listening on.
+   *
+   * On the object because the caller no longer necessarily chose it: a boot that omits `port` is
+   * handed one by the kernel, and a spec that wants to say "and it was not the other server" has
+   * nowhere else to read it from.
+   */
+  port: number;
   /** SIGTERM, then wait for the exit. Safe to call twice. */
   stop(): Promise<void>;
 }
@@ -163,6 +177,48 @@ async function probeHealth(port: number): Promise<number | null> {
 }
 
 /**
+ * A loopback port nothing is listening on, picked by the OPERATING SYSTEM rather than by this file.
+ *
+ * WRITTEN BECAUSE A HARDCODED PORT MADE THIS SUITE UNRUNNABLE, and the failure was disguised. The
+ * second boot below used to ask for 3133 by name. On a machine where an unrelated project's server
+ * held 3133 — and answered `/api/health` on it, as every service built from the same template does
+ * — the refusal below fired and the run ended `62 passed, 1 failed` with a message naming "an
+ * orphaned `node packages/server/dist/index.js` from an interrupted run". It was not ours and there
+ * was nothing to kill. The only honest remedies were to edit a committed constant per machine or to
+ * stop an unrelated service, and both mean the suite's completeness depends on what else the
+ * developer happens to be running.
+ *
+ * THIS DOES NOT REPLACE THE REFUSAL, IT MAKES IT UNREACHABLE. Asking the kernel for a free port and
+ * spawning the child onto it means talking to a stranger is impossible by construction rather than
+ * merely detected; the probe below still runs on whatever port we ended up with, because "cannot
+ * happen" is the class of claim this file exists to distrust.
+ *
+ * Bind to port 0, read the assignment, close, hand it to the child. The gap between the close and
+ * the child's own bind is a race the kernel does not usually lose — Linux does not immediately
+ * recycle a just-released ephemeral port — and if it ever did, the probe catches the case that
+ * matters and the readiness loop times out on the case that does not.
+ */
+async function reserveLoopbackPort(): Promise<number> {
+  return await new Promise<number>((resolvePort, reject) => {
+    const probe = createServer();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      if (address === null || typeof address === 'string') {
+        probe.close(() => {
+          reject(new Error(`expected a TCP address from the port probe, got ${String(address)}`));
+        });
+        return;
+      }
+      const { port } = address;
+      probe.close(() => {
+        resolvePort(port);
+      });
+    });
+  });
+}
+
+/**
  * Boot `packages/server/dist/index.js` against `dataDir` and resolve once `/api/health` answers.
  *
  * The entrypoint is the real one, unmodified: it migrates, runs `importSeedIfEmpty`, rebuilds the
@@ -171,7 +227,12 @@ async function probeHealth(port: number): Promise<number | null> {
  * harness reaches a third-party site.
  */
 export async function bootShippedServer(options: {
-  port: number;
+  /**
+   * Omit unless a module-level constant has to know the number before the boot happens. Omitted,
+   * the OS assigns one — see `reserveLoopbackPort` for why that is the default rather than a
+   * fallback.
+   */
+  port?: number;
   dataDir: string;
 }): Promise<BootedServer> {
   if (!existsSync(SERVER_ENTRY) || !existsSync(WEB_INDEX)) {
@@ -189,12 +250,16 @@ export async function bootShippedServer(options: {
   // "booted" in 51ms, read a bootstrap token out of ITS OWN child's log, and spent it against a
   // stranger's process, which answered 401. A test suite that measures the wrong server is worse
   // than one that fails to start, so this fails to start.
-  const squatter = await probeHealth(options.port);
+  const port = options.port ?? (await reserveLoopbackPort());
+  const squatter = await probeHealth(port);
   if (squatter !== null) {
     throw new Error(
-      `something is already answering /api/health on port ${options.port} (${squatter}). ` +
-        'This harness must talk to the server it started, so it will not share the port. An ' +
-        'orphaned `node packages/server/dist/index.js` from an interrupted run is the usual cause.',
+      `something is already answering /api/health on port ${port} (${squatter}). This harness ` +
+        'must talk to the server it started, so it will not share the port. If the port was ' +
+        'passed in, an orphaned `node packages/server/dist/index.js` from an interrupted run and ' +
+        'an unrelated project on the same loopback address are both usual causes — the message ' +
+        'cannot tell them apart, so check before killing anything. If it was not passed in, the ' +
+        'kernel handed us this port as free and something took it in between.',
     );
   }
 
@@ -202,7 +267,7 @@ export async function bootShippedServer(options: {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
-      PORT: String(options.port),
+      PORT: String(port),
       // The server opens `${DATA_DIR}/grantspotter.sqlite`. There is no DB-path env var.
       DATA_DIR: options.dataDir,
       SESSION_SECRET: 'e2e-shipped-session-secret-not-a-real-secret',
@@ -235,6 +300,7 @@ export async function bootShippedServer(options: {
   const server: BootedServer = {
     output: () => output,
     dataDir: options.dataDir,
+    port,
     stop: async () => {
       if (exitLine !== undefined) return;
       child.kill('SIGTERM');
@@ -250,15 +316,15 @@ export async function bootShippedServer(options: {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (exitLine !== undefined) {
-      throw new Error(`the server on port ${options.port} ${exitLine} before it listened:\n${output}`);
+      throw new Error(`the server on port ${port} ${exitLine} before it listened:\n${output}`);
     }
-    if ((await probeHealth(options.port)) === 200) return server;
+    if ((await probeHealth(port)) === 200) return server;
     await sleep(200);
   }
 
   await server.stop();
   throw new Error(
-    `the server on port ${options.port} did not answer /api/health within ${READY_TIMEOUT_MS}ms:\n${output}`,
+    `the server on port ${port} did not answer /api/health within ${READY_TIMEOUT_MS}ms:\n${output}`,
   );
 }
 

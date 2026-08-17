@@ -36,6 +36,16 @@ import type { Program, RawOpportunity, StudentProfile } from '@grantspotter/core
 import { matchProgram } from '@grantspotter/core';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadCorpus } from '../../../../../scripts/profile-corpus.js';
+import {
+  bump,
+  everyConstraintInBothCorpora,
+  plant,
+  seedConstraint,
+  tally,
+  warmBothCorpora,
+  type CorpusConstraint,
+  type Tally,
+} from '../../test/axesCorpora.js';
 import { extractFieldOfStudy } from './fieldOfStudy.js';
 import { extractHamActivity } from './hamActivity.js';
 
@@ -57,6 +67,8 @@ function corpus(): ReturnType<typeof loadCorpus> {
  */
 beforeAll(async () => {
   await corpus();
+  // The seed half of the corpus-wide guard at the foot of this file. Same reason, same hook.
+  await warmBothCorpora();
 }, 120_000);
 
 const raw = (fields: Record<string, string>): RawOpportunity => ({
@@ -304,23 +316,47 @@ describe('nothing recorded as the funder’s words may be words the funder did n
    * the funder's own connector between them may be "or" ("Science, Technology, Engineering OR
    * Mathematics"). Each named route must appear verbatim; only the join is ours.
    */
-  it('every orUnrepresented route appears verbatim in its own constraint’s rawText', async () => {
-    const { programs } = await corpus();
+  /**
+   * THE SWEEP, LIFTED OUT OF ITS `it` SO THE PLANTED-VIOLATION PROOF RUNS THE SAME ONE.
+   *
+   * The shape `spec-vs-sentence.test.ts` and `sentence-vs-spec.test.ts` adopted in the round
+   * before this: a proof that re-implements the predicate proves the predicate can return true,
+   * not that the RULE can reach a record and say so. Four guards in this repository have been
+   * found structurally blind with a perfectly good predicate inside them.
+   */
+  function readRoutes(all: readonly CorpusConstraint[]): { offenders: string[]; checked: Tally } {
     const offenders: string[] = [];
-    let checked = 0;
-    for (const program of programs) {
-      for (const c of program.constraints) {
-        const stated = c.spec.orUnrepresented;
-        if (stated === undefined) continue;
-        checked += 1;
-        for (const route of stated.split(', ')) {
-          if (!c.rawText.toLowerCase().includes(route.toLowerCase())) {
-            offenders.push(`${program.name}: "${route}" is not in its own rawText`);
-          }
+    const checked = tally();
+    for (const { corpus: which, program, c } of all) {
+      const stated = c.spec.orUnrepresented;
+      if (stated === undefined) continue;
+      bump(checked, which);
+      for (const route of stated.split(', ')) {
+        if (!c.rawText.toLowerCase().includes(route.toLowerCase())) {
+          offenders.push(`[${which}] ${program.name}: "${route}" is not in its own rawText`);
         }
       }
     }
+    return { offenders, checked };
+  }
+
+  /**
+   * AND IT NOW READS THE CORPUS A STUDENT IS ACTUALLY SERVED.
+   *
+   * Until 2026-08-16 this rule read `loadCorpus()` and nothing else — the 150 FIXTURE records
+   * built by re-running the extractors over `fixtures/`. A fresh install serves `data/seed`, and
+   * the 91 hand-written `orUnrepresented` routes in it had never been past this rule in their
+   * lives. They pass; that is the answer, and it was not knowable before the sweep was pointed at
+   * them. The distinction that matters is in `docs/how-this-catalogue-can-be-wrong.md`: this is a
+   * claim about DATA, not about code, so it is true only of the population it was run over, and
+   * running it on the fixtures said nothing whatever about the seed.
+   */
+  it('every orUnrepresented route appears verbatim in its own constraint’s rawText', async () => {
+    const { offenders, checked } = readRoutes(await everyConstraintInBothCorpora());
     expect(offenders).toEqual([]);
+    // Per corpus, never summed: a rule that stops seeing the fixture half must not be able to hide
+    // inside a total the seed half makes up. Seed measured at 91 on 2026-08-16.
+    expect(checked.seed).toBe(91);
     // Vacuity guard. 49 field_of_study constraints carry a bare domain, the CWops proof list, and
     // Robert A. Rodriguez K5AUW's "previous awardees" — the audience with no profile field that
     // this field was introduced for.
@@ -356,6 +392,37 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     // credential, so the record was held to have stated one, kept a hard `["BACH","GRAD"]`, and
     // refused every associate and certificate applicant. 928 (profile, state, programme) pairs,
     // every one of them `ineligible -> unknown` and none in the other direction.
-    expect(checked).toBe(90);
+    expect(checked.fixture).toBe(90);
+  });
+
+  /**
+   * THE PROOF THAT THE SWEEP CAN REACH A SEED RECORD AND SAY SO.
+   *
+   * Built on a real record found by its committed ids — `seedConstraint` throws rather than
+   * returning `undefined`, because a violation planted on a record the corpus no longer holds is
+   * planted on nothing and passes green. The mutation is the exact defect this rule exists for and
+   * the one round five removed from `rawText`: GrantSpotter's own summary, filed in the field
+   * documented as the funder's own words.
+   */
+  it('…and the same sweep goes red on a real seed record whose route nobody wrote', async () => {
+    const all = await everyConstraintInBothCorpora();
+    const target = seedConstraint(
+      all,
+      'arrl-cat-the-chick-allen-nw3y-scholarship',
+      'field_of_study-0-d1cca5db',
+    );
+    const planted = plant(all, target, (c) => ({
+      ...c,
+      spec: { ...c.spec, orUnrepresented: 'any field broadly related to the sciences' },
+    }));
+
+    const { offenders, checked } = readRoutes(planted);
+    expect(offenders).toEqual([
+      '[seed] The Chick Allen, NW3Y, Scholarship: "any field broadly related to the sciences" is ' +
+        'not in its own rawText',
+    ]);
+    // The mutation replaced a route, it did not add one: the census must not move, or the sweep is
+    // reaching a different set of records under the mutation than it does under the real corpus.
+    expect(checked).toEqual({ fixture: 90, seed: 91 });
   });
 });
