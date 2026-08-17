@@ -57,6 +57,26 @@
  *      wolf gets an exemption bolted on, and the exemption is where the real offender walks
  *      through — `statesUnadmitted`'s county qualifier in the other file is that exact story.
  *
+ * ================== AND, SINCE 2026-08-16, OVER THE CORPUS A DEPLOYMENT SERVES ==================
+ * Every rule here read `loadCorpus()` — the 150 records built out of `fixtures/` — and none of them
+ * had ever read `data/seed/`, the 144 records `importSeedIfEmpty` puts in front of a student on a
+ * fresh install and the ones running at grant.waterburp.com. Both are read now, every census is
+ * taken per corpus, and each rule carries a planted-violation proof against a REAL seed record so
+ * that a zero from the seed half means something.
+ *
+ * FOUR THINGS THE SEED HALF FOUND ON THE FIRST RUN, each named in its own register beside the rule:
+ *
+ *   W1   the shipped Fisher and Cothran records carry the same two geography over-claims as their
+ *        fixture twins — a Californian and a Puerto Rican told an award is open to them
+ *   W3   `arrl-foundation-scholarships` admits all four credential rungs under a sentence that is a
+ *        greeting and names none
+ *   W7   `rca-scholarship-program` publishes three majors its own sentence does not contain
+ *   W9   three YLRL records pass a culinary-arts major on the strength of "Amateur Radio related
+ *        arts and sciences"
+ *   W12  `dara-grantmaker-only-via-arrl` HARD-REFUSED every graduate applicant on a sentence saying
+ *        "accredited four-year institution" — FIXED in this commit, because the same funder's other
+ *        record in the same corpus already carried the answer
+ *
  * WHAT "THE SENTENCE NAMES IT" MEANS, and why the vocabularies below are written out here rather
  * than imported from the extractors: importing would make each rule agree with the parser by
  * construction, including about a value the parser cannot see. These are lists of facts about
@@ -82,14 +102,22 @@ import {
   statesForArrlSection,
 } from '@grantspotter/core';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { loadCorpus } from '../../../../../scripts/profile-corpus.js';
+import {
+  type CorpusConstraint,
+  type CorpusName,
+  everyConstraintInBothCorpora,
+  fixtureCorpus as corpus,
+  plant,
+  seedConstraint,
+  seedPrograms,
+  warmBothCorpora,
+} from '../../test/axesCorpora.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
 
-let cached: ReturnType<typeof loadCorpus> | undefined;
-function corpus(): ReturnType<typeof loadCorpus> {
-  cached ??= loadCorpus();
-  return cached;
+/** One half of the population, for the rules whose census is taken per corpus. */
+function only(all: readonly CorpusConstraint[], which: CorpusName): CorpusConstraint[] {
+  return all.filter((e) => e.corpus === which);
 }
 
 /**
@@ -101,12 +129,27 @@ function corpus(): ReturnType<typeof loadCorpus> {
  * and every file in this list was sitting at about half the budget behind it.
  */
 beforeAll(async () => {
-  await corpus();
+  await warmBothCorpora();
 }, 120_000);
 
-async function everyConstraint(): Promise<Array<{ program: Program; c: Constraint }>> {
-  const { programs } = await corpus();
-  return programs.flatMap((program) => program.constraints.map((c) => ({ program, c })));
+/**
+ * Every constraint in BOTH publishable corpora — the 652 the fixtures produce AND the 696 in
+ * `data/seed/` that a fresh install actually serves.
+ *
+ * IT WAS THE FIXTURES ALONE UNTIL 2026-08-16. W1 through W12 are twelve rules about a spec that
+ * claims more than its own sentence, and every one of them read `loadCorpus()`. The corpus a
+ * student reads at grant.waterburp.com was outside all of them, and its constraints are not the
+ * same objects: a fixture `spec` is what `normalize/axes/` extracted, a seed `spec` is what a
+ * curator typed beside a sentence they copied off the funder's page. 638 of the 696 seed
+ * constraints do quote a `rawText` some fixture constraint also carries, and 635 pair it with an
+ * identical `spec` — so most of this corpus is the same judgement made twice, and 61 of them are
+ * judgements nothing in `normalize/axes/` ever made. `src/test/axesCorpora.ts` carries the argument.
+ *
+ * Every census below is now taken PER CORPUS, never as a total, so a rule that stops seeing the
+ * fixture half cannot hide inside a sum the seed half makes up.
+ */
+async function everyConstraint(): Promise<CorpusConstraint[]> {
+  return everyConstraintInBothCorpora();
 }
 
 /** The base tier plus every alternative: the whole disjunction, which is what an applicant faces. */
@@ -318,26 +361,63 @@ const KNOWN_GEO_OVERCLAIMS = [
   'The James Cothran, KD3NI, Scholarship: admits PR,VI',
 ];
 
+/**
+ * THE SEED CORPUS CARRIES THE SAME TWO OVER-CLAIMS, ON ITS OWN COPIES OF THE SAME TWO RECORDS.
+ *
+ * Measured 2026-08-16, the first time this rule read `data/seed`: the shipped Fisher record admits
+ * every Californian under a sentence naming the SOUTHWESTERN Division, and the shipped Cothran
+ * record admits Puerto Rico and the Virgin Islands under a sentence that lists its states by hand.
+ * Same defect, same reasoning as the fixture pair above, different file — and this one is the copy
+ * grant.waterburp.com serves. Neither is fixable by an extractor change; both are a curator's edit
+ * to `data/seed/programs.arrl-catalog.json`, and both are named in this round's register rather
+ * than silently widened by a test that wanted to be green.
+ */
+const KNOWN_SEED_GEO_OVERCLAIMS = [
+  'The Charles N. Fisher Memorial Scholarship: admits CA',
+  'The James Cothran, KD3NI, Scholarship: admits PR,VI',
+];
+
+interface PlaceReading {
+  offenders: string[];
+  checked: number;
+  admittedValues: number;
+}
+
+function readW1(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { c, program } of all) {
+    if (c.spec.axis !== 'geography') continue;
+    const admitted = new Set(geoTiers(c.spec).flatMap(placesAdmittedByTier));
+    if (admitted.size === 0) continue;
+    if (geoTiers(c.spec).some((g) => g.type === 'radius' || g.type === 'call_district' || g.type === 'any')) {
+      continue;
+    }
+    if (GEO_WIDENED.test(c.rawText)) continue;
+    reading.checked += 1;
+    reading.admittedValues += admitted.size;
+    const unnamed = placesUnnamed(c.spec, c.rawText);
+    if (unnamed.length > 0) reading.offenders.push(`${program.name}: admits ${unnamed.join(',')}`);
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W1 — a place the spec admits, that the funder never named', () => {
   it('no geography tier admits a state its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let admittedValues = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'geography') continue;
-      const admitted = new Set(geoTiers(c.spec).flatMap(placesAdmittedByTier));
-      if (admitted.size === 0) continue;
-      if (geoTiers(c.spec).some((g) => g.type === 'radius' || g.type === 'call_district' || g.type === 'any')) {
-        continue;
-      }
-      if (GEO_WIDENED.test(c.rawText)) continue;
-      checked += 1;
-      admittedValues += admitted.size;
-      const unnamed = placesUnnamed(c.spec, c.rawText);
-      if (unnamed.length > 0) offenders.push(`${program.name}: admits ${unnamed.join(',')}`);
-    }
-    expect(offenders.sort()).toEqual(KNOWN_GEO_OVERCLAIMS);
-    // Vacuity guard: 77 constraints, 287 admitted places. The rule had 287 chances to be wrong.
+    const all = await everyConstraint();
+    const fixture = readW1(only(all, 'fixture'));
+    const seed = readW1(only(all, 'seed'));
+    expect(fixture.offenders).toEqual(KNOWN_GEO_OVERCLAIMS);
+    expect(seed.offenders).toEqual(KNOWN_SEED_GEO_OVERCLAIMS);
+    // The seed half's own vacuity guard: 77 tiers, 287 admitted places, hand-written.
+    expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
+      checked: 77,
+      admittedValues: 287,
+    });
+    const checked = fixture.checked;
+    const admittedValues = fixture.admittedValues;
+    // Vacuity guard, the FIXTURE half: 77 constraints, 287 admitted places. The rule had 287
+    // chances to be wrong.
     //
     // 63 AND 246 UNTIL ROUND 8, when 14 cascade ladders were published beside the preferences they
     // came from. Those are the constraints most able to over-claim — each is a disjunction built
@@ -385,8 +465,41 @@ describe('W1 — a place the spec admits, that the funder never named', () => {
     ).toEqual([]);
   });
 
-  it('…and the two known over-claims are real: each passes an applicant its sentence excludes', async () => {
-    const { programs } = await corpus();
+  /**
+   * AND IT SPEAKS ON SEED DATA, proved by planting a violation in a real seed record and running
+   * THE SAME SWEEP. Ware's shipped record spells all six New England states plus four more into
+   * one tier; add Pennsylvania, which the sentence never names, and the sweep names the record.
+   * (Zero new offenders on a corpus a rule has never read is the state this project has been lied
+   * to by four times, so every rule here has to be shown able to speak before its silence counts.)
+   */
+  it('…and the same sweep goes red on a real seed record with one state added', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'geography-0-288b4755');
+    expect(ware.c.rawText).not.toContain('Pennsylvania');
+    const red = readW1(
+      only(
+        plant(all, ware, (c) => ({
+          ...c,
+          spec: {
+            axis: 'geography',
+            geo: { type: 'state', values: ['DE', 'MD', 'NJ', 'NY', 'PA', ...NEW_ENGLAND] },
+          },
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual(
+      [...KNOWN_SEED_GEO_OVERCLAIMS, `${ware.program.name}: admits PA`].sort(),
+    );
+  });
+
+  it.each([
+    ['fixture', async () => (await corpus()).programs],
+    ['seed', async () => seedPrograms()],
+  ])(
+    '…and the two known over-claims are real in the %s corpus: each passes an applicant its sentence excludes',
+    async (_name, load) => {
+    const programs = await load();
     const fisher = programs.find((p) => p.name.includes('Charles N. Fisher'));
     if (fisher === undefined) throw new Error('The Charles N. Fisher Memorial Scholarship is missing from the corpus');
     const geo = fisher.constraints.find((c) => c.spec.axis === 'geography');
@@ -400,7 +513,8 @@ describe('W1 — a place the spec admits, that the funder never named', () => {
     // The route the funder named first is untouched and must stay so.
     expect(evaluateConstraint(geo.spec, { kind: 'student', state: 'AZ' }, NOW, geo.rawText).status).toBe('pass');
     expect(evaluateConstraint(geo.spec, { kind: 'student', state: 'OH' }, NOW, geo.rawText).status).toBe('fail');
-  });
+    },
+  );
 });
 
 // ============================================================ W2 + W3: audiences and levels
@@ -413,9 +527,31 @@ describe('W1 — a place the spec admits, that the funder never named', () => {
  * A bare "students" is deliberately NOT here. It would make UNDERGRAD unfalsifiable — nearly every
  * sentence on this axis contains it — and a rule that cannot fail is the thing this file exists to
  * replace.
+ *
+ * A GRADE RANGE IS A NAMING OF EVERY BAND IT SPANS, and this clause was added on 2026-08-16, the
+ * day this rule first read `data/seed`. It flagged one record and the record was right:
+ *
+ *   SARA Student and Teacher Project Grants  "Preference will be given to students 5TH GRADE
+ *                                             THROUGH COLLEGE and to new and innovative ideas."
+ *                                             seeded as `stages: ['HS_SENIOR','UNDERGRAD']`
+ *
+ * A high-school senior is inside "5th grade through college" by arithmetic, so the funder named
+ * them and the spec claims nothing the sentence does not. THIS IS THE RULE CRYING WOLF, and the
+ * remedy the header prescribes for that is to fix the READING rather than to bolt on an exemption
+ * — "a rule that cries wolf gets an exemption bolted on, and the exemption is where the real
+ * offender walks through". So the vocabulary learns the range, in the narrowest form that reads it:
+ * a numbered grade, followed by a span word, ending at college or above. It cannot make HS_SENIOR
+ * unfalsifiable, because a sentence that names only a destination ("open to college students")
+ * still has no grade in it, and the planted Goldwater case below still flags GRAD.
+ *
+ * The record has a SECOND question in it that this rule cannot ask and a curator has to: the range
+ * starts at the 5TH GRADE, and `Stage` has no value below `HS_SENIOR`, so the middle-school
+ * students SARA prefers are unrepresentable rather than unnamed. That is a schema gap, it is
+ * reported in this round's register, and it is not something a test file may invent a value for.
  */
 const STAGE_SAYS: Record<string, RegExp> = {
-  HS_SENIOR: /\bhigh[\s-]?school\b|\bhighschool\b|\bsecondary school\b|\bK-?12\b|\bpre[\s-]?college\b|\b12th grade\b/i,
+  HS_SENIOR:
+    /\bhigh[\s-]?school\b|\bhighschool\b|\bsecondary school\b|\bK-?12\b|\bpre[\s-]?college\b|\b12th grade\b|\b(?:[1-9]|1[0-2])(?:st|nd|rd|th)\s+grade\s+(?:through|thru|to|until|up to)\s+(?:and\s+including\s+)?(?:college|university|graduation|12th|twelfth)/i,
   UNDERGRAD:
     /\bundergraduate\b|\bundergrad\b|\bbachelor|\bbaccalaureate\b|\bfreshman\b|\bsophomore\b|\bcollege\b|\buniversity\b|\b(?:4|four)\s*-?\s*years?\b|\bassociate\b|\b(?:2|two)\s*-?\s*years?\b/i,
   GRAD: /\bgraduate\b|\bmaster|\bdoctora|\bph\.?d\b|\bpost[\s-]?graduate\b/i,
@@ -429,28 +565,93 @@ function stagesUnnamed(spec: ConstraintSpec, rawText: string): string[] {
   return admitted.filter((s) => !(STAGE_SAYS[s] ?? /$^/).test(rawText)).sort();
 }
 
+function readW2(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'age_stage') continue;
+    const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'age_stage' ? t.stages : [])));
+    if (admitted.size === 0) continue;
+    reading.checked += 1;
+    reading.admittedValues += admitted.size;
+    const unnamed = stagesUnnamed(c.spec, c.rawText);
+    if (unnamed.length > 0) {
+      reading.offenders.push(
+        `${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`,
+      );
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W2 — an audience the stage list admits, that the funder never named', () => {
   it('no stage list admits an audience its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let admittedValues = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'age_stage') continue;
-      const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'age_stage' ? t.stages : [])));
-      if (admitted.size === 0) continue;
-      checked += 1;
-      admittedValues += admitted.size;
-      const unnamed = stagesUnnamed(c.spec, c.rawText);
-      if (unnamed.length > 0) {
-        offenders.push(
-          `${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`,
-        );
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 14 stage lists publishing 22 audiences between them.
-    expect(checked).toBe(14);
-    expect(admittedValues).toBe(22);
+    const all = await everyConstraint();
+    const fixture = readW2(only(all, 'fixture'));
+    const seed = readW2(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual([]);
+    // Vacuity guard: 14 fixture stage lists publishing 22 audiences between them, and 14 seed ones
+    // publishing 22 — the same shape, hand-written, on a different set of records.
+    expect({ checked: fixture.checked, admittedValues: fixture.admittedValues }).toEqual({
+      checked: 14,
+      admittedValues: 22,
+    });
+    expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
+      checked: 14,
+      admittedValues: 22,
+    });
+  });
+
+  /**
+   * PLANTED ON A SHIPPED RECORD WHOSE SENTENCE SAYS "OPEN ONLY TO" TWO AUDIENCES. Goldwater's seed
+   * record admits exactly the two the sentence names; add the graduate student it excludes by name
+   * and the sweep reports it against `data/seed`, where only a curator's edit can put it right.
+   */
+  it('…and the same sweep goes red on a real seed record with an audience added', async () => {
+    const all = await everyConstraint();
+    const goldwater = seedConstraint(
+      all,
+      'arrl-cat-the-arrl-scholarship-to-honor-barry-goldwater',
+      'age_stage-0-b901916c',
+    );
+    expect(goldwater.c.rawText).toContain('open only to');
+    const red = readW2(
+      only(
+        plant(all, goldwater, (c) => ({
+          ...c,
+          spec: { axis: 'age_stage', stages: ['HS_SENIOR', 'UNDERGRAD', 'GRAD'] },
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual([
+      `${goldwater.program.name}: admits GRAD — ${JSON.stringify(goldwater.c.rawText.slice(0, 140))}`,
+    ]);
+  });
+
+  /**
+   * THE GRADE-RANGE READING, PINNED IN BOTH DIRECTIONS, because it was added to stop this rule
+   * flagging a record that was right and a reading added for that reason is exactly the kind that
+   * quietly stops the rule flagging records that are wrong.
+   */
+  it('…and a grade range names the bands it spans, and nothing else', () => {
+    const sara = 'Preference will be given to students 5th grade through college and to new and innovative ideas.';
+    expect(stagesUnnamed({ axis: 'age_stage', stages: ['HS_SENIOR', 'UNDERGRAD'] }, sara)).toEqual([]);
+    // It reaches no further than the range: SARA never names a graduate student or a veteran.
+    expect(stagesUnnamed({ axis: 'age_stage', stages: ['GRAD'] }, sara)).toEqual(['GRAD']);
+    expect(stagesUnnamed({ axis: 'age_stage', stages: ['VETERAN'] }, sara)).toEqual(['VETERAN']);
+    // A destination with no grade in front of it is not a range, and still does not name a
+    // high-school senior — which is what stops this clause swallowing the Goldwater case.
+    expect(
+      stagesUnnamed({ axis: 'age_stage', stages: ['HS_SENIOR'] }, 'Open to college students.'),
+    ).toEqual(['HS_SENIOR']);
+    expect(
+      stagesUnnamed(
+        { axis: 'age_stage', stages: ['HS_SENIOR'] },
+        'Applicants must have completed the 5th grade of an accredited elementary school.',
+      ),
+    ).toEqual(['HS_SENIOR']);
   });
 
   it('…and it catches an audience added to the Goldwater list that its sentence never names', () => {
@@ -683,23 +884,76 @@ function levelsUnnamed(spec: ConstraintSpec, rawText: string): string[] {
   return admitted.filter((l) => !named.has(l)).sort();
 }
 
+/**
+ * THE SEED CORPUS ADMITS FOUR CREDENTIAL RUNGS UNDER A SENTENCE THAT NAMES NONE — ONE RECORD, AND
+ * IT IS THE ARRL FOUNDATION'S OWN SCHOLARSHIP PAGE.
+ *
+ * MEASURED 2026-08-16, the first time W3 read `data/seed`. `arrl-foundation-scholarships` /
+ * `arrl-schol-enrolled` is HARD, publishes `degreeLevels: ['CERT','ASSOC','BACH','GRAD']` — every
+ * rung this schema has — and the sentence printed beside it, under "ONE REQUIREMENT, AS THE FUNDER
+ * WROTE IT", is:
+ *
+ *   "Thank you for your interest in the ARRL Foundation Scholarship Program for eligible amateur
+ *    radio operators pursuing higher education."
+ *
+ * That sentence names no credential at all. It is a greeting. It arrived in a5dda09, which replaced
+ * a fabricated quotation ("Individual catalogue entries name their own institution, accreditation
+ * and enrolment requirements" — a sentence about THIS PRODUCT'S CATALOGUE) with a real one from the
+ * Foundation's page; the replacement is genuinely the funder's words, and it supports none of the
+ * four values the spec beside it publishes.
+ *
+ * WHY IT IS A REGISTER ENTRY AND NOT A FIX. Two honest repairs exist and both need a curator:
+ * quote the Foundation sentence that DOES bound the credential, or empty the list and let the
+ * per-scholarship records carry the levels. Choosing between them is a curation decision about
+ * what the Foundation's page says, made against the capture, not something a guard may decide by
+ * editing data until it goes green — and this entry is the loud form of that: it names the record,
+ * it goes red if the record is fixed, and it goes red if a second one arrives.
+ *
+ * IT IS NOT A FALSE INCLUDE TODAY, and that is the honest bound on it: admitting every rung is the
+ * widest possible list, so no applicant is REFUSED by it. What it does is tell a certificate
+ * student at a trade school that the ARRL Foundation's programme is open to them on a sentence
+ * that says nothing of the sort.
+ */
+const KNOWN_SEED_LEVEL_OVERCLAIMS = [
+  'ARRL Foundation Scholarship Program: admits ASSOC,BACH,CERT,GRAD — ' +
+    '"Thank you for your interest in the ARRL Foundation Scholarship Program for eligible amateur radio operators pursuing higher education."',
+];
+
+function readW3(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'institution') continue;
+    const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'institution' ? t.degreeLevels : [])));
+    if (admitted.size === 0) continue;
+    reading.checked += 1;
+    reading.admittedValues += admitted.size;
+    const unnamed = levelsUnnamed(c.spec, c.rawText);
+    if (unnamed.length > 0) {
+      reading.offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W3 — a degree level the level list admits, that the funder never named', () => {
   it('no degree-level list admits a level its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let admittedValues = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'institution') continue;
-      const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'institution' ? t.degreeLevels : [])));
-      if (admitted.size === 0) continue;
-      checked += 1;
-      admittedValues += admitted.size;
-      const unnamed = levelsUnnamed(c.spec, c.rawText);
-      if (unnamed.length > 0) {
-        offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+    const all = await everyConstraint();
+    const fixture = readW3(only(all, 'fixture'));
+    const seed = readW3(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual(KNOWN_SEED_LEVEL_OVERCLAIMS);
+    // The seed half's own vacuity guard: 57 hand-written level lists publishing 133 levels. It was
+    // 132 until W12 below found `dara-institution` hard-refusing every graduate applicant on a
+    // sentence that names a four-year institution; giving that record the `['BACH','GRAD']` its own
+    // sibling already carries is the +1, and this rule then has to agree that "four-year
+    // institution" names graduate study. It does — see the school-tier note above.
+    expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
+      checked: 57,
+      admittedValues: 133,
+    });
+    const checked = fixture.checked;
+    const admittedValues = fixture.admittedValues;
     // Vacuity guard: 53 level lists publishing 123 levels — the largest hard-bar axis in the corpus.
     //
     // 33 AND 83 UNTIL ROUND 9. The 20 records that read "4-year college or university" published
@@ -710,6 +964,39 @@ describe('W3 — a degree level the level list admits, that the funder never nam
     // is where graduate study happens — see the school-tier note above.
     expect(checked).toBe(53);
     expect(admittedValues).toBe(123);
+  });
+
+  /**
+   * PLANTED ON A SHIPPED RECORD WHOSE SENTENCE IS SEVEN WORDS LONG. David Knaus reads "Bachelor's
+   * degree or a 2 year Associate's degree" and admits exactly those two rungs; add graduate study
+   * and the sweep names the record. The register entry above is therefore a finding, not the rule
+   * being unable to say anything else.
+   */
+  it('…and the same sweep goes red on a real seed record with a rung added', async () => {
+    const all = await everyConstraint();
+    const knaus = seedConstraint(all, 'arrl-cat-the-david-knaus-memorial-scholarship', 'institution-0-d82840ac');
+    expect(knaus.c.rawText).not.toMatch(/graduate|master|doctor/i);
+    const red = readW3(
+      only(
+        plant(all, knaus, (c) => ({
+          ...c,
+          spec: {
+            axis: 'institution',
+            degreeLevels: ['ASSOC', 'BACH', 'GRAD'],
+            tradeSchoolOK: false,
+            partTimeOK: true,
+            accreditationRequired: false,
+          },
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual(
+      [
+        ...KNOWN_SEED_LEVEL_OVERCLAIMS,
+        `${knaus.program.name}: admits GRAD — ${JSON.stringify(knaus.c.rawText.slice(0, 140))}`,
+      ].sort(),
+    );
   });
 
   it('…and it catches a graduate route added to a sentence that stops at the bachelor', () => {
@@ -801,26 +1088,66 @@ function activitiesUnnamed(spec: ConstraintSpec, rawText: string): string[] {
   return admitted.filter((k) => !(ACTIVITY_SAYS[k] ?? /$^/).test(rawText)).sort();
 }
 
+function readW4(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'ham_activity') continue;
+    const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'ham_activity' ? t.activityKinds : [])));
+    if (admitted.size === 0) continue;
+    reading.checked += 1;
+    reading.admittedValues += admitted.size;
+    const unnamed = activitiesUnnamed(c.spec, c.rawText);
+    if (unnamed.length > 0) {
+      reading.offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W4 — an activity the kind list admits, that the funder never named', () => {
   it('no activity list admits a kind its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let admittedValues = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'ham_activity') continue;
-      const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'ham_activity' ? t.activityKinds : [])));
-      if (admitted.size === 0) continue;
-      checked += 1;
-      admittedValues += admitted.size;
-      const unnamed = activitiesUnnamed(c.spec, c.rawText);
-      if (unnamed.length > 0) {
-        offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 11 activity lists publishing 18 kinds.
-    expect(checked).toBe(11);
-    expect(admittedValues).toBe(18);
+    const all = await everyConstraint();
+    const fixture = readW4(only(all, 'fixture'));
+    const seed = readW4(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual([]);
+    // Vacuity guard: 11 activity lists publishing 18 kinds, in each corpus.
+    expect({ checked: fixture.checked, admittedValues: fixture.admittedValues }).toEqual({
+      checked: 11,
+      admittedValues: 18,
+    });
+    expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
+      checked: 11,
+      admittedValues: 18,
+    });
+  });
+
+  /**
+   * PLANTED ON CARA'S SHIPPED RECORD — round seven's own axis, on the corpus round seven never
+   * read. CARA names public service, ARES/RACES/SKYWARN and Field Day; add contesting, which the
+   * sentence does not, and the sweep names it.
+   */
+  it('…and the same sweep goes red on a real seed record with a kind added', async () => {
+    const all = await everyConstraint();
+    const cara = seedConstraint(all, 'arrl-cat-the-cara-merit-scholarship', 'ham_activity-0-bceb5957');
+    expect(cara.c.rawText).not.toMatch(/contest/i);
+    const red = readW4(
+      only(
+        plant(all, cara, (c) => ({
+          ...c,
+          spec: {
+            axis: 'ham_activity',
+            activityKinds: ['ares_races_skywarn', 'field_day', 'public_service', 'contesting'],
+            proofRequired: false,
+          },
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual([
+      `${cara.program.name}: admits contesting — ${JSON.stringify(cara.c.rawText.slice(0, 140))}`,
+    ]);
   });
 
   it('…and it catches a kind added to CARA’s list that CARA never mentions', () => {
@@ -885,21 +1212,56 @@ function licenseFloorBelowSentence(spec: ConstraintSpec, rawText: string): boole
   return Math.min(...floors) < Math.min(...named.map((n) => LICENSE_RANK[n]));
 }
 
+interface FloorReading {
+  offenders: string[];
+  checked: number;
+}
+
+function readW5(all: readonly CorpusConstraint[]): FloorReading {
+  const reading: FloorReading = { offenders: [], checked: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'license') continue;
+    if (ANY_CLASS.test(c.rawText) || classesNamed(c.rawText).length === 0) continue;
+    reading.checked += 1;
+    if (licenseFloorBelowSentence(c.spec, c.rawText)) {
+      reading.offenders.push(`${program.name}: ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W5 — a licence floor below the lowest class the funder named', () => {
   it('no licence constraint admits a class its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'license') continue;
-      if (ANY_CLASS.test(c.rawText) || classesNamed(c.rawText).length === 0) continue;
-      checked += 1;
-      if (licenseFloorBelowSentence(c.spec, c.rawText)) {
-        offenders.push(`${program.name}: ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 39 licence sentences name a class outright.
-    expect(checked).toBe(39);
+    const all = await everyConstraint();
+    const fixture = readW5(only(all, 'fixture'));
+    const seed = readW5(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual([]);
+    // Vacuity guard: 39 licence sentences name a class outright, in each corpus.
+    expect(fixture.checked).toBe(39);
+    expect(seed.checked).toBe(39);
+  });
+
+  /**
+   * PLANTED ON WARE'S SHIPPED RECORD, whose sentence names General and Extra and nothing below.
+   * Drop the floor to Technician and the sweep names it — the false include a value-narrowing rule
+   * cannot see, now proved reachable in `data/seed`.
+   */
+  it('…and the same sweep goes red on a real seed record with its floor dropped', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'license-0-2ef1325b');
+    expect(ware.c.rawText).toContain('General Class License');
+    const red = readW5(
+      only(
+        plant(all, ware, (c) => ({
+          ...c,
+          spec: { axis: 'license', licenseMin: 'TECH', heldMonthsMin: 24 },
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual([`${ware.program.name}: ${JSON.stringify(ware.c.rawText.slice(0, 140))}`]);
   });
 
   it('…and it catches a floor dropped below the class the sentence asks for', () => {
@@ -947,22 +1309,40 @@ function gpaFloorBelowSentence(spec: ConstraintSpec, rawText: string): boolean {
   return Math.min(...mins) < Math.min(...named);
 }
 
+function readW8(all: readonly CorpusConstraint[]): FloorReading {
+  const reading: FloorReading = { offenders: [], checked: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'gpa') continue;
+    if (gpasNamed(c.rawText).length === 0) continue;
+    if (tiers(c.spec).every((t) => t.axis !== 'gpa' || t.min === undefined)) continue;
+    reading.checked += 1;
+    if (gpaFloorBelowSentence(c.spec, c.rawText)) {
+      reading.offenders.push(`${program.name}: ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W8 — a grade floor below the number the funder named', () => {
   it('no gpa constraint admits a grade its own sentence does not', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'gpa') continue;
-      if (gpasNamed(c.rawText).length === 0) continue;
-      if (tiers(c.spec).every((t) => t.axis !== 'gpa' || t.min === undefined)) continue;
-      checked += 1;
-      if (gpaFloorBelowSentence(c.spec, c.rawText)) {
-        offenders.push(`${program.name}: ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 17 records state a grade-point number AND publish a floor.
-    expect(checked).toBe(17);
+    const all = await everyConstraint();
+    const fixture = readW8(only(all, 'fixture'));
+    const seed = readW8(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual([]);
+    // Vacuity guard: 17 records state a grade-point number AND publish a floor, in each corpus.
+    expect(fixture.checked).toBe(17);
+    expect(seed.checked).toBe(17);
+  });
+
+  /** PLANTED ON A SHIPPED RECORD THAT STATES ITS OWN NUMBER: drop the floor under it. */
+  it('…and the same sweep goes red on a real seed record with its floor dropped', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'gpa-0-ab3d92b0');
+    expect(ware.c.rawText).toContain('3.0');
+    const red = readW8(only(plant(all, ware, (c) => ({ ...c, spec: { axis: 'gpa', min: 2.0 } })), 'seed'));
+    expect(red.offenders).toEqual([`${ware.program.name}: ${JSON.stringify(ware.c.rawText.slice(0, 140))}`]);
   });
 
   it('…and it catches a floor set below the number the sentence states', () => {
@@ -1000,26 +1380,55 @@ function citizenshipsUnnamed(spec: ConstraintSpec, rawText: string): string[] {
   return unnamed.sort();
 }
 
+function readW6(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'citizenship') continue;
+    const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'citizenship' ? t.allowed : [])));
+    if (admitted.size === 0) continue;
+    reading.checked += 1;
+    reading.admittedValues += admitted.size;
+    const unnamed = citizenshipsUnnamed(c.spec, c.rawText);
+    if (unnamed.length > 0) {
+      reading.offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W6 — a citizenship the allow-list admits, that the funder never named', () => {
   it('no citizenship list admits a status its own sentence does not name', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let admittedValues = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'citizenship') continue;
-      const admitted = new Set(tiers(c.spec).flatMap((t) => (t.axis === 'citizenship' ? t.allowed : [])));
-      if (admitted.size === 0) continue;
-      checked += 1;
-      admittedValues += admitted.size;
-      const unnamed = citizenshipsUnnamed(c.spec, c.rawText);
-      if (unnamed.length > 0) {
-        offenders.push(`${program.name}: admits ${unnamed.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 27 citizenship constraints, 27 published statuses.
-    expect(checked).toBe(27);
-    expect(admittedValues).toBe(27);
+    const all = await everyConstraint();
+    const fixture = readW6(only(all, 'fixture'));
+    const seed = readW6(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual([]);
+    // Vacuity guard: 27 citizenship constraints publishing 27 statuses, in each corpus.
+    expect({ checked: fixture.checked, admittedValues: fixture.admittedValues }).toEqual({
+      checked: 27,
+      admittedValues: 27,
+    });
+    expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
+      checked: 27,
+      admittedValues: 27,
+    });
+  });
+
+  /**
+   * PLANTED ON A SHIPPED RECORD THAT SAYS "must be a citizen of the United States": publish 'ANY'
+   * beside it — the widest value this axis has — and the sweep names it.
+   */
+  it('…and the same sweep goes red on a real seed record opened to anybody', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'citizenship-0-6a58668c');
+    expect(ware.c.rawText).toContain('citizen of the United States');
+    const red = readW6(
+      only(plant(all, ware, (c) => ({ ...c, spec: { axis: 'citizenship', allowed: ['ANY'] } })), 'seed'),
+    );
+    expect(red.offenders).toEqual([
+      `${ware.program.name}: admits ANY — ${JSON.stringify(ware.c.rawText.slice(0, 140))}`,
+    ]);
   });
 
   it('…and it catches "anybody" published under a sentence that says US citizen', () => {
@@ -1070,26 +1479,104 @@ function fieldsNotInSentence(spec: ConstraintSpec, rawText: string): string[] {
   });
 }
 
+/**
+ * ONE SEED RECORD PUBLISHES THREE MAJORS ITS OWN SENTENCE DOES NOT CONTAIN.
+ *
+ * MEASURED 2026-08-16, the first time W7 read `data/seed`. `rca-scholarship-program` / `rca-track`
+ * is a soft `field_of_study` constraint whose whole sentence is
+ *
+ *   "Undergraduate and graduate students on a wireless career track. A ham licence is NOT required."
+ *
+ * and whose spec names `["Wireless communications","Electrical Engineering","Telecommunications"]`.
+ * Not one of the three is in the sentence. The funder wrote a CAREER TRACK; the record answers with
+ * three named majors, and `Opportunity.tsx` prints the sentence under "ONE REQUIREMENT, AS THE
+ * FUNDER WROTE IT" with the spec beside it.
+ *
+ * WHY IT IS NOT FIXED HERE, and this is the honest bound of what this guard can see. The record's
+ * `sourceKey` is `manual-tier-d`, which builds its records from a hand-written array inside the
+ * module rather than from a captured page — `constraintProvenance.test.ts` names those constraints
+ * UNMEASURABLE for exactly this reason: their "source text" is GrantSpotter's own research brief,
+ * so checking a quotation against it is checking our prose against our prose. There is therefore no
+ * captured RCA page in this repository against which to decide whether RCA's own words name
+ * electrical engineering. Guessing would be inventing the funder's sentence a second time.
+ *
+ * WHAT IT COSTS TODAY, stated rather than implied: the constraint is SOFT, so it refuses nobody. It
+ * ranks — an electrical-engineering applicant is told they meet a preference the visible sentence
+ * does not state, and a student in another wireless discipline is not.
+ *
+ * A REGISTER ENTRY, NOT AN EXEMPTION: it goes red when the record is fixed, and red when a second
+ * one arrives.
+ */
+const KNOWN_SEED_INVENTED_FIELDS = [
+  'Radio Club of America Scholarship Program: ' +
+    '["Wireless communications","Electrical Engineering","Telecommunications"] — ' +
+    '"Undergraduate and graduate students on a wireless career track. A ham licence is NOT required."',
+];
+
+function readW7(all: readonly CorpusConstraint[]): PlaceReading {
+  const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'field_of_study') continue;
+    const entries = tiers(c.spec).flatMap((t) =>
+      t.axis === 'field_of_study' ? [...t.fields, ...t.excludedFields] : [],
+    );
+    if (entries.length === 0) continue;
+    reading.checked += 1;
+    reading.admittedValues += entries.length;
+    const invented = fieldsNotInSentence(c.spec, c.rawText);
+    if (invented.length > 0) {
+      reading.offenders.push(`${program.name}: ${JSON.stringify(invented)} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
+    }
+  }
+  reading.offenders.sort();
+  return reading;
+}
+
 describe('W7 — a field in the list that appears nowhere in the funder’s sentence', () => {
   it('every field list is a quotation of its own sentence', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let entries = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'field_of_study') continue;
-      const all = tiers(c.spec).flatMap((t) => (t.axis === 'field_of_study' ? [...t.fields, ...t.excludedFields] : []));
-      if (all.length === 0) continue;
-      checked += 1;
-      entries += all.length;
-      const invented = fieldsNotInSentence(c.spec, c.rawText);
-      if (invented.length > 0) {
-        offenders.push(`${program.name}: ${JSON.stringify(invented)} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+    const all = await everyConstraint();
+    const fixtureReading = readW7(only(all, 'fixture'));
+    const seedReading = readW7(only(all, 'seed'));
+    expect(fixtureReading.offenders).toEqual([]);
+    expect(seedReading.offenders).toEqual(KNOWN_SEED_INVENTED_FIELDS);
+    // The seed half's own vacuity guard: 65 hand-written field lists holding 225 entries.
+    expect({ checked: seedReading.checked, entries: seedReading.admittedValues }).toEqual({
+      checked: 65,
+      entries: 225,
+    });
+    const checked = fixtureReading.checked;
+    const entries = fixtureReading.admittedValues;
     // Vacuity guard: 61 field lists holding 210 entries between them, every one of them checked.
     expect(checked).toBe(61);
     expect(entries).toBe(210);
+  });
+
+  /**
+   * PLANTED ON THE CHICK ALLEN SEED RECORD, whose field list is a five-entry quotation of its own
+   * sentence. Add one major nobody wrote and the sweep names it beside the register entry above —
+   * which is what makes that entry a finding rather than the rule's only possible output.
+   */
+  it('…and the same sweep goes red on a real seed record with a field nobody wrote', async () => {
+    const all = await everyConstraint();
+    const chick = seedConstraint(all, 'arrl-cat-the-chick-allen-nw3y-scholarship', 'field_of_study-0-d1cca5db');
+    const red = readW7(
+      only(
+        plant(all, chick, (c) => ({
+          ...c,
+          spec:
+            c.spec.axis === 'field_of_study'
+              ? { ...c.spec, fields: [...c.spec.fields, 'Underwater Basket Weaving'] }
+              : c.spec,
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual(
+      [
+        ...KNOWN_SEED_INVENTED_FIELDS,
+        `${chick.program.name}: ["Underwater Basket Weaving"] — ${JSON.stringify(chick.c.rawText.slice(0, 140))}`,
+      ].sort(),
+    );
   });
 
   it('…and it catches a field nobody wrote', () => {
@@ -1187,6 +1674,71 @@ const PLAINLY_UNRELATED = ['Basket Weaving', 'Medieval Poetry', 'Culinary Arts',
 const RELATEDNESS_ENTRY =
   /\b(?:related|similar|allied|adjacent|comparable|equivalent|associated|akin|analogous|relevant|applicable)\b/i;
 
+/**
+ * THREE SHIPPED RECORDS TELL A CULINARY-ARTS MAJOR THEY MEET THE FUNDER'S PREFERENCE.
+ *
+ * MEASURED 2026-08-16, the first time W9 read `data/seed`. The three YLRL scholarships each carry
+ * the same soft `field_of_study` constraint:
+ *
+ *   sentence  "Preference will be given to students studying communications, radio, electronics,
+ *              or AMATEUR RADIO RELATED ARTS AND SCIENCES."
+ *   spec      fields: ["Communications","Radio","Electronics","Amateur Radio related arts and sciences"]
+ *
+ * `matcher.ts` matches a field by stemmed word overlap, so the fourth entry — which the funder
+ * wrote to WIDEN their list — matches any major with the word "arts" in it. Culinary Arts comes out
+ * `pass`. Removing the funder's widening from the list turns that same probe into a non-pass, which
+ * is exactly what this rule defines as "the pass rests on the widening".
+ *
+ * WHAT IT COSTS TODAY: the constraint is SOFT on all three, so nobody is refused and nobody is told
+ * `eligible` by it alone. What a culinary student is told is that they meet a preference YLRL
+ * stated for amateur-radio-related arts, which is a claim about them the funder did not make, and
+ * it ranks them above applicants who are.
+ *
+ * WHY IT IS REGISTERED AND NOT FIXED IN THIS COMMIT. There is a known remedy in this codebase for
+ * an entry that names a CLASS of fields rather than a field — Chick Allen's "or similar scientific
+ * field" carries it verbatim in `orUnrepresented`, which answers `unknown` instead of `pass` — and
+ * applying it here means deciding that "Amateur Radio related arts and sciences" is that kind of
+ * phrase for YLRL, then rewriting three hand-curated records in
+ * `data/seed/programs.ham-orgs.json` and regenerating `data/seed/shipped-values.tsv` so a running
+ * deployment can be corrected. That is a curator's judgement about the funder's meaning plus a
+ * change to the shipped-corrections ledger, and neither is something a guard may do to itself to
+ * come out green. It is named here, with the sentence and the spec, so it can be acted on.
+ *
+ * A REGISTER, NOT AN EXEMPTION: it goes red when any of the three is fixed and red when a fourth
+ * record arrives.
+ */
+const KNOWN_SEED_WIDENING_PASSES = [
+  'YLRL Ethel Smith K4LMB Memorial Scholarship — Culinary Arts',
+  'YLRL Mary Lou Brown NM7N Memorial Scholarship — Culinary Arts',
+  'YLRL Marte Wessel K0EPE Memorial Scholarship — Culinary Arts',
+];
+
+interface WideningReading {
+  offenders: string[];
+  checked: number;
+  probed: number;
+}
+
+function readW9(all: readonly CorpusConstraint[]): WideningReading {
+  const reading: WideningReading = { offenders: [], checked: 0, probed: 0 };
+  for (const { program, c } of all) {
+    if (c.spec.axis !== 'field_of_study' || c.spec.fields.length === 0) continue;
+    reading.checked += 1;
+    const closed: ConstraintSpec = {
+      ...c.spec,
+      fields: c.spec.fields.filter((f) => !RELATEDNESS_ENTRY.test(f)),
+    };
+    for (const fieldOfStudy of PLAINLY_UNRELATED) {
+      reading.probed += 1;
+      const asWritten = evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy }, NOW, c.rawText).status;
+      if (asWritten !== 'pass') continue;
+      const withoutTheWidening = evaluateConstraint(closed, { kind: 'student', fieldOfStudy }, NOW, '').status;
+      if (withoutTheWidening !== 'pass') reading.offenders.push(`${program.name} — ${fieldOfStudy}`);
+    }
+  }
+  return reading;
+}
+
 describe('W9 — a widened field list that used to admit every major there is', () => {
   /**
    * THE ASSERTION THE PARAGRAPH ABOVE ASKED FOR, and it is a stronger one than the name-list it
@@ -1197,29 +1749,49 @@ describe('W9 — a widened field list that used to admit every major there is', 
    * own list already gave. A pass that does not is the over-claim, and there are none.
    */
   it('no pass anywhere in the corpus rests on the funder having widened their list', async () => {
-    const restsOnTheWidening: string[] = [];
-    let checked = 0;
-    let probed = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'field_of_study' || c.spec.fields.length === 0) continue;
-      checked += 1;
-      const closed: ConstraintSpec = {
-        ...c.spec,
-        fields: c.spec.fields.filter((f) => !RELATEDNESS_ENTRY.test(f)),
-      };
-      for (const fieldOfStudy of PLAINLY_UNRELATED) {
-        probed += 1;
-        const asWritten = evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy }, NOW, c.rawText).status;
-        if (asWritten !== 'pass') continue;
-        const withoutTheWidening = evaluateConstraint(closed, { kind: 'student', fieldOfStudy }, NOW, '').status;
-        if (withoutTheWidening !== 'pass') restsOnTheWidening.push(`${program.name} — ${fieldOfStudy}`);
-      }
-    }
-    expect(restsOnTheWidening).toEqual([]);
-    // Vacuity guard: 60 field lists with at least one entry, five majors each. Before the fix this
-    // same probe returned 90 pairs across the eighteen records listed above.
-    expect(checked).toBe(60);
-    expect(probed).toBe(300);
+    const all = await everyConstraint();
+    const fixture = readW9(only(all, 'fixture'));
+    const seed = readW9(only(all, 'seed'));
+    expect(fixture.offenders).toEqual([]);
+    expect(seed.offenders).toEqual(KNOWN_SEED_WIDENING_PASSES);
+    // Vacuity guard: 60 fixture field lists with at least one entry, five majors each. Before the
+    // fix this same probe returned 90 pairs across the eighteen records listed above. The seed half
+    // holds 64 such lists, probed the same five ways.
+    expect({ checked: fixture.checked, probed: fixture.probed }).toEqual({ checked: 60, probed: 300 });
+    expect({ checked: seed.checked, probed: seed.probed }).toEqual({ checked: 64, probed: 320 });
+  });
+
+  /**
+   * PLANTED ON THE CHICK ALLEN SEED RECORD — AND THE FIRST PLANT DID NOT WORK, WHICH IS THE PART
+   * WORTH KEEPING. Giving that record a bare `fields: ['or related fields']` flags NOTHING, because
+   * round eight's fix ends `matcher.ts`'s field arm with `if (required.widened) return unknown()` —
+   * a list the matcher RECOGNISES as opened can no longer pass anybody, so it cannot produce this
+   * rule's offender either.
+   *
+   * The mechanism that still can is the one the three YLRL records are in: an entry that the
+   * matcher reads as an ordinary field phrase, matched by stemmed word overlap, which happens to
+   * share a word with an unrelated major. So the plant is that entry, verbatim, on a different
+   * shipped record — and Chick Allen then tells a culinary-arts major the same thing.
+   */
+  it('…and the same sweep goes red on a real seed record whose widening does the admitting', async () => {
+    const all = await everyConstraint();
+    const chick = seedConstraint(all, 'arrl-cat-the-chick-allen-nw3y-scholarship', 'field_of_study-0-d1cca5db');
+    const red = readW9(
+      only(
+        plant(all, chick, (c) => ({
+          ...c,
+          spec:
+            c.spec.axis === 'field_of_study'
+              ? { ...c.spec, fields: [...c.spec.fields, 'Amateur Radio related arts and sciences'] }
+              : c.spec,
+        })),
+        'seed',
+      ),
+    );
+    expect(red.offenders).toEqual([
+      `${chick.program.name} — Culinary Arts`,
+      ...KNOWN_SEED_WIDENING_PASSES,
+    ]);
   });
 
   /**
@@ -1982,10 +2554,84 @@ const KNOWN_NOTED_ONLY = [
   'The Medical Amateur Radio Council (MARCO) Scholarship [ham_activity] — "1) Applicants should be able to describe how they have engaged in volunteer and/or public "',
 ];
 
+/**
+ * THE SEED CORPUS HAS ONE, AND IT IS THIS RULE MISREADING A SENTENCE RATHER THAN A RECORD FAILING
+ * TO ENFORCE ONE. Named, because a false alarm that is quietly skipped is how a real one gets
+ * skipped beside it.
+ *
+ *   NCDXF W6EEN Memorial Scholarship / `ncdxf-w6een-age`
+ *   sentence  "If you are a licensed amateur radio operator 25 YEARS OF AGE OR YOUNGER, you can
+ *              apply for a free tuition scholarship by contacting the appropriate UNIVERSITY
+ *              directly."
+ *   spec      { axis: 'age_stage', ageMax: 25, stages: [] }, hard
+ *
+ * The constraint enforces exactly what the funder wrote: an applicant of 26 is refused by `ageMax`.
+ * What W10 flags is a STAGE probe, built because `STAGE_SAYS.UNDERGRAD` matches the word
+ * "university" — which appears here in a clause about HOW TO APPLY, not about who may. The rule
+ * then requires the spec to refuse a high-school senior, and an empty `stages` list refuses nobody.
+ *
+ * THIS IS THE SAME ERROR ROUND TEN CORRECTED ON THE OTHER AXIS — reading a BUILDING as a statement
+ * about the applicant — one axis over. `credentialLevelsNamed` exists because "4-year college or
+ * university" bounds the school and not the credential; nothing yet does that for stages, and
+ * `STAGE_SAYS` cannot simply drop `college|university` because W2 needs exactly that reading in the
+ * other direction (a spec admitting UNDERGRAD under "enrolled at an accredited university" is not
+ * over-claiming). Splitting the vocabulary the way the level rules are split is the fix, it changes
+ * what W10 probes across BOTH corpora, and it is a rule change with its own measurements — not
+ * something to bolt on inside the commit that first pointed this rule at `data/seed`.
+ *
+ * So it is registered, with the reason, and it goes red if the record changes or a second one
+ * arrives.
+ */
+const KNOWN_SEED_TOOTHLESS = [
+  'NCDXF W6EEN Memorial Scholarship [age_stage] stage HS_SENIOR -> pass — ' +
+    '"If you are a licensed amateur radio operator 25 years of age or younger, you can apply for"',
+];
+
+/**
+ * THE SEED HALF OF `KNOWN_NOTED_ONLY`, and one of the three is not a `should`.
+ *
+ * York and MARCO are the same two records the fixture list carries, for the same reason: RFC 2119's
+ * SHOULD, which `preference.ts` softens on purpose.
+ *
+ * THE THIRD IS THE ARRL TEACHERS INSTITUTE / ETP GRANTS RECORD, and it is worth a curator's eye:
+ *
+ *   `arrl-etp-grants` / `etp-plan`, soft, `activityKinds: ['teaching']`
+ *   "How will your planned ham radio activities support the curriculum that you are required to
+ *    teach? Will you involve other teaching staff in the program? …"
+ *
+ * The sentence is a QUESTION on ARRL's application form, so softening it is defensible — nobody is
+ * refused for how they answer a prompt. What makes it worth naming is what sits beside it: the ETP
+ * programme's real audience bar lives in `etp-k12`, whose spec is `axis: 'other'` with a note, and
+ * an `other` constraint enforces nothing at all. So a college student reading this record is
+ * refused by neither, on a programme ARRL states is for K-12 classrooms. That is a gap in what the
+ * schema can express for this record, it is not a value a guard may invent, and it is reported.
+ */
+const KNOWN_SEED_NOTED_ONLY = [
+  'ARRL Teachers Institute / ETP Grants (School Station and Progress) [ham_activity] — ' +
+    '"How will your planned ham radio activities support the curriculum that you are required to"',
+  'The John C. York, KE5V, Scholarship [ham_activity] — "Applicants should describe how they have engaged iin volunteer and/or public service activ"',
+  'The Medical Amateur Radio Council (MARCO) Scholarship [ham_activity] — "1) Applicants should be able to describe how they have engaged in volunteer and/or public "',
+];
+
 describe('W10 — a sentence that states a requirement, over a constraint that bars nobody', () => {
   it('every closed sentence produces a spec that can refuse the applicant it excludes', async () => {
-    const census = readEnforcementWidth(await everyConstraint());
+    const all = await everyConstraint();
+    const census = readEnforcementWidth(only(all, 'fixture'));
+    const seed = readEnforcementWidth(only(all, 'seed'));
     expect(census.admitsEverybody).toEqual(KNOWN_TOOTHLESS);
+    expect(seed.admitsEverybody).toEqual(KNOWN_SEED_TOOTHLESS);
+    // The seed half's own census, on the same six buckets, adding to every seed constraint.
+    expect({
+      checked: seed.checked,
+      probes: seed.probes,
+      opened: seed.opened,
+      unrepresented: seed.unrepresented,
+      typeOnly: seed.typeOnly,
+      silent: seed.silent,
+    }).toEqual({ checked: 221, probes: 230, opened: 38, unrepresented: 60, typeOnly: 10, silent: 367 });
+    expect(
+      seed.checked + seed.opened + seed.unrepresented + seed.typeOnly + seed.silent,
+    ).toBe(only(all, 'seed').length);
     // Vacuity guard, and these six numbers add to all 652 constraints in the corpus — every one is
     // either checked or in a named bucket, and no constraint falls out of this rule unseen.
     //
@@ -2036,7 +2682,7 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     }).toEqual({ checked: 214, probes: 219, opened: 36, unrepresented: 60, typeOnly: 10, silent: 332 });
     expect(
       census.checked + census.opened + census.unrepresented + census.typeOnly + census.silent,
-    ).toBe((await everyConstraint()).length);
+    ).toBe(only(all, 'fixture').length);
   });
 
   /**
@@ -2174,8 +2820,16 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
    * that D1 moves.
    */
   it('a closed requirement that is not a preference is enforced, not merely noted', async () => {
-    const w10b = readEnforcementReach(await everyConstraint());
+    const all = await everyConstraint();
+    const w10b = readEnforcementReach(only(all, 'fixture'));
+    const seed = readEnforcementReach(only(all, 'seed'));
     expect(w10b.notedOnly).toEqual(KNOWN_NOTED_ONLY);
+    expect(seed.notedOnly).toEqual(KNOWN_SEED_NOTED_ONLY);
+    // The seed half's own vacuity guard, same two buckets.
+    expect({ checked: seed.checked, preferences: seed.preferences }).toEqual({
+      checked: 182,
+      preferences: 38,
+    });
     // Vacuity guard: requirements stated flatly, over specs that really can refuse the applicant
     // the sentence excludes, where the only remaining question is whether the refusal is enforced.
     // The `preferences` bucket is the funder RANKING rather than barring — "preference will be
@@ -2200,7 +2854,11 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
    * measurement this block exists to record.
    */
   it('goes red when the product is disarmed, by each of the four ways it can be disarmed', async () => {
-    const all = await everyConstraint();
+    // THE BATTERY IS RUN ON THE FIXTURE CORPUS, and the seed corpus gets its own run below rather
+    // than being folded in here. Every number in this block is a measurement of one population; a
+    // sum over two would be a number nobody could reproduce or reason about, and the point of the
+    // battery is that each figure is checkable by hand.
+    const all = only(await everyConstraint(), 'fixture');
     const mutated = (mutate: (c: Constraint) => Constraint) =>
       all.map(({ program, c }) => ({ program, c: mutate(c) }));
 
@@ -2260,6 +2918,44 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     expect(d4.admitsEverybody.filter((o) => o.includes('[field_of_study]'))).toHaveLength(
       d4.admitsEverybody.length - w10a.admitsEverybody.length,
     );
+  });
+
+  /**
+   * …AND THE SAME BATTERY ON THE CORPUS A FRESH INSTALL SERVES.
+   *
+   * This is the "prove the rule can still bite" obligation, discharged for W10 the way the rule
+   * itself is built rather than by planting one value: D1 and D2 disarm the seed corpus wholesale
+   * and both numbers move. A rule reports a disarm by flagging more or by having nothing left to
+   * say, and here it is the first.
+   */
+  it('…and goes red the same way when the SEED corpus is disarmed', async () => {
+    const seed = only(await everyConstraint(), 'seed');
+    const mutated = (mutate: (c: Constraint) => Constraint) =>
+      seed.map(({ program, c }) => ({ program, c: mutate(c) }));
+
+    // The control, so what follows is the mutation and not the corpus.
+    expect(readEnforcementWidth(seed).admitsEverybody).toEqual(KNOWN_SEED_TOOTHLESS);
+    expect(readEnforcementReach(seed).notedOnly).toEqual(KNOWN_SEED_NOTED_ONLY);
+
+    // D1 — every hard constraint becomes soft. W10b flags every requirement it was checking.
+    const d1 = readEnforcementReach(mutated((c) => ({ ...c, hard: false })));
+    expect(d1.notedOnly).toHaveLength(182);
+    // …and the value-width half cannot see it, on this corpus either: same census, byte for byte.
+    expect(readEnforcementWidth(mutated((c) => ({ ...c, hard: false })))).toEqual(
+      readEnforcementWidth(seed),
+    );
+
+    // D2 — every spec becomes its empty form. Every probe the rule can still build is flagged.
+    const d2 = readEnforcementWidth(mutated((c) => ({ ...c, spec: emptied(c.spec) })));
+    expect(d2.admitsEverybody.length).toBeGreaterThan(KNOWN_SEED_TOOTHLESS.length);
+    expect(d2.admitsEverybody).toHaveLength(d2.probes);
+
+    // D3 — the blind spot, on this corpus too: nothing is flagged and coverage collapses instead.
+    const d3 = readEnforcementWidth(
+      mutated((c) => ({ ...c, spec: { ...c.spec, orUnrepresented: 'the funder named another route' } })),
+    );
+    expect(d3.checked).toBe(0);
+    expect(d3.admitsEverybody).toEqual([]);
   });
 
   /**
@@ -2583,6 +3279,45 @@ describe('W11 — a bar the funder wrote into a sentence filed under another axi
     expect(census.checked).toBeGreaterThan(census.unreachable);
   });
 
+  /**
+   * …AND THE SAME QUESTION OF THE CORPUS A FRESH INSTALL SERVES. W11 reads a VERDICT rather than a
+   * spec, so it is asked of PROGRAMMES, and the 144 in `data/seed/` are different programmes with
+   * different constraint sets from the 150 the fixtures produce. Nothing in this file had ever
+   * asked them.
+   */
+  it('…and the same is true of every programme a fresh install serves', async () => {
+    const census = readCrossAxisReach(seedPrograms());
+    expect(census.enforcedNowhere).toEqual([]);
+    // The seed half's own four buckets, and its own anti-R6 assertion.
+    expect({
+      checked: census.checked,
+      unreachable: census.unreachable,
+      ranked: census.ranked,
+      opened: census.opened,
+      noted: census.noted,
+    }).toEqual({ checked: 5, unreachable: 0, ranked: 4, opened: 7, noted: 0 });
+    expect(census.checked).toBeGreaterThan(census.unreachable);
+  });
+
+  /**
+   * PLANTED ON A REAL SEED PROGRAMME, the same way the fixture proof below plants on Metzger: leave
+   * every funder sentence exactly as it is and empty every spec, so the floor the sentence states
+   * is enforced by nothing. The rule must name the programme.
+   */
+  it('…and it flags a SEED programme whose sentence states a floor no constraint enforces', () => {
+    const metzger = seedPrograms().find((p) => p.name.includes('Metzger'));
+    if (metzger === undefined) throw new Error('The Edmond A. Metzger Scholarship is missing from data/seed');
+    const disarmed: Program = {
+      ...metzger,
+      constraints: metzger.constraints.map((c) => ({ ...c, spec: emptied(c.spec) })),
+    };
+    expect(readCrossAxisReach([disarmed]).enforcedNowhere.some((o) => o.includes('degreeLevel ASSOC'))).toBe(
+      true,
+    );
+    // …and the record as shipped is silent, so what went red is the plant.
+    expect(readCrossAxisReach([metzger]).enforcedNowhere).toEqual([]);
+  });
+
   it('…and it catches a degree floor that only a non-institution sentence states', async () => {
     const { programs } = await corpus();
     const metzger = programs.find((p) => p.name.includes('Metzger'));
@@ -2789,10 +3524,32 @@ function readRefusalReach(all: Array<{ program: Program; c: Constraint }>): Refu
 
 describe('W12 — a constraint that refuses an applicant its own sentence admits', () => {
   it('no institution constraint refuses a credential rung its own sentence does not put outside', async () => {
-    const census = readRefusalReach(await everyConstraint());
+    const all = await everyConstraint();
+    const census = readRefusalReach(only(all, 'fixture'));
+    const seed = readRefusalReach(only(all, 'seed'));
     // AN EMPTY EQUALITY, for the reason `KNOWN_TOOTHLESS` gives: there is no list to quietly add a
     // record to, and a record arriving here fails with its own name and the funder's sentence.
     expect(census.refusesTheAdmitted).toEqual([]);
+    // AND THE SAME EMPTY EQUALITY ON THE CORPUS A FRESH INSTALL SERVES — which it did NOT satisfy
+    // when this rule first read it on 2026-08-16. `dara-grantmaker-only-via-arrl` refused three
+    // rungs, GRAD among them: a hard `ineligible` for every graduate applicant, on a record whose
+    // own sentence says "must be enrolled at an accredited four-year institution", where a graduate
+    // student plainly is. The seed record is the same $1,500 DARA scholarship as
+    // `arrl-cat-the-dayton-amateur-radio-association-scholarship`, which had already been curated
+    // to `['BACH','GRAD']` with the tier phrase in `orUnrepresented` — two records for one award,
+    // disagreeing, one of them refusing people the other admits. Fixed in `programs.negatives.json`
+    // by giving the negative record the answer its own sibling already carries; see the round
+    // report. This is the 1,456-shaped defect, surviving in the shipped corpus after the product
+    // fix that ended it in the fixture one.
+    expect(seed.refusesTheAdmitted).toEqual([]);
+    // The seed half's own census.
+    expect({
+      tierChecked: seed.tierChecked,
+      namedChecked: seed.namedChecked,
+      probes: seed.probes,
+      silent: seed.silent,
+    }).toEqual({ tierChecked: 36, namedChecked: 37, probes: 211, silent: 623 });
+    expect(seed.tierChecked + seed.namedChecked + seed.silent).toBe(only(all, 'seed').length);
     // Vacuity guard, and it is the whole point of writing this rule as a census.
     //
     //   tierChecked    34  the population the 1,456 came from: a sentence that bounds the SCHOOL
@@ -2812,7 +3569,7 @@ describe('W12 — a constraint that refuses an applicant its own sentence admits
       probes: census.probes,
       silent: census.silent,
     }).toEqual({ tierChecked: 34, namedChecked: 35, probes: 199, silent: 583 });
-    expect(census.tierChecked + census.namedChecked + census.silent).toBe((await everyConstraint()).length);
+    expect(census.tierChecked + census.namedChecked + census.silent).toBe(only(all, 'fixture').length);
   });
 
   /**
@@ -2825,7 +3582,7 @@ describe('W12 — a constraint that refuses an applicant its own sentence admits
    * flags every constraint it touched.
    */
   it('goes red when the round-nine state is replayed, on every record it refused', async () => {
-    const all = await everyConstraint();
+    const all = only(await everyConstraint(), 'fixture');
     const d5 = readRefusalReach(
       all.map(({ program, c }) => ({
         program,
@@ -2858,7 +3615,7 @@ describe('W12 — a constraint that refuses an applicant its own sentence admits
    * applicant in the corpus is then refused by a sentence naming the building they study in.
    */
   it('…and red on the over-tight reading that would have refused every graduate applicant', async () => {
-    const all = await everyConstraint();
+    const all = only(await everyConstraint(), 'fixture');
     const d6 = readRefusalReach(
       all.map(({ program, c }) => ({
         program,

@@ -131,7 +131,7 @@
       "applyVia": "external_spa_portal",
       "applyUrl": "https://www.arrl.org/scholarship-program",
       "constraints": [
-        { "id": "dara-institution", "hard": true, "fallbackRank": 0, "rawText": "Any licence class, any region, any field of study; must be enrolled at an accredited four-year institution.", "spec": { "axis": "institution", "degreeLevels": ["BACH"], "tradeSchoolOK": false, "partTimeOK": true, "accreditationRequired": true } }
+        { "id": "dara-institution", "hard": true, "fallbackRank": 0, "rawText": "Any licence class, any region, any field of study; must be enrolled at an accredited four-year institution.", "spec": { "axis": "institution", "degreeLevels": ["BACH", "GRAD"], "tradeSchoolOK": false, "partTimeOK": true, "accreditationRequired": true, "orUnrepresented": "accredited four-year institution" } }
       ],
       "fundingRestrictions": [],
       "obligations": {},

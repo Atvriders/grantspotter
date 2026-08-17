@@ -44,21 +44,39 @@
  * R7 IS NOT A HISTORICAL CASE. It found a live one, in this file's own verification pass — see its
  * block below.
  *
+ * WHICH CORPUS IS "THE REAL CORPUS", ANSWERED PROPERLY ON 2026-08-16. Until that date every rule
+ * here read `loadCorpus()` — the 150 records built by running the parsers over `fixtures/` — and
+ * NOT the 144 in `data/seed/`, which is what `importSeedIfEmpty` puts in front of a student on a
+ * fresh install and what runs at grant.waterburp.com. Nine rounds of hardening, and the 696
+ * constraints a real deployment serves were outside all of it. Both are read now, every count is
+ * per corpus, and each rule carries a SECOND mutation proof that plants a violation in a real seed
+ * record and runs the same sweep over it — because a rule reporting zero on a population it has
+ * never read before is the state this project has been lied to by four times.
+ *
+ * WHAT THE SEED HALF FOUND: nothing, on all seven rules, and the planted proofs are what make that
+ * silence worth anything. The over-claim file next door found four things, and its registers name
+ * them.
+ *
  * Its own file rather than an append to part1/part2/disjunction/unadjudicable, for the reason those
  * files give for existing.
  */
-import type { Constraint, ConstraintSpec, GeoSpec, Program, StudentProfile } from '@grantspotter/core';
+import type { ConstraintSpec, GeoSpec, StudentProfile } from '@grantspotter/core';
 import { evaluateConstraint, statesForArrlDivision, statesForArrlSection } from '@grantspotter/core';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { loadCorpus } from '../../../../../scripts/profile-corpus.js';
+import {
+  type CorpusConstraint,
+  type Tally,
+  bump,
+  everyConstraintInBothCorpora,
+  fixtureCorpus,
+  plant,
+  seedConstraint,
+  seedPrograms,
+  tally,
+  warmBothCorpora,
+} from '../../test/axesCorpora.js';
 
 const NOW = '2026-08-02T00:00:00.000Z';
-
-let cached: ReturnType<typeof loadCorpus> | undefined;
-function corpus(): ReturnType<typeof loadCorpus> {
-  cached ??= loadCorpus();
-  return cached;
-}
 
 /**
  * THE FIXTURE LOAD IS SETUP FOR THE WHOLE FILE, AND IT IS NOT PART OF ANY RULE'S TIME BUDGET.
@@ -84,13 +102,30 @@ function corpus(): ReturnType<typeof loadCorpus> {
  * slowest machine this suite runs on, not a property of the product.
  */
 beforeAll(async () => {
-  await corpus();
+  await warmBothCorpora();
 }, 120_000);
 
-/** Every constraint in the publishable corpus, with the program that carries it. */
-async function everyConstraint(): Promise<Array<{ program: Program; c: Constraint }>> {
-  const { programs } = await corpus();
-  return programs.flatMap((program) => program.constraints.map((c) => ({ program, c })));
+/**
+ * Every constraint in BOTH publishable corpora, with the program that carries it and the
+ * population it came from.
+ *
+ * IT WAS THE FIXTURE CORPUS ALONE UNTIL 2026-08-16, AND THAT IS THE WHOLE POINT OF THIS ROUND.
+ * R1–R7 below are seven rules about whether a spec says what the sentence printed beside it says,
+ * and every one of them read `loadCorpus()` — the 150 records built by running the parsers over
+ * `fixtures/`. The 144 records in `data/seed/` are what `importSeedIfEmpty` puts in front of a
+ * student on a fresh install, they carry 696 hand-written constraints, and no rule in this file had
+ * ever read one. `src/test/axesCorpora.ts` carries the argument; the counts below are now per
+ * corpus, so neither half can go quiet behind the other's total.
+ *
+ * THE TWO POPULATIONS ARE NOT THE SAME SHAPE, and the rules had to be read again in the light of
+ * that rather than pointed at new data and declared covered. A fixture constraint's `spec` is what
+ * `normalize/axes/` extracted, so a defect there is an extractor defect and the fix is in code. A
+ * seed constraint's `spec` is what a curator typed beside a sentence they copied off the funder's
+ * page, so a defect there is in `data/seed/*.json` and no code change can reach it. Both are shown
+ * to students by the same matcher, so both are in scope for the same rule.
+ */
+async function everyConstraint(): Promise<CorpusConstraint[]> {
+  return everyConstraintInBothCorpora();
 }
 
 /** The tier the funder named first, plus every alternative — the whole disjunction. */
@@ -198,6 +233,39 @@ function statesUnadmitted(spec: ConstraintSpec, rawText: string): string[] {
   );
 }
 
+/**
+ * ONE PASS OF A RULE OVER A CORPUS, WRITTEN ONCE.
+ *
+ * Every rule below is a function of a constraint list rather than a loop inside its own `it`, and
+ * that is not tidiness. It is what lets the planted-violation proof beside each rule run THE SAME
+ * SWEEP — the same axis filter, the same exemptions, the same counters — over a corpus with one
+ * value changed, instead of calling the rule's predicate directly and proving only that the
+ * predicate can return true. The four blind guards this project has found were all predicates that
+ * worked over sweeps that never handed them the record. `readEnforcementWidth` in
+ * `sentence-vs-spec.test.ts` has had this shape since round eight for exactly that reason.
+ */
+interface RuleReading {
+  offenders: string[];
+  checked: Tally;
+}
+
+function readR1(all: readonly CorpusConstraint[]): RuleReading {
+  const reading: RuleReading = { offenders: [], checked: tally() };
+  for (const { corpus, program, c } of all) {
+    if (c.spec.axis !== 'geography' || !c.hard) continue;
+    if (c.spec.orUnrepresented !== undefined) continue;
+    if (!decidableFromStates(c.spec) || statesNamedIn(c.rawText).length === 0) continue;
+    bump(reading.checked, corpus);
+    const missing = statesUnadmitted(c.spec, c.rawText);
+    if (missing.length > 0) {
+      reading.offenders.push(
+        `[${corpus}] ${program.name}: names ${missing.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`,
+      );
+    }
+  }
+  return reading;
+}
+
 describe('R1 — a state the funder named, that no tier of the spec admits', () => {
   /**
    * HARD CONSTRAINTS ONLY, and the scope is the doctrine rather than convenience: a soft
@@ -224,21 +292,42 @@ describe('R1 — a state the funder named, that no tier of the spec admits', () 
    * exactly what this rule exists to guarantee, arrived at by a different route.
    */
   it('no hard geography constraint leaves out a state its own sentence names', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'geography' || !c.hard) continue;
-      if (c.spec.orUnrepresented !== undefined) continue;
-      if (!decidableFromStates(c.spec) || statesNamedIn(c.rawText).length === 0) continue;
-      checked += 1;
-      const missing = statesUnadmitted(c.spec, c.rawText);
-      if (missing.length > 0) {
-        offenders.push(`${program.name}: names ${missing.join(',')} — ${JSON.stringify(c.rawText.slice(0, 140))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: the rule really has 40 hard constraints to be wrong about.
-    expect(checked).toBe(40);
+    const r1 = readR1(await everyConstraint());
+    expect(r1.offenders).toEqual([]);
+    // Vacuity guard, per corpus: the rule really has this many hard constraints to be wrong about
+    // in each population, and the seed half is the one a fresh install serves.
+    expect(r1.checked).toEqual({ fixture: 40, seed: 40 });
+  });
+
+  /**
+   * AND IT SPEAKS ON SEED DATA, proved by planting a violation in a real seed record and running
+   * THE SAME SWEEP over it. Zero offenders on a corpus a rule has never read before is the exact
+   * state this project has been lied to by four times, so no rule here is allowed to report zero
+   * on `data/seed` without first being shown to be able to report one.
+   *
+   * The record is Texas's: ARRL's North Texas Section, plus Oklahoma residents attending school in
+   * Texas, which the curator seeded as two state tiers. Take Oklahoma out — the exact defect R1 was
+   * born from, on the shipped copy of the very record it was born from — and the sweep names it.
+   */
+  it('…and the same sweep goes red on a real seed record with a state taken out of it', async () => {
+    const all = await everyConstraint();
+    const target = seedConstraint(
+      all,
+      'arrl-cat-the-north-texas-section-bob-nelson-kb5bnu-memorial-scholarsh',
+      'geography-0-fb4c68df',
+    );
+    expect(target.c.rawText).toContain('Oklahoma');
+    const red = readR1(
+      plant(all, target, (c) => ({
+        ...c,
+        spec: { axis: 'geography', geo: { type: 'state', values: ['TX'] } },
+      })),
+    );
+    expect(red.offenders).toEqual([
+      `[seed] ${target.program.name}: names OK — ${JSON.stringify(target.c.rawText.slice(0, 140))}`,
+    ]);
+    // …and the control: the record AS SHIPPED is not an offender, so what went red is the plant.
+    expect(readR1(all).offenders).toEqual([]);
   });
 
   it('…and it catches all three of the specs that were published before this round', () => {
@@ -284,22 +373,45 @@ describe('R1 — a state the funder named, that no tier of the spec admits', () 
  */
 const NEW_ENGLAND = ['CT', 'ME', 'MA', 'NH', 'RI', 'VT'];
 
+function readR2(all: readonly CorpusConstraint[]): RuleReading {
+  const reading: RuleReading = { offenders: [], checked: tally() };
+  for (const { corpus, program, c } of all) {
+    if (c.spec.axis !== 'geography' || !/\bnew england\b/i.test(c.rawText)) continue;
+    if (!decidableFromStates(c.spec)) continue;
+    bump(reading.checked, corpus);
+    const admitted = new Set(geoTiers(c.spec).flatMap(statesAdmittedByTier));
+    const missing = NEW_ENGLAND.filter((s) => !admitted.has(s));
+    if (missing.length > 0) reading.offenders.push(`[${corpus}] ${program.name}: missing ${missing.join(',')}`);
+  }
+  return reading;
+}
+
 describe('R2 — a region the funder named, resolved to fewer states than it has', () => {
   it('every record whose sentence says "New England" admits all six New England states', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'geography' || !/\bnew england\b/i.test(c.rawText)) continue;
-      if (!decidableFromStates(c.spec)) continue;
-      checked += 1;
-      const admitted = new Set(geoTiers(c.spec).flatMap(statesAdmittedByTier));
-      const missing = NEW_ENGLAND.filter((s) => !admitted.has(s));
-      if (missing.length > 0) offenders.push(`${program.name}: missing ${missing.join(',')}`);
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard. Eight records say it; seven said it and were already right, which is what
-    // made the eighth invisible.
-    expect(checked).toBe(8);
+    const r2 = readR2(await everyConstraint());
+    expect(r2.offenders).toEqual([]);
+    // Vacuity guard. Eight fixture records say it; seven said it and were already right, which is
+    // what made the eighth invisible.
+    expect(r2.checked).toEqual({ fixture: 8, seed: 8 });
+  });
+
+  /**
+   * PLANTED ON THE SHIPPED COPY OF THE RECORD THIS RULE WAS BORN FROM. Ware's seed record spells
+   * all six New England states into its tier; take them out and it is byte-for-byte the spec that
+   * refused six states' worth of applicants, on the sentence that names the region.
+   */
+  it('…and the same sweep goes red on the real seed record with the region collapsed', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'geography-0-288b4755');
+    expect(ware.c.rawText).toContain('New England');
+    const red = readR2(
+      plant(all, ware, (c) => ({
+        ...c,
+        spec: { axis: 'geography', geo: { type: 'state', values: ['DE', 'MD', 'NJ', 'NY'] } },
+      })),
+    );
+    expect(red.offenders).toEqual([`[seed] ${ware.program.name}: missing CT,ME,MA,NH,RI,VT`]);
+    expect(readR2(all).offenders).toEqual([]);
   });
 
   it('…and it catches the Ware spec as it was published', () => {
@@ -363,23 +475,43 @@ function durationLeaksAcrossBranches(spec: ConstraintSpec, rawText: string): boo
   return (spec.anyOf ?? []).length === 0;
 }
 
+function readR3(all: readonly CorpusConstraint[]): RuleReading {
+  const reading: RuleReading = { offenders: [], checked: tally() };
+  for (const { corpus, program, c } of all) {
+    if (c.spec.axis !== 'license') continue;
+    if (distinctClassesNamed(c.rawText).length < 2) continue;
+    bump(reading.checked, corpus);
+    if (durationLeaksAcrossBranches(c.spec, c.rawText)) {
+      reading.offenders.push(`[${corpus}] ${program.name}: ${JSON.stringify(c.rawText.slice(0, 150))}`);
+    }
+  }
+  return reading;
+}
+
 describe('R3 — a duration the sentence put on one branch, applied to both', () => {
   it('no licence constraint holds a duration the sentence does not put last', async () => {
-    const offenders: string[] = [];
-    let withTwoClasses = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'license') continue;
-      if (distinctClassesNamed(c.rawText).length < 2) continue;
-      withTwoClasses += 1;
-      if (durationLeaksAcrossBranches(c.spec, c.rawText)) {
-        offenders.push(`${program.name}: ${JSON.stringify(c.rawText.slice(0, 150))}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: four sentences in the corpus name two or more licence classes — NEAR-Fest
-    // (three, in preference order), Tortorella, You've Got a Friend in Pennsylvania, and Ware.
-    // Only Ware carries a duration the sentence does not put last, and only Ware has an `anyOf`.
-    expect(withTwoClasses).toBe(4);
+    const r3 = readR3(await everyConstraint());
+    expect(r3.offenders).toEqual([]);
+    // Vacuity guard: four sentences in the fixture corpus name two or more licence classes —
+    // NEAR-Fest (three, in preference order), Tortorella, You've Got a Friend in Pennsylvania, and
+    // Ware. Only Ware carries a duration the sentence does not put last, and only Ware has an
+    // `anyOf`.
+    expect(r3.checked).toEqual({ fixture: 4, seed: 4 });
+  });
+
+  /** The Extra of six months, refused by the shipped record, with the funder's second branch cut. */
+  it('…and the same sweep goes red on the real seed record with its alternative cut', async () => {
+    const all = await everyConstraint();
+    const ware = seedConstraint(all, 'arrl-cat-the-michael-r-ware-nn3i-scholarship', 'license-0-2ef1325b');
+    expect(ware.c.rawText).toContain('or hold a current Amateur Extra Class License');
+    const red = readR3(
+      plant(all, ware, (c) => ({
+        ...c,
+        spec: { axis: 'license', licenseMin: 'GENERAL', heldMonthsMin: 24 },
+      })),
+    );
+    expect(red.offenders).toEqual([`[seed] ${ware.program.name}: ${JSON.stringify(ware.c.rawText.slice(0, 150))}`]);
+    expect(readR3(all).offenders).toEqual([]);
   });
 
   it('…and it catches the Ware spec as it was published, without touching Tortorella', () => {
@@ -478,32 +610,59 @@ function namedOnlyAsAnException(rawText: string, says: RegExp): boolean {
   return !says.test(rawText.slice(0, marker.index));
 }
 
+interface R4Reading extends RuleReading {
+  exceptions: Tally;
+}
+
+function readR4(all: readonly CorpusConstraint[]): R4Reading {
+  const reading: R4Reading = { offenders: [], checked: tally(), exceptions: tally() };
+  for (const { corpus, program, c } of all) {
+    if (c.spec.axis !== 'age_stage' || c.spec.stages.length === 0) continue;
+    for (const rule of AUDIENCE_RULES) {
+      if (!rule.says.test(c.rawText)) continue;
+      bump(reading.checked, corpus);
+      if (allowListSatisfies(c.spec, 'stages', rule.mustAllow)) continue;
+      if (!c.hard && namedOnlyAsAnException(c.rawText, rule.says)) {
+        bump(reading.exceptions, corpus);
+        continue;
+      }
+      reading.offenders.push(
+        `[${corpus}] ${program.name}: names "${rule.label}" but publishes ` +
+          `${JSON.stringify(c.spec.stages)} — ${JSON.stringify(c.rawText.slice(0, 140))}`,
+      );
+    }
+  }
+  return reading;
+}
+
 describe('R4 — an audience the funder named, missing from the stage list', () => {
   it('no stage list drops an audience its own sentence names', async () => {
-    const offenders: string[] = [];
-    let claims = 0;
-    let exceptions = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'age_stage' || c.spec.stages.length === 0) continue;
-      for (const rule of AUDIENCE_RULES) {
-        if (!rule.says.test(c.rawText)) continue;
-        claims += 1;
-        if (allowListSatisfies(c.spec, 'stages', rule.mustAllow)) continue;
-        if (!c.hard && namedOnlyAsAnException(c.rawText, rule.says)) {
-          exceptions += 1;
-          continue;
-        }
-        offenders.push(
-          `${program.name}: names "${rule.label}" but publishes ${JSON.stringify(c.spec.stages)} — ` +
-            JSON.stringify(c.rawText.slice(0, 140)),
-        );
-      }
-    }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 19 audience claims across the corpus's stage constraints.
-    expect(claims).toBe(19);
+    const r4 = readR4(await everyConstraint());
+    expect(r4.offenders).toEqual([]);
+    // Vacuity guard: 19 audience claims across the fixture corpus's stage constraints.
+    expect(r4.checked).toEqual({ fixture: 19, seed: 18 });
     // …and exactly one of them is a preference declining to claim its own exception (MARCO).
-    expect(exceptions).toBe(1);
+    expect(r4.exceptions).toEqual({ fixture: 1, seed: 1 });
+  });
+
+  /**
+   * THE GOLDWATER DEFECT, PLANTED ON A DIFFERENT SHIPPED RECORD THAT NAMES THREE AUDIENCES.
+   * Frankford's sentence names high-school seniors, undergraduates AND US military veterans, and
+   * its seed record admits all three. Drop the veterans and the sweep says so — on `data/seed`,
+   * where no extractor fix can reach and only a curator's edit can.
+   */
+  it('…and the same sweep goes red on a real seed record with an audience dropped', async () => {
+    const all = await everyConstraint();
+    const frc = seedConstraint(all, 'arrl-cat-the-frankford-radio-club-frc-scholarship', 'age_stage-0-8c6b2d22');
+    expect(frc.c.rawText).toContain('veterans');
+    const red = readR4(
+      plant(all, frc, (c) => ({ ...c, spec: { axis: 'age_stage', stages: ['HS_SENIOR', 'UNDERGRAD'] } })),
+    );
+    expect(red.offenders).toEqual([
+      `[seed] ${frc.program.name}: names "veterans" but publishes ["HS_SENIOR","UNDERGRAD"] — ` +
+        JSON.stringify(frc.c.rawText.slice(0, 140)),
+    ]);
+    expect(readR4(all).offenders).toEqual([]);
   });
 
   it('the exception clause is an exception, not a hole in the rule', () => {
@@ -541,23 +700,27 @@ describe('R4 — an audience the funder named, missing from the stage list', () 
   });
 });
 
+function readR5(all: readonly CorpusConstraint[]): RuleReading {
+  const reading: RuleReading = { offenders: [], checked: tally() };
+  for (const { corpus, program, c } of all) {
+    if (c.spec.axis !== 'institution' || c.spec.degreeLevels.length === 0) continue;
+    for (const rule of LEVEL_RULES) {
+      if (!rule.says.test(c.rawText)) continue;
+      bump(reading.checked, corpus);
+      if (allowListSatisfies(c.spec, 'degreeLevels', rule.mustAllow)) continue;
+      reading.offenders.push(
+        `[${corpus}] ${program.name}: names ${rule.label} but publishes ` +
+          `${JSON.stringify(c.spec.degreeLevels)} — ${JSON.stringify(c.rawText.slice(0, 140))}`,
+      );
+    }
+  }
+  return reading;
+}
+
 describe('R5 — a degree level the funder named, missing from the level list', () => {
   it('no degree-level list drops a level its own sentence names', async () => {
-    const offenders: string[] = [];
-    let claims = 0;
-    for (const { program, c } of await everyConstraint()) {
-      if (c.spec.axis !== 'institution' || c.spec.degreeLevels.length === 0) continue;
-      for (const rule of LEVEL_RULES) {
-        if (!rule.says.test(c.rawText)) continue;
-        claims += 1;
-        if (allowListSatisfies(c.spec, 'degreeLevels', rule.mustAllow)) continue;
-        offenders.push(
-          `${program.name}: names ${rule.label} but publishes ${JSON.stringify(c.spec.degreeLevels)} — ` +
-            JSON.stringify(c.rawText.slice(0, 140)),
-        );
-      }
-    }
-    expect(offenders).toEqual([]);
+    const r5 = readR5(await everyConstraint());
+    expect(r5.offenders).toEqual([]);
     // Vacuity guard: 67 level claims, on the largest hard-bar axis in this corpus (122 hard
     // institution constraints). It was 39 until the ASSOC pattern learned to read "2- or 4-year";
     // the eight sentences that phrasing added are all satisfied, which is the answer that makes
@@ -569,8 +732,38 @@ describe('R5 — a degree level the funder named, missing from the level list', 
     // or a `['GRAD']` read off "university") would put all 20 into `offenders` above. The 13
     // sibling records reading "2- or 4-year college or university" are still skipped by that same
     // guard, which is the shape of the fix: they name a two-year route themselves, so they keep
-    // an empty list and this rule has nothing to check.
-    expect(claims).toBe(67);
+    // an empty list and this rule has nothing to check. Every figure in that paragraph is the
+    // FIXTURE half; the seed half is a curator's hand-written lists and is counted beside it.
+    expect(r5.checked).toEqual({ fixture: 67, seed: 70 });
+  });
+
+  /**
+   * PLANTED ON A SHIPPED RECORD WHOSE SENTENCE NAMES BOTH RUNGS IN SEVEN WORDS. David Knaus reads
+   * "Bachelor's degree or a 2 year Associate's degree" and the seed record admits both. Publish the
+   * bachelor alone and every associate-degree applicant is refused a sentence written for them —
+   * which is the shape this rule exists for, now proved reachable in `data/seed`.
+   */
+  it('…and the same sweep goes red on a real seed record with a rung dropped', async () => {
+    const all = await everyConstraint();
+    const knaus = seedConstraint(all, 'arrl-cat-the-david-knaus-memorial-scholarship', 'institution-0-d82840ac');
+    expect(knaus.c.rawText).toContain("Associate's degree");
+    const red = readR5(
+      plant(all, knaus, (c) => ({
+        ...c,
+        spec: {
+          axis: 'institution',
+          degreeLevels: ['BACH'],
+          tradeSchoolOK: false,
+          partTimeOK: true,
+          accreditationRequired: false,
+        },
+      })),
+    );
+    expect(red.offenders).toEqual([
+      `[seed] ${knaus.program.name}: names a two-year programme but publishes ["BACH"] — ` +
+        JSON.stringify(knaus.c.rawText.slice(0, 140)),
+    ]);
+    expect(readR5(all).offenders).toEqual([]);
   });
 
   it('…and it catches a two-year school published as a bachelor-only bar', () => {
@@ -632,29 +825,68 @@ const OFF_LIST_APPLICANTS: Array<{ label: string; profile: StudentProfile }> = [
   { label: 'never asked', profile: { ...OFF_LIST_APPLICANT, activityKinds: undefined } },
 ];
 
-describe('R6 — the funder called their own list illustrative, and it refused somebody anyway', () => {
-  it('no constraint whose sentence opens its own list can produce a refusal', async () => {
-    const offenders: string[] = [];
-    let checked = 0;
-    let probes = 0;
-    for (const { program, c } of await everyConstraint()) {
-      const eligibleHalf = c.rawText.split(EXCLUSION_INTRO)[0];
-      if (!ILLUSTRATIVE.test(eligibleHalf)) continue;
-      // A funder who opened their list AND wrote an exclusion still means the exclusion.
-      if (c.spec.axis === 'field_of_study' && c.spec.excludedFields.length > 0) continue;
-      checked += 1;
-      for (const { label, profile } of OFF_LIST_APPLICANTS) {
-        probes += 1;
-        if (evaluateConstraint(c.spec, profile, NOW, c.rawText).status === 'fail') {
-          offenders.push(`${program.name} [${c.spec.axis}] (${label}): ${JSON.stringify(c.rawText.slice(0, 140))}`);
-        }
+interface R6Reading extends RuleReading {
+  probes: Tally;
+}
+
+function readR6(all: readonly CorpusConstraint[]): R6Reading {
+  const reading: R6Reading = { offenders: [], checked: tally(), probes: tally() };
+  for (const { corpus, program, c } of all) {
+    const eligibleHalf = c.rawText.split(EXCLUSION_INTRO)[0];
+    if (!ILLUSTRATIVE.test(eligibleHalf)) continue;
+    // A funder who opened their list AND wrote an exclusion still means the exclusion.
+    if (c.spec.axis === 'field_of_study' && c.spec.excludedFields.length > 0) continue;
+    bump(reading.checked, corpus);
+    for (const { label, profile } of OFF_LIST_APPLICANTS) {
+      bump(reading.probes, corpus);
+      if (evaluateConstraint(c.spec, profile, NOW, c.rawText).status === 'fail') {
+        reading.offenders.push(
+          `[${corpus}] ${program.name} [${c.spec.axis}] (${label}): ${JSON.stringify(c.rawText.slice(0, 140))}`,
+        );
       }
     }
-    expect(offenders).toEqual([]);
-    // Vacuity guard: 20 constraints in the corpus carry the funder's own widening…
-    expect(checked).toBe(20);
+  }
+  return reading;
+}
+
+describe('R6 — the funder called their own list illustrative, and it refused somebody anyway', () => {
+  it('no constraint whose sentence opens its own list can produce a refusal', async () => {
+    const r6 = readR6(await everyConstraint());
+    expect(r6.offenders).toEqual([]);
+    // Vacuity guard: 20 fixture constraints carry the funder's own widening…
+    expect(r6.checked).toEqual({ fixture: 20, seed: 21 });
     // …and each is asked by all three off-list applicants, not just the one that has an answer.
-    expect(probes).toBe(60);
+    expect(r6.probes).toEqual({ fixture: 60, seed: 63 });
+  });
+
+  /**
+   * WHAT A PLANTED VIOLATION OF R6 HAS TO LOOK LIKE, AND WHAT MEASURING IT TAUGHT.
+   *
+   * The obvious plant does not work, and finding that out is worth more than the proof. Narrow
+   * CARA's activity list back to `['club_member']` and the verdict is still `unknown`, not `fail`:
+   * `funderOpenedTheList` reads the funder's "etc." straight off `rawText` and `ham_activity`
+   * converts the refusal itself. The same is true of `field_of_study`. MEASURED on the seed
+   * records, all three off-list applicants, on CARA narrowed, on CWops with `orUnrepresented`
+   * deleted, and on Kupferschmid narrowed to a single field: `unknown` every time, nine of nine.
+   *
+   * That is the mechanism working, and it means R6's corpus sweep can only ever flag a record
+   * where the funder opened a list on ONE axis and the spec bars on ANOTHER — because those are
+   * the axes `matcher.ts` does not hand the sentence to. So that is what is planted: CARA's opened
+   * sentence, filed as a stage bar. It is not a hypothetical shape. A curator writing
+   * `data/seed/*.json` by hand chooses the axis, and the sentence they quote does not choose it
+   * for them.
+   */
+  it('…and the same sweep goes red on a real seed sentence barred on an axis that ignores it', async () => {
+    const all = await everyConstraint();
+    const cara = seedConstraint(all, 'arrl-cat-the-cara-merit-scholarship', 'other-0-d70acb8d');
+    expect(cara.c.rawText).toContain('etc.');
+    const red = readR6(
+      plant(all, cara, (c) => ({ ...c, spec: { axis: 'age_stage', stages: ['GRAD'] } })),
+    );
+    // All three off-list applicants are undergraduates, so all three are refused.
+    expect(red.offenders).toHaveLength(3);
+    expect(red.offenders[0]).toContain(`[seed] ${cara.program.name} [age_stage]`);
+    expect(readR6(all).offenders).toEqual([]);
   });
 
   it('…and it catches the two activity lists that were hardened, on the sentences they came from', () => {
@@ -715,6 +947,37 @@ function relatednessIdioms(spec: ConstraintSpec): string[] {
   return spec.fields.filter((f) => RELATEDNESS_IDIOM.test(f) && CLASS_OF_FIELDS_NOUN.test(f));
 }
 
+interface R7Reading {
+  refusals: string[];
+  blankets: string[];
+  checked: Tally;
+}
+
+function readR7(all: readonly CorpusConstraint[]): R7Reading {
+  const reading: R7Reading = { refusals: [], blankets: [], checked: tally() };
+  for (const { corpus, program, c } of all) {
+    const idioms = relatednessIdioms(c.spec);
+    if (idioms.length === 0) continue;
+    if (c.spec.axis === 'field_of_study' && c.spec.excludedFields.length > 0) continue;
+    bump(reading.checked, corpus);
+    const insider = evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy: 'Physics' }, NOW, c.rawText).status;
+    const outsider = evaluateConstraint(
+      c.spec, { kind: 'student', fieldOfStudy: 'Music Performance' }, NOW, c.rawText,
+    ).status;
+    if (insider === 'fail') {
+      reading.refusals.push(`[${corpus}] ${program.name}: ${JSON.stringify(idioms)} refuses Physics`);
+    }
+    // A widening the FUNDER wrote may pass anybody — that is `or related fields`, and it is their
+    // choice. What may not happen is an entry becoming a pass with no widening in the sentence.
+    if (outsider === 'pass' && !ILLUSTRATIVE.test(c.rawText) && !/\b(?:or|and) (?:a |an |any )?(?:closely |otherwise )?(?:related|similar)\b/i.test(c.rawText)) {
+      reading.blankets.push(
+        `[${corpus}] ${program.name}: ${JSON.stringify(idioms)} admits a music major with no widening`,
+      );
+    }
+  }
+  return reading;
+}
+
 describe('R7 — a list entry that describes a CLASS of fields, used as a bar', () => {
   /**
    * Two probes, and both matter. The idiom must never be the reason for a refusal (it is an
@@ -723,29 +986,37 @@ describe('R7 — a list entry that describes a CLASS of fields, used as a bar', 
    * "similar"). `unknown` is the third answer, and it is the one this product is built to give.
    */
   it('no field list refuses an applicant on the strength of a relatedness idiom', async () => {
-    const refusals: string[] = [];
-    const blankets: string[] = [];
-    let checked = 0;
-    for (const { program, c } of await everyConstraint()) {
-      const idioms = relatednessIdioms(c.spec);
-      if (idioms.length === 0) continue;
-      if (c.spec.axis === 'field_of_study' && c.spec.excludedFields.length > 0) continue;
-      checked += 1;
-      const insider = evaluateConstraint(c.spec, { kind: 'student', fieldOfStudy: 'Physics' }, NOW, c.rawText).status;
-      const outsider = evaluateConstraint(
-        c.spec, { kind: 'student', fieldOfStudy: 'Music Performance' }, NOW, c.rawText,
-      ).status;
-      if (insider === 'fail') refusals.push(`${program.name}: ${JSON.stringify(idioms)} refuses Physics`);
-      // A widening the FUNDER wrote may pass anybody — that is `or related fields`, and it is their
-      // choice. What may not happen is an entry becoming a pass with no widening in the sentence.
-      if (outsider === 'pass' && !ILLUSTRATIVE.test(c.rawText) && !/\b(?:or|and) (?:a |an |any )?(?:closely |otherwise )?(?:related|similar)\b/i.test(c.rawText)) {
-        blankets.push(`${program.name}: ${JSON.stringify(idioms)} admits a music major with no widening`);
-      }
-    }
-    expect(refusals).toEqual([]);
-    expect(blankets).toEqual([]);
-    // Vacuity guard: 19 records carry a relatedness idiom in their field list.
-    expect(checked).toBe(19);
+    const r7 = readR7(await everyConstraint());
+    expect(r7.refusals).toEqual([]);
+    expect(r7.blankets).toEqual([]);
+    // Vacuity guard: 19 fixture records carry a relatedness idiom in their field list.
+    expect(r7.checked).toEqual({ fixture: 19, seed: 19 });
+  });
+
+  /**
+   * PLANTED ON THE CHICK ALLEN SEED RECORD, WHICH IS THE COPY A STUDENT ACTUALLY READS. The
+   * extractor fix that closed this defect lives in `fieldOfStudy.ts` and rewrites the FIXTURE
+   * record on the next parse. The seed record carries the answer as a hand-written
+   * `orUnrepresented`, and nothing in `fieldOfStudy.ts` can put it back if a curator deletes it.
+   * Delete it here and the physics undergraduate is hard-refused again, under a sentence reading
+   * "or similar scientific field".
+   */
+  it('…and the same sweep goes red on the real seed record with its widening deleted', async () => {
+    const all = await everyConstraint();
+    const chick = seedConstraint(all, 'arrl-cat-the-chick-allen-nw3y-scholarship', 'field_of_study-0-d1cca5db');
+    expect(chick.c.rawText).toContain('or similar scientific field');
+    const red = readR7(
+      plant(all, chick, (c) => {
+        const { orUnrepresented: _dropped, ...withoutTheWidening } = c.spec as ConstraintSpec & {
+          orUnrepresented?: string;
+        };
+        return { ...c, spec: withoutTheWidening as ConstraintSpec };
+      }),
+    );
+    expect(red.refusals).toEqual([
+      `[seed] ${chick.program.name}: ["similar scientific field"] refuses Physics`,
+    ]);
+    expect(readR7(all).refusals).toEqual([]);
   });
 
   it('…and it catches the Chick Allen spec as it was published, four hours before this test', () => {
@@ -767,8 +1038,18 @@ describe('R7 — a list entry that describes a CLASS of fields, used as a bar', 
     expect(evaluateConstraint(fixed, { kind: 'student', fieldOfStudy: 'Electronics' }, NOW, sentence).status).toBe('pass');
   });
 
-  it('the record itself now says so, in the funder’s own words', async () => {
-    const { programs } = await corpus();
+  /**
+   * BOTH CORPORA, and the seed one is the copy a student reads. The extractor fix that closed this
+   * defect lives in `fieldOfStudy.ts` and reaches the fixture record on the next parse; the seed
+   * record carries its own hand-written `orUnrepresented` and nothing in `fieldOfStudy.ts` can
+   * reach it. Asserting only the fixture half would have certified a fix the deployment does not
+   * have — which is the exact shape of this whole round.
+   */
+  it.each([
+    ['fixture', async () => (await fixtureCorpus()).programs],
+    ['seed', async () => seedPrograms()],
+  ])('the %s record itself now says so, in the funder’s own words', async (_name, load) => {
+    const programs = await load();
     const chickAllen = programs.find((p) => p.name.includes('Chick Allen'));
     if (chickAllen === undefined) throw new Error('The Chick Allen, NW3Y, Scholarship is missing from the corpus');
     const field = chickAllen.constraints.find((c) => c.spec.axis === 'field_of_study');
