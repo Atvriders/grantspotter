@@ -140,6 +140,44 @@ that record's `rawOtherText`, verbatim.
 > instant to draw, and it is not a published fact. Also not asserted: '2024: 135 awards, more than
 > $715,000', which appears on no captured page.
 
+### `arrl-foundation-special-funds`
+
+> ONE RECORD FOR THREE FUNDS, because the page is one page and `arrl-pages.ts` parses it into one
+> `RawOpportunity` (`externalKey: foundation-special-funds`). Splitting it into three seed records
+> would mint two crawler identities no parser emits, which is the duplication `SeedSourceKey`
+> exists to prevent. So every field on this record has to be read as "the page's answer", and where
+> the page's three funds answer differently the split is stated in `summary` and `deadline.note` —
+> both GrantSpotter's own voice, both rendered to the student.
+>
+> Every value is taken from
+> `fixtures/arrl-foundation-special-funds/00-www-arrl-org-arrl-foundation-special-funds.html`. All
+> four constraint sentences are one contiguous verbatim run of that capture.
+>
+> THE AUDIENCE IS THE LOAD-BEARING FIELD. The sentence it comes from is *"Groups that qualify for
+> mini-grants will include, **but not be limited to**, high school radio clubs, youth groups, and
+> general-interest radio clubs…"* — an explicitly open list. A model reading it returned
+> `['club_unincorporated']` alone, which would have turned an honest `unknown` into a hard
+> `ineligible` for a club that is its own 501(c)(3): the record already carries constraints, so the
+> empty entity list was the only thing keeping it at `unknown`, and narrowing it is the one edit
+> here that can move a verdict. Seeded as
+> `['club_unincorporated', 'club_501c3', 'school_lea']`.
+>
+> NOT ASSERTED HERE: `amountMin` / `amountMax`. ARRL prints one figure on the page — *"Minigrants,
+> not to exceed $1,000 per grant"* — and it belongs to the Victor C. Clark fund alone; the Alfred E.
+> Friend fund publishes no floor and no cap. A record-level maximum of $1,000 would be a cap ARRL
+> never put on the Friend fund, so the sentence is kept in `amountRaw` (where the reader sees the
+> real number and, from `summary`, whose number it is) and the numeric bounds are left unset, which
+> prints the app's own *"Not stated"*.
+>
+> NOT ASSERTED HERE: a reporting obligation. *"Grant awards may be renewed based on a performance
+> report by the award winner"* conditions a report on seeking RENEWAL. `reportingObligation` would
+> read as a term of the original award, which is a stronger claim than ARRL made.
+>
+> NOT ASSERTED HERE: status `open`. The page states no cycle status and carries no year. `unknown`
+> is the honest badge; the Friend fund's *"the application deadline for each year is October 1st"*
+> is a recurrence rule with no year attached, so it is `dates.basis: projected` with a `RECUR`
+> directive rather than a window anybody published.
+
 ---
 
 ## `programs.ham-orgs.json`
@@ -150,16 +188,25 @@ that record's `rawOtherText`, verbatim.
 > through the ARRL catalog. Every fact in this record is quoted from
 > `fixtures/ylrl/00-ylrl-net-scholarships.html`. Status is `unknown` rather than `open` because the
 > page states no cycle at all: an unpublished deadline cannot support an open badge.
+>
+> Three of its five constraints quote the shared requirements block, not the paragraph naming this
+> award. See "The ten YLRL quotations" below for why they stay where they are and what was added
+> instead.
 
 ### `ylrl-mary-lou-brown-nm7n`
 
-> Quoted from `fixtures/ylrl/00-ylrl-net-scholarships.html`.
+> Quoted from `fixtures/ylrl/00-ylrl-net-scholarships.html`. Same shared-block attribution as
+> `ylrl-ethel-smith-k4lmb`, on the same three constraints.
 
 ### `ylrl-marte-wessel-k0epe`
 
 > The one award in this corpus written FOR part-time students. `partTimeOK` is true and
 > `degreeLevels` is empty on purpose: YLRL restricts neither, and an empty allow-list here means the
 > funder set no level, not that no level qualifies.
+>
+> Four of its six constraints quote the shared requirements block — this record's `institution`
+> constraint quotes the page's footnote (*"\*What qualifies as an educational institution?"*), which
+> is attached to no award's paragraph at all.
 
 ### `austin-arc-copeland`
 
@@ -435,6 +482,101 @@ empty-`rawText` constraints instead of deletions.
 
 ---
 
+## Round three, 2026-08-17: the record that was never seeded, and the ten quotations that point at the wrong paragraph
+
+### `arrl-foundation-special-funds` existed only in the fixture corpus
+
+The source module has parsed that page since Plan 2 and `scripts/profile-corpus.ts` has counted the
+record it produces, so every sweep taken with the fixture corpus saw it. `data/seed/` never carried
+it, and `data/seed/` is what a fresh install serves. Consequence: the audience decision above was
+adjudicated and then applied to nothing.
+
+It is seeded now, curated from the committed capture; the per-field reasoning is under
+`programs.curated.json` above. **Measured over the seed corpus** (144 records, all publishable),
+matching all seven shipped profiles plus an unincorporated club, this record is the ONLY programme
+whose verdict moves, and it moves because it did not exist before:
+
+| profile | before | after |
+| --- | --- | --- |
+| the five student profiles | (no record) | `ineligible` |
+| `radio-club` (501(c)(3)) | (no record) | `eligible` |
+| `school-org` (school district) | (no record) | `eligible` |
+| an unincorporated club | (no record) | `eligible` |
+
+The five `ineligible` answers are the applicant-entity gate, and the two sentences behind them are
+on the record, verbatim, for the reader to check: *"Groups that qualify for mini-grants will
+include, but not be limited to, high school radio clubs, youth groups, and general-interest radio
+clubs…"* and *"Endowed by the estate of Alfred E. Friend, Jr., W4CF, this fund is intended to
+provide grants for educational programs and activities of Amateur Radio organizations."* Neither
+fund on that page describes an award to a person applying alone; the third thing on it, the Bill
+Orr, W6SAI, Technical Writing Award, goes to an individual but is *selected* from the year's QST
+articles, not applied for, which is why `summary` says so rather than the record offering a student
+a route that does not exist.
+
+### The ten YLRL quotations that come from a sibling record's page
+
+`ylrl.net/Scholarships/` states its rules ONCE, in a block headed **"Scholarship Requirements:"**,
+and `tier-c-a.ts` parses that block into a fourth record (`ylrl-scholarships`) while the three named
+awards get only the paragraph that names them. Ten constraints on the three named records therefore
+quote a sentence that `constraintProvenance.test.ts` can only find on the sibling — which is what
+its `VERBATIM_ON_SIBLING` register says, and why it says a weaker claim is a weaker claim.
+
+**What was decided: the quotations stay, and each record now says where its sentences come from.**
+
+They stay because the reader's page and the parser's record are not the same object. All four
+records carry `trust.sourceUrl: https://ylrl.net/Scholarships/`, and every one of the ten sentences
+is on that page, in the block that governs all three awards. The record boundary is an artefact of
+how one HTML page was split, not a boundary the funder drew or the reader can see. What was
+genuinely missing was the statement of WHERE on that page to look, so a reader who goes to check a
+requirement against the paragraph naming their award does not find it there and concludes we made
+it up. Each of the three summaries now names the shared block.
+
+The sentence went into `summary` and not into the constraint, deliberately, and this is the part
+worth keeping: `summary` is a `CORRECTABLE_PATH`, so this fix can actually reach a deployment that
+was seeded before it existed. A fix nobody can receive is not a fix.
+
+**A constraint used to be unable to receive one at all, and half of it now can.** When this was
+written, `constraints` was a single witnessed-only path, which is exactly why the three fabricated
+quotations of 2026-08-13 stayed live for days after they were fixed here. That path has since been
+split: `constraints[<id>].rawText` — the sentence a record DISPLAYS — is correctable, per
+constraint, under the same byte-for-byte rule as `summary`, while `constraints.rules` (the id,
+`hard`, the fallback rank and the `spec`) stays witnessed-only, because that half is what decides
+who is eligible. So a corrected QUOTATION now reaches a running deployment and a changed RULE still
+does not. Rewriting a sentence is fenced at write time against the one thing the matcher reads out
+of it (see `seed/matcherReading.ts`), so it cannot move a verdict; changing a rule is still yours
+to decide. The reasoning above — that moving these constraints to a parent record would never reach
+an existing install — is unchanged, because moving a constraint is a rules change.
+
+**The two shapes that were rejected, and why:**
+
+- *Attach the shared block to each record.* That is a change to `tier-c-a.ts`'s parser. It would
+  move what the guard measures without changing one word a reader sees, and it is not a curation
+  act.
+- *Move the constraints to the parent.* There is no `ylrl-scholarships` seed record, and the three
+  named records are the ones a student opens. Moving the rules off them would take the female-only
+  bar, the licence floor and the full-time requirement off the three pages where they decide
+  something — and `corrections.ts` refuses constraint changes, so no existing deployment would ever
+  receive the move anyway. The corpus and every live install would simply disagree.
+
+Both alternatives also require rewriting `VERBATIM_ON_SIBLING`, whose entries are asserted in both
+directions: a constraint that becomes verbatim, or stops existing, fails the register-is-current
+rule. That register is a guard, not a mute list, and it is doing its job here — it is the reason
+anybody knew about this at all.
+
+### Two bookkeeping constants in `packages/` had to follow the data
+
+Neither is an assertion; both are registers of what `data/seed/` contains, and both fail loudly and
+by name when it changes, which is the design:
+
+- `SEED_RECORD_COUNT` in `validate.ts`, 143 → 144. Its own failure message is *"update
+  SEED_RECORD_COUNT / SEED_FUNDER_PUBLISHED_RECORDS in validate.ts to these values"*.
+  `SEED_FUNDER_PUBLISHED_RECORDS` stays 3 — the new record is `projected`, not `funder_published`.
+- The hand-maintained `known` set in `seed.test.ts`'s "names only source ids Plan 2 actually
+  registers", which gains `arrl-foundation-special-funds`. That source **is** registered
+  (`arrl-pages.ts`); the set had simply never needed the id because no seed record named it.
+
+---
+
 ## Known residual, NOT fixed here
 
 **The playbooks are out of `rawOtherText`.** The previous round left three there and asked that they
@@ -454,6 +596,20 @@ was an interim measure that asked the reader to disbelieve a heading the product
 3. The guard cannot see a fluent invention, a paraphrase, or a quote lifted from the wrong page.
    `funderVoice.test.ts`'s header lists all five blind spots. Do not read a green tick there as
    "every quotation in this corpus is real" — it means "no field is visibly GrantSpotter talking".
+4. **`arrl-foundation-special-funds` refuses six of the ten applicant entities on the strength of a
+   list ARRL wrote as open.** The adjudicated audience is
+   `['club_unincorporated', 'club_501c3', 'school_lea']`, and it was seeded exactly as adjudicated.
+   But the entity gate is an `includes()`, so measured against the seeded record every other entity
+   is a hard `ineligible`: `club_via_fiscal_sponsor`, `university`, `university_dept`,
+   `ieee_student_branch_chapter`, `teacher`, `nominated_by_institution`. For four of those the page
+   really is silent. For `university` and `university_dept` it is worse than silent — *"general-
+   interest radio clubs that sponsor subgroups of young people"* plainly describes a collegiate
+   radio club, which is this product's primary audience, and *"but not be limited to"* is ARRL
+   saying the list does not close. No sentence on that page excludes a university club, so this is
+   the same defect the audience fix corrects, pointed at a different applicant. It is written down
+   rather than fixed here because widening an adjudicated value unilaterally is how a curation
+   round becomes unreviewable; it needs a decision, not a patch. No shipped profile is affected —
+   none of the seven is a university org — which is precisely why it would go unmeasured.
 
 ---
 

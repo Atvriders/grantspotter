@@ -56,7 +56,9 @@ import { seedDir } from './load.js';
  * observed window is refused, reported, and left for a human. All four notes the 2026-08-13
  * correction touches keep their directive byte-identical and only rewrite the prose after it.
  *
- * `constraints` is deliberately NOT here — see `WITNESSED_ONLY_PATHS`.
+ * A constraint's SENTENCE is correctable too, one constraint at a time, but it cannot be named in
+ * a fixed list because its path carries the constraint's own id — see `constraintRawTextPath`. A
+ * constraint's RULES are not correctable at all; see `WITNESSED_ONLY_PATHS`.
  */
 export const CORRECTABLE_PATHS = [
   'summary',
@@ -68,33 +70,105 @@ export const CORRECTABLE_PATHS = [
   'fundingRestrictions',
 ] as const;
 
-export type CorrectablePath = (typeof CORRECTABLE_PATHS)[number];
+export type FixedCorrectablePath = (typeof CORRECTABLE_PATHS)[number];
+
+/* ------------------------------------------------ the two halves of a constraint -------------- */
 
 /**
- * WITNESSED BUT NEVER WRITTEN.
+ * A CONSTRAINT IS TWO THINGS, AND ONE PATH WAS TREATING IT AS ONE.
  *
- * The 2026-08-13 correction DELETES three constraints whose `rawText` was GrantSpotter's own
- * sentence — an invented eligibility rule, admitted as such in its own text ("2026-08-02 research
- * pass"). Deleting one of those changes who the matcher calls eligible, on a deployment, with
- * nobody watching. That is exactly the class of change this product sends to a human, so the
- * digest is recorded here in order to RECOGNISE the untouched shipped version and tell the
- * operator their copy still carries a rule the corpus has dropped — and then to do nothing.
+ * `constraints` used to be a single witnessed-only value covering the whole array. That call was
+ * half right, and the half that was wrong printed three sentences no funder wrote to every student
+ * who opened those records — under a heading promising the funder's own words — with no way for a
+ * correction to reach them. `docker compose pull` reported the records and deliberately did not
+ * rewrite them, exactly as designed, for eight days.
+ *
+ * The half that was right is `constraints.rules`, below: the id, the hardness, the fallback rank
+ * and the `spec` are what `matcher.ts` reasons over, and rewriting them at boot changes who is
+ * told they are eligible. MEASURED over the shipped corpus and the seven shipped profiles, 1,001
+ * (profile, programme) pairs: flipping every `hard` moves 596 answers, renumbering every
+ * `fallbackRank` moves 25. That stays witnessed-only, and the whole rules half of a record moves
+ * or does not move together, because a constraint the corpus dropped and a constraint the corpus
+ * added are the same event seen from two sides.
+ *
+ * The half that was wrong is `constraints[<id>].rawText`: the sentence the product PRINTS. It gets
+ * its own path, per constraint, so a corrected quotation is proved and rewritten under the same
+ * byte-identity rule as every other displayed sentence, and an operator who has rewritten ONE
+ * sentence does not thereby freeze the other four on the same record.
+ *
+ * IT IS NOT INERT AND IT IS NOT TREATED AS INERT. `rawText` reaches `evaluateConstraint`, which
+ * asks whether the funder called their own list illustrative; erasing every `rawText` in the corpus
+ * moves 16 answers. So this path is admitted here and then FENCED at write time by `meaningOf` in
+ * `corrections.ts`, through `matcherReadingOf` — the same shape as `deadline.note`, which is prose
+ * that also carries a `RECUR` directive and is admitted only because the parse is compared.
  */
-export const WITNESSED_ONLY_PATHS = ['constraints'] as const;
+export const WITNESSED_ONLY_PATHS = ['constraints.rules'] as const;
 
-export type WitnessedPath = CorrectablePath | (typeof WITNESSED_ONLY_PATHS)[number];
+export type WitnessedOnlyPath = (typeof WITNESSED_ONLY_PATHS)[number];
 
+/**
+ * The path naming one constraint's displayed sentence. `[` and `]` cannot appear in a seed
+ * constraint id (`validate.ts` restricts them to a slug), so the grammar is unambiguous, and a tab
+ * cannot appear either — which is what keeps the ledger's four columns four columns.
+ */
+const CONSTRAINT_RAW_TEXT = /^constraints\[([^[\]\t]+)\]\.rawText$/;
+
+export function constraintRawTextPath(constraintId: string): ConstraintRawTextPath {
+  return `constraints[${constraintId}].rawText`;
+}
+
+export type ConstraintRawTextPath = `constraints[${string}].rawText`;
+
+/** The constraint id inside a `constraints[<id>].rawText` path, or `undefined` for any other. */
+export function constraintIdOfRawTextPath(path: string): string | undefined {
+  return CONSTRAINT_RAW_TEXT.exec(path)?.[1];
+}
+
+export type CorrectablePath = FixedCorrectablePath | ConstraintRawTextPath;
+
+export type WitnessedPath = CorrectablePath | WitnessedOnlyPath;
+
+/**
+ * The paths every record has, in ledger order. A record's constraint-sentence paths are not in
+ * here because they depend on the record; `witnessedValuesOf` adds them.
+ */
 export const WITNESSED_PATHS: readonly WitnessedPath[] = [
   ...CORRECTABLE_PATHS,
   ...WITNESSED_ONLY_PATHS,
 ];
 
 export function isCorrectablePath(path: string): path is CorrectablePath {
-  return (CORRECTABLE_PATHS as readonly string[]).includes(path);
+  return (
+    (CORRECTABLE_PATHS as readonly string[]).includes(path) ||
+    constraintIdOfRawTextPath(path) !== undefined
+  );
 }
 
 export function isWitnessedPath(path: string): path is WitnessedPath {
-  return (WITNESSED_PATHS as readonly string[]).includes(path);
+  return isCorrectablePath(path) || (WITNESSED_ONLY_PATHS as readonly string[]).includes(path);
+}
+
+/**
+ * PATHS THE LEDGER USED TO CARRY AND NOTHING COMPUTES ANY MORE.
+ *
+ * `constraints` was one value covering a whole constraint array, sentence and rules together.
+ * Splitting it means nothing ever produces that value again, so its digests can never match
+ * anything and are dead weight — but a ledger file written before the split still holds 283 of
+ * them, and a ledger file that will not PARSE is worse than one carrying dead rows: `loadShipped
+ * Values` would throw, `corrections.ts` would report `ran: false`, and every correction in the
+ * release would stop arriving. Worse, `record-shipped-values.ts` reads the existing file before it
+ * unions, so a hard failure here would make the ledger un-regenerable — you could not even run the
+ * command that fixes it.
+ *
+ * So a retired path is READ AND DROPPED, not rejected: the file loads, the dead rows do not enter
+ * the ledger, and the next regeneration writes a file without them. Anything that is neither
+ * witnessed nor retired is still a hard error, because that is a typo or a path somebody invented,
+ * and silently ignoring one would mean a correction that never fires and never says why.
+ */
+export const RETIRED_PATHS = ['constraints'] as const;
+
+export function isRetiredPath(path: string): boolean {
+  return (RETIRED_PATHS as readonly string[]).includes(path);
 }
 
 /**
@@ -141,8 +215,18 @@ export function valueAt(program: Program, path: WitnessedPath): string | undefin
       return program.aiPolicy.quote;
     case 'fundingRestrictions':
       return canonicalJson(program.fundingRestrictions);
-    case 'constraints':
-      return canonicalJson(program.constraints);
+    case 'constraints.rules':
+      // THE SENTENCE IS BLANKED, NOT DROPPED. Blanking keeps the shape of the value — one entry
+      // per constraint, in order — so a constraint the corpus added or dropped still changes this
+      // digest and is still reported. Dropping the key instead would make an EMPTY rawText and an
+      // ABSENT one hash alike, and an empty rawText is a real state this product uses: it is how
+      // `hasFunderWording` says "no funder wrote this", which is the whole basis of the quote box.
+      return canonicalJson(program.constraints.map((c) => ({ ...c, rawText: '' })));
+    default: {
+      const constraintId = constraintIdOfRawTextPath(path);
+      if (constraintId === undefined) return undefined;
+      return program.constraints.find((c) => c.id === constraintId)?.rawText;
+    }
   }
 }
 
@@ -225,6 +309,12 @@ const HEADER = [
   '# One line per (program, field, exact bytes):',
   '#   <sha256>\\t<programId>\\t<path>\\t<first date the corpus carried these bytes>',
   '#',
+  '# A CONSTRAINT HAS TWO PATHS, because it is two things. `constraints[<id>].rawText` is the',
+  '# sentence a record DISPLAYS, one line per constraint, and a correction may rewrite it.',
+  '# `constraints.rules` is the id, hardness, fallback rank and spec of every constraint on the',
+  '# record — what decides who is eligible — and it is witnessed here only so a difference can be',
+  '# REPORTED to the operator. Nothing ever rewrites it.',
+  '#',
   '# This file is what lets a shipped data correction reach a deployment that was seeded before',
   '# the correction existed WITHOUT overwriting anything a human changed: a field is rewritten',
   '# only when the value it holds today hashes to a line below, which proves the bytes are ours.',
@@ -265,10 +355,12 @@ export function parseShippedValues(text: string): ShippedValues {
         `${SHIPPED_VALUES_FILE} line ${String(index + 1)}: "${sha256}" is not a sha256 digest.`,
       );
     }
+    if (isRetiredPath(path)) return;
     if (!isWitnessedPath(path)) {
       throw new ShippedValuesError(
         `${SHIPPED_VALUES_FILE} line ${String(index + 1)}: "${path}" is not a witnessed path. ` +
-          `A correction may only ever be proved for: ${WITNESSED_PATHS.join(', ')}.`,
+          `A correction may only ever be proved for: ${WITNESSED_PATHS.join(', ')}, and ` +
+          'constraints[<constraint id>].rawText.',
       );
     }
     values.add({ sha256, programId, path, firstSeen });
@@ -293,6 +385,12 @@ export function witnessedValuesOf(program: Program): Array<{ path: WitnessedPath
   for (const path of WITNESSED_PATHS) {
     const value = valueAt(program, path);
     if (value !== undefined) out.push({ path, value });
+  }
+  // One line per displayed sentence. Recorded even when it is empty: an empty `rawText` is this
+  // product saying "no funder wrote this", and a correction that fills one in has to be able to
+  // prove the emptiness it is replacing was ours.
+  for (const constraint of program.constraints) {
+    out.push({ path: constraintRawTextPath(constraint.id), value: constraint.rawText });
   }
   return out;
 }

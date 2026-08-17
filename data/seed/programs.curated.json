@@ -122,6 +122,32 @@
       "trust": { "status": "closed", "sourceUrl": "https://www.arrl.org/scholarship-program", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
       "rawOtherText": "",
       "tags": ["ham", "scholarship", "arrl", "catalog-parent"]
+    },
+    {
+      "id": "arrl-foundation-special-funds",
+      "funderId": "arrl-foundation",
+      "sourceKey": { "sourceId": "arrl-foundation-special-funds", "externalKey": "foundation-special-funds" },
+      "dates": { "basis": "projected" },
+      "name": "ARRL Foundation Special Funds",
+      "klass": "ham_grant",
+      "summary": "One ARRL page carrying three separately endowed funds. The Victor C. Clark Youth Incentive Fund makes mini-grants capped at $1,000 to groups that involve young people; ARRL prints no address for it beyond an invitation to send a proposal. The Alfred E. Friend, Jr., W4CF, Educational Activities Fund makes annual grants to organisations, is applied for on the ARRL Amateur Radio Grants form, and is the only one of the three with a deadline. The Bill Orr, W6SAI, Technical Writing Award is picked by QST's editors from the year's articles and is not applied for at all.",
+      "applicantEntities": ["club_unincorporated", "club_501c3", "school_lea"],
+      "amount": { "instrument": "cash_range", "amountRaw": "Minigrants, not to exceed $1,000 per grant, will be made for such projects as securing equipment for antennas for club stations, purchasing training materials, supporting local service projects that bring favorable public exposure, and similar activities.", "awardCountRaw": "" },
+      "deadline": { "kind": "n_fixed_dates", "source": { "kind": "self" }, "note": "RECUR n_fixed_dates tz=America/New_York dates=10-01 | This page prints one deadline and it governs one of the three funds. The Alfred E. Friend, Jr., W4CF, Educational Activities Fund's criteria say the application deadline for each year is October 1st, with no year attached, so it is projected forward rather than read off a published calendar. The Victor C. Clark Youth Incentive Fund invites proposals with no date anywhere on the page, and the Bill Orr, W6SAI, Technical Writing Award is selected from the year's QST articles rather than applied for; neither has a cycle here, and this one is not theirs." },
+      "applyVia": "external_spa_portal",
+      "applyUrl": "https://www.arrl.org/amateur-radio-grants",
+      "constraints": [
+        { "id": "special-funds-clark-groups", "hard": true, "fallbackRank": 0, "rawText": "Groups that qualify for mini-grants will include, but not be limited to, high school radio clubs, youth groups, and general-interest radio clubs that sponsor subgroups of young people or otherwise make a special effort to get them involved in club activities.", "spec": { "axis": "other", "note": "The Victor C. Clark mini-grants go to groups, and ARRL's list of them is explicitly open — \"will include, but not be limited to\". A group ARRL does not name is one it never ruled out, not one that fails to qualify, so read the sentence before you rule yourself out." } },
+        { "id": "special-funds-friend-organizations", "hard": true, "fallbackRank": 0, "rawText": "Endowed by the estate of Alfred E. Friend, Jr., W4CF, this fund is intended to provide grants for educational programs and activities of Amateur Radio organizations.", "spec": { "axis": "other", "note": "The Friend fund names organisations, and its criteria name \"organized programs and projects designed for groups\". Neither fund on this page describes an award to a person applying alone." } },
+        { "id": "special-funds-clark-matching", "hard": false, "fallbackRank": 0, "rawText": "Preference will be given to projects for which matching funds are raised locally.", "spec": { "axis": "other", "note": "Locally raised matching funds are a preference on the Clark mini-grants, not a bar." } },
+        { "id": "special-funds-friend-local-support", "hard": false, "fallbackRank": 0, "rawText": "Applicants with local radio club participation and community fund raising will be given preference.", "spec": { "axis": "other", "note": "Local radio club participation and community fund raising are a preference on the Friend fund, not a bar." } }
+      ],
+      "fundingRestrictions": [],
+      "obligations": {},
+      "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/arrl-foundation-special-funds" },
+      "trust": { "status": "unknown", "sourceUrl": "https://www.arrl.org/arrl-foundation-special-funds", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
+      "rawOtherText": "An applicant for a mini-grant must write a brief, but complete proposal including such items as:\n* Names, call signs (if applicable), addresses and telephone numbers of sponsors\n* Objectives of the proposed program\n* Existing resources if relevant (e.g. status of school club station, etc.)\n* Concise, realistic statement of financial need\n* Description of local resources (e.g. matching funds, specific financial and/or equipment/material contributions)\n* Commitment of relevant local non-ham group (e.g. school, school science coordinator and/or principle, school board)\n* Any relevant supporting documentation including letters of support, letters of intent, pledges and the like\n* Timeframe; local evaluation process; criteria for evaluating program effectiveness/success",
+      "tags": ["ham", "grant", "arrl", "youth", "club", "school"]
     }
   ]
 }

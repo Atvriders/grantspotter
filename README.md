@@ -40,8 +40,8 @@ committed fixtures by `npm run profile-corpus`:
 **What a fresh install actually contains is smaller than that, and the difference is not a bug.**
 The table above measures the committed fixtures — every page ever captured, past-award tables
 included. What ships in the container is the curated seed, and a first boot prints exactly what it
-imported. Measured on a clean `DATA_DIR` at 0.1.0: **143 programmes (143 publishable, 0 suppressed)
-from 26 funders**, 111 of them from `arrl.org/scholarship-descriptions`, and **7 of the 143 badged
+imported. Measured on a clean `DATA_DIR` at 0.1.0: **144 programmes (144 publishable, 0 suppressed)
+from 26 funders**, 111 of them from `arrl.org/scholarship-descriptions`, and **7 of the 144 badged
 open** — the rest are `closed`, `contact_only`, `dormant`, `discontinued`, `no_application` or
 `unknown`, inherited from the funder's own page. The 553 suppressed rows arrive with the first
 crawl that reads a past-award table, not with the seed, so a new installation has none of them.
@@ -850,10 +850,11 @@ It says what it did, per record, in the log:
        text GrantSpotter shipped.
 [seed]   corrected arrl-club-grant: summary, rawOtherText
 [seed]   corrected arrl-etp-grants: summary, rawOtherText, amount.amountRaw, amount.awardCountRaw, deadline.note
+[seed]   corrected ardc-grants: constraints[ardc-entity].rawText
 [seed]   left alone ardc-grants rawOtherText — your copy is not the text GrantSpotter shipped —
          somebody here edited it … — so the correction was not applied
-[seed]   left alone arrl-club-grant constraints — the shipped corpus changed this record's
-         constraints. A correction may change what a record says, never what it means …
+[seed]   left alone arrl-club-grant constraints.rules — the shipped corpus added, dropped or
+         changed one of this record's eligibility RULES (not just the sentence it displays) …
 ```
 
 Every one of those lines is also written to `audit_log` under that record's own id, and the applied
@@ -868,16 +869,48 @@ docker compose exec grantspotter sqlite3 /data/grantspotter.sqlite \
 yours, and the newer text is in the release notes and in `data/seed/MAINTAINER-NOTES.md` if you want
 to apply it yourself (Admin → full backup, edit, restore).
 
+#### A constraint is two things, and only one of them can be corrected
+
+Under **"ONE REQUIREMENT, AS THE FUNDER WROTE IT"** a record prints a sentence. Beside that
+sentence, invisibly, sits the rule the matcher actually reasons over. They are stored together and
+they are **not** treated together:
+
+| | what it is | what an upgrade does |
+|---|---|---|
+| `constraints[…].rawText` | the sentence you read on the page | **corrected**, under the byte-for-byte rule above, one constraint at a time |
+| `constraints.rules` — the id, `hard`, the fallback rank, the `spec` | who is eligible | **never written.** A difference is reported to you and left for you to decide |
+
+That split is the fix for a real failure. Between 2026-08-13 and 2026-08-16, three records printed
+sentences no funder ever wrote — an absence claim (*"the programme … names no college or university
+track"*), a sentence about **this catalogue's own structure**, and four of a funder's sentences
+compressed into three of ours with a hedge added — under a heading promising the funder's own words.
+The corrected text shipped; the correction could not arrive, because the whole of `constraints` was
+in the never-written half. Your instance reported those three records at every boot and, by design,
+refused to fix them.
+
+**Correcting a sentence cannot move a verdict, and that is checked rather than assumed.** It is not
+a free-form field: the matcher reads a displayed sentence to ask one question — *did the funder say
+the list they just gave was illustrative rather than complete* ("including but not limited to…",
+"such as…", "or a related field") — and two axes act on the answer. Measured over the shipped corpus
+and a profile set spanning the axes, 1,001 (applicant, programme) pairs: erasing every sentence
+moves **16** answers and appending an open-list marker to every sentence moves **15**, while
+replacing every sentence with a completely different one that keeps the same reading moves **0**.
+So each correction is checked, before it is written, against the real matcher: a rewrite that keeps
+the reading is applied, and a rewrite that would change it is refused and reported to you exactly
+like a deadline note whose dates move. Both halves of a record's rewrite land together or neither
+does, so the content hash never describes text the record does not hold.
+
 What it will never do, enforced in code and covered by the suite, not promised in a comment:
 
 - never write a value it cannot prove this project shipped;
-- never change what a record **means** — only the prose it prints. Eligibility constraints,
-  entities, class, amounts, statuses, the `RECUR` recurrence and the funder-stated dates in a
-  deadline note are all compared before and after, and a rewrite that would move any of them is
-  refused and reported (so the three constraints the 2026-08-13 correction deletes are reported to
-  you and left for you to decide);
+- never change what a record **means** — only the prose it prints. Eligibility rules, entities,
+  class, amounts, statuses, the `RECUR` recurrence, the funder-stated dates in a deadline note and
+  the matcher's reading of a displayed sentence are all compared before and after, and a rewrite
+  that would move any of them is refused and reported (so a constraint the shipped corpus deletes
+  is reported to you and left for you to decide);
 - never insert or delete a program, funder, constraint or cycle, and never put back a record you
-  deleted;
+  deleted. Exactly two statements write anything: an UPDATE of named `programs` columns, and an
+  UPDATE of `constraints.raw_text` — nothing can reach `hard`, `fallback_rank` or `spec`;
 - never touch `trust` beyond recomputing the derived content hash;
 - never touch a record that is not in the shipped corpus at all;
 - never do any of it silently, and never stop the server from starting if it cannot run.

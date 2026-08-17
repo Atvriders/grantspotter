@@ -129,7 +129,7 @@ export const DATE_BASES: readonly DateBasis[] = ['projected', 'funder_published'
  * `validate.test.ts` recomputes both figures from `data/seed/` and fails naming the new ones, so
  * a batch that adds records cannot leave this sentence quietly wrong the way the last one was.
  */
-export const SEED_RECORD_COUNT = 143;
+export const SEED_RECORD_COUNT = 144;
 export const SEED_FUNDER_PUBLISHED_RECORDS = 3;
 
 const FUNDER_PUBLISHED_IS_RARE =

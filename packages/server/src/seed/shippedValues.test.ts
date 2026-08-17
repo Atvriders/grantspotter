@@ -18,8 +18,12 @@ import {
   ShippedValuesError,
   WITNESSED_PATHS,
   canonicalJson,
+  constraintIdOfRawTextPath,
+  constraintRawTextPath,
   digestOf,
   formatShippedValues,
+  isCorrectablePath,
+  isWitnessedPath,
   loadShippedValues,
   parseShippedValues,
   shippedValuesPath,
@@ -141,8 +145,93 @@ describe('the corpus that ships today', () => {
     }
   });
 
+  /**
+   * The ledger file in the tree is regenerated separately from this code, so the two halves of the
+   * split land in one commit but are authored apart. A ledger written before the split must still
+   * LOAD — a ledger that throws takes every correction in the release down with it, and takes the
+   * regeneration command down too, because the generator reads the file before it unions.
+   */
+  it('still loads a ledger written before the constraints path was split', () => {
+    const legacy = [
+      `${digestOf('anything')}\tarrl-club-grant\tconstraints\t2026-08-04`,
+      `${digestOf('a summary')}\tarrl-club-grant\tsummary\t2026-08-04`,
+    ].join('\n');
+    const values = parseShippedValues(legacy);
+
+    // The live path is kept...
+    expect(values.witness('arrl-club-grant', 'summary', 'a summary')).toBeDefined();
+    // ...and the retired one is dropped rather than carried, because nothing computes that value
+    // any more and a digest that can never match is dead weight in a file people grep.
+    expect(values.size).toBe(1);
+    expect(formatShippedValues(values)).not.toContain('\tconstraints\t');
+
+    // A path that is neither live nor retired is still a hard error: that is a typo, and a typo
+    // silently ignored is a correction that never fires and never says why.
+    expect(() => parseShippedValues(`${digestOf('x')}\tarrl-club-grant\tconstraint\t2026-08-04`)).toThrow(
+      ShippedValuesError,
+    );
+  });
+
   it('witnesses every correctable path and the one witnessed-only path', () => {
-    expect(WITNESSED_PATHS).toEqual([...CORRECTABLE_PATHS, 'constraints']);
+    expect(WITNESSED_PATHS).toEqual([...CORRECTABLE_PATHS, 'constraints.rules']);
     expect(CORRECTABLE_PATHS).not.toContain('constraints');
+    expect(CORRECTABLE_PATHS).not.toContain('constraints.rules');
+    expect(isCorrectablePath('constraints.rules')).toBe(false);
+  });
+
+  /**
+   * THE SPLIT, AS A PROPERTY OF THE PATH MODEL. A constraint is two things and the ledger now says
+   * so: its RULES are witnessed and never written, its displayed SENTENCE is correctable, one
+   * constraint at a time, and neither path can be mistaken for the other.
+   */
+  it('gives every constraint a sentence path of its own, and never one for its rules', () => {
+    const subject = corpus.programs.find((p) => p.constraints.length >= 2);
+    expect(subject).toBeDefined();
+    const paths = witnessedValuesOf(subject!).map((v) => v.path);
+    for (const constraint of subject!.constraints) {
+      const path = constraintRawTextPath(constraint.id);
+      expect(paths).toContain(path);
+      expect(isCorrectablePath(path)).toBe(true);
+      expect(constraintIdOfRawTextPath(path)).toBe(constraint.id);
+      expect(valueAt(subject!, path)).toBe(constraint.rawText);
+    }
+    // One line per sentence, plus exactly one for the whole rules half.
+    expect(paths.filter((p) => p === 'constraints.rules')).toHaveLength(1);
+    expect(paths.filter((p) => constraintIdOfRawTextPath(p) !== undefined)).toHaveLength(
+      subject!.constraints.length,
+    );
+    // Nothing that merely looks like the grammar is admitted.
+    for (const near of ['constraints', 'constraints[].spec', 'constraints[x].spec', 'constraints[].rawtext']) {
+      expect(isWitnessedPath(near)).toBe(false);
+    }
+  });
+
+  /**
+   * The rules half must not move when only a sentence does — otherwise correcting a quotation
+   * would silence the "your copy still carries a rule the corpus dropped" report, or fake one.
+   */
+  it('reads the rules half of a constraint without its sentence', () => {
+    const subject = corpus.programs.find((p) => p.constraints.length >= 1)!;
+    const reworded: Program = {
+      ...subject,
+      constraints: subject.constraints.map((c) => ({ ...c, rawText: `Reworded. ${c.rawText}` })),
+    };
+    expect(valueAt(reworded, 'constraints.rules')).toBe(valueAt(subject, 'constraints.rules'));
+
+    // ...and it still moves when a rule does.
+    const hardened: Program = {
+      ...subject,
+      constraints: subject.constraints.map((c) => ({ ...c, hard: !c.hard })),
+    };
+    expect(valueAt(hardened, 'constraints.rules')).not.toBe(valueAt(subject, 'constraints.rules'));
+
+    // An EMPTY sentence and an ABSENT constraint must not hash alike: blanking keeps the shape.
+    const emptied: Program = {
+      ...subject,
+      constraints: subject.constraints.map((c) => ({ ...c, rawText: '' })),
+    };
+    const dropped: Program = { ...subject, constraints: subject.constraints.slice(1) };
+    expect(valueAt(emptied, 'constraints.rules')).toBe(valueAt(subject, 'constraints.rules'));
+    expect(valueAt(dropped, 'constraints.rules')).not.toBe(valueAt(subject, 'constraints.rules'));
   });
 });

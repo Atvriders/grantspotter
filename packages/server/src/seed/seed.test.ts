@@ -227,6 +227,7 @@ describe('crawler identity (sourceKey)', () => {
   it('names only source ids Plan 2 actually registers', () => {
     const known = new Set([
       'ardc-grants', 'arrl-amateur-radio-grants', 'arrl-club-grant', 'arrl-etp-grants',
+      'arrl-foundation-special-funds',
       'arrl-scholarship-program', 'arrl-scholarship-descriptions', 'qcwa', 'ylrl', 'austin-arc',
       'sara', 'ncdxf-grants', 'ncdxf-scholarships', 'ariss', 'ieee-mtts',
       'ieee-student-branch-rebate', 'nasa-csli', 'yaesu-dr2x', 'manual-tier-d',

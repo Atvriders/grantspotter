@@ -375,15 +375,26 @@ describe('README honesty surfaces', () => {
 
   /**
    * ADDED BY THE SPEC §14 FLOW WALK (Task 22). The corpus table above measures the committed
-   * fixtures; a `docker compose up` installs the seed, and the two are different sizes. Boot on a
-   * clean DATA_DIR prints "Imported 143 programs (143 publishable, 0 suppressed) from 26 funders",
-   * so a reader who took 150/553 as "what I will have after installing" was wrong by 7 records and
-   * by the entire suppressed set. The README now says both, and this binds the second one.
+   * fixtures; a `docker compose up` installs the seed, and the two are different sizes. A reader
+   * who took 150/553 as "what I will have after installing" was wrong by the whole suppressed set.
+   * The README says both, and this binds the second one.
+   *
+   * THE NUMBER MOVED 143 -> 144 ON 2026-08-16, AND IT MOVED BECAUSE THE CORPUS DID, NOT BECAUSE
+   * THIS LINE WAS IN THE WAY. `arrl-foundation-special-funds` was seeded that day: it had existed
+   * only in the fixture corpus, so four adjudicated constraints and the audience fix that is the
+   * sole blocker on that record — `['club_unincorporated','club_501c3','school_lea']`, from a
+   * sentence reading "will include, but not be limited to" — could not reach a fresh install at
+   * all. Verified before editing: `data/seed/programs*.json` holds 144 records, and
+   * `seed/validate.ts`'s SEED_RECORD_COUNT was raised to 144 by the same change.
+   *
+   * The pairing is the point. This assertion and the README are meant to move together or not at
+   * all; if you find yourself changing one of them alone, the other is now lying to a reader about
+   * what they will get after `docker compose up`.
    */
   it('separates the fixture measurements from what a fresh install actually imports', () => {
     expect(readme).toMatch(/fresh install/i);
-    expect(readme).toMatch(/143 programmes \(143 publishable, 0 suppressed\)/);
-    expect(readme).toMatch(/7 of the 143/);
+    expect(readme).toMatch(/144 programmes \(144 publishable, 0 suppressed\)/);
+    expect(readme).toMatch(/7 of the 144/);
   });
 
   /**

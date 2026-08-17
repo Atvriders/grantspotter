@@ -54,8 +54,8 @@ async function corpora(): Promise<Corpus[]> {
       programs: shipped.programs,
       funders: shipped.funders,
       cycles: shipped.cyclesByProgramId,
-      withDirective: 7,
-      size: 143,
+      withDirective: 8,
+      size: 144,
     },
     {
       label: 'fixture (703 records normalized out of fixtures/)',

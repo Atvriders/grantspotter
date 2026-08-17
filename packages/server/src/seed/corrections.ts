@@ -45,10 +45,13 @@
  *      after every single correction, and a correction that moves the matcher's inputs, the
  *      calendar's recurrence, the funder-stated window, the status, the entities, the amounts or
  *      the constraints is dropped and reported.
- *   3. Never insert or delete a program, funder, constraint or cycle. The only statement in this
- *      file that touches `programs` is an UPDATE of named columns on one id; `constraints` is
- *      never opened at all, which is why a corpus that DROPS a constraint is reported instead
- *      (`seedCorrections.test.ts` scans this file's source for the absence of the other verbs).
+ *   3. Never insert or delete a program, funder, constraint or cycle, and never change what a
+ *      constraint REQUIRES. Exactly two statements here write: an UPDATE of named `programs`
+ *      columns on one id, and an UPDATE of `constraints.raw_text` — the sentence a record
+ *      DISPLAYS — on one id. There is no INSERT and no DELETE, which is why a corpus that drops a
+ *      constraint is still reported and not obeyed, and no write can reach `hard`, `fallback_rank`
+ *      or `spec` (`corrections.test.ts` scans this file's source for the absence of the other
+ *      verbs and for the shape of the one constraint write).
  *   4. Never touch a record the shipped corpus does not contain. The loop is over the corpus.
  *   5. Never touch trust beyond `contentHash`, which is derived and must stay true.
  *   6. Never be silent. Every applied and every refused correction is printed at boot and written
@@ -62,15 +65,19 @@ import { hashProgram, parseObservedWindow, parseRecurrence } from '@grantspotter
 import { appendAuditLog } from '../db/repositories/ingestion.js';
 import { createProgramRepo } from '../db/repositories/programs.js';
 import { loadSeedCorpus, seedDir } from './load.js';
+import { matcherReadingOf } from './matcherReading.js';
 import {
   CORRECTABLE_PATHS,
   ShippedValues,
   canonicalJson,
+  constraintIdOfRawTextPath,
+  constraintRawTextPath,
   digestOf,
   loadShippedValues,
   shippedValuesPath,
   valueAt,
   type CorrectablePath,
+  type FixedCorrectablePath,
   type WitnessedPath,
 } from './shippedValues.js';
 
@@ -82,12 +89,21 @@ import {
  *
  * Compare this before and after a correction and it answers the only question that matters at
  * write time: did rewriting a sentence change an answer this product gives? The matcher's inputs
- * (`constraints`, `applicantEntities`, `klass`, `tags`) are in here because a rewrite must never
- * move an eligibility verdict. The parsed recurrence and the funder-stated window are in here
- * because `deadline.note` is prose that also carries the `RECUR` micro-format `expandCycles`
+ * (the constraint RULES, `applicantEntities`, `klass`, `tags`) are in here because a rewrite must
+ * never move an eligibility verdict. The parsed recurrence and the funder-stated window are in
+ * here because `deadline.note` is prose that also carries the `RECUR` micro-format `expandCycles`
  * projects a calendar from and the sentence `parseObservedWindow` reads dates out of — so a note
  * whose PROSE changes is a correction, and a note whose DATES change is a different act that a
  * human has to perform.
+ *
+ * `constraints[].rawText` IS THE THIRD OF THESE AND THE ONE THAT WAS MISSED. It is the displayed
+ * sentence, so a correction must be allowed to rewrite it — and it is ALSO threaded into
+ * `evaluateConstraint`, which asks it whether the funder called their own list illustrative. Two
+ * axes act on the answer. So the sentence is blanked here exactly like a note's prose, and the
+ * matcher's reading of it is compared exactly like a note's directive: `matcherReadingOf` asks the
+ * real matcher, so this cannot drift out of step with what the matcher actually does. A rewrite
+ * that keeps the reading is a correction; a rewrite that moves it is a different act, refused and
+ * reported, and a human decides.
  *
  * `trust.contentHash` is blanked because it is derived from the record and a correction is
  * required to recompute it. Everything else in `trust` — status, lastVerifiedAt,
@@ -102,12 +118,19 @@ export function meaningOf(program: Program): string {
     deadline: { ...program.deadline, note: '' },
     aiPolicy: { ...program.aiPolicy, quote: '' },
     fundingRestrictions: [],
+    constraints: program.constraints.map((c) => ({ ...c, rawText: '' })),
     trust: { ...program.trust, contentHash: '' },
   };
   return canonicalJson({
     record: stripped,
     recurrence: safeRecurrence(program.deadline.note),
     observedWindow: parseObservedWindow(program.deadline.note) ?? null,
+    // Keyed by constraint id, not by position, so this compares the reading of THE SAME SENTENCE
+    // before and after rather than of whatever sentence happens to sit at that index.
+    constraintReadings: program.constraints.map((c) => ({
+      id: c.id,
+      ...matcherReadingOf(c.rawText),
+    })),
   });
 }
 
@@ -178,7 +201,16 @@ export function planForProgram(
   const corrections: SeedCorrection[] = [];
   const leftAlone: SeedLeftAlone[] = [];
 
-  for (const path of CORRECTABLE_PATHS) {
+  // THE SENTENCES, ONE CONSTRAINT AT A TIME, AND ONLY WHERE BOTH SIDES HAVE THAT CONSTRAINT.
+  // A constraint on one side only is not a sentence to correct: it is the corpus adding or
+  // dropping a RULE, which is the `constraints.rules` difference reported at the bottom of this
+  // function. Generating a path for it as well would print the same fact twice under two names.
+  const storedIds = new Set(stored.constraints.map((c) => c.id));
+  const sentencePaths = shipped.constraints
+    .filter((c) => storedIds.has(c.id))
+    .map((c) => constraintRawTextPath(c.id));
+
+  for (const path of [...CORRECTABLE_PATHS, ...sentencePaths]) {
     const storedValue = valueAt(stored, path);
     const shippedValue = valueAt(shipped, path);
     if (storedValue === shippedValue) continue;
@@ -215,23 +247,29 @@ export function planForProgram(
     });
   }
 
-  // WITNESSED, NEVER WRITTEN. A record still carrying exactly the constraints we shipped, against
-  // a corpus that has changed them, is the operator's to decide: those are the sentences the
-  // matcher reasons over. Constraints that do NOT match the ledger are the operator's own work and
-  // are not remarked on at all.
-  const storedConstraints = valueAt(stored, 'constraints');
-  const shippedConstraints = valueAt(shipped, 'constraints');
+  // WITNESSED, NEVER WRITTEN. A record still carrying exactly the constraint RULES we shipped,
+  // against a corpus that has changed them, is the operator's to decide: added, dropped, hardened
+  // or re-ranked rules are what the matcher reasons over, and rewriting them at boot would change
+  // who is told they are eligible. Rules that do NOT match the ledger are the operator's own work
+  // and are not remarked on at all.
+  //
+  // The displayed sentences are excluded from this value (see `valueAt`), so correcting a
+  // quotation neither triggers this report nor silences it: the rules half is compared on its own
+  // terms, before and after, and a record whose sentences we have just rewritten still reports its
+  // rules difference on the next boot exactly as it did on this one.
+  const storedRules = valueAt(stored, 'constraints.rules');
+  const shippedRules = valueAt(shipped, 'constraints.rules');
   if (
-    storedConstraints !== undefined &&
-    shippedConstraints !== undefined &&
-    storedConstraints !== shippedConstraints &&
-    ledger.witness(stored.id, 'constraints', storedConstraints) !== undefined
+    storedRules !== undefined &&
+    shippedRules !== undefined &&
+    storedRules !== shippedRules &&
+    ledger.witness(stored.id, 'constraints.rules', storedRules) !== undefined
   ) {
     leftAlone.push({
       programId: stored.id,
-      path: 'constraints',
+      path: 'constraints.rules',
       reason: 'eligibility-rules-differ',
-      storedSha256: digestOf(storedConstraints),
+      storedSha256: digestOf(storedRules),
     });
   }
 
@@ -240,8 +278,8 @@ export function planForProgram(
 
 /* ------------------------------------------------------------------- applying it -------------- */
 
-/** The one column each correctable path lives in. Nothing else in `programs` is ever written. */
-const COLUMN_FOR: Record<CorrectablePath, string> = {
+/** The one column each fixed correctable path lives in. Nothing else in `programs` is ever written. */
+const COLUMN_FOR: Record<FixedCorrectablePath, string> = {
   summary: 'summary',
   rawOtherText: 'raw_other_text',
   'amount.amountRaw': 'amount',
@@ -267,7 +305,16 @@ type RawRow = Record<ReadColumn, string>;
 
 /** Applies one correction to a copy of the record, for the meaning check and the new hash. */
 function withCorrection(program: Program, correction: SeedCorrection): Program {
-  switch (correction.path) {
+  const constraintId = constraintIdOfRawTextPath(correction.path);
+  if (constraintId !== undefined) {
+    return {
+      ...program,
+      constraints: program.constraints.map((c) =>
+        c.id === constraintId ? { ...c, rawText: correction.to } : c,
+      ),
+    };
+  }
+  switch (correction.path as FixedCorrectablePath) {
     case 'summary':
       return { ...program, summary: correction.to };
     case 'rawOtherText':
@@ -294,7 +341,7 @@ function withCorrection(program: Program, correction: SeedCorrection): Program {
  */
 function withCorrectionInColumns(columns: RawRow, correction: SeedCorrection): RawRow {
   const next: RawRow = { ...columns };
-  switch (correction.path) {
+  switch (correction.path as FixedCorrectablePath) {
     case 'summary':
       next.summary = correction.to;
       return next;
@@ -360,6 +407,19 @@ export interface SeedCorrectionOptions {
 const ACTION_APPLIED = 'seed_correction.applied';
 const ACTION_LEFT_ALONE = 'seed_correction.left_alone';
 
+interface SentenceRow {
+  id: string;
+  raw_text: string;
+}
+
+/**
+ * Thrown to roll one record's SAVEPOINT back, never seen outside this file. A sentinel object
+ * rather than an `Error` subclass so `error !== ROW_MOVED` is an identity test: any OTHER throw —
+ * a corrupt column, a bug here — must not be mistaken for a moved row and swallowed as one, and is
+ * rethrown to fail the whole reconcile with `ran: false`.
+ */
+const ROW_MOVED = { rowMoved: true } as const;
+
 /**
  * The reconcile. One transaction: either every correction and every audit row lands, or none does.
  *
@@ -392,6 +452,15 @@ export function applySeedCorrections(
 
     const readStmt = db.prepare(
       `SELECT ${READ_COLUMNS.join(', ')} FROM programs WHERE id = ?`,
+    );
+    const sentenceReadStmt = db.prepare(
+      'SELECT id, raw_text FROM constraints WHERE program_id = ? ORDER BY ordinal',
+    );
+    // THE ONLY STATEMENT IN THIS FILE THAT WRITES A CONSTRAINT, and it sets exactly one column.
+    // No INSERT, no DELETE, nothing that could add, drop or re-rank a rule: this rewrites the
+    // sentence a record DISPLAYS and can reach nothing the matcher reasons over.
+    const sentenceWriteStmt = db.prepare(
+      'UPDATE constraints SET raw_text = @to WHERE id = @rowId AND program_id = @programId AND raw_text = @from',
     );
     const auditSeenStmt = db.prepare(
       'SELECT 1 FROM audit_log WHERE action = ? AND entity_id = ? AND detail = ? LIMIT 1',
@@ -441,7 +510,9 @@ export function applySeedCorrections(
             continue;
           }
           merged = candidate;
-          mergedColumns = withCorrectionInColumns(mergedColumns, correction);
+          if (constraintIdOfRawTextPath(correction.path) === undefined) {
+            mergedColumns = withCorrectionInColumns(mergedColumns, correction);
+          }
           accepted.push(correction);
         }
         if (accepted.length === 0) continue;
@@ -451,8 +522,25 @@ export function applySeedCorrections(
         const newTrust = JSON.stringify(trust);
         const newHash = hashProgram(merged);
 
-        // The columns this record's accepted corrections actually touch, and nothing else.
-        const touched = [...new Set(accepted.map((c) => COLUMN_FOR[c.path]))];
+        // A DISPLAYED SENTENCE LIVES IN A DIFFERENT TABLE FROM THE REST OF THE RECORD, and both
+        // halves of a record's rewrite have to land or neither may. `content_hash` is computed
+        // over the constraints too (core/hash.ts sorts them by id and hashes `rawText`), so a
+        // programs row that landed beside a constraints row that did not would leave the record
+        // claiming a hash of text it does not hold — the derived-value lie `hashProgram` exists to
+        // prevent. So the two writes go in a nested transaction, which better-sqlite3 issues as a
+        // SAVEPOINT: one record's writes roll back together and the reconcile carries on with the
+        // next record.
+        const sentences = accepted.filter((c) => constraintIdOfRawTextPath(c.path) !== undefined);
+        const columnCorrections = accepted.filter(
+          (c) => constraintIdOfRawTextPath(c.path) === undefined,
+        );
+
+        // The columns this record's accepted corrections actually touch, and nothing else. A
+        // record whose only corrections are sentences touches NO `programs` column of its own —
+        // just `trust`, `content_hash` and `updated_at`, which every correction moves.
+        const touched = [
+          ...new Set(columnCorrections.map((c) => COLUMN_FOR[c.path as FixedCorrectablePath])),
+        ];
         const sets = [...touched.map((c) => `${c} = @new_${c}`), 'trust = @new_trust', 'content_hash = @new_content_hash', 'updated_at = @now'];
         // THE SECOND HALF OF THE PROOF. The ledger says these bytes were ours when we read them;
         // this says they are still those bytes at the instant we write. A row that moved in
@@ -482,10 +570,38 @@ export function applySeedCorrections(
           continue;
         }
 
-        const changes = db
-          .prepare(`UPDATE programs SET ${sets.join(', ')} WHERE ${wheres.join(' AND ')}`)
-          .run(params).changes;
-        if (changes !== 1) {
+        const updateStmt = db.prepare(
+          `UPDATE programs SET ${sets.join(', ')} WHERE ${wheres.join(' AND ')}`,
+        );
+        const writeWholeRecord = db.transaction(() => {
+          if (updateStmt.run(params).changes !== 1) throw ROW_MOVED;
+          if (sentences.length === 0) return;
+          // The row ids are read rather than reconstructed: `constraints.id` is stored under a
+          // program-scoped key whose shape is `constraints.ts`'s private business, and both
+          // queries are `ORDER BY ordinal`, so position is the link that cannot go stale.
+          const rows = sentenceReadStmt.all(shipped.id) as SentenceRow[];
+          if (rows.length !== stored.constraints.length) throw ROW_MOVED;
+          for (const correction of sentences) {
+            const constraintId = constraintIdOfRawTextPath(correction.path);
+            const at = stored.constraints.findIndex((c) => c.id === constraintId);
+            const row = at < 0 ? undefined : rows[at];
+            if (row === undefined) throw ROW_MOVED;
+            // THE SECOND HALF OF THE PROOF, for the sentence table too: the ledger said these
+            // bytes were ours when we read them, and this says they are still those bytes now.
+            const written = sentenceWriteStmt.run({
+              rowId: row.id,
+              programId: shipped.id,
+              from: correction.from,
+              to: correction.to,
+            }).changes;
+            if (written !== 1) throw ROW_MOVED;
+          }
+        });
+
+        try {
+          writeWholeRecord();
+        } catch (error) {
+          if (error !== ROW_MOVED) throw error;
           for (const correction of accepted) {
             report.leftAlone.push({
               programId: correction.programId,
@@ -567,8 +683,9 @@ export const LEFT_ALONE_PROSE: Record<LeftAloneReason, string> = {
   'corpus-no-longer-carries-this-field':
     'the shipped corpus dropped this field; removing data is not something this path does',
   'eligibility-rules-differ':
-    'the shipped corpus changed this record’s constraints. A correction may change what a ' +
-    'record says, never what it means, so nothing was touched',
+    'the shipped corpus added, dropped or changed one of this record’s eligibility RULES (not just ' +
+    'the sentence it displays). A correction may change what a record says, never what it means, ' +
+    'so nothing was touched',
   'changes-what-the-record-means':
     'applying it would have changed a date, an amount or an eligibility answer, not just wording',
   'row-changed-underneath': 'the row changed between the read and the write; nothing was written',

@@ -59,21 +59,25 @@ const ARDC_PROGRAM_NAME = 'ARDC Grants Program';
 const ARDC_FUNDER_NAME = 'Amateur Radio Digital Communications';
 
 /**
- * What `importSeedIfEmpty` puts in an empty database, measured on 2026-08-04 by booting
+ * What `importSeedIfEmpty` puts in an empty database, re-measured on 2026-08-17 by booting
  * `packages/server/dist/index.js` against an empty DATA_DIR and counting the rows it left:
  *
  *   $ DATA_DIR=<empty> node packages/server/dist/index.js
- *   [seed] Imported 143 programs (143 publishable, 0 suppressed) from 26 funders, 141 of them
+ *   [seed] Imported 144 programs (144 publishable, 0 suppressed) from 26 funders, 142 of them
  *          bound to a crawler identity, all verified 2026-08-02.
+ *
+ * 143/141 until 2026-08-17, when `arrl-foundation-special-funds` was seeded — a page the source
+ * module had parsed since Plan 2 and `data/seed/` had never carried, so every figure here and in
+ * the README was a statement about a corpus that was missing one of its records.
  *
  * Zero suppressed is not an oversight in the corpus: the 553 hidden rows are past-award tables,
  * which arrive with the first crawl that reads one, not with the seed. It is also why the
  * suppression specs must keep their fixture harness.
  */
-const SHIPPED_PROGRAMS = 143;
+const SHIPPED_PROGRAMS = 144;
 const SHIPPED_SUPPRESSED = 0;
 const SHIPPED_FUNDERS = 26;
-const SHIPPED_CRAWLER_IDENTITIES = 141;
+const SHIPPED_CRAWLER_IDENTITIES = 142;
 
 let server: BootedServer | undefined;
 let firstBootLog = '';
