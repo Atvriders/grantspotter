@@ -7,9 +7,9 @@
       "dates": { "basis": "funder_published" },
       "name": "ARISS-USA ISS Contact Proposals",
       "klass": "equipment_in_kind",
-      "summary": "A scheduled, voice-only contact of roughly ten minutes between your students and an ISS crew member, plus an ARISS Technical Mentor and an Educational Mentor to get the ground station and the education plan ready. No cash changes hands. Written for US schools and educational organisations; colleges and universities are not named in the eligibility sentence and K-12 dominates the awardee list.",
+      "summary": "A scheduled, voice-only contact of approximately 10 minutes between your students and an ISS crew member. Selected organisations are paired with an ARISS Technical Mentor, who helps them develop an Equipment Plan, and an ARISS Educational Mentor, who helps with educational concerns. ARISS states no award amount anywhere on the proposal-overview page. Written for US schools and educational organisations; colleges and universities are not named in the eligibility sentence.",
       "applicantEntities": ["school_lea", "university"],
-      "amount": { "instrument": "in_kind_service", "amountRaw": "No cash. A scheduled ISS crew contact of approximately 10 minutes, plus an ARISS Technical Mentor who helps develop an Equipment Plan and an ARISS Educational Mentor. The applicant provides the ground station.", "awardCountRaw": "" },
+      "amount": { "instrument": "in_kind_service", "amountRaw": "A scheduled ISS crew contact of approximately 10 minutes, plus an ARISS Technical Mentor who helps develop an Equipment Plan and an ARISS Educational Mentor.", "awardCountRaw": "" },
       "deadline": { "kind": "quarterly_rewritten", "source": { "kind": "self" }, "note": "One window sentence rewritten quarterly at a stable URL. Application window published by the funder: opens 2026-07-01, closes 2026-09-30. The page prints the month and day and no year; the year is fixed by the contact period the same sentence names, January to June 2027." },
       "applyVia": "page_form",
       "applyUrl": "https://ariss-usa.org/proposal-overview/",
@@ -21,7 +21,7 @@
         { "id": "ariss-window", "hard": true, "fallbackRank": 0, "rawText": "Proposals from schools and organizations in the US are accepted during four proposal windows each year – one each quarter. Proposals are not accepted outside of the scheduled proposal windows.", "spec": { "axis": "other", "note": "Four proposal windows a year; nothing is accepted outside a window." } },
         { "id": "ariss-education-topics", "hard": false, "fallbackRank": 0, "rawText": "Educational proposals should include plans for students to:\nstudy topics related to space technology, space exploration, or space research, and,\nlearn about communication, wireless technology, and radio science", "spec": { "axis": "other", "note": "The education plan should have students study space technology, exploration or research, and learn about communication, wireless technology and radio science. ARISS writes \"should\" here and \"must\" for the flexibility requirement above." } }
       ],
-      "fundingRestrictions": ["No cash is awarded. The ground station is the applicant's responsibility, though ARISS pairs the organisation with a Technical Mentor who helps develop an Equipment Plan."],
+      "fundingRestrictions": [],
       "obligations": { "sustainmentObligation": "After the Equipment Plan is approved, the organization initiates their Education Plan, and preparations for the contact get underway." },
       "evidence": {
         "obligations": {
@@ -40,7 +40,7 @@
       "dates": { "basis": "unpublished" },
       "name": "NASA CubeSat Launch Initiative (CSLI)",
       "klass": "equipment_in_kind",
-      "summary": "Launch and deployment opportunities for CubeSats built by US educational institutions and non-profit organisations, museums and science centres included. NASA calls it a low-cost pathway to flight: the ride is the award, and the team designs, develops and builds its own hardware. There is no hardware funding, so budget for building the spacecraft separately. NASA has launched over 150 CubeSats through the initiative.",
+      "summary": "Launch and deployment opportunities for CubeSats built by US educational institutions and non-profit organisations, museums and science centres included. NASA calls it a low-cost pathway to conduct scientific investigations and technology demonstrations in space, enabling students, teachers and faculty to obtain hands-on flight hardware design, development and build experience: the ride is the award. The page states no funding amount of any kind. NASA has launched over 150 CubeSats through the initiative.",
       "applicantEntities": ["university", "school_lea", "club_501c3"],
       "amount": { "instrument": "in_kind_service", "amountRaw": "a low-cost pathway to conduct scientific investigations and technology demonstrations in space", "awardCountRaw": "" },
       "deadline": { "kind": "unpublished", "source": { "kind": "self" }, "note": "No dated window is published on the announcement page. The page states only a habit: CSLI's Announcements of Partnership Opportunity is typically released each August with proposals due in November. A habit is not a deadline, so nothing here is put on a calendar; watch the page for the announcement itself." },
@@ -138,7 +138,7 @@
       "klass": "adjacent_stem",
       "summary": "A rebate paid to IEEE Student Branches that file their Annual Plan. The plan is due 15 March and filing it is what qualifies the branch: \"Submitting an Annual Plan is required to qualify for a Student Branch Rebate.\" The rebate schedule itself is not published on the page IEEE points branches at, so no amount is recorded here — ask your branch counsellor for the current figures.",
       "applicantEntities": ["ieee_student_branch_chapter"],
-      "amount": { "instrument": "per_member_rebate", "amountRaw": "", "awardCountRaw": "One rebate per branch per year." },
+      "amount": { "instrument": "per_member_rebate", "amountRaw": "", "awardCountRaw": "" },
       "deadline": { "kind": "n_fixed_dates", "source": { "kind": "self" }, "note": "RECUR n_fixed_dates tz=America/New_York dates=03-15 | Student Branch Annual Plans are due 15 March. No year is printed next to that date and no opening date appears anywhere on the page, so this is a deadline projected forward as a rule, not a window IEEE published." },
       "applyVia": "page_form",
       "applyUrl": "https://students.ieee.org/topics/submit-your-student-branch-annual-plan/",

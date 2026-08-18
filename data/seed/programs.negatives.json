@@ -15,7 +15,7 @@
       "applyUrl": "https://www.arrl.org/club-grant-program",
       "constraints": [
 ],
-      "fundingRestrictions": ["Does not fund ongoing operating expenses."],
+      "fundingRestrictions": [],
       "obligations": {},
       "aiPolicy": { "stance": "unaddressed", "url": "https://www.arrl.org/files/file/Foundation/Grant%20Application%20Form.pdf" },
       "trust": {

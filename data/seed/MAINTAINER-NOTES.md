@@ -575,6 +575,119 @@ by name when it changes, which is the design:
   registers", which gains `arrl-foundation-special-funds`. That source **is** registered
   (`arrl-pages.ts`); the set had simply never needed the id because no seed record named it.
 
+## Round four, 2026-08-18: six "contradictions" that were quoting our own test fixture
+
+Six prose fields the product renders — `summary`, `obligations`, `deadline.note`,
+`amount.amountRaw`, `amount.awardCountRaw`, `fundingRestrictions` — have no provenance rule of any
+kind. They are curator-written, they are rendered to students, and nothing checks them. A
+fact-check of 191 claims in those fields against "the funder's complete committed capture" reported
+6 CONTRADICTED and 10 UNSUPPORTED.
+
+**All six contradictions were false, and every one of them failed the same way: the quote that
+convicted the record came from a `pathological.*` fixture.**
+
+`fixtures/<sourceId>/` holds two unrelated kinds of file. `NN-<host-and-path>.<ext>` is a real
+capture of a funder's page. `pathological.html` is a short synthetic page somebody wrote to
+exercise a parser — deliberately stuffed with the awkward shapes a real page does not have, and
+therefore full of sentences no funder ever published. Handing a checker the whole directory and
+calling it "the funder's capture" makes the parser's torture test speak in the funder's voice.
+
+Checked with `grep` across `fixtures/`, here is where each convicting quote actually lives:
+
+| record / field | the quote said to contradict it | only file in the repo containing it |
+| --- | --- | --- |
+| `arrl-cat-the-challenge-met-scholarship` `summary` | *"Amount awarded may vary depending on the review committee's judgement."* → award is $1,000, licence is "Technician or higher" | `arrl-scholarship-descriptions/pathological.html` |
+| `arrl-club-grant` `summary` | *"Applicants must be an ARRL-affiliated club in good standing."* | `arrl-club-grant/pathological.html` |
+| `arrl-foundation-scholarships` `deadline.note` | *"…closes December 30 at 12:00 PM EST."* | `arrl-scholarship-program/pathological.html`, `arrl-news-rss/pathological.xml` |
+| `sara-student-teacher-grants` `summary` | *"Open to students from 5th grade through college, and to their teachers, worldwide."* | `sara/pathological.html` |
+| `yaesu-dr2x-repeater` `summary` | *"Program pricing: DR-2X $1,450, or $1,860 with the LAN-01A."* | `yaesu-dr2x/pathological.html` (and two other synthetic overlays) |
+| `yaesu-dr2x-repeater` `deadline.note` | *"DR-2X Repeater Program June 3 - August 31, 2026 (Fillable)"* | `yaesu-dr2x/pathological.html` |
+
+**The one flagged as worst is the one that shows what acting on it would have cost.** The Challenge
+Met Scholarship record says Award Amount $500 and "Any active Amateur Radio License Class". That is
+what `arrl-scholarship-descriptions/00-www-arrl-org-scholarship-descriptions.html` says, word for
+word, at the paragraph headed *"The Challenge Met Scholarship"*. The $1,000 / "Technician or
+higher" pair exists in exactly one file on this disk, and it is the file whose entire purpose is to
+not be a real page. Rewriting the record to match it would have replaced a correct figure with an
+invented one and told a Technician-class-or-lower applicant they were barred from a scholarship
+open to any licence class — the exact shape the fix was described as preventing.
+
+The same trap, in a milder form, hit one of the ten UNSUPPORTED claims. `arrl-foundation-scholarships`
+`summary` names QCWA, YASME, DARA and the Six Meter Club of Chicago, and cites "more than 150" and
+"111 entries"; the check called all of that absent because it read only the record's own
+`sourceKey` capture, `arrl-scholarship-program`. Every one of those facts is in a capture this repo
+holds — the *descriptions* page, which the sentence already names. So the claim stayed, with the
+attribution tightened.
+
+**The rule this leaves behind, for the next person who runs a check like this:**
+
+* An absence claim is only as strong as the input's completeness — and a PRESENCE claim is only as
+  strong as the input's *authenticity*. Both halves can be wrong, and this round only the second
+  half was.
+* When checking a record's prose, the corpus is **every `NN-` capture in `fixtures/`**, not just the
+  one directory named by `sourceKey` — a curator legitimately reads a funder's sibling pages.
+* `pathological.*`, `empty-window.html`, `no-pdf-link.html`, `unparseable-filename.html` and the
+  other hand-written overlays are **never** evidence about a funder. `funderCaptures.test.ts`
+  already encodes this and refuses any capture path containing `pathological`; a human check has to
+  apply the same filter by hand.
+* Before rewriting a field, `grep` the proposed new value's source sentence across `fixtures/` and
+  look at which filename comes back. It takes one command and it caught six of sixteen findings.
+
+### The ten that were real, and what each became
+
+Nine are absences confirmed against the complete `NN-` capture, plus one fabricated close time. The
+funder is not at fault in any of them; a curator wrote down something true-in-the-world that the
+page does not say, and the page is the only thing a student can check us against.
+
+**`ardc-grants` `deadline.note`** — the four dates are on `ardc-grants/02-apply.html` ("The 2026
+application deadlines are: February 1 / April 1 / July 1 / September 1"), and so are the rollover
+and the 60–120 days. A time zone is not: the string "Pacific", "PT", "PST" and "PDT" appear nowhere
+in either ARDC capture. But `RECUR` requires `tz=`, and `describeRecurrence` prints it to the reader
+as *"…closing at 23:59 America/Los_Angeles"*. Deleting the zone deletes the whole rule, and the
+dates with it. So the zone stays and the note now says whose assumption it is.
+
+**`arrl-amateur-radio-grants` `deadline.note`** — same shape. The three windows are on the page;
+`tz=America/New_York` is ours, and the note now says so and says where it came from (the Newington,
+Connecticut address in the page's own footer).
+
+**`arrl-foundation-scholarships` `deadline.note`** — this one carried a self-contradiction that the
+false quote happened to expose. The directive said `close=12:00` while the prose two clauses later
+said *"ARRL publishes no closing time"*. No ARRL capture in this repo contains "12:00", "11:59",
+"noon", "EST" or "EDT" anywhere. `close=12:00` is deleted; the rule now renders at the 23:59
+default, and the note names the default as ours too.
+
+**`arrl-amateur-radio-grants` `amount.awardCountRaw`** and **`ieee-student-branch-rebate`
+`amount.awardCountRaw`** — emptied. ARRL states three cycles a year and never a number of awards;
+the IEEE page is 40 words long and says only *"Submitting an Annual Plan is required to qualify for
+a Student Branch Rebate."* "Multiple per cycle" and "One rebate per branch per year" were both
+plausible and neither was published.
+
+**`arrl-club-grant` `fundingRestrictions`** — emptied. *"Grant requests for ongoing operations or
+expenses will not be considered"* is real, and it is on `arrl-amateur-radio-grants`, a different
+programme with a different application. Carrying it here refuses a club on another programme's rule.
+
+**`ariss-iss-contact` `summary`, `amount.amountRaw`, `fundingRestrictions`** — the proposal-overview
+capture supports the ~10-minute voice contact, the Technical Mentor and the Equipment Plan, the
+Educational Mentor, and "US schools and educational organizations". It does not say no cash changes
+hands, it does not say who buys the ground station, and it contains no awardee list at all, so
+"K-12 dominates the awardee list" had nothing to dominate. All three claims are gone;
+`instrument: in_kind_service` still tells the reader this is not a cheque, and it does that from a
+field the matcher owns rather than from a sentence attributed to ARISS. `fundingRestrictions` is now
+empty, which is the honest state: the page states none.
+
+**`nasa-csli` `summary`** — the page's own words are *"a low-cost pathway to conduct scientific
+investigations and technology demonstrations in space, thus enabling students, teachers, and faculty
+to obtain hands-on flight hardware design, development, and build experience"*. It never says there
+is no hardware funding, and it never tells a team to budget for the spacecraft separately. The
+summary now says the page states no funding amount, which is the checkable claim.
+
+### What did not move
+
+`matchAll` over the shipped seed (144 records × the 7 profiles in `scripts/profile-corpus.ts`,
+`now = 2026-08-02`) returns 1,008 verdicts. Before this round and after it, all 1,008 are byte
+identical. That is the expected result and it is worth stating: these six fields are display-only,
+and the deadline edits — including deleting a close time — reach the projector but not the matcher.
+
 ---
 
 ## Known residual, NOT fixed here
