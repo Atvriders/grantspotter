@@ -34,7 +34,7 @@
       },
       "aiPolicy": { "stance": "permitted", "quote": "If you choose to use AI when writing your proposal be sure to thoroughly edit for clarity, brevity, and accuracy. If the proposal is extremely long and hard to understand, we can't evaluate or support it.", "url": "https://www.ardc.net/apply/grant-application-instructions/" },
       "trust": { "status": "open", "sourceUrl": "https://www.ardc.net/apply/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "If your request is for a project that will take several years, it should still be clear in your proposal what the scope of the eventual end product is, and how the goals of the proposal connect back to that end product. Show us the roadmap for your project and where the activities in your proposal fit within that.",
+      "rawOtherText": "",
       "tags": ["ham", "grant", "ardc", "open-source", "education", "research"]
     },
     {
@@ -113,7 +113,7 @@
       "applyUrl": "https://www.arrl.org/scholarship-program",
       "constraints": [
         { "id": "arrl-schol-license", "hard": true, "fallbackRank": 0, "rawText": "All applicants must be an active, FCC-licensed amateur radio operators. [NOTE: Active foreign amateur radio operators are eligible for the ARDC Scholarships]", "spec": { "axis": "license", "licenseMin": "TECH" } },
-        { "id": "arrl-schol-enrolled", "hard": true, "fallbackRank": 0, "rawText": "Thank you for your interest in the ARRL Foundation Scholarship Program for eligible amateur radio operators pursuing higher education.", "spec": { "axis": "institution", "degreeLevels": ["CERT", "ASSOC", "BACH", "GRAD"], "tradeSchoolOK": true, "partTimeOK": true, "accreditationRequired": false } },
+        { "id": "arrl-schol-enrolled", "hard": true, "fallbackRank": 0, "rawText": "Thank you for your interest in the ARRL Foundation Scholarship Program for eligible amateur radio operators pursuing higher education.", "spec": { "axis": "institution", "degreeLevels": [], "tradeSchoolOK": true, "partTimeOK": true, "accreditationRequired": false } },
         { "id": "arrl-schol-documents", "hard": false, "fallbackRank": 0, "rawText": "A number of scholarships require additional documents, such as a letter of recommendation from a sitting Officer of an ARRL-affiliated club. Applications without accompanying transcripts and additional required documents (if applicable) will not be considered.", "spec": { "axis": "other", "note": "Some catalogue entries require a recommendation from a sitting officer of an ARRL-affiliated club. Which ones is an entry-level fact, not a programme-level one." } }
       ],
       "fundingRestrictions": [],

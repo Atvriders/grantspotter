@@ -30,7 +30,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://ariss-usa.org/proposal-overview/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "SPARKI is named once on this page as a companion programme, and the proposal-window sentence is rewritten each quarter at a stable URL. Selection timing, in ARISS's words: 4 to 6 weeks after the close of the proposal window, organizations with approved proposals are sent a congratulatory email.",
+      "rawOtherText": "4 to 6 weeks after the close of the proposal window, organizations with approved proposals are sent a congratulatory email. Declination emails are also sent out at that time.",
       "tags": ["ham", "in-kind", "iss", "education", "k12"]
     },
     {
@@ -106,7 +106,7 @@
       },
       "aiPolicy": { "stance": "unaddressed" },
       "trust": { "status": "open", "sourceUrl": "https://mtt.org/chapter-support/", "lastVerifiedAt": "2026-08-02", "verificationMethod": "seed_import", "contentHash": "" },
-      "rawOtherText": "In addition to the chapter activity support above, MTT-S offers $500 seed money per chapter for a workshop or symposium, on condition that an IEEE MTT-S membership booth is present at the event, and up to $2,250 a year of Chapter Officer travel support to attend a Chapter Chair Meeting.",
+      "rawOtherText": "Each active MTT-S Chapter may receive financial support up to $2,250 per year to send a Chapter Officer to attend one of the Chapter Chair Meetings (CCM) held in conjunction with the International Microwave Symposium (IMS), the European Microwave Week (EuMW), the Asia-Pacific Microwave Conference (APMC), the Microwaves Antennas and Propagation Conference (MAPCON), or the Latin America Microwave Conference (LAMC).",
       "tags": ["adjacent", "ieee", "rf", "student-chapter"]
     },
     {

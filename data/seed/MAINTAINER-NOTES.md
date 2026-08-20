@@ -690,6 +690,201 @@ and the deadline edits — including deleting a close time — reach the project
 
 ---
 
+## Round five, 2026-08-20: the eight register entries closed from the capture, and the six that cannot be
+
+The registers this round worked from are `KNOWN_SEED_GEO_OVERCLAIMS`, `KNOWN_SEED_LEVEL_OVERCLAIMS`,
+`KNOWN_SEED_INVENTED_FIELDS`, `KNOWN_SEED_WIDENING_PASSES`, `KNOWN_SEED_TOOTHLESS` and
+`KNOWN_SEED_NOTED_ONLY` in `packages/server/src/normalize/axes/sentence-vs-spec.test.ts`, and
+`NOT_VERBATIM` in `packages/server/src/seed/constraintProvenance.test.ts`. Every entry was read back
+against its record's **parsed** capture, through `loadRawOpportunities` — never by globbing
+`fixtures/<sourceId>/`, which also holds `pathological.*`, the synthetic parser-torture pages that
+cost round four six confident and entirely false findings.
+
+**No shipped verdict moved.** Measured over all seven `PROFILES` in `scripts/profile-corpus.ts`
+against `loadSeedCorpus()`, 659 (profile, program) pairs, comparing verdict kind, preference rank,
+the `met` list, `missingProfileFields` and the refusal reasons: zero differences before and after.
+Every change below removes a claim the funder did not make; none of them changes what a student is
+told about themselves. (The harness was shown able to speak: planting `fields: ["Basket Weaving"]`
+on the Ethel Smith record moves `ee-undergrad` from `eligible_preferred met=[ylrl-k4lmb-study]` to
+plain `eligible`.)
+
+### Closed
+
+**`arrl-foundation-scholarships` / `arrl-schol-enrolled`** — `degreeLevels` `["CERT","ASSOC","BACH","GRAD"]` → `[]`.
+
+The whole sentence beside that spec is *"Thank you for your interest in the ARRL Foundation
+Scholarship Program for eligible amateur radio operators pursuing higher education."* The capture of
+`arrl-scholarship-program` was read end to end: **that page names no credential anywhere.** It
+names an award range, a licence requirement, a document requirement and a closed cycle, and nothing
+else. So the record now publishes no credential floor and the per-scholarship catalogue entries
+carry the levels, which is where the Foundation actually states them. Behaviour is unchanged in both
+directions — `DegreeLevel` has exactly those four values, so a list of all four and an empty list
+admit the same people — and what goes away is the record telling a certificate student at a trade
+school that the Foundation's programme is open to them on a greeting.
+
+**`ylrl-ethel-smith-k4lmb`, `ylrl-mary-lou-brown-nm7n`, `ylrl-marte-wessel-k0epe`** — the fourth
+entry moves out of `fields` and into `orUnrepresented`, verbatim.
+
+    fields  ["Communications","Radio","Electronics","Amateur Radio related arts and sciences"]
+      ->    ["Communications","Radio","Electronics"]
+            orUnrepresented: "Amateur Radio related arts and sciences"
+
+The capture (`ylrl`, `ylrl-scholarships`, the "Scholarship Requirements" block) reads *"• Preference
+will be given to students studying communications, radio, electronics, or Amateur Radio related arts
+and sciences."* — so all four are YLRL's words and none is being deleted. The defect was where the
+fourth one sat: `matcher.ts` matches a field by stemmed word overlap, so an entry the funder wrote to
+WIDEN their list matched every major with the word "arts" in it. Measured on the shipped record,
+`Culinary Arts` went from `pass` to `unknown`; `Electrical Engineering` and `Communications` still
+`pass`. This is the remedy the register itself named, and the idiom Chick Allen, Goldwater and Wayne
+Nelson already use: a phrase that names a CLASS of fields rather than a field goes in
+`orUnrepresented`, which can turn a `fail` into an `unknown` and can never manufacture a refusal.
+
+**`rca-scholarship-program` / `rca-track`** — `fields` `["Wireless communications","Electrical Engineering","Telecommunications"]` → `["wireless career track"]`, with the same phrase in `orUnrepresented`.
+
+Not one of the three majors appears in the constraint's own sentence, *"Undergraduate and graduate
+students on a wireless career track. A ham licence is NOT required."* This record is
+`manual-tier-d`: it has NO captured funder page, so there is nothing in this repository against
+which RCA's real wording could be checked, and inventing one is the defect this whole file is about.
+What could be decided without a funder page is that the record should not publish three majors its
+own visible sentence does not contain — so the spec now quotes that sentence and nothing else.
+
+A `fields: []` was tried first and is the wrong answer: an empty field list is `unrestricted`, so
+the soft constraint came out `pass` for **every** applicant and the record would have told a
+culinary-arts major that they meet RCA's wireless-career-track preference. With the phrase quoted
+and repeated in `orUnrepresented`, every probed major comes out `unknown` — nobody is ranked up on a
+judgement this record cannot make, and nobody is refused. The constraint is soft, so no verdict
+depends on it either way, and no shipped profile can even reach this record: its
+`applicantEntities` is `["nominated_by_institution"]`.
+
+**`ariss-iss-contact` / `rawOtherText`** — the "Unstructured requirements, verbatim" panel.
+
+    before  "SPARKI is named once on this page as a companion programme, and the proposal-window
+             sentence is rewritten each quarter at a stable URL. Selection timing, in ARISS's words:
+             4 to 6 weeks after the close of the proposal window, organizations with approved
+             proposals are sent a congratulatory email."
+    after   "4 to 6 weeks after the close of the proposal window, organizations with approved
+             proposals are sent a congratulatory email. Declination emails are also sent out at that
+             time."
+
+The second half was always genuine; the first half was GrantSpotter describing the funder's page, in
+GrantSpotter's voice, inside a panel headed "reproduced exactly". The replacement is one contiguous
+run of the `ariss` capture — the fifth and sixth sentences of "The ARISS Proposal Process" list —
+and the declination sentence, which is on the same line of the page, is kept because a student
+waiting on an answer is entitled to know that silence is not the shape of a "no" here.
+
+**`ieee-mtts-chapter-support` / `rawOtherText`.**
+
+    before  "In addition to the chapter activity support above, MTT-S offers $500 seed money per
+             chapter for a workshop or symposium, on condition that an IEEE MTT-S membership booth
+             is present at the event, and up to $2,250 a year of Chapter Officer travel support to
+             attend a Chapter Chair Meeting."
+    after   "Each active MTT-S Chapter may receive financial support up to $2,250 per year to send a
+             Chapter Officer to attend one of the Chapter Chair Meetings (CCM) held in conjunction
+             with the International Microwave Symposium (IMS), the European Microwave Week (EuMW),
+             the Asia-Pacific Microwave Conference (APMC), the Microwaves Antennas and Propagation
+             Conference (MAPCON), or the Latin America Microwave Conference (LAMC)."
+
+"In addition to … above" is a cross-reference to OUR page layout; no funder's page can contain one.
+The figures underneath it were real, and they are on the `ieee-mtts` capture in two places that are
+nowhere near each other — the $500 seed fund under "CHAPTER FUNDING", the $2,250 travel support
+under "CHAPTER OFFICER TRAVEL SUPPORT", with four paragraphs about affinity groups in between. The
+$500 seed fund is already stated in this record's own `summary`, which is GrantSpotter's voice and
+is allowed to summarise; the travel support was modelled by no field at all, which is exactly what
+`rawOtherText` is for. So the panel now carries that one sentence, verbatim, as MTT-S wrote it.
+
+**`ardc-grants` / `rawOtherText`** — removed, set to `""`.
+
+The paragraph about multi-year scope and "Show us the roadmap for your project" reads like real ARDC
+copy and is not on the page this record is keyed to (`ardc-grants`, `apply`); the word "roadmap"
+does not occur in that capture at all. It was most likely lifted from a different ARDC page, which
+under a heading promising exact reproduction costs the reader precisely what an invention costs.
+
+Nothing replaced it, and that is the finding rather than a shortfall: every other passage on the
+`apply` capture is ALREADY modelled by a field on this record — the eligible-entity list and the
+fiscal-sponsor rule are constraints, the open-licence requirement is `obligations.licenseObligation`,
+the 20% indirect-cost cap is a `fundingRestrictions` entry, the four dates are `deadline.note`, and
+the budget and funding rate are `amount.amountRaw`. There is no unmodelled text left on that page, so
+the honest value of a field for unmodelled text is empty. An empty string is a legal value and the
+record simply stops rendering the panel.
+
+### Not closed, and what each one actually needs
+
+**The two geography over-claims are NOT a curator's edit, and the register says they are.** This is
+the correction worth carrying forward. `KNOWN_SEED_GEO_OVERCLAIMS` ends with *"both are a curator's
+edit to `data/seed/programs.arrl-catalog.json`"*. That file is **generated**:
+`scripts/generate-arrl-seed.ts` builds all 111 records by running the shipped parser and
+`normalizeRaw` over the committed ARRL capture, and `scripts/generate-arrl-seed.test.ts` asserts the
+committed JSON is **byte-for-byte** what the generator produces. Hand-editing either record turns
+that test red and the edit is erased by the next `npm run seed:arrl`. Both fixes are extractor work
+in `packages/server/src/normalize/axes/geography.ts`, and both then arrive in the seed file for free.
+
+* **The James Cothran, KD3NI, Scholarship** (`arrl-cat-the-james-cothran-kd3ni-scholarship`,
+  `geography-0-6e04b748`) admits PR and VI. Capture line, verbatim: *"Region: Resident of Atlantic
+  Division (DE, MD, PA, Southern NJ, Western NY), the Roanoke Division (NC, SC, VA, WV), the
+  Southeastern Division (AL, FL, GA) or Washington, D.C."* The spec is
+  `arrl_division: ['Atlantic','Roanoke','Southeastern']`, and `statesForArrlDivision('Southeastern')`
+  is `AL,FL,GA,PR,VI` — the Puerto Rico and US Virgin Islands sections. **This one is decidable from
+  the capture and needs no funder contact.** The funder glossed all three divisions by hand and then
+  added "or Washington, D.C." — a jurisdiction ARRL already puts INSIDE the Atlantic Division's
+  Maryland-DC section. Nobody who meant "the divisions as ARRL defines them" needs to add DC. The
+  parentheses are therefore the operative scope, and the extractor should emit
+  `geo: { type: 'state', values: ['AL','DC','DE','FL','GA','MD','NC','NJ','NY','PA','SC','VA','WV'] }`
+  — the funder's own thirteen, exactly as written, PR and VI dropped.
+* **The Charles N. Fisher Memorial Scholarship** (`arrl-cat-the-charles-n-fisher-memorial-scholarship`,
+  `geography-0-e0bd5c90`) admits every Californian. Capture line, verbatim: *"Region: Residence in
+  ARRL Southwestern Division (AZ, Los Angeles, Orange, San Diego, Santa Barbara)"*. **This one is NOT
+  decidable from anything in this repository, and it must not be guessed at.** Those four names are
+  ARRL SECTIONS, all in southern California, and `arrlSections.ts` records only that each maps to
+  `CA` — so `arrl_section` is no narrower than `arrl_division` here, and a Berkeley student in the
+  PACIFIC division still reads `eligible`.
+
+  The only shape in `GeoSpec` that can say "southern California" is `county`, and writing one needs a
+  fact this repository does not hold: **which counties ARRL puts in the Los Angeles, Orange, San
+  Diego and Santa Barbara sections.** Someone has to open <http://www.arrl.org/sections> (or the
+  section pages themselves) and write those lists down. Do not shortcut it by reading the four names
+  AS counties: the Santa Barbara section is not Santa Barbara county alone, and a county tier built
+  that way hard-refuses residents the funder admits — a false exclude, which `matcher.ts` calls the
+  kind that "hides the money forever, silently". With the real county lists the tier becomes
+  `geo: { type: 'county', values: [...] }` with `anyOf: [{ axis: 'geography', geo: { type: 'state', values: ['AZ'] } }]`,
+  which is the shape IRARC already uses (`county[Brevard]` + `anyOf state[FL]`).
+
+  Until then the record stays as it is, over-claiming, because the two available shortcuts are worse
+  than the defect: narrowing on a guess refuses real applicants, and hanging `orUnrepresented` off
+  the whole sentence converts forty-eight states from a correct `ineligible` into a `maybe`.
+
+**`ncdxf-w6een-scholarship` / `ncdxf-w6een-age` (`KNOWN_SEED_TOOTHLESS`) — the record is right and
+the rule is wrong.** Re-read against the `ncdxf-scholarships` capture: the constraint is
+`{ axis: 'age_stage', ageMax: 25, stages: [] }`, hard, beside *"If you are a licensed amateur radio
+operator 25 years of age or younger, you can apply for a free tuition scholarship by contacting the
+appropriate University directly."* It refuses a 26-year-old, which is the whole of what NCDXF wrote.
+W10 flags it because `STAGE_SAYS.UNDERGRAD` matches the word "University" — which is in a clause
+about HOW TO APPLY, not about who may — and then demands the spec refuse a high-school senior. There
+is no edit to `data/seed/` that fixes this without putting a claim in the record that NCDXF did not
+make. The fix is splitting the stage vocabulary the way `credentialLevelsNamed` already splits the
+credential vocabulary, in `sentence-vs-spec.test.ts` itself, and it changes what W10 probes across
+both corpora.
+
+**`KNOWN_SEED_NOTED_ONLY` — two of the three are correct behaviour and one is a schema gap.** None is
+a seed-data edit.
+
+* `The John C. York, KE5V, Scholarship` and `The Medical Amateur Radio Council (MARCO) Scholarship`,
+  both `[ham_activity]`: the funder's own modal is RFC 2119's SHOULD — *"Applicants should describe
+  how they have engaged in volunteer and/or public service activities"* — and `preference.ts`
+  softens it deliberately. Before it did, both awards were a hard `ineligible` on `ham_activity` for
+  every licensed individual in the corpus. Soft is the right answer; the entries exist so a THIRD
+  arrival is a question asked again.
+* `arrl-etp-grants` / `etp-plan` is a QUESTION on ARRL's application form — *"How will your planned
+  ham radio activities support the curriculum that you are required to teach?"* — and nobody may be
+  refused for how they answer a prompt. What is worth a curator's eye is what sits beside it:
+  `etp-k12` carries ARRL's real audience bar in an `axis: 'other'` spec, and an `other` constraint
+  enforces nothing. The record's `applicantEntities` is `["teacher","school_lea"]`, so the entity
+  gate does refuse an individual student before any constraint is consulted — the exposure is a
+  university DEPARTMENT, which is not in that list either, so it is refused too. There is no
+  applicant this actually reaches today. Closing it properly needs a `ConstraintSpec` that can say
+  "the beneficiaries are K-12 pupils", which no axis has.
+
+---
+
 ## Known residual, NOT fixed here
 
 **The playbooks are out of `rawOtherText`.** The previous round left three there and asked that they
@@ -723,6 +918,21 @@ was an interim measure that asked the reader to disbelieve a heading the product
    rather than fixed here because widening an adjudicated value unilaterally is how a curation
    round becomes unreviewable; it needs a decision, not a patch. No shipped profile is affected —
    none of the seven is a university org — which is precisely why it would go unmeasured.
+
+**Somebody has to open a page for exactly one of these.** Round five closed eight register entries
+from the committed captures and left six open. Five of the six need code, not a page, and are
+written up in full in the round-five section above: the Cothran geography (an extractor fix in
+`normalize/axes/geography.ts`, fully decided by the capture), the NCDXF stage probe (a rule fix in
+`sentence-vs-spec.test.ts`), the ETP K-12 audience (no axis can say it), and York and MARCO
+(already correct — RFC 2119's SHOULD, softened on purpose). The one that needs a human with a
+browser is:
+
+5. **The Charles N. Fisher Memorial Scholarship geography.** Open <http://www.arrl.org/sections> and
+   record which COUNTIES ARRL places in the Los Angeles, Orange, San Diego and Santa Barbara
+   sections. Until those four lists exist in this repository the record cannot be narrowed without
+   either guessing (which produces false excludes) or turning forty-eight states into a `maybe`.
+   Every Californian currently reads `eligible` for an award whose own sentence lists four southern
+   sections.
 
 ---
 
