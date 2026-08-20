@@ -166,6 +166,21 @@ function payloadFor(rawUrl: string): unknown {
     return { rows: [], summary: { total: 0, healthy: 0, unhealthy: 0 }, canConfigure: false };
   }
   if (path === '/api/admin/users') return { rows: [] };
+  // A deployment already holding everything the image would change. The panel's own behaviour is
+  // in PendingImageChanges.test.tsx; what this file needs is for /admin to draw without an
+  // unstubbed call, which is precisely what the `unstubbed` list below exists to force.
+  if (path === '/api/admin/seed-corrections') {
+    return {
+      ran: true,
+      wording: [],
+      rules: [],
+      additions: [],
+      notOffered: [],
+      profilesMeasured: 0,
+      examined: 144,
+      ledgerSize: 1997,
+    };
+  }
   /*
    * `/api/admin/enrollment-codes` HAD A STUB HERE AND IT IS DELETED (2026-08-11), which is a
    * deliberate removal of cover rather than tidying. The route was unmounted with the rest of the

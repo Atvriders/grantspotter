@@ -11,6 +11,7 @@ import { createChannelRouter } from './channelRouter.js';
 import { createCalendarRouter } from './calendarRouter.js';
 import { createInboxRouter } from './inboxRouter.js';
 import { createAdminUsersRouter } from './adminUsersRouter.js';
+import { createSeedCorrectionsRouter } from './seedCorrectionsRouter.js';
 import { createSourcesRouter } from './sourcesRouter.js';
 
 /**
@@ -58,6 +59,10 @@ export function mountProductApi(
   app.use('/api/calendar', createCalendarRouter(deps));
   app.use('/api/inbox', createInboxRouter(deps));
   app.use('/api/admin/users', createAdminUsersRouter(deps));
+  // The second door on a shipped-data correction: what the image would change and cannot, and the
+  // two consented acts that let an administrator change it. Admin-only on every route, including
+  // the read. See seed/consentedCorrections.ts for why this is a screen and not a subcommand.
+  app.use('/api/admin/seed-corrections', createSeedCorrectionsRouter(deps));
   // `/api/admin/enrollment-codes` WAS MOUNTED HERE AND IS GONE (2026-08-11). It issued, listed and
   // revoked the codes an account used to be created with; accounts are open now, so there is no
   // code to issue. `mount.test.ts` asserts that the three routes 404 rather than only that the

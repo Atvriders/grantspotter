@@ -240,3 +240,134 @@
   font-size: var(--fs-200);
   color: var(--no);
 }
+
+/* ---------------------------------------------- pending changes from the image ---------------- */
+
+/* The panel an operator is sent to by the boot log. Every row is one decision: a rule the image
+   would change, the funder's sentence behind it, and who it moves. It is a LIST rather than a
+   table for the same reason the accounts table becomes cards on a phone — nobody scans this down
+   a column; each row is read whole and acted on. */
+
+.pending-heading {
+  font-size: var(--fs-300);
+  margin-top: var(--s-4);
+  margin-bottom: var(--s-2);
+}
+
+.pending-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--s-4);
+  display: grid;
+  gap: var(--s-3);
+}
+
+.pending-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+}
+
+.pending-choose {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+}
+
+/* The tick is a 44 px target like everything else in this console. */
+.pending-choose input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  margin-top: 2px;
+  flex: none;
+}
+
+.pending-choose > span {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.pending-meta {
+  font-size: var(--fs-200);
+  color: var(--text-muted);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pending-summary {
+  max-width: 70ch;
+  margin: 0;
+}
+
+.pending-rule {
+  display: grid;
+  gap: var(--s-2);
+}
+
+/* The funder's own words, set apart from ours. This panel exists because a rule and the sentence
+   it claims to encode had drifted apart, so the two are never rendered in the same voice. */
+.pending-quote {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface);
+  max-width: 70ch;
+  overflow-wrap: anywhere;
+}
+
+.pending-quote-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.pending-fields {
+  margin: 0;
+  padding-left: var(--s-4);
+  display: grid;
+  gap: var(--s-1);
+  font-size: var(--fs-200);
+  overflow-wrap: anywhere;
+}
+
+.pending-from {
+  color: var(--text-muted);
+}
+
+.pending-to {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pending-impact {
+  margin: 0;
+  padding-left: var(--s-4);
+  display: grid;
+  gap: var(--s-1);
+  max-width: 70ch;
+}
+
+.pending-impact-none {
+  padding-left: 0;
+  color: var(--text-muted);
+}
+
+.pending-additions {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-3);
+  margin-top: var(--s-4);
+}
+
+.pending-not-offered {
+  margin-top: var(--s-4);
+}
+
+.pending-not-offered summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}

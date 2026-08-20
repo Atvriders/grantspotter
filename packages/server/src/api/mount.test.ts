@@ -70,6 +70,9 @@ const PLAN_3_ROUTES: Probe[] = [
   { method: 'patch', path: '/api/admin/users/no-such-user/disabled', body: { disabled: true } },
   { method: 'post', path: '/api/admin/users/no-such-user/reset-password', body: {} },
   { method: 'delete', path: '/api/admin/users/no-such-user' },
+  { method: 'get', path: '/api/admin/seed-corrections' },
+  { method: 'post', path: '/api/admin/seed-corrections/apply', body: { confirm: 'CORRECT', proposalIds: ['no-such-proposal'] } },
+  { method: 'post', path: '/api/admin/seed-corrections/add', body: { confirm: 'ADD', proposalIds: ['no-such-proposal'] } },
   { method: 'get', path: '/api/sources/health' },
   { method: 'patch', path: '/api/sources/no-such-source', body: { enabled: false } },
   { method: 'post', path: '/api/sources/crawl', body: { sourceIds: [] } },
@@ -197,8 +200,8 @@ describe('mountRoutes composition', () => {
     }
   });
 
-  it('covers all 28 registered routes, so this list cannot silently shrink', () => {
-    expect(PLAN_3_ROUTES).toHaveLength(28);
+  it('covers all 31 registered routes, so this list cannot silently shrink', () => {
+    expect(PLAN_3_ROUTES).toHaveLength(31);
   });
 
   it('serves the read surfaces a signed-in member is entitled to', async () => {
@@ -254,6 +257,12 @@ describe('mountRoutes composition', () => {
       { method: 'patch', path: '/api/admin/users/no-such-user/disabled', body: { disabled: true } },
       { method: 'post', path: '/api/admin/users/no-such-user/reset-password', body: {} },
       { method: 'delete', path: '/api/admin/users/no-such-user' },
+      // ALL THREE, INCLUDING THE READ. The pending-changes preview names records, quotes funder
+      // sentences and reports how many of this instance's applicant profiles change verdict; the
+      // two writes change what every member is told about their own eligibility.
+      { method: 'get', path: '/api/admin/seed-corrections' },
+      { method: 'post', path: '/api/admin/seed-corrections/apply', body: { confirm: 'CORRECT', proposalIds: ['x'] } },
+      { method: 'post', path: '/api/admin/seed-corrections/add', body: { confirm: 'ADD', proposalIds: ['x'] } },
       // The three enrollment-code routes were here and are asserted GONE below instead — see
       // `unmounts every enrollment-code route`. They earned this comment by being the reason this
       // file exists: until the list named them the ROUTER WAS NOT MOUNTED AT ALL and nothing

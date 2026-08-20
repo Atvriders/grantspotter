@@ -41,6 +41,27 @@ const MEMBER_ROW: AdminUserFixture = {
 
 const USERS = { rows: [ADMIN_ROW, MEMBER_ROW] };
 
+/**
+ * A deployment holding everything the image would change — the state most instances are in most of
+ * the time, and the one the rest of this file is about.
+ *
+ * It is in the shared stub rather than in each test because of what the stub promises: "everything
+ * else gets a shape the console can render, so a test never fails on a request it was not written
+ * about". Without it the pending-changes panel reads a users payload, correctly concludes the
+ * comparison did not run, and renders its own `role="alert"` — and four tests that assert on THE
+ * alert start failing for a reason that has nothing to do with them.
+ */
+const NO_PENDING_CHANGES = {
+  ran: true,
+  wording: [],
+  rules: [],
+  additions: [],
+  notOffered: [],
+  profilesMeasured: 0,
+  examined: 144,
+  ledgerSize: 1997,
+};
+
 type Override = (url: string, init?: RequestInit) => unknown;
 
 /**
@@ -73,6 +94,9 @@ function stubFetch(overrides: Override = () => undefined, users: { rows: AdminUs
     }
     if (init?.method !== undefined && init.method !== 'GET') {
       return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    }
+    if (url.startsWith('/api/admin/seed-corrections')) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => NO_PENDING_CHANGES });
     }
     return Promise.resolve({ ok: true, status: 200, json: async () => users });
   });

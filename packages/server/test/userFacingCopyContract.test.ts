@@ -655,7 +655,7 @@ const UNASSERTED_BUDGET: ReadonlyMap<string, number> = new Map(
     'packages/web/src/lib/filterState.ts': 13,
     'packages/web/src/lib/profileFields.ts': 13,
     'packages/web/src/lib/safety.ts': 1,
-    'packages/web/src/routes/Admin.tsx': 15,
+    'packages/web/src/routes/Admin.tsx': 14,
     // 10 until 2026-08-13, then 9. "Start a new draft or open an existing one." is now read by a
     // test — `Applications.test.tsx`'s "offers the section buttons switched off while no draft is
     // open" — because that sentence became load-bearing: the three template groups are disabled
@@ -755,9 +755,9 @@ describe('sentences no test names', () => {
    * drift from the figure the suite measures — and so that the previous headline, "335 of 1,320",
    * cannot be repeated now that it is known to have been 335 of the 1,320 the counter could see.
    */
-  it('number 413 of 1,541 today, and that ceiling only falls', () => {
-    expect(copy.length).toBeGreaterThanOrEqual(1541);
-    expect(unasserted.length).toBeLessThanOrEqual(413);
+  it('number 387 of 1,750 today, and that ceiling only falls', () => {
+    expect(copy.length).toBeGreaterThanOrEqual(1750);
+    expect(unasserted.length).toBeLessThanOrEqual(387);
   });
 });
 

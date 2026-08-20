@@ -303,8 +303,16 @@ const READ_COLUMNS = [
 type ReadColumn = (typeof READ_COLUMNS)[number];
 type RawRow = Record<ReadColumn, string>;
 
-/** Applies one correction to a copy of the record, for the meaning check and the new hash. */
-function withCorrection(program: Program, correction: SeedCorrection): Program {
+/**
+ * Applies one correction to a copy of the record, for the meaning check and the new hash.
+ *
+ * EXPORTED for `consentedCorrections.ts`, the second door, so the two doors cannot disagree about
+ * what applying a correction to a record MEANS. That file may write things this one may not — a
+ * change that moves a verdict, with an administrator's consent and their id on the audit row — and
+ * the one thing it must not do is carry its own copy of this switch, which would drift the instant
+ * a new correctable path is added here.
+ */
+export function withCorrection(program: Program, correction: SeedCorrection): Program {
   const constraintId = constraintIdOfRawTextPath(correction.path);
   if (constraintId !== undefined) {
     return {
@@ -733,6 +741,19 @@ export function formatSeedCorrectionReport(report: SeedCorrectionReport): string
     lines.push(
       '[seed]   Each line above is also in audit_log under that record’s id, with the exact ' +
         'text that was replaced.',
+    );
+  }
+  if (report.leftAlone.length > 0) {
+    // THE LINE THAT SAYS WHERE THE LEFTOVERS GO, and the reason it is here rather than nowhere:
+    // this report has printed its refusals at every boot of the live instance for a fortnight and
+    // the defects it names are still live, because nothing told the operator there was anything
+    // they could do about them. Admin → Pending changes from the image is that somewhere: it
+    // shows what each refused change would move, and applies only what an administrator reads and
+    // consents to. Nothing about the rules above changes; see seed/consentedCorrections.ts.
+    lines.push(
+      '[seed]   A refusal is not a dead end. Admin → “Pending changes from the image” shows what ' +
+        'each of these would change, who it moves, and applies only what an administrator reads ' +
+        'and consents to.',
     );
   }
   return lines;

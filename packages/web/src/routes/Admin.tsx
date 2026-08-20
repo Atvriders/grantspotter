@@ -5,6 +5,7 @@ import { useSession } from '../store/session.js';
 import { useApi } from '../store/useApi.js';
 import { formatDate } from '../lib/trust.js';
 import { useNarrowerThan } from '../lib/narrowLayout.js';
+import { PendingImageChanges } from '../components/PendingImageChanges.js';
 import '../components/admin.css';
 
 /**
@@ -616,6 +617,13 @@ export function Admin(): JSX.Element {
           Revoke my calendar feed link
         </button>
       </section>
+
+      {/* BEFORE the backup panel and AFTER the accounts table, deliberately. This is the panel a
+          restart tells the operator to come and read, and it is not a danger zone: nothing in it
+          is applied without being ticked, and every field it can rewrite is one this project can
+          prove it wrote. It sits above "Backup and restore" because the honest first move before
+          consenting to any of it is to download a backup. */}
+      <PendingImageChanges />
 
       <section className="admin-section card danger-zone" aria-label="Backup and restore">
         <h2>Backup and restore</h2>
