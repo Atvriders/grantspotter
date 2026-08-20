@@ -566,37 +566,79 @@ describe('what the seed corpus puts beyond this check, named rather than counted
  * `constraints[].rawText` applies to it word for word, and until 2026-08-16 no rule read it —
  * FOUR ROUNDS OF WORK ON FABRICATED FUNDER TEXT, all of it aimed at the field next to this one.
  *
- * Measured on 2026-08-16 over the seed corpus a fresh install serves: 118 records carry the field,
- * 115 of them are ONE verbatim run of their own funder capture, and THREE are not. They are
- * registered below rather than deleted, because inventing a replacement sentence for a funder is
- * the defect itself and this agent cannot read the funders' pages. The register is the handoff.
+ * Measured on 2026-08-16 over the seed corpus a fresh install serves: 118 records carried the
+ * field, 115 of them were ONE verbatim run of their own funder capture, and THREE were not. They
+ * were registered rather than deleted, because inventing a replacement sentence for a funder is
+ * the defect itself and the agent that found them could not read the funders' pages.
+ *
+ * THE REGISTER IS NOW EMPTY, AND THAT IS WHY THIS COMMENT IS LONGER THAN IT WAS. `87c656c` read
+ * the three captures and repaired all three, so on 2026-08-20 the offender list is `[]` and there
+ * is no list left to add a fourth to. An allowlist that outlives its defect is how a fixed bug
+ * comes back — this repository has already lost `KNOWN_TOOTHLESS` that way — so the three names
+ * do not stay here as a comment nobody re-measures. They move DOWN, into
+ * `THE_THREE_THAT_WERE_NOT_VERBATIM`, which is not a register but a scar: each of the three is
+ * asserted, by name, to be in the repaired state, so the specific defect cannot come back
+ * silently under a green corpus-wide sweep.
  */
 describe('the other panel that promises the funder’s words: rawOtherText', () => {
   /**
-   * THE THREE RECORDS WHOSE "verbatim" PANEL IS NOT VERBATIM, EACH WITH WHAT IS WRONG WITH IT.
+   * EMPTY, AND THE EMPTINESS IS THE ASSERTION.
    *
-   * A register, not an exemption list: every entry is a live defect on grant.waterburp.com, and
-   * the rule below fails the moment a FOURTH appears or a listed one is fixed without being
-   * removed from here. The same discipline as `SPLICED` above.
-   *
-   * · `ariss-iss-contact` — the clearest, and the same shape as the three sentences a5dda09
-   *   removed from `constraints[].rawText`. "SPARKI is named once on this page as a companion
-   *   programme, and the proposal-window sentence is rewritten each quarter at a stable URL" is a
-   *   sentence ABOUT the funder's page, in GrantSpotter's voice, printed as the funder's text. The
-   *   passage's own "Selection timing, in ARISS's words:" concedes that what precedes it is not.
-   * · `ieee-mtts-chapter-support` — "In addition to the chapter activity support above, MTT-S
-   *   offers …". "In addition to … above" is a connective referring to another part of OUR record;
-   *   the funder's page cannot contain a cross-reference to a GrantSpotter layout. A composed
-   *   summary, whatever the underlying figures are worth.
-   * · `ardc-grants` — a coherent paragraph of ARDC guidance about proposal scope and roadmaps that
-   *   reads as genuine ARDC copy, but appears nowhere in the ARDC page this record is keyed to. It
-   *   is most likely real text lifted from a DIFFERENT ARDC page, which is a provenance failure
-   *   rather than an invention — and is indistinguishable from one here, which is the point: under
-   *   a heading that says "reproduced exactly", unverifiable and false cost the reader the same.
+   * `toEqual([])` below is the strongest form this rule has: any record whose "verbatim" panel
+   * stops being one verbatim run of its own capture fails here with its own id in the diff, and
+   * there is no longer any list to quietly add it to. It stays typed and named so that a future
+   * author who genuinely cannot repair a record has somewhere to put it WITH a reason — not so
+   * that anybody can make this file green by pasting an id into it.
    */
-  const NOT_VERBATIM = ['ardc-grants', 'ariss-iss-contact', 'ieee-mtts-chapter-support'];
+  const NOT_VERBATIM: string[] = [];
 
-  it('reproduces the funder’s own captured page, on every record but the registered three', async () => {
+  /**
+   * THE THREE THAT WERE NOT VERBATIM ON 2026-08-16, AND WHAT EACH ONE IS NOW.
+   *
+   * · `ariss-iss-contact` — carried "SPARKI is named once on this page as a companion programme,
+   *   and the proposal-window sentence is rewritten each quarter at a stable URL", a sentence
+   *   ABOUT the funder's page, in GrantSpotter's voice, printed as the funder's text. Its own
+   *   "Selection timing, in ARISS's words:" conceded that what preceded it was not. Now: the two
+   *   ARISS sentences that were being introduced, and nothing else.
+   * · `ieee-mtts-chapter-support` — carried "In addition to the chapter activity support above,
+   *   MTT-S offers …". "In addition to … above" is a connective referring to another part of OUR
+   *   record; a funder's page cannot contain a cross-reference to a GrantSpotter layout. Now: the
+   *   single MTT-S sentence about Chapter Officer travel support, as MTT-S wrote it.
+   * · `ardc-grants` — carried a coherent paragraph of ARDC guidance about proposal scope and
+   *   roadmaps that reads as genuine ARDC copy but appears nowhere in the ARDC page this record is
+   *   keyed to: most likely real text from a DIFFERENT ARDC page, which is a provenance failure
+   *   rather than an invention, and indistinguishable from one here. Now: empty. Under a heading
+   *   that says "reproduced exactly", nothing is the only honest answer to text nobody can pair to
+   *   the page it is filed under.
+   *
+   * WHAT THIS SCAR ADDS OVER THE SWEEP ABOVE, STATED WITHOUT INFLATING IT. The sweep catches all
+   * three coming back — it is what FOUND all three, including ARDC's, whose prose was real and
+   * cleanly written and still failed the run test because it was from the wrong page. What the
+   * sweep does not do is name them: it reports an id and a count, and the next author has to
+   * rediscover which words were the evidence. The assertions below pin the specific repair — the
+   * meta-commentary words that are gone from ARISS, the layout cross-reference that is gone from
+   * MTT-S — so a partial relapse fails on the sentence that was wrong rather than on a total.
+   *
+   * BOTH HALVES WERE SHOWN ABLE TO SPEAK, on 2026-08-20, rather than argued for. Restoring ARDC's
+   * old paragraph to `data/seed/programs.curated.json` and running this file takes the sweep red
+   * with `expected [ 'ardc-grants' ] to deeply equal []` AND the scar red with
+   * `expected true to be false` on the emptiness pin. The seed file was restored byte-identical
+   * afterwards. A guard nobody has watched fail is a guard nobody has tested.
+   *
+   * THE ARDC PIN IS A DELIBERATE OVER-PIN AND SHOULD BE READ AS ONE. `ardc-grants` was repaired by
+   * emptying the field, so the record leaves `rawOther` entirely and the sweep above stops seeing
+   * it at all — a corpus-wide rule cannot check a record that is not in its population. Asserting
+   * the field is empty is the only thing that keeps it in view. It will go red on a GOOD change
+   * too: an author who pairs ARDC's panel back to ARDC's own captured page should delete this pin
+   * in the same commit, which is a deliberate act rather than a silent one.
+   */
+  const THE_THREE_THAT_WERE_NOT_VERBATIM = [
+    'ariss-iss-contact',
+    'ieee-mtts-chapter-support',
+    'ardc-grants',
+  ] as const;
+
+  it('reproduces the funder’s own captured page, on every record it carries', async () => {
     const { rawOther } = await seedProvenance();
 
     const offenders = rawOther
@@ -605,28 +647,54 @@ describe('the other panel that promises the funder’s words: rawOtherText', () 
       .sort((a, b) => a.localeCompare(b));
 
     // Equality, not containment: a record that gets fixed must leave the register in the same
-    // commit, or the next author reads three live defects where there are two.
+    // commit, or the next author reads three live defects where there are two. On 2026-08-20 that
+    // is what happened, and the register went to zero.
     expect(offenders).toEqual(NOT_VERBATIM);
-    // Vacuity guard. Measured 2026-08-16: 118 records carry the field, 115 are verbatim.
-    expect(rawOther.length).toBe(118);
+    // Vacuity guard. 118 records carried the field on 2026-08-16 and 115 were verbatim; 117 carry
+    // it now, because `ardc-grants` was emptied rather than rewritten, and all 117 are verbatim.
+    expect(rawOther.length).toBe(117);
   });
 
-  it('names, for each registered record, the words its own funder capture does not contain', async () => {
+  it('holds the three records the register used to name to the repaired state, by name', async () => {
     const { rawOther } = await seedProvenance();
-    const missingFor = (programId: string): string[] => {
-      const record = rawOther.find((r) => r.programId === programId);
-      if (record === undefined) throw new Error(`${programId} no longer carries rawOtherText`);
-      return [...new Set(words(record.text).filter((w) => !record.own.includes(w)))];
-    };
+    const byId = new Map(rawOther.map((r) => [r.programId, r] as const));
 
-    // The concrete evidence, so "not verbatim" is a reading anybody can check rather than a label.
-    // GrantSpotter's own meta-commentary about the funder's page:
-    expect(missingFor('ariss-iss-contact')).toContain('rewritten');
-    expect(missingFor('ariss-iss-contact')).toContain('companion');
-    // A cross-reference to this product's own layout, which no funder page can contain:
-    expect(missingFor('ieee-mtts-chapter-support')).toEqual(['addition', 'above', 'offers', 'condition']);
-    // Prose that is plausibly the funder's, from a page this record is not keyed to:
-    expect(missingFor('ardc-grants')).toContain('roadmap');
+    // ARISS and MTT-S still carry the panel, and what they carry is now their own funder's words.
+    // Driven from the named list, not from a copy of it: a name deleted from the list up there
+    // stops being checked down here, and that has to be visible as a deletion.
+    for (const programId of THE_THREE_THAT_WERE_NOT_VERBATIM.filter((id) => id !== 'ardc-grants')) {
+      const record = byId.get(programId);
+      if (record === undefined) {
+        throw new Error(`${programId} no longer carries rawOtherText at all — check the repair`);
+      }
+      const missing = [...new Set(words(record.text).filter((w) => !record.own.includes(w)))];
+      expect({ programId, missing }).toEqual({ programId, missing: [] });
+      expect(runsNeeded(words(record.text), record.own)).toBe(1);
+    }
+
+    // The words that were the evidence of the defect are gone from the panel: GrantSpotter's own
+    // meta-commentary about ARISS's page, and the cross-reference to this product's own layout.
+    const ariss = words(byId.get('ariss-iss-contact')?.text ?? '');
+    expect(ariss).not.toContain('rewritten');
+    expect(ariss).not.toContain('companion');
+    const mtts = words(byId.get('ieee-mtts-chapter-support')?.text ?? '');
+    expect(mtts).not.toContain('addition');
+    expect(mtts).not.toContain('above');
+
+    // And ARDC's panel is empty, which is why it is not in `rawOther` at all — and why the sweep
+    // above no longer has it in its population. See the over-pin note in the block comment.
+    expect(byId.has('ardc-grants')).toBe(false);
+    const ardc = loadSeedCorpus().programs.find((p) => p.id === 'ardc-grants');
+    if (ardc === undefined) throw new Error('ardc-grants has left the seed corpus');
+    expect(ardc.rawOtherText.trim()).toBe('');
+
+    // Vacuity: the scar is only worth anything if it is looking at the three records it names, and
+    // the three are the ones the register held at `da204cc`. A shortened list is a quieter test.
+    expect([...THE_THREE_THAT_WERE_NOT_VERBATIM].sort()).toEqual([
+      'ardc-grants',
+      'ariss-iss-contact',
+      'ieee-mtts-chapter-support',
+    ]);
   });
 
   it('goes red on a fourth record, planted on a real one that passes today', async () => {
@@ -645,6 +713,7 @@ describe('the other panel that promises the funder’s words: rawOtherText', () 
     expect(offenders).not.toEqual(NOT_VERBATIM);
     expect(offenders).toContain(clean.programId);
   });
+
 });
 
 /**

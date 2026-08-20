@@ -356,7 +356,45 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     expect(offenders).toEqual([]);
     // Per corpus, never summed: a rule that stops seeing the fixture half must not be able to hide
     // inside a total the seed half makes up. Seed measured at 91 on 2026-08-16.
-    expect(checked.seed).toBe(91);
+    //
+    // 95 SINCE `87c656c`, WHICH IS THIS RULE DOING ITS JOB IN THE GROWING DIRECTION. Four routes
+    // were added to `data/seed` by the round that closed eight register entries against the
+    // funders' own captures, and all four are a phrase the record's own `rawText` already carried,
+    // lifted OUT of `fields` — where word overlap was matching it to majors it does not name — and
+    // into the field that publishes it as an unadjudicable route. All four constraints are SOFT,
+    // so the movement here is `pass` -> `unknown`, not `fail` -> `unknown`: nobody was being
+    // refused, people were being told they met a preference the sentence does not give them.
+    // (Re-measured through `evaluateConstraint` on 2026-08-20, on the shipped `ylrl-k4lmb-study`:
+    // `Culinary Arts` pass -> unknown, `Electrical Engineering` and `Communications` pass -> pass.)
+    //
+    //   · `ylrl-k4lmb-study`, `ylrl-nm7n-study`, `ylrl-k0epe-study` — three YLRL scholarships whose
+    //     shared sentence is "Preference will be given to students studying communications, radio,
+    //     electronics, or Amateur Radio related arts and sciences." The fourth disjunct names a
+    //     CLASS of fields rather than a field, and it was sitting in `fields` as a list member.
+    //     `matcher.ts` matches a field by stemmed word overlap, so a phrase the funder wrote to
+    //     WIDEN their list matched every major carrying the word "arts": measured on the shipped
+    //     record, `Culinary Arts` read `pass` and now reads `unknown`, while `Electrical
+    //     Engineering` and `Communications` still `pass`. The defect was an over-claim on a soft
+    //     preference — a culinary-arts student told they met YLRL's study preference — not a
+    //     refusal; these three constraints are soft and refuse nobody either way.
+    //   · `rca-track` — "Undergraduate and graduate students on a wireless career track", where
+    //     "wireless career track" is a career direction and not a field of study either. The
+    //     alternative of `fields: []` was tried and is worse: an empty list is `unrestricted`, so
+    //     every applicant would `pass` and a culinary-arts major would be told they meet RCA's
+    //     wireless-career-track preference. Quoted here, every probed major reads `unknown`.
+    //
+    // Each is a substring of its own constraint's `rawText`, which is what the sweep above proves;
+    // the pin is here so a FIFTH route cannot arrive unannounced, and so a route that is silently
+    // deleted takes this test red rather than passing on a smaller corpus.
+    //
+    // AND ONE HONEST LIMIT ON WHAT `rca-track` INHERITS FROM THAT PROOF. This rule checks a route
+    // against its own `rawText`, not against a funder capture. On a record that HAS a capture that
+    // is a chain — `constraintProvenance.test.ts` holds `rawText` itself verbatim to the page — so
+    // the route inherits the page's authority. `rca-scholarship-program` is `manual-tier-d` and
+    // ships no capture at all, so its `rawText` is GrantSpotter's own research brief and what this
+    // sweep proves there is internal consistency, not provenance. That is not a reason to skip it;
+    // it is a reason not to read a green tick on it as more than it says.
+    expect(checked.seed).toBe(95);
     // Vacuity guard. 49 field_of_study constraints carry a bare domain, the CWops proof list, and
     // Robert A. Rodriguez K5AUW's "previous awardees" — the audience with no profile field that
     // this field was introduced for.
@@ -423,6 +461,6 @@ describe('nothing recorded as the funder’s words may be words the funder did n
     ]);
     // The mutation replaced a route, it did not add one: the census must not move, or the sweep is
     // reaching a different set of records under the mutation than it does under the real corpus.
-    expect(checked).toEqual({ fixture: 90, seed: 91 });
+    expect(checked).toEqual({ fixture: 90, seed: 95 });
   });
 });
