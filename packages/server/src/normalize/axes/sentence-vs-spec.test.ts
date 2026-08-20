@@ -42,6 +42,13 @@
  *   W7  a FIELD in the list that appears nowhere in the sentence
  *   W8  a GPA FLOOR below the number the sentence names
  *
+ * …AND, SINCE W13 AT THE FOOT OF THIS FILE, THE MIRROR OF ALL OF THEM ON EVERY OTHER AXIS. W12 asks
+ * the refusal question of `institution.degreeLevels` alone — 130 of the 696 constraints a fresh
+ * install serves. W13 asks it of fourteen dimensions across ten axes, and asserts of the other
+ * three — `other`, `recommendation`, `financial_need`, 117 seed constraints between them — that no
+ * spec on them can refuse anybody at all, which is a claim about the matcher verified by execution
+ * rather than a gap papered over with a rule that would pass vacuously.
+ *
  * ================================ HOW EACH RULE IS BUILT =================================
  * Same three obligations as the narrowing file, because they are what made it worth having:
  *
@@ -77,6 +84,16 @@
  *        "accredited four-year institution" — FIXED in this commit, because the same funder's other
  *        record in the same corpus already carried the answer
  *
+ * AND WHAT W13 FOUND ON ITS FIRST RUN, 2026-08-18, which is one record and four wrong readings:
+ *
+ *   the record   MARCO's "…but GRADUATE STUDENTS MAY APPLY", over `stages: ['UNDERGRAD']`. SOFT, so
+ *                no verdict turns on it; registered in `KNOWN_SOFT_DEMOTIONS` with the reason it
+ *                needs a curator (the sentence makes two statements and one soft constraint can
+ *                hold one of them).
+ *   58 of 59     the rest of the first sweep's findings were this rule being wrong, and two of the
+ *                four corrections were latent defects in `sentenceNamesPlace` and `placesNamed`
+ *                that W1 and W10 have been reading since they were written. See W13's header.
+ *
  * WHAT "THE SENTENCE NAMES IT" MEANS, and why the vocabularies below are written out here rather
  * than imported from the extractors: importing would make each rule agree with the parser by
  * construction, including about a value the parser cannot see. These are lists of facts about
@@ -110,6 +127,8 @@ import {
   plant,
   seedConstraint,
   seedPrograms,
+  tally,
+  bump,
   warmBothCorpora,
 } from '../../test/axesCorpora.js';
 
@@ -235,7 +254,21 @@ function sentenceNamesPlace(text: string, code: string): boolean {
         : new RegExp(`\\b${name.replace(/ /g, '\\s+')}\\b`, 'i');
   if (byName.test(text)) return true;
   if (new RegExp(`\\b${code}\\b`).test(text)) return true;
-  if (name.length >= 6 && !name.includes(' ')) {
+  // AND THE TYPO PATH IS CLOSED TO THE TWO NAMES ABOVE, which is round eleven's correction and is
+  // the same defect in the same function twice. `withinOneEdit` compares BARE WORDS, so it never
+  // sees the qualifier the two special cases exist to read: "West Virginia" tokenises to
+  // `[west, virginia]` and matches `virginia` at zero edits, and "Washington, D.C." tokenises to
+  // `[washington, d, c]` and matches `washington` at zero. Both branches above got the answer
+  // right and this one overruled them — so the K3IVO Freestate sentence ("Maryland, DC, Delaware,
+  // Pennsylvania, or WEST VIRGINIA") read as naming VIRGINIA, and the James Cothran sentence
+  // ("... or WASHINGTON, D.C.") as naming WASHINGTON STATE.
+  //
+  // It cost nothing visible while the only reader was W1, because crediting a sentence with a
+  // state it does not name can only make a WIDTH rule quieter. W13 reads the same function in the
+  // mirror direction, where the same credit becomes an accusation: it demanded that K3IVO admit a
+  // Virginian and that Cothran admit a Washingtonian, on two records whose specs say exactly what
+  // their funders wrote. A shared vocabulary is only shared if it is right in both directions.
+  if (name.length >= 6 && !name.includes(' ') && name !== 'virginia' && name !== 'washington') {
     return (text.toLowerCase().match(/[a-z]+/g) ?? []).some((w) => w.length >= 6 && withinOneEdit(w, name));
   }
   return false;
@@ -303,6 +336,16 @@ function placesNamed(rawText: string): Set<string> {
   for (const region of REGIONS) {
     const at = region.words.exec(rawText);
     if (at === null) continue;
+    // A DIVISION NAMED AS THE PARENT OF A SECTION IS AN ADDRESS, NOT A SCOPE, and it is the gloss
+    // rule one level down: the most specific thing the funder said about scope governs. The Steel
+    // City ARC writes "ARRL WESTERN PENNSYLVANIA SECTION of the Atlantic Division", whose spec is
+    // `arrl_section: ['Western Pennsylvania']` and is right; reading the trailing division word as
+    // a naming credited that sentence with DC, DE, MD, NJ and NY — five states it mentions only by
+    // saying which division its one section belongs to. W1 could not see the difference (crediting
+    // extra states only ever quietens a width rule); W13 reads the same set as the applicants the
+    // funder admits, and demanded that a New Yorker be let into a Western-Pennsylvania award.
+    const before = rawText.slice(Math.max(0, at.index - 24), at.index);
+    if (/\bsections?\s+(?:of\s+)?(?:the\s+)?$/i.test(before)) continue;
     const gloss = rawText.slice(at.index, at.index + 140);
     const glossed = Object.values(PLACE_BY_NAME).some((code) => sentenceNamesPlace(gloss, code));
     if (!glossed) for (const s of region.states) supported.add(s);
@@ -902,22 +945,24 @@ function levelsUnnamed(spec: ConstraintSpec, rawText: string): string[] {
  * Foundation's page; the replacement is genuinely the funder's words, and it supports none of the
  * four values the spec beside it publishes.
  *
- * WHY IT IS A REGISTER ENTRY AND NOT A FIX. Two honest repairs exist and both need a curator:
- * quote the Foundation sentence that DOES bound the credential, or empty the list and let the
- * per-scholarship records carry the levels. Choosing between them is a curation decision about
- * what the Foundation's page says, made against the capture, not something a guard may decide by
- * editing data until it goes green — and this entry is the loud form of that: it names the record,
- * it goes red if the record is fixed, and it goes red if a second one arrives.
+ * WHY IT WAS A REGISTER ENTRY AND NOT A FIX, AND WHICH OF THE TWO REPAIRS WAS TAKEN. Two honest
+ * ones existed and both needed a curator: quote the Foundation sentence that DOES bound the
+ * credential, or empty the list and let the per-scholarship records carry the levels. `87c656c`
+ * took the second, having read the capture of `arrl-scholarship-program` back through
+ * `loadRawOpportunities` and found no credential named anywhere on the page:
+ * `degreeLevels: ["CERT","ASSOC","BACH","GRAD"] -> []`.
  *
- * IT IS NOT A FALSE INCLUDE TODAY, and that is the honest bound on it: admitting every rung is the
- * widest possible list, so no applicant is REFUSED by it. What it does is tell a certificate
- * student at a trade school that the ARRL Foundation's programme is open to them on a sentence
- * that says nothing of the sort.
+ * THE SAME PEOPLE ARE ADMITTED EITHER WAY — a list of every rung and a list of none both refuse
+ * nobody — so no verdict moved. What moved is what the record CLAIMS: it no longer tells a
+ * certificate student at a trade school that the Foundation named them.
+ *
+ * TWO CONSEQUENCES FOR THIS RULE, both pinned below rather than absorbed. W3 skips an empty list at
+ * `if (admitted.size === 0) continue`, so its seed population falls 57 -> 56 and the levels it
+ * reads 133 -> 129. And the question the record now poses belongs to W10 — a spec that publishes no
+ * level bars nobody — which is the swap this file made deliberately in round nine and is why the
+ * two rules are pinned side by side.
  */
-const KNOWN_SEED_LEVEL_OVERCLAIMS = [
-  'ARRL Foundation Scholarship Program: admits ASSOC,BACH,CERT,GRAD — ' +
-    '"Thank you for your interest in the ARRL Foundation Scholarship Program for eligible amateur radio operators pursuing higher education."',
-];
+const KNOWN_SEED_LEVEL_OVERCLAIMS: string[] = [];
 
 function readW3(all: readonly CorpusConstraint[]): PlaceReading {
   const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
@@ -949,8 +994,8 @@ describe('W3 — a degree level the level list admits, that the funder never nam
     // sibling already carries is the +1, and this rule then has to agree that "four-year
     // institution" names graduate study. It does — see the school-tier note above.
     expect({ checked: seed.checked, admittedValues: seed.admittedValues }).toEqual({
-      checked: 57,
-      admittedValues: 133,
+      checked: 56,
+      admittedValues: 129,
     });
     const checked = fixture.checked;
     const admittedValues = fixture.admittedValues;
@@ -1505,13 +1550,22 @@ function fieldsNotInSentence(spec: ConstraintSpec, rawText: string): string[] {
  * does not state, and a student in another wireless discipline is not.
  *
  * A REGISTER ENTRY, NOT AN EXEMPTION: it goes red when the record is fixed, and red when a second
- * one arrives.
+ * one arrives. IT WENT RED ON 2026-08-20, ON THE FIRST HALF. `87c656c` replaced the three invented
+ * majors with the funder's own four words:
+ *
+ *   spec, now  fields: ["wireless career track"], orUnrepresented: "wireless career track"
+ *
+ * which is a quotation of the sentence rather than a reading of it, and answers `unknown` where it
+ * used to rank an electrical-engineering applicant above everybody else in wireless. The bound
+ * stated above still holds and is why the fix took this shape and not a better one: there is no
+ * captured RCA page in this repository, so nobody here can say what RCA's own words name. Quoting
+ * the brief's own phrase claims nothing extra; naming a major would have invented the sentence a
+ * second time.
+ *
+ * The list stays, empty and asserted empty. Seed entries fall 225 -> 220 with it: two off RCA and
+ * one off each of the three YLRL records W9 registers.
  */
-const KNOWN_SEED_INVENTED_FIELDS = [
-  'Radio Club of America Scholarship Program: ' +
-    '["Wireless communications","Electrical Engineering","Telecommunications"] — ' +
-    '"Undergraduate and graduate students on a wireless career track. A ham licence is NOT required."',
-];
+const KNOWN_SEED_INVENTED_FIELDS: string[] = [];
 
 function readW7(all: readonly CorpusConstraint[]): PlaceReading {
   const reading: PlaceReading = { offenders: [], checked: 0, admittedValues: 0 };
@@ -1539,10 +1593,14 @@ describe('W7 — a field in the list that appears nowhere in the funder’s sent
     const seedReading = readW7(only(all, 'seed'));
     expect(fixtureReading.offenders).toEqual([]);
     expect(seedReading.offenders).toEqual(KNOWN_SEED_INVENTED_FIELDS);
-    // The seed half's own vacuity guard: 65 hand-written field lists holding 225 entries.
+    // The seed half's own vacuity guard: 65 hand-written field lists holding 220 entries. It was
+    // 225 until `87c656c` closed the two registers above — five entries that were not quotations,
+    // two of them RCA's invented majors and three the YLRL widening, moved out of `fields` and into
+    // `orUnrepresented` or out of the record. The population of LISTS is unchanged: every one of
+    // the 65 is still read.
     expect({ checked: seedReading.checked, entries: seedReading.admittedValues }).toEqual({
       checked: 65,
-      entries: 225,
+      entries: 220,
     });
     const checked = fixtureReading.checked;
     const entries = fixtureReading.admittedValues;
@@ -1694,24 +1752,25 @@ const RELATEDNESS_ENTRY =
  * stated for amateur-radio-related arts, which is a claim about them the funder did not make, and
  * it ranks them above applicants who are.
  *
- * WHY IT IS REGISTERED AND NOT FIXED IN THIS COMMIT. There is a known remedy in this codebase for
- * an entry that names a CLASS of fields rather than a field — Chick Allen's "or similar scientific
- * field" carries it verbatim in `orUnrepresented`, which answers `unknown` instead of `pass` — and
- * applying it here means deciding that "Amateur Radio related arts and sciences" is that kind of
- * phrase for YLRL, then rewriting three hand-curated records in
- * `data/seed/programs.ham-orgs.json` and regenerating `data/seed/shipped-values.tsv` so a running
- * deployment can be corrected. That is a curator's judgement about the funder's meaning plus a
- * change to the shipped-corrections ledger, and neither is something a guard may do to itself to
- * come out green. It is named here, with the sentence and the spec, so it can be acted on.
+ * IT WAS REGISTERED HERE AND NOT FIXED, AND ON 2026-08-20 IT WAS FIXED — WHICH IS THE REGISTER
+ * DOING ITS JOB AND NOT AN ARGUMENT FOR HAVING WRITTEN IT AS A SKIP. `87c656c` applied the remedy
+ * this entry named: the funder's own widening moves out of `fields` and into `orUnrepresented`
+ * VERBATIM, exactly as Chick Allen's "or similar scientific field" already did, in all three
+ * records in `data/seed/programs.ham-orgs.json`.
  *
- * A REGISTER, NOT AN EXEMPTION: it goes red when any of the three is fixed and red when a fourth
- * record arrives.
+ *   spec, now  fields: ["Communications","Radio","Electronics"],
+ *              orUnrepresented: "Amateur Radio related arts and sciences"
+ *
+ * Culinary Arts moves `pass` -> `unknown` on all three; Communications and Electrical Engineering
+ * still pass on the funder's own list. So the three names come out of the list below, and the list
+ * stays — empty and asserted empty, because the next record to do this must be added deliberately
+ * and with its sentence, not absorbed by a rule that had grown a tolerance.
+ *
+ * ONE COUNT MOVED WITH IT, and it is W10's rather than this rule's: three soft `field_of_study`
+ * constraints that carried no `orUnrepresented` now do, so W10b's seed `preferences` bucket falls
+ * 38 -> 35 and W10a's `unrepresented` rises 60 -> 63. Both are pinned below; neither is an offender.
  */
-const KNOWN_SEED_WIDENING_PASSES = [
-  'YLRL Ethel Smith K4LMB Memorial Scholarship — Culinary Arts',
-  'YLRL Mary Lou Brown NM7N Memorial Scholarship — Culinary Arts',
-  'YLRL Marte Wessel K0EPE Memorial Scholarship — Culinary Arts',
-];
+const KNOWN_SEED_WIDENING_PASSES: string[] = [];
 
 interface WideningReading {
   offenders: string[];
@@ -2628,7 +2687,12 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
       unrepresented: seed.unrepresented,
       typeOnly: seed.typeOnly,
       silent: seed.silent,
-    }).toEqual({ checked: 221, probes: 230, opened: 38, unrepresented: 60, typeOnly: 10, silent: 367 });
+    //
+    // 221/230/60 UNTIL `87c656c`. Three YLRL `field_of_study` constraints gained an
+    // `orUnrepresented` holding the funder's own widening, which moves them out of `checked` and
+    // into `unrepresented` — a constraint that answers `unknown` by design is not one this rule may
+    // hold responsible for refusing nobody. The six buckets still add to all 696.
+    }).toEqual({ checked: 218, probes: 227, opened: 38, unrepresented: 63, typeOnly: 10, silent: 367 });
     expect(
       seed.checked + seed.opened + seed.unrepresented + seed.typeOnly + seed.silent,
     ).toBe(only(all, 'seed').length);
@@ -2826,9 +2890,11 @@ describe('W10 — a sentence that states a requirement, over a constraint that b
     expect(w10b.notedOnly).toEqual(KNOWN_NOTED_ONLY);
     expect(seed.notedOnly).toEqual(KNOWN_SEED_NOTED_ONLY);
     // The seed half's own vacuity guard, same two buckets.
+    // 38 preferences until `87c656c`: the same three YLRL constraints, which are SOFT and now carry
+    // the funder's widening, so they are no longer a preference this rule can ask anything of.
     expect({ checked: seed.checked, preferences: seed.preferences }).toEqual({
       checked: 182,
-      preferences: 38,
+      preferences: 35,
     });
     // Vacuity guard: requirements stated flatly, over specs that really can refuse the applicant
     // the sentence excludes, where the only remaining question is whether the refusal is enforced.
@@ -3627,6 +3693,1179 @@ describe('W12 — a constraint that refuses an applicant its own sentence admits
     );
     expect(d6.refusesTheAdmitted.filter((o) => o.includes('degreeLevel GRAD')).length).toBeGreaterThan(0);
     expect(readRefusalReach(all).refusesTheAdmitted).toEqual([]);
+  });
+});
+
+
+// ============= W13: the other direction, on the twelve axes W12 never reached =============
+
+/**
+ * W13 — A CONSTRAINT ON ANY AXIS THAT REFUSES AN APPLICANT ITS OWN SENTENCE NAMES.
+ *
+ * W12 asks this question of ONE axis and ONE field: `institution.degreeLevels`, on the 69 fixture
+ * and 73 seed constraints whose sentence states a school tier or a credential. It was written for
+ * the 1,456 refusals that shipped in `85d6dcf`, it holds that shape down, and it holds nothing
+ * else down. `docs/how-this-catalogue-can-be-wrong.md` names the resulting gap as the largest in
+ * the suite: 130 of 696 seed constraints inside a refusal rule, and a false refusal on GEOGRAPHY
+ * (133 constraints), LICENSE (116), FIELD_OF_STUDY (115), OTHER (103), CITIZENSHIP, GPA, AGE_STAGE,
+ * HAM_ACTIVITY, ARRL_MEMBERSHIP, RECOMMENDATION, FINANCIAL_NEED or GENDER caught by nothing at all.
+ *
+ * That is the direction that hides the money. A student wrongly told `ineligible` does not apply,
+ * does not write to the funder, and never learns that the sentence printed under the verdict — the
+ * funder's own words, which this product puts on the screen precisely so the reader can check it —
+ * says they qualify.
+ *
+ * ============================ WHAT IT ASKS, AXIS BY AXIS ============================
+ * One question, fourteen shapes, because a sentence names an applicant differently on each axis.
+ * Every arm builds an applicant standing on a value THE SENTENCE ITSELF NAMES, maximally qualified
+ * on every other dimension (`ENFORCEMENT_PROBE`), and asks `evaluateConstraint` — the real matcher,
+ * the same call `matchProgram` makes — for a verdict. A `fail` is the finding.
+ *
+ *   geography.state           a state the sentence names, refused by the tier beside it
+ *   license.class             the LOWEST class the sentence names, below the spec's floor
+ *   license.duration          a licence a month old, under a sentence stating no duration
+ *   field_of_study.major      a major the sentence names by name, outside the spec's list
+ *   institution.accreditation an unaccredited applicant, under a sentence that never says the word
+ *   institution.partTime      a part-time applicant, under a sentence that never asks for full-time
+ *   gpa.floor                 the LOWEST grade the sentence names, below the spec's floor
+ *   arrl_membership.duration  a member of one month, under a sentence stating no duration
+ *   citizenship.status        a status the sentence names, outside the allow-list
+ *   age_stage.stage           an audience the sentence names, outside the stage list
+ *   age_stage.age             an age the sentence names, outside the age window
+ *   ham_activity.kinds        an applicant doing exactly what the sentence names, and no more
+ *   ham_activity.cwWpm        the speed the sentence names, below the spec's floor
+ *   gender.allowed            a gender the sentence names — or, where it names none, either one
+ *
+ * THREE AXES ARE NOT IN THAT LIST AND THE OMISSION IS THE FINDING, not a gap. `other` (103 seed
+ * constraints, more than any axis but geography, institution, license and field of study),
+ * `recommendation` and `financial_need` CANNOT
+ * REFUSE ANYBODY — `evaluateTier` returns `not_evaluable` for the first two whatever the spec says,
+ * and `financial_need` is a weighting by §4.5 rule 11 and returns `pass` or `not_evaluable` and
+ * never `fail`. A probe-and-assert rule over them would be green by construction and would read as
+ * 117 seed constraints covered. So they get the OPPOSITE treatment: a battery of five adversarial
+ * applicants — including the empty profile and one contradicting every field — run over every such
+ * constraint in both corpora, asserting that not one of them can be refused. That is a claim about
+ * the corpus, verified by execution; the day `other` learns to refuse somebody it goes red and this
+ * axis needs a real rule rather than a paragraph.
+ *
+ * ==================== FOUR READINGS THIS RULE HAD TO CORRECT FIRST ====================
+ * The first sweep reported 57 geography violations and 2 stage violations in the seed corpus. 58 of
+ * the 59 were the RULE being wrong, not the corpus, and each was fixed by reading the funder's
+ * sentence more carefully rather than by an exemption — the discipline the header of this file
+ * prescribes, because "a rule that cries wolf gets an exemption bolted on, and the exemption is
+ * where the real offender walks through". Two of the four corrections are in `sentenceNamesPlace`
+ * and `placesNamed`, which W1 and W10 also read, and both were latent defects there:
+ *
+ *   THE TYPO PATH          `withinOneEdit` matched `virginia` inside "West Virginia" and
+ *                          `washington` inside "Washington, D.C.", overruling the two special cases
+ *                          written directly above it. 1 record each. See `sentenceNamesPlace`.
+ *   THE PARENT DIVISION    "ARRL Western Pennsylvania SECTION OF THE Atlantic Division" read as a
+ *                          naming of all five Atlantic states. See `placesNamed`.
+ *   THE CASCADE            CTRI's "New England Division (…); IF NO SUITABLE APPLICANT IDENTIFIED,
+ *                          applicants from all regions will be considered" is a fallback, not an
+ *                          admission: 51 of the 57. `GEO_WIDENED` is right for W1, which uses it to
+ *                          SKIP a record; read as "every state is named" it demanded that a
+ *                          Connecticut award admit a Texan outright. `CASCADE_CONDITION` already
+ *                          existed for exactly this distinction and W10b already used it.
+ *   THE DESTINATION SCHOOL K6GO's "must be a high school senior ENTERING an accredited college,
+ *                          university, junior college or trade technical school" read as naming
+ *                          UNDERGRAD, because `STAGE_SAYS.UNDERGRAD` contains `college`. The school
+ *                          named after "entering" is where the applicant is GOING, not what they
+ *                          are — the same "the school is where you are, the degree is what you are
+ *                          for" conflation that has now cost this file three rounds. See
+ *                          `stagesAdmitted`, which is to `STAGE_SAYS` what `credentialLevelsNamed`
+ *                          is to `levelsNamed`.
+ *
+ * The fifth is a real record and it is registered rather than fixed: see `KNOWN_SOFT_DEMOTIONS`.
+ *
+ * ================== HOW EACH ARM PROVES IT IS NOT VACUOUSLY GREEN ==================
+ * Twelve of the fourteen arms found nothing on the first run, and a zero is the shape every blind
+ * guard in this repository wore. Three things stand behind each one:
+ *
+ *   1. COULD-REFUSE, MEASURED PER ARM AND PER CORPUS. A probe that no spec could ever have refused
+ *      is not evidence. Each arm therefore reports how many of its probes faced a constraint that
+ *      CAN refuse on that dimension, established in one of two ways and never by assumption:
+ *        - by execution, where the sentence leaves somebody outside: the probe's TWIN, standing on
+ *          a value the sentence does NOT name, must come back `fail`. That is W11's control,
+ *          mirrored.
+ *        - by the spec, where the sentence states no bar at all and the whole question is whether
+ *          the spec invented one (durations, floors, age windows, accreditation, enrolment): the
+ *          count is how many of those probes faced a spec publishing that bar.
+ *      An arm whose `couldRefuse` is zero is reported as CHECKING NOTHING, not as passing.
+ *   2. A PLANTED VIOLATION PER ARM, on a REAL record in `data/seed` — the corpus a fresh install
+ *      serves — run through the WHOLE sweep, not the predicate. `plant()` throws if it matches no
+ *      constraint, and `seedConstraint` throws if a curator renamed the record.
+ *   3. THE FOUR CORRECTED READINGS ARE PINNED SILENT by name, so a return of any of the four
+ *      cry-wolves fails a test that says which one came back.
+ *
+ * ================================ WHAT IT IS BLIND TO ================================
+ * Stated because a bounded claim is the only honest kind, and because four guards in this repo were
+ * structurally blind while looking exactly like this one:
+ *
+ *   - IT READS ONE SENTENCE AT A TIME, like every rule in this file. A funder whose age bound is in
+ *     one sentence and whose stage list is in the next is read as two records that each state half.
+ *   - A NUMBER WITH NO TEXTUAL FORM IS UNCHECKABLE, and there are two. `recommendation.count` is
+ *     never evaluated at all. `institution.tradeSchoolOK` and `license.foreignLicenseOK` are
+ *     informational in `matcher.ts`'s own words — CONTRACT §3 has no profile field for either — so
+ *     no applicant can be built that either could refuse. They are not probed and they are not
+ *     counted as covered.
+ *   - `field_of_study` IS READ THROUGH A VOCABULARY OF SEVENTEEN MAJORS, not through the spec's own
+ *     list. Reading the spec's list back to it would make every arm agree with itself: of course a
+ *     list admits the majors it contains. The cost is that a funder naming a major outside the
+ *     vocabulary is not probed, and the count of what WAS probed is pinned below so that cost is
+ *     visible rather than assumed.
+ *   - A SENTENCE THAT BARS SOMEBODY IN WORDS THIS FILE CANNOT READ is a false accusation waiting to
+ *     happen, so the field arm stands down entirely on any sentence containing an exclusion idiom
+ *     (`EXCLUSION_CLAUSE`) — one record in each corpus, "Any, except for Liberal Arts", counted in
+ *     its own `standDown` bucket rather than buried in the axis's silent count.
+ *   - THE GENDER ARM'S WIDEST CASE IS UNEXERCISED. Where a sentence names no gender at all, the arm
+ *     probes BOTH, because a gender bar that appears in a spec and nowhere in the funder's words
+ *     refuses half the applicants there are. Every gender sentence in both corpora names one, so
+ *     that branch has never run against a real record: `probes` equals `constraints` on that arm,
+ *     which is how the census shows it.
+ *   - IT IS A CENSUS OF THIS CORPUS. A wording no funder here uses is a wording none of these
+ *     fourteen readings has been tried against.
+ */
+
+/** An applicant the funder's own sentence names, and the twin that proves the arm has teeth. */
+interface AdmittedProbe {
+  /** `axis.dimension` — the unit every count below is kept in. */
+  arm: string;
+  /** What the sentence named, in the words the offender list prints. */
+  admits: string;
+  profile: StudentProfile;
+  /**
+   * THE SAME APPLICANT ON A VALUE THE SENTENCE DOES NOT NAME. When the constraint refuses this
+   * twin, a refusal on this dimension is reachable and admitting the probe is a real observation.
+   * `undefined` when the sentence leaves nobody outside on this dimension — then `facesABar` is
+   * how the arm establishes the same thing.
+   */
+  outsider?: StudentProfile;
+  /**
+   * THE SPEC PUBLISHES THE BAR THIS PROBE STANDS UNDER. For the arms where the funder's sentence
+   * states no bar at all — a duration, a floor, an age window, an accreditation or enrolment
+   * requirement — there IS no applicant the sentence excludes, so there is no twin to refuse. What
+   * makes the probe evidence there is that the spec beside it invented a bar; this counts how often
+   * that bar existed to be measured.
+   */
+  facesABar?: boolean;
+}
+
+const NOW_YEAR = Number(NOW.slice(0, 4));
+
+/** A birthday putting the applicant at exactly `age` on `NOW`, which is 2 August. */
+function birthdayFor(age: number): string {
+  return `${NOW_YEAR - age}-01-01T00:00:00.000Z`;
+}
+
+/** A licence or a membership taken up ONE MONTH before `NOW`: the newest an applicant can be. */
+const A_MONTH_AGO = '2026-07-02T00:00:00.000Z';
+
+/**
+ * THE FUNDER STATING HOW LONG. Read GENEROUSLY and in the safe direction: a sentence this matches
+ * is one the duration arms stand down on, so a phrase credited wrongly costs coverage, while a
+ * duration missed produces an accusation. "a year", "24 months", "since 2019", "continuously" all
+ * count.
+ */
+const DURATION_NAMED =
+  /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a)\s*[-\s]?(?:year|month)s?\b|\bsince\b|\bcontinuous/i;
+
+/**
+ * THE FUNDER PUTTING SOMEBODY OUTSIDE IN WORDS NO ARM HERE READS. The field arm stands down on any
+ * sentence carrying one: "Engineering, EXCLUDING computer engineering" names a major twice, once as
+ * admitted and once as barred, and this file cannot tell which of the two a probe is standing on.
+ * Standing down costs coverage and is counted; guessing would cost a record its correct refusal.
+ */
+const EXCLUSION_CLAUSE =
+  /\bexclud|\bnot eligible\b|\bineligible\b|\bother than\b|\bexcept\b|\bmay not\b|\bdoes not (?:include|apply)\b/i;
+
+/** The words a funder uses to name a gender. `\bmen\b` cannot match inside "women". */
+const GENDER_SAYS: Record<'female' | 'male', RegExp> = {
+  female: /\bwom[ae]n\b|\bfemales?\b|\bgirls?\b|\byls?\b|\bxyls?\b|\bladies\b|\blady\b/i,
+  male: /\bmen\b|\bmales?\b|\bboys?\b/i,
+};
+
+/**
+ * MAJORS A FUNDER'S OWN SENTENCE CAN NAME, and the applicant standing on each.
+ *
+ * Longest first, so "electrical engineering" is probed as itself rather than as the broader
+ * "engineering" — `fieldPhrasesOverlap` is word overlap, and the two are different applicants to a
+ * funder who wrote only one of them.
+ *
+ * WRITTEN OUT HERE RATHER THAN TAKEN FROM THE SPEC, for the reason the header gives: a list read
+ * back to itself admits its own contents by construction. These are the majors this corpus's
+ * funders actually name; a major outside them is unprobed, which is a bound on coverage and is
+ * pinned as a number below rather than left to be assumed away.
+ */
+const FIELD_SAYS: Array<[RegExp, string]> = [
+  [/\belectrical engineering\b/i, 'Electrical Engineering'],
+  [/\bcomputer science\b/i, 'Computer Science'],
+  [/\bcomputer technology\b/i, 'Computer Technology'],
+  [/\btelecommunications\b/i, 'Telecommunications'],
+  [/\bengineering\b/i, 'Engineering'],
+  [/\bjournalism\b/i, 'Journalism'],
+  [/\bnursing\b/i, 'Nursing'],
+  [/\bmedicine\b/i, 'Medicine'],
+  [/\beducation\b/i, 'Education'],
+  [/\bbusiness\b/i, 'Business'],
+  [/\bmathematics\b/i, 'Mathematics'],
+  [/\bphysics\b/i, 'Physics'],
+  [/\bchemistry\b/i, 'Chemistry'],
+  [/\bbiology\b/i, 'Biology'],
+  [/\belectronics\b/i, 'Electronics'],
+  [/\bagriculture\b/i, 'Agriculture'],
+  [/\bhumanities\b/i, 'Humanities'],
+];
+
+/**
+ * THE DENOMINATOR A FUNDER PRINTS BESIDE A GRADE — "on a 4.0 scale", "out of a maximum of 4.0",
+ * "on a 4 point scale". It is the scale the requirement is expressed in, never a requirement, and
+ * it is struck out before the grade arm reads the sentence. A strike that took a real threshold
+ * with it would raise the probe's grade and quieten the arm, which is the direction to err in.
+ */
+const GPA_SCALE =
+  /\b(?:on|out of)\s+(?:a\s+)?(?:maximum\s+of\s+)?[0-4](?:\.\d{1,2})?(?:\s*[- ]?point)?(?:\s*scale)?\b/gi;
+
+/** The code speed a sentence states, as a number of words per minute. */
+function wpmNamed(rawText: string): number[] {
+  return [...rawText.matchAll(/\b(\d{1,2})\s*(?:w\.?p\.?m\.?|words per minute)/gi)].map((m) => Number(m[1]));
+}
+
+/**
+ * AN AGE THE SENTENCE SAYS IS INSIDE THE AWARD. Four idioms, all of them bounded to a two-digit
+ * number between 10 and 99 so that a dollar figure, a year or a count of letters cannot be read as
+ * an age. "under 25" names 24, not 25 — the funder's bound is exclusive and the applicant this
+ * builds has to be one the sentence certainly admits.
+ */
+function agesNamed(rawText: string): number[] {
+  const named: number[] = [];
+  for (const m of rawText.matchAll(/\bunder (?:the age of )?(\d{1,2})\b/gi)) named.push(Number(m[1]) - 1);
+  for (const m of rawText.matchAll(/\b(\d{1,2})\s*(?:years? of age )?or (?:younger|less|under)\b/gi)) {
+    named.push(Number(m[1]));
+  }
+  for (const m of rawText.matchAll(/\bages?\s+(\d{1,2})\s*(?:-|–|to|through|and)\s*(\d{1,2})\b/gi)) {
+    named.push(Number(m[1]), Number(m[2]));
+  }
+  for (const m of rawText.matchAll(/\bbetween (?:the ages of )?(\d{1,2}) and (\d{1,2})\b/gi)) {
+    named.push(Number(m[1]), Number(m[2]));
+  }
+  return named.filter((a) => a >= 10 && a <= 99);
+}
+
+/**
+ * AN AGE THE SPEC'S OWN WINDOW ADMITS, so that an age bound cannot decide a STAGE probe.
+ *
+ * This is the one place an arm reads the spec to BUILD an applicant, and it is the isolation
+ * `ENFORCEMENT_PROBE` performs everywhere else: every other dimension is set to the most generous
+ * value the schema holds, and age has no such value because its bound is two-sided. Without it, the
+ * Goldwater-shaped record — `ageMax` under a sentence naming an audience — would refuse every stage
+ * probe for a reason that has nothing to do with stages, and the arm would report a stage defect
+ * that is not there. The AGE arm reads the sentence and never the spec, which is what keeps the
+ * age window itself under test.
+ */
+function ageInsideWindow(spec: ConstraintSpec): number {
+  const tier = tiers(spec).find(
+    (t) => t.axis === 'age_stage' && (t.ageMin !== undefined || t.ageMax !== undefined),
+  );
+  if (tier === undefined || tier.axis !== 'age_stage') return 22;
+  const lo = tier.ageMin ?? 16;
+  const hi = tier.ageMax ?? lo + 4;
+  return Math.floor((lo + hi) / 2);
+}
+
+/**
+ * THE SCHOOL AN APPLICANT IS GOING TO, WHICH IS NOT THE STAGE THEY ARE AT. Struck out before the
+ * stage vocabulary reads the sentence, for the reason the header gives — K6GO's high-school senior
+ * "entering an accredited college" is not a naming of undergraduates.
+ *
+ * A strike costs a NAMING, so it costs coverage and never produces an accusation: a sentence whose
+ * only stage word is inside a destination clause is simply not probed on that stage. That is the
+ * direction this had to err in. `STAGE_SAYS` itself cannot narrow, because W2 needs exactly its
+ * wider reading to ask its own question — the same split, and for the same reason, as
+ * `levelsNamed` and `credentialLevelsNamed` one screen up.
+ */
+const SCHOOL_DESTINATION =
+  /\b(?:entering|attending|attend|accepted (?:at|to|into)|admitted to|matriculating at)\b[^.;]*/gi;
+
+function stagesAdmitted(rawText: string): string[] {
+  const sentence = rawText.replace(SCHOOL_DESTINATION, ' ');
+  return ALL_STAGES.filter((s) => STAGE_SAYS[s].test(sentence));
+}
+
+/** The probe states a STATE and nothing else, so a county, a circle or a call district answers `unknown`. */
+const NO_PLACE_STATED = {
+  lat: undefined,
+  lon: undefined,
+  county: undefined,
+  callDistrict: undefined,
+  callsign: undefined,
+};
+
+function probe(arm: string, admits: string, over: Partial<StudentProfile>, rest: Omit<AdmittedProbe, 'arm' | 'admits' | 'profile'> = {}): AdmittedProbe {
+  return { arm, admits, profile: { ...ENFORCEMENT_PROBE, ...over }, ...rest };
+}
+
+/**
+ * EVERY APPLICANT THIS SENTENCE NAMES, on every dimension of its own axis that a sentence can name
+ * one on. The mirror of `theApplicantsTheSentenceExcludes`, and deliberately built from the same
+ * vocabularies: if the two disagreed about what a sentence says, one of them would be demanding a
+ * refusal the other forbids.
+ */
+function theApplicantsTheSentenceAdmits(spec: ConstraintSpec, rawText: string): AdmittedProbe[] {
+  switch (spec.axis) {
+    case 'geography': {
+      // A CASCADE IS NOT AN ADMISSION. See the header: "if no suitable applicant … all regions"
+      // widens the award only when the funder's first choice fails, and reading it as a naming
+      // demanded that a New England scholarship admit a Texan outright.
+      const widened = GEO_WIDENED.test(rawText) && !CASCADE_CONDITION.test(rawText);
+      const named = widened ? new Set(Object.values(PLACE_BY_NAME)) : placesNamed(rawText);
+      const outside = Object.values(PLACE_BY_NAME).find((code) => !named.has(code));
+      return [...named].sort().map((state) =>
+        probe('geography.state', `state ${state}`, { ...NO_PLACE_STATED, state }, {
+          outsider:
+            outside === undefined ? undefined : { ...ENFORCEMENT_PROBE, ...NO_PLACE_STATED, state: outside },
+        }),
+      );
+    }
+
+    case 'license': {
+      const probes: AdmittedProbe[] = [];
+      // "Any active licence class" names the whole ladder, so its lowest rung is a Technician —
+      // the same reading `ANY_CLASS` gives W5, which is what stops the two rules disagreeing about
+      // Michael Holt K8MJH.
+      const named = ANY_CLASS.test(rawText) ? ['TECH'] : classesNamed(rawText);
+      if (named.length > 0) {
+        const lowest = named.reduce((a, b) => (LICENSE_RANK[a] <= LICENSE_RANK[b] ? a : b));
+        const below = Object.keys(LICENSE_RANK).find((k) => LICENSE_RANK[k] === LICENSE_RANK[lowest] - 1);
+        probes.push(
+          probe('license.class', `licenseClass ${lowest}`, { licenseClass: lowest as StudentProfile['licenseClass'] }, {
+            outsider:
+              below === undefined
+                ? undefined
+                : { ...ENFORCEMENT_PROBE, licenseClass: below as StudentProfile['licenseClass'] },
+          }),
+        );
+      }
+      // A HOLDING PERIOD THE FUNDER NEVER ASKED FOR. There is no applicant such a sentence puts
+      // outside, so the twin is the spec: `heldMonthsMin` above zero is a bar that exists only in
+      // the record.
+      if (!DURATION_NAMED.test(rawText)) {
+        probes.push(
+          probe('license.duration', 'licensedSince a month ago', { licensedSince: A_MONTH_AGO }, {
+            facesABar: tiers(spec).some((t) => t.axis === 'license' && (t.heldMonthsMin ?? 0) > 0),
+          }),
+        );
+      }
+      return probes;
+    }
+
+    case 'field_of_study': {
+      if (EXCLUSION_CLAUSE.test(rawText)) return [];
+      const named: string[] = [];
+      for (const [says, major] of FIELD_SAYS) {
+        // "Electrical engineering" is ONE applicant, not two: `FIELD_SAYS` is ordered longest
+        // first, so a major already covered by a longer phrase that matched is the same person and
+        // is not probed twice.
+        if (!says.test(rawText)) continue;
+        if (named.some((kept) => kept.toLowerCase().includes(major.toLowerCase()))) continue;
+        named.push(major);
+      }
+      return named.map((major) =>
+        probe('field_of_study.major', `fieldOfStudy ${major}`, { fieldOfStudy: major }, {
+          outsider: { ...ENFORCEMENT_PROBE, fieldOfStudy: PLAINLY_UNRELATED[0] },
+        }),
+      );
+    }
+
+    case 'institution': {
+      // The credential rungs are W12's question and are deliberately not re-asked here; these are
+      // the OTHER two fields on this axis that can refuse somebody, and no rule read either of them
+      // in this direction. Both are bar-shaped: the sentence names no one, and the question is
+      // whether the record wrote a bar the funder did not.
+      const probes: AdmittedProbe[] = [];
+      if (!ACCREDITATION_REQUIRED.test(rawText)) {
+        probes.push(
+          probe('institution.accreditation', 'accredited false', { accredited: false }, {
+            facesABar: tiers(spec).some((t) => t.axis === 'institution' && t.accreditationRequired),
+          }),
+        );
+      }
+      if (!FULL_TIME_REQUIRED.test(rawText)) {
+        probes.push(
+          probe('institution.partTime', 'partTime true', { partTime: true }, {
+            facesABar: tiers(spec).some((t) => t.axis === 'institution' && !t.partTimeOK),
+          }),
+        );
+      }
+      return probes;
+    }
+
+    case 'gpa': {
+      // THE SCALE IS NOT A THRESHOLD, and reading it as one is the difference between an arm that
+      // works and an arm that is green forever. Six of the seventeen grade sentences in this corpus
+      // end "on a 4.0 scale" or "out of a maximum of 4.0"; probing the highest number they contain
+      // builds a 4.0 applicant, whom no floor in this schema can refuse. Struck first, the lowest
+      // number left is the funder's own requirement — the grade their sentence certainly admits.
+      const named = gpasNamed(rawText.replace(GPA_SCALE, ' '));
+      if (named.length === 0) return [];
+      const floor = Math.min(...named);
+      // …AND A CLASS RANK OF 100, the worst there is, because `evaluateTier`'s gpa arm is an OR —
+      // "either route satisfies the axis" — so a probe in the top 1% of its class would satisfy any
+      // `classRankTopPct` beside the floor and mask it.
+      return [
+        probe('gpa.floor', `gpa ${floor}`, { gpa: floor, classRankTopPct: 100 }, {
+          facesABar: tiers(spec).some((t) => t.axis === 'gpa' && t.min !== undefined),
+        }),
+      ];
+    }
+
+    case 'arrl_membership': {
+      if (DURATION_NAMED.test(rawText)) return [];
+      return [
+        probe('arrl_membership.duration', 'arrlMemberSince a month ago', { arrlMemberSince: A_MONTH_AGO }, {
+          facesABar: tiers(spec).some((t) => t.axis === 'arrl_membership' && t.required && t.minYears > 0),
+        }),
+      ];
+    }
+
+    case 'citizenship': {
+      const probes: AdmittedProbe[] = [];
+      const allowed = new Set(tiers(spec).flatMap((t) => (t.axis === 'citizenship' ? t.allowed : [])));
+      // `'ANY'` on a PROFILE is the applicant who is neither a citizen nor a resident — the reading
+      // `citizenshipExcluded` uses, and the widest thing a sentence can admit.
+      if (CITIZENSHIP_SAYS_ANY.test(rawText)) {
+        probes.push(
+          probe('citizenship.status', 'citizenship neither', { citizenship: 'ANY' }, {
+            facesABar: !allowed.has('ANY'),
+          }),
+        );
+      }
+      if (CITIZENSHIP_SAYS_RESIDENT.test(rawText)) {
+        probes.push(
+          probe('citizenship.status', 'citizenship US_RESIDENT', { citizenship: 'US_RESIDENT' }, {
+            outsider: { ...ENFORCEMENT_PROBE, citizenship: 'ANY' },
+          }),
+        );
+      }
+      if (/\bcitizen/i.test(rawText)) {
+        probes.push(
+          probe('citizenship.status', 'citizenship US_CITIZEN', { citizenship: 'US_CITIZEN' }, {
+            outsider: { ...ENFORCEMENT_PROBE, citizenship: 'ANY' },
+          }),
+        );
+      }
+      return probes;
+    }
+
+    case 'age_stage': {
+      const probes: AdmittedProbe[] = [];
+      const age = ageInsideWindow(spec);
+      const named = stagesAdmitted(rawText);
+      const outside = STAGE_PROBE_ORDER.find((s) => !named.includes(s));
+      for (const stage of named) {
+        // `stagesSatisfiedBy` reads `degreeLevel` too, so the probe states its stage and nothing
+        // else — exactly as `stageExcluded` does, and for the same reason.
+        probes.push(
+          probe('age_stage.stage', `stage ${stage}`, {
+            stage: stage as StudentProfile['stage'],
+            degreeLevel: undefined,
+            birthDate: birthdayFor(age),
+          }, {
+            outsider:
+              outside === undefined
+                ? undefined
+                : {
+                    ...ENFORCEMENT_PROBE,
+                    stage: outside as StudentProfile['stage'],
+                    degreeLevel: undefined,
+                    birthDate: birthdayFor(age),
+                  },
+          }),
+        );
+      }
+      for (const stated of agesNamed(rawText)) {
+        // No stage stated: `evaluateTier` answers a failed age bound BEFORE it lists a missing
+        // stage, so an unstated stage cannot mask an age refusal, and a passing age comes back
+        // `unknown` rather than `pass` — which is not a `fail` and so is not a finding.
+        probes.push(
+          probe('age_stage.age', `age ${stated}`, {
+            stage: undefined,
+            degreeLevel: undefined,
+            birthDate: birthdayFor(stated),
+          }, {
+            facesABar: tiers(spec).some(
+              (t) => t.axis === 'age_stage' && (t.ageMin !== undefined || t.ageMax !== undefined),
+            ),
+          }),
+        );
+      }
+      return probes;
+    }
+
+    case 'ham_activity': {
+      const probes: AdmittedProbe[] = [];
+      const named = ALL_ACTIVITY_KINDS.filter((k) => ACTIVITY_SAYS[k].test(rawText));
+      const outside = ALL_ACTIVITY_KINDS.find((k) => !named.includes(k));
+      if (named.length > 0) {
+        // An applicant doing EXACTLY what the funder listed and nothing else. `ENFORCEMENT_PROBE`
+        // holds all seven kinds, which would satisfy any list there is and prove nothing.
+        probes.push(
+          probe('ham_activity.kinds', `activityKinds [${named.join(',')}]`, { activityKinds: named as ActivityKind[] }, {
+            outsider:
+              outside === undefined
+                ? undefined
+                : { ...ENFORCEMENT_PROBE, activityKinds: [outside as ActivityKind] },
+          }),
+        );
+      }
+      const wpm = wpmNamed(rawText);
+      if (wpm.length > 0) {
+        probes.push(
+          probe('ham_activity.cwWpm', `cwWpm ${Math.max(...wpm)}`, { cwWpm: Math.max(...wpm) }, {
+            facesABar: tiers(spec).some((t) => t.axis === 'ham_activity' && t.cwProficiencyWpmMin !== undefined),
+          }),
+        );
+      }
+      return probes;
+    }
+
+    case 'gender': {
+      const named = (['female', 'male'] as const).filter((g) => GENDER_SAYS[g].test(rawText));
+      const allowed = new Set(tiers(spec).flatMap((t) => (t.axis === 'gender' ? t.allowed : [])));
+      // A SENTENCE THAT NAMES NO GENDER PUTS NOBODY OUTSIDE ON THIS AXIS, so both applicants are
+      // probed: a gender bar that appears in the spec and nowhere in the funder's words refuses
+      // half the applicants there are, on nobody's authority.
+      const probed = named.length > 0 ? named : (['female', 'male'] as const);
+      return probed.map((g) => {
+        const other = g === 'female' ? 'male' : 'female';
+        return probe('gender.allowed', `gender ${g}`, { gender: g }, {
+          outsider: named.includes(other) ? undefined : { ...ENFORCEMENT_PROBE, gender: other },
+          facesABar: !allowed.has('any'),
+        });
+      });
+    }
+
+    default:
+      // `other`, `recommendation` and `financial_need`. See the header, and the test below that
+      // asserts what this `return` claims rather than leaving it as a comment.
+      return [];
+  }
+}
+
+/** THE AXES THAT CANNOT REFUSE ANYBODY, whatever their spec says. Asserted, not assumed. */
+const AXES_THAT_CANNOT_REFUSE = ['other', 'recommendation', 'financial_need'];
+
+interface ArmCensus {
+  /** Constraints this arm built at least one probe for. */
+  constraints: number;
+  probes: number;
+  /** Probes facing a constraint that CAN refuse on this dimension. See {@link AdmittedProbe}. */
+  couldRefuse: number;
+}
+
+interface AdmissionCensus {
+  /** A hard constraint refusing an applicant its own sentence names: an `ineligible` on the screen. */
+  refusesTheAdmitted: string[];
+  /** The same on a SOFT constraint: not a refusal, a preference the applicant is told they missed. */
+  demotesTheAdmitted: string[];
+  arms: Record<string, ArmCensus>;
+  /** Constraints no arm could read, by axis — the honest bound on what this rule covers. */
+  silent: Record<string, number>;
+  /**
+   * CONSTRAINTS AN ARM REFUSED TO READ THOUGH IT COULD HAVE, and why — counted separately from
+   * `silent`, which is "the sentence named nothing". A stand-down is this rule declining a sentence
+   * it can see it would get wrong, and it is the kind of number that must be visible: a stand-down
+   * that quietly grew to cover the whole axis would look exactly like an axis with nothing in it.
+   */
+  standDown: Record<string, number>;
+}
+
+function readW13(all: Array<{ program: Program; c: Constraint }>): AdmissionCensus {
+  const census: AdmissionCensus = {
+    refusesTheAdmitted: [], demotesTheAdmitted: [], arms: {}, silent: {}, standDown: {},
+  };
+  for (const { program, c } of all) {
+    // The field arm's one stand-down, counted where it can be read beside the coverage it costs.
+    if (c.spec.axis === 'field_of_study' && EXCLUSION_CLAUSE.test(c.rawText)) {
+      census.standDown['field_of_study.exclusion'] = (census.standDown['field_of_study.exclusion'] ?? 0) + 1;
+    }
+    const probes = theApplicantsTheSentenceAdmits(c.spec, c.rawText);
+    if (probes.length === 0) {
+      census.silent[c.spec.axis] = (census.silent[c.spec.axis] ?? 0) + 1;
+      continue;
+    }
+    const armsHere = new Set<string>();
+    for (const p of probes) {
+      const arm = (census.arms[p.arm] ??= { constraints: 0, probes: 0, couldRefuse: 0 });
+      if (!armsHere.has(p.arm)) {
+        arm.constraints += 1;
+        armsHere.add(p.arm);
+      }
+      arm.probes += 1;
+      // THE TWIN PATH IS MEASURED BY EXECUTION and so already accounts for every way a constraint
+      // can be disarmed. THE BAR PATH IS READ OFF THE SPEC and does not, so `orUnrepresented` is
+      // subtracted here explicitly: it turns every `fail` on a constraint into an `unknown`, which
+      // means a bar the spec publishes under it can refuse nobody. Counting those as coverage is
+      // exactly the D3 blindness W10a reports about itself, and it inflated this arm's own figure
+      // — CWops publishes `cwProficiencyWpmMin: 15` and quotes its own opened list into
+      // `orUnrepresented`, so the code-speed arm read as covering one record while covering none.
+      const twinRefused =
+        p.outsider !== undefined &&
+        evaluateConstraint(c.spec, p.outsider, NOW, c.rawText).status === 'fail';
+      const barCanBite = p.facesABar === true && !funderNamedARouteTheSchemaCannotCheck(c.spec);
+      if (twinRefused || barCanBite) arm.couldRefuse += 1;
+      if (evaluateConstraint(c.spec, p.profile, NOW, c.rawText).status !== 'fail') continue;
+      const finding =
+        `[${p.arm}] ${program.name} — ${p.admits} -> fail — ${JSON.stringify(c.rawText.slice(0, 110))}`;
+      if (c.hard) census.refusesTheAdmitted.push(finding);
+      else census.demotesTheAdmitted.push(finding);
+    }
+  }
+  census.refusesTheAdmitted.sort();
+  census.demotesTheAdmitted.sort();
+  return census;
+}
+
+/**
+ * THE ONE RECORD IN EITHER CORPUS WHOSE SPEC TURNS AWAY AN APPLICANT ITS OWN SENTENCE NAMES, and
+ * why it is registered here rather than widened.
+ *
+ *   Medical Amateur Radio Council (MARCO)  "Preference will be given to undergraduate students and
+ *                                           those in certificate programs, BUT GRADUATE STUDENTS
+ *                                           MAY APPLY."   spec: `stages: ['UNDERGRAD']`, SOFT.
+ *
+ * The sentence names graduate students in so many words and the stage list leaves them out, so a
+ * graduate applicant is told they do not meet this criterion. It is a SOFT constraint, and that is
+ * the whole of the difference: `matchProgram` never puts a soft failure in `hardFailures`, so no
+ * verdict turns on it. What a graduate student loses is the `eligible_preferred` ranking — the
+ * funder's own preference, which by the same sentence really is for undergraduates.
+ *
+ * SO IS IT A DEFECT AT ALL? Half of one, and the honest answer needs a curator rather than a test.
+ * The funder made TWO statements — a preference for undergraduates and a permission for graduate
+ * students — and one soft `age_stage` constraint can hold only the first. Widening `stages` to
+ * `['UNDERGRAD','GRAD']` would express the permission and DESTROY the preference: every graduate
+ * applicant would then read as meeting a preference the sentence explicitly gives to somebody else.
+ * The record needs two constraints, not a wider one, and `data/seed/programs.arrl-catalog.json` is
+ * a curator's file.
+ *
+ * A LIST THAT MAY ONLY SHRINK, and it is in the SOFT list — `refusesTheAdmitted` is asserted empty
+ * outright, because a HARD constraint doing this is an `ineligible` and there is no version of that
+ * which is half a defect.
+ */
+const KNOWN_SOFT_DEMOTIONS = [
+  '[age_stage.stage] The Medical Amateur Radio Council (MARCO) Scholarship — stage GRAD -> fail — ' +
+    '"Preference will be given to undergraduate students and those in certificate programs, but graduate students ma"',
+];
+
+describe('W13 — a constraint on any axis that refuses an applicant its own sentence names', () => {
+  it('no hard constraint in either corpus refuses an applicant its own sentence admits', async () => {
+    const all = await everyConstraint();
+    const fixture = readW13(only(all, 'fixture'));
+    const seed = readW13(only(all, 'seed'));
+    // AN EMPTY EQUALITY on both, for the reason W12 gives: there is no list to quietly add a record
+    // to, and a record arriving here fails carrying its own name and the funder's own sentence.
+    expect(fixture.refusesTheAdmitted).toEqual([]);
+    expect(seed.refusesTheAdmitted).toEqual([]);
+    // …and the soft half, which is a register rather than an assertion of health. See above.
+    expect(fixture.demotesTheAdmitted).toEqual(KNOWN_SOFT_DEMOTIONS);
+    expect(seed.demotesTheAdmitted).toEqual(KNOWN_SOFT_DEMOTIONS);
+  });
+
+  /**
+   * THE VACUITY GUARD, AND IT IS THE HALF THAT MATTERS. Twelve of the fourteen arms found nothing,
+   * and every structurally blind guard this project has found was a rule finding nothing.
+   *
+   * `couldRefuse` is the number to read: probes that faced a constraint which CAN say no on that
+   * dimension. An arm at zero is checking nothing whatever its `probes` says, so the three arms
+   * that are at zero are named here with the reason rather than counted as coverage:
+   *
+   *   institution.partTime  185 probes, 0 armed. Every `institution` spec in both corpora carries
+   *                         `partTimeOK: true`, so the part-time applicant cannot be refused by any
+   *                         record that exists today. The arm is live and will speak the moment one
+   *                         publishes `partTimeOK: false` under a sentence that never asks for
+   *                         full-time enrolment — the planted proof below is that demonstration.
+   *   ham_activity.cwWpm    1 probe, 0 armed. One sentence in the corpus states a code speed and the
+   *                         spec beside it publishes no `cwProficiencyWpmMin`.
+   *   license.duration      the same shape wherever a sentence states no period; the count is the
+   *                         number of records where a `heldMonthsMin` existed to be measured.
+   *
+   * THE COUNTS ARE PER CORPUS AND NEVER SUMMED — a rule that stops seeing the fixture half must not
+   * be able to hide inside a total the seed half makes up.
+   */
+  it('…and every arm reports how many of its probes faced a spec that could have refused them', async () => {
+    const all = await everyConstraint();
+    const fixture = readW13(only(all, 'fixture'));
+    const seed = readW13(only(all, 'seed'));
+    expect(fixture.arms).toEqual(FIXTURE_ARMS);
+    expect(seed.arms).toEqual(SEED_ARMS);
+    // Nothing is lost between the two books: every constraint is either probed by an arm or counted
+    // as silent, and the silent ones are named by axis rather than left as a difference of totals.
+    const probedFixture = Object.values(fixture.arms).reduce((n, a) => n + a.constraints, 0);
+    const probedSeed = Object.values(seed.arms).reduce((n, a) => n + a.constraints, 0);
+    expect(fixture.silent).toEqual(FIXTURE_SILENT);
+    expect(seed.silent).toEqual(SEED_SILENT);
+    // THE ONE STAND-DOWN, IN EACH CORPUS, AND IT IS THE SAME RECORD: the Rick Hughes K4BYT
+    // Memorial Scholarship, "Any, except for Liberal Arts". A sentence that names a field in order
+    // to BAR it is one no arm here may stand an applicant on, and a rule that read it the other way
+    // would demand that a record admit the very major its funder excluded. One is a number small
+    // enough to check by hand and large enough to prove the clause is reachable; if it ever climbs,
+    // this arm is quietly retreating and the number says so before the coverage does.
+    expect(fixture.standDown).toEqual({ 'field_of_study.exclusion': 1 });
+    expect(seed.standDown).toEqual({ 'field_of_study.exclusion': 1 });
+    // `constraints` is per ARM, and one constraint can feed two arms, so the accounting is stated
+    // as an inequality in the direction that can actually go wrong: fewer constraints probed than
+    // arm-entries, and every unprobed constraint accounted for by axis.
+    expect(probedFixture).toBeGreaterThanOrEqual(
+      only(all, 'fixture').length - Object.values(FIXTURE_SILENT).reduce((n, v) => n + v, 0),
+    );
+    expect(probedSeed).toBeGreaterThanOrEqual(
+      only(all, 'seed').length - Object.values(SEED_SILENT).reduce((n, v) => n + v, 0),
+    );
+  });
+
+  /**
+   * THE THREE AXES THAT CANNOT REFUSE ANYBODY — asserted over the real corpus rather than argued in
+   * a comment, because "this axis is harmless" is exactly the claim a blind guard makes about
+   * itself. 117 seed constraints and 83 fixture ones live on these three axes — `other` alone holds
+   * 103 of them — and a rule that probed them would have reported every one as covered.
+   *
+   * Five applicants, chosen to have nothing in common: the maximally qualified one, one who has
+   * answered nothing, one who has answered every question with its least generous answer, an
+   * unlicensed non-member, and one whose financial need is false. If any spec on these axes could
+   * refuse anybody, one of the five would find it.
+   */
+  it('…and the three axes with no refusal in them cannot refuse any of five adversarial applicants', async () => {
+    const all = await everyConstraint();
+    const battery: StudentProfile[] = [
+      ENFORCEMENT_PROBE,
+      { kind: 'student' },
+      {
+        ...ENFORCEMENT_PROBE,
+        licenseClass: 'NONE',
+        licensedSince: A_MONTH_AGO,
+        state: 'ZZ',
+        fieldOfStudy: PLAINLY_UNRELATED[0],
+        degreeLevel: 'CERT',
+        accredited: false,
+        partTime: true,
+        gpa: 0,
+        classRankTopPct: 100,
+        arrlMemberSince: A_MONTH_AGO,
+        citizenship: 'ANY',
+        birthDate: birthdayFor(72),
+        stage: 'RETRAINING_ADULT',
+        activityKinds: [],
+        cwWpm: 0,
+        financialNeed: false,
+        gender: 'male',
+      },
+      { ...ENFORCEMENT_PROBE, licenseClass: undefined, arrlMemberSince: undefined },
+      { ...ENFORCEMENT_PROBE, financialNeed: false },
+    ];
+    const refused: string[] = [];
+    const seen = tally();
+    for (const { corpus, program, c } of all) {
+      if (!AXES_THAT_CANNOT_REFUSE.includes(c.spec.axis)) continue;
+      bump(seen, corpus);
+      for (const applicant of battery) {
+        if (evaluateConstraint(c.spec, applicant, NOW, c.rawText).status === 'fail') {
+          refused.push(`[${c.spec.axis}] ${program.name} — ${JSON.stringify(c.rawText.slice(0, 90))}`);
+        }
+      }
+    }
+    expect(refused).toEqual([]);
+    // The population, per corpus, so this cannot go quiet by the constraints disappearing.
+    expect(seen).toEqual({ fixture: 83, seed: 117 });
+  });
+});
+
+/**
+ * THE CENSUS, PER CORPUS AND PER ARM. Read `couldRefuse` first: it is the number of probes that
+ * faced a constraint which CAN say no on that dimension, and an arm at zero is checking nothing
+ * whatever its `probes` column says.
+ *
+ * MEASURED 2026-08-18, over both corpora, by the sweep below. FIVE ARMS STAND AT ZERO AND EACH IS A
+ * DIFFERENT FACT ABOUT THE CORPUS RATHER THAN A DIFFERENT DEFECT IN THE RULE:
+ *
+ *   institution.partTime       119/122 probes, 0 armed. EVERY `institution` spec in both corpora
+ *                              carries `partTimeOK: true`. No record can refuse a part-time
+ *                              applicant, so no record can refuse one wrongly — today.
+ *   institution.accreditation  66/67 probes, 0 armed. No spec sets `accreditationRequired` under a
+ *                              sentence that never says the word; the 60-odd that DO require it all
+ *                              quote it, which is why they are not probed at all.
+ *   license.duration           104/103 probes, 0 armed. Not one licence spec publishes a
+ *                              `heldMonthsMin` under a sentence stating no period.
+ *   arrl_membership.duration   9 probes, 0 armed. The single record with `minYears > 0` — Ronald
+ *                              Hesselbrock WA8LOW — writes "a member of the ARRL for a minimum of
+ *                              ONE YEAR" and is therefore never probed. The other nine publish
+ *                              `minYears: 0`.
+ *   ham_activity.cwWpm         1 probe, 0 armed. The corpus states exactly one code speed, CWops's
+ *                              15 wpm, and that constraint quotes its own opened list into
+ *                              `orUnrepresented` — which turns every refusal it could make into an
+ *                              `unknown`. See the note in `readW13`.
+ *
+ * All five are live rules over an unarmed population: the planted proofs below arm each one on a
+ * real record and watch it speak. That is the difference between "found nothing" and "cannot see".
+ *
+ * AND ONE MORE BOUND, WHICH IS NOT VISIBLE IN THESE NUMBERS. All four armed `ham_activity.kinds`
+ * records are SOFT, so a false refusal there cannot reach a verdict in this corpus as it stands —
+ * it would cost an applicant a preference, not an award. The arm is kept for the first hard closed
+ * list to arrive, and the planted proof asserts against the SOFT list for exactly that reason.
+ */
+const FIXTURE_ARMS: Record<string, ArmCensus> = {
+  'geography.state': { constraints: 91, probes: 317, couldRefuse: 246 },
+  'license.class': { constraints: 98, probes: 98, couldRefuse: 98 },
+  'license.duration': { constraints: 104, probes: 104, couldRefuse: 0 },
+  'field_of_study.major': { constraints: 52, probes: 88, couldRefuse: 8 },
+  'institution.accreditation': { constraints: 66, probes: 66, couldRefuse: 0 },
+  'institution.partTime': { constraints: 119, probes: 119, couldRefuse: 0 },
+  'gpa.floor': { constraints: 17, probes: 17, couldRefuse: 17 },
+  'arrl_membership.duration': { constraints: 9, probes: 9, couldRefuse: 0 },
+  'citizenship.status': { constraints: 27, probes: 31, couldRefuse: 24 },
+  'age_stage.stage': { constraints: 14, probes: 22, couldRefuse: 21 },
+  'ham_activity.kinds': { constraints: 11, probes: 11, couldRefuse: 4 },
+  'ham_activity.cwWpm': { constraints: 1, probes: 1, couldRefuse: 0 },
+  'gender.allowed': { constraints: 5, probes: 5, couldRefuse: 5 },
+};
+
+/**
+ * THE SAME CENSUS OVER THE CORPUS A FRESH INSTALL SERVES, and the differences are the differences
+ * between the two books rather than between two readings. `age_stage.age` exists ONLY here: NCDXF's
+ * "25 years of age or younger" is a seed-only record, and it is the one place in either corpus
+ * where a funder states an age in words and a spec states one in numbers beside it.
+ */
+const SEED_ARMS: Record<string, ArmCensus> = {
+  'geography.state': { constraints: 91, probes: 317, couldRefuse: 246 },
+  'license.class': { constraints: 98, probes: 98, couldRefuse: 98 },
+  'license.duration': { constraints: 103, probes: 103, couldRefuse: 0 },
+  'field_of_study.major': { constraints: 55, probes: 91, couldRefuse: 8 },
+  'institution.accreditation': { constraints: 67, probes: 67, couldRefuse: 0 },
+  'institution.partTime': { constraints: 122, probes: 122, couldRefuse: 0 },
+  'gpa.floor': { constraints: 17, probes: 17, couldRefuse: 17 },
+  'arrl_membership.duration': { constraints: 9, probes: 9, couldRefuse: 0 },
+  'citizenship.status': { constraints: 27, probes: 31, couldRefuse: 24 },
+  'age_stage.stage': { constraints: 15, probes: 23, couldRefuse: 21 },
+  'age_stage.age': { constraints: 1, probes: 1, couldRefuse: 1 },
+  'ham_activity.kinds': { constraints: 11, probes: 11, couldRefuse: 4 },
+  'ham_activity.cwWpm': { constraints: 1, probes: 1, couldRefuse: 0 },
+  'gender.allowed': { constraints: 4, probes: 4, couldRefuse: 4 },
+};
+
+/**
+ * WHAT NO ARM COULD READ, BY AXIS — the honest bound on the coverage claim, and the number to argue
+ * with. `other` and `recommendation` are silent by construction and are asserted harmless below;
+ * the rest are sentences that name nothing this file's vocabularies can stand an applicant on: a
+ * bare "Any", a county, a circle drawn round a clubhouse, a field list stated as a career track.
+ */
+const FIXTURE_SILENT: Record<string, number> = {
+  geography: 40,
+  field_of_study: 59,
+  institution: 4,
+  gpa: 1,
+  arrl_membership: 1,
+  recommendation: 12,
+  financial_need: 7,
+  other: 64,
+};
+const SEED_SILENT: Record<string, number> = {
+  geography: 42,
+  field_of_study: 60,
+  institution: 6,
+  gpa: 1,
+  arrl_membership: 1,
+  recommendation: 8,
+  financial_need: 6,
+  other: 103,
+};
+
+/**
+ * ONE PLANTED VIOLATION PER ARM, EACH ON A REAL RECORD IN `data/seed`, each run through the WHOLE
+ * SWEEP and not through its own predicate.
+ *
+ * "Calling the predicate directly does not count" is the standing rule here, and it is the rule
+ * because every blind guard this project has found was a working predicate over a sweep that never
+ * handed it the record. So each entry below mutates one constraint in the corpus a fresh install
+ * serves, runs `readW13` over all 696, and asserts the arm names that record and only that record.
+ *
+ * The mutations are the over-tight readings a curator or an extractor could plausibly write: a
+ * state list short of the sentence's second state, a licence floor one rung above it, a holding
+ * period nobody asked for, a citizenship demanded by a funder who wrote that citizenship is not a
+ * requirement.
+ */
+interface PlantedProof {
+  arm: string;
+  programId: string;
+  constraintId: string;
+  /** A fragment of the funder's own sentence, asserted before the plant: the wrong record cannot be planted on. */
+  quotes: string;
+  overTight: (c: Constraint) => Constraint;
+  /** The `admits` strings the sweep must newly print, in sorted order. */
+  flags: string[];
+  /** Which half of the census it lands in — a hard constraint refuses, a soft one demotes. */
+  list: 'hard' | 'soft';
+  /** Why this record, when the arm's armed population needs explaining. */
+  note?: string;
+}
+
+const PLANTED: PlantedProof[] = [
+  {
+    arm: 'geography.state',
+    programId: 'arrl-cat-the-tom-and-judith-comstock-scholarship',
+    constraintId: 'geography-0-08b0fa8d',
+    quotes: 'Residence in TX or OK',
+    overTight: (c) => ({ ...c, spec: { axis: 'geography', geo: { type: 'state', values: ['TX'] } } }),
+    flags: ['state OK'],
+    list: 'hard',
+  },
+  {
+    arm: 'license.class',
+    programId: 'arrl-cat-the-michael-r-ware-nn3i-scholarship',
+    constraintId: 'license-0-2ef1325b',
+    quotes: 'General Class License',
+    overTight: (c) => ({ ...c, spec: { axis: 'license', licenseMin: 'EXTRA', heldMonthsMin: 24 } }),
+    flags: ['licenseClass GENERAL'],
+    list: 'hard',
+  },
+  {
+    arm: 'license.duration',
+    programId: 'arrl-cat-the-arrl-scholarship-to-honor-barry-goldwater',
+    constraintId: 'license-0-7f58113c',
+    quotes: 'Applicant must be a licensed radio amateur.',
+    overTight: (c) => ({ ...c, spec: { axis: 'license', licenseMin: 'TECH', heldMonthsMin: 24 } }),
+    flags: ['licensedSince a month ago'],
+    list: 'hard',
+    note: 'A two-year holding period on a sentence whose whole content is "must be licensed".',
+  },
+  {
+    arm: 'field_of_study.major',
+    programId: 'arrl-cat-the-edmond-a-metzger-scholarship',
+    constraintId: 'field_of_study-0-6d4cf82b',
+    quotes: 'electrical engineering',
+    overTight: (c) => ({
+      ...c,
+      spec: { axis: 'field_of_study', fields: [PLAINLY_UNRELATED[0]], excludedFields: [] },
+    }),
+    flags: ['fieldOfStudy Electrical Engineering'],
+    list: 'hard',
+    note: 'One of the eight armed field probes: a closed list, unwidened and unsoftened.',
+  },
+  {
+    arm: 'institution.accreditation',
+    programId: 'arrl-cat-the-arrl-general-fund-scholarship',
+    constraintId: 'institution-0-61e9ac5b',
+    quotes: 'Any',
+    overTight: (c) => ({
+      ...c,
+      spec:
+        c.spec.axis === 'institution'
+          ? { ...c.spec, accreditationRequired: true }
+          : c.spec,
+    }),
+    flags: ['accredited false'],
+    list: 'hard',
+    note: 'The funder wrote "Any". An accreditation bar under that sentence is ours, not theirs.',
+  },
+  {
+    arm: 'institution.partTime',
+    programId: 'arrl-cat-the-arrl-general-fund-scholarship',
+    constraintId: 'institution-0-61e9ac5b',
+    quotes: 'Any',
+    overTight: (c) => ({
+      ...c,
+      spec: c.spec.axis === 'institution' ? { ...c.spec, partTimeOK: false } : c.spec,
+    }),
+    flags: ['partTime true'],
+    list: 'hard',
+    note: 'The arm no record in either corpus arms today — 241 probes, none of them refusable.',
+  },
+  {
+    arm: 'gpa.floor',
+    programId: 'arrl-cat-the-michael-r-ware-nn3i-scholarship',
+    constraintId: 'gpa-0-ab3d92b0',
+    quotes: '3.0',
+    overTight: (c) => ({ ...c, spec: { axis: 'gpa', min: 3.5 } }),
+    flags: ['gpa 3'],
+    list: 'hard',
+  },
+  {
+    arm: 'arrl_membership.duration',
+    programId: 'arrl-cat-the-edmond-a-metzger-scholarship',
+    constraintId: 'arrl_membership-0-90873cef',
+    quotes: 'Must be an ARRL Member',
+    overTight: (c) => ({ ...c, spec: { axis: 'arrl_membership', required: true, minYears: 5 } }),
+    flags: ['arrlMemberSince a month ago'],
+    list: 'hard',
+    note: 'Five years of membership demanded by a sentence that asks only for a membership.',
+  },
+  {
+    arm: 'citizenship.status',
+    programId: 'arrl-cat-the-10-10-international-scholarships',
+    constraintId: 'citizenship-0-ea5c5313',
+    quotes: 'US citizenship are not requirements',
+    overTight: (c) => ({ ...c, spec: { axis: 'citizenship', allowed: ['US_CITIZEN'] } }),
+    flags: ['citizenship neither', 'citizenship US_RESIDENT'],
+    list: 'hard',
+    note:
+      'The funder says citizenship is not a requirement, and the planted spec requires it — so it ' +
+      'refuses TWO of the three applicants that sentence names: the one who is neither, and the ' +
+      'permanent resident whom the same sentence lets in by saying US residence is not required.',
+  },
+  {
+    arm: 'age_stage.stage',
+    programId: 'arrl-cat-the-chick-allen-nw3y-scholarship',
+    constraintId: 'age_stage-0-d01bf1a6',
+    quotes: 'undergraduate students and U.S. military veterans',
+    overTight: (c) => ({ ...c, spec: { axis: 'age_stage', stages: ['HS_SENIOR'] } }),
+    flags: ['stage UNDERGRAD', 'stage VETERAN'],
+    list: 'hard',
+    note: 'Two of the three audiences the sentence names, struck out of the list beside it.',
+  },
+  {
+    arm: 'age_stage.age',
+    programId: 'ncdxf-w6een-scholarship',
+    constraintId: 'ncdxf-w6een-age',
+    quotes: '25 years of age or younger',
+    overTight: (c) => ({ ...c, spec: { axis: 'age_stage', ageMax: 20, stages: [] } }),
+    flags: ['age 25'],
+    list: 'hard',
+    note: 'The only record in either corpus where a funder states an age and a spec bounds one.',
+  },
+  {
+    arm: 'ham_activity.kinds',
+    programId: 'arrl-cat-the-yasme-foundation-scholarship',
+    constraintId: 'ham_activity-0-51b395bc',
+    quotes: 'active in a local Amateur Radio Club and in community service',
+    overTight: (c) => ({
+      ...c,
+      spec: { axis: 'ham_activity', activityKinds: ['contesting'], proofRequired: false },
+    }),
+    flags: ['activityKinds [club_member,public_service]'],
+    list: 'soft',
+    note: 'SOFT, because all four armed records on this arm are. See the census note.',
+  },
+  {
+    arm: 'ham_activity.cwWpm',
+    programId: 'arrl-cat-the-cwops-scholarship',
+    constraintId: 'ham_activity-0-0bfb40cc',
+    quotes: 'Demonstrated CW operating ability',
+    overTight: (c) => ({
+      ...c,
+      spec: {
+        axis: 'ham_activity',
+        activityKinds: ['club_member', 'on_air', 'contesting'],
+        cwProficiencyWpmMin: 30,
+        proofRequired: true,
+      },
+    }),
+    flags: ['cwWpm 15'],
+    list: 'hard',
+    note:
+      'TWO CHANGES, and the second is the point: the floor is doubled AND `orUnrepresented` is ' +
+      'dropped. This is D5\'s mutation — "keep the floor and take away the widening" — because the ' +
+      'corpus holds exactly one stated code speed and that record softens every refusal it makes. ' +
+      'An arm with no unsoftened record cannot be proved on one, and saying so is the alternative ' +
+      'to a proof that quietly asserts less than it looks like it does.',
+  },
+  {
+    arm: 'gender.allowed',
+    programId: 'ylrl-ethel-smith-k4lmb',
+    constraintId: 'ylrl-k4lmb-gender',
+    quotes: 'Applicant must be female',
+    overTight: (c) => ({ ...c, spec: { axis: 'gender', allowed: ['male'] } }),
+    flags: ['gender female'],
+    list: 'hard',
+  },
+];
+
+describe('W13 — and every arm proved able to bite, on a real record in the shipped corpus', () => {
+  for (const proof of PLANTED) {
+    it(`${proof.arm}: ${proof.quotes}`, async () => {
+      const all = await everyConstraint();
+      // Throws rather than returning `undefined` if a curator renamed the record — a proof planted
+      // on nothing is a green test that proves the rule can speak when it cannot.
+      const target = seedConstraint(all, proof.programId, proof.constraintId);
+      expect(target.c.rawText).toContain(proof.quotes);
+      const before = readW13(only(all, 'seed'));
+      const after = readW13(only(plant(all, target, proof.overTight), 'seed'));
+      const half = (census: AdmissionCensus): string[] =>
+        proof.list === 'hard' ? census.refusesTheAdmitted : census.demotesTheAdmitted;
+      const other = (census: AdmissionCensus): string[] =>
+        proof.list === 'hard' ? census.demotesTheAdmitted : census.refusesTheAdmitted;
+      // EXACTLY THE PLANTED FINDINGS, named with the record and the funder's own sentence — the
+      // same strings a real offender would print, built from the record rather than typed out.
+      expect(half(after)).toEqual(
+        [...half(before), ...proof.flags.map(
+          (admits) =>
+            `[${proof.arm}] ${target.program.name} — ${admits} -> fail — ` +
+            `${JSON.stringify(target.c.rawText.slice(0, 110))}`,
+        )].sort(),
+      );
+      // …and nothing moved in the other half, so a hard plant cannot be counted as a soft one.
+      expect(other(after)).toEqual(other(before));
+    });
+  }
+});
+
+/**
+ * …AND THE OPPOSITE, WHICH IS THE HALF THAT KEEPS A RULE FROM CRYING WOLF. Five sentences the first
+ * sweep read wrongly, each pinned at the reading that made it stop — and pinned in BOTH directions,
+ * so that a reading narrowed until it can no longer see anything fails here too.
+ *
+ * "A rule that cries wolf gets an exemption bolted on, and the exemption is where the real offender
+ * walks through." None of the five is an exemption: every one of them is a correction to what the
+ * funder's sentence was read as saying, and each leaves the rule live on that record.
+ */
+describe('W13 — and the five readings that made it stop crying wolf', () => {
+  const CTRI =
+    'ARRL New England Division (Connecticut, Rhode Island, Vermont, Maine, New Hampshire); ' +
+    'if no suitable applicant identified, applicants from all regions will be considered';
+  const COTHRAN =
+    'Resident of Atlantic Division (DE, MD, PA, Southern NJ, Western NY), the Roanoke Division ' +
+    '(NC, SC, VA, WV), the Southeastern Division (AL, FL, GA) or Washington, D.C.';
+  const K3IVO = 'Maryland, DC, Delaware, Pennsylvania, or West Virginia';
+  const STEEL_CITY = 'ARRL Western Pennsylvania Section of the Atlantic Division';
+  const K6GO =
+    '1) Applicant must be a high school senior entering an accredited college, university, ' +
+    'junior college or trade technical school in the US this coming fall.';
+
+  it('a cascade is not an admission, and the states before it still are', () => {
+    const admitted = theApplicantsTheSentenceAdmits(
+      { axis: 'geography', geo: { type: 'state', values: ['CT', 'RI', 'VT', 'ME', 'NH'] } },
+      CTRI,
+    );
+    // The five states the funder listed, and not the other fifty-one.
+    expect(admitted.map((p) => p.admits).sort()).toEqual([
+      'state CT', 'state ME', 'state NH', 'state RI', 'state VT',
+    ]);
+    // …and W1's own use of the same widening is untouched: it SKIPS a widened record, which is the
+    // safe direction for a rule about admitting too much.
+    expect(GEO_WIDENED.test(CTRI)).toBe(true);
+  });
+
+  it('"West Virginia" does not name Virginia, and "Washington, D.C." does not name Washington', () => {
+    expect([...placesNamed(K3IVO)].sort()).toEqual(['DC', 'DE', 'MD', 'PA', 'WV']);
+    expect(placesNamed(COTHRAN).has('WA')).toBe(false);
+    // The other direction, which the two special cases exist for: the district IS named, and so is
+    // the state when the funder means the state.
+    expect(placesNamed(COTHRAN).has('DC')).toBe(true);
+    expect(placesNamed('Residents of Washington and Oregon').has('WA')).toBe(true);
+    expect(placesNamed('Residents of West Virginia and Virginia').has('VA')).toBe(true);
+    // …and the typo path still works where it was written to: one dropped letter, one real state.
+    expect(placesNamed('(Illinois, Indiana and Wisconsion)').has('WI')).toBe(true);
+  });
+
+  it('a division named as a section’s parent is an address, not a scope', () => {
+    expect([...placesNamed(STEEL_CITY)].sort()).toEqual(['PA']);
+    // A division the funder left as a NAME still names every state in it.
+    expect(placesNamed('Residence in the ARRL Atlantic Division').has('NY')).toBe(true);
+  });
+
+  it('the school a high-school senior is entering is not an audience the funder named', () => {
+    expect(stagesAdmitted(K6GO)).toEqual(['HS_SENIOR']);
+    // …and a sentence that names undergraduates as APPLICANTS still names them.
+    expect(stagesAdmitted('Open to undergraduate students')).toEqual(['UNDERGRAD']);
+    // W2 keeps the wider reading it needs, so the two rules do not have to agree about "college".
+    expect(STAGE_SAYS.UNDERGRAD.test(K6GO)).toBe(true);
   });
 });
 
