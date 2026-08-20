@@ -6,6 +6,7 @@ import {
   isBelowAdjacencyThreshold,
   isDoNotPublish,
   loadCorpus,
+  loadRawOpportunities,
   PROFILE_NOW_ISO,
   PROFILES,
 } from './profile-corpus.js';
@@ -13,12 +14,19 @@ import {
 /**
  * ONE LOAD FOR THE FILE, AND IT IS SETUP RATHER THAN PART OF ANY TEST'S BUDGET.
  *
- * `loadCorpus` re-parses every committed fixture on every call and memoizes nothing: MEASURED on
- * this host on 2026-08-12 on two cores, 2,351 ms for the first test in this file and about 1,650 ms
- * for EACH of the five after it, because each one called it again. Six loads of the same immutable
- * fixtures, every one of them inside a 5,000 ms default test timeout that the assertions around it
- * need almost none of. `axes/spec-vs-sentence.test.ts` carries the measurement and the argument;
- * it is the file where this went over the line on a two-core runner.
+ * `loadCorpus` used to re-parse every committed fixture on every call and memoize nothing: MEASURED
+ * on this host on 2026-08-12 on two cores, 2,351 ms for the first test in this file and about
+ * 1,650 ms for EACH of the five after it, because each one called it again. Six loads of the same
+ * immutable fixtures, every one of them inside a 5,000 ms default test timeout that the assertions
+ * around it need almost none of. `axes/spec-vs-sentence.test.ts` carries the measurement and the
+ * argument; it is the file where this went over the line on a two-core runner.
+ *
+ * IT IS MEMOISED AT THE SOURCE SINCE 2026-08-20 — one build per process, deep-frozen so the shared
+ * result cannot be mutated (the note beside the memo in `scripts/profile-corpus.ts` has the
+ * measurement and the safety argument). That is what took the repeat calls to nothing. THIS HOOK
+ * STILL EARNS ITS PLACE: the memo is per process and vitest isolates each test file, so SOME test
+ * in this file is still the one that builds the corpus, and it should not be an `it` paying for it
+ * inside a 5,000 ms budget.
  *
  * SHARED BECAUSE THE CORPUS IS BUILT FROM COMMITTED FILES AND NOTHING HERE WRITES TO IT — every
  * test below reads counts and filters lists. The eleven axis test files have shared one load per
@@ -285,5 +293,82 @@ describe('scripts/profile-corpus — the certificate and organisation profiles c
       kind: 'unknown',
       missingProfileFields: [],
     });
+  });
+});
+
+/**
+ * THE MEMO, PINNED — both halves of it, because a memo without the second half is worse than none.
+ *
+ * The first half is the one that fixed CI run 32411910577: `loadCorpus` and `loadRawOpportunities`
+ * re-read and re-parsed every committed capture on EVERY call, ~2.8 s of it landed inside one
+ * 5,000 ms default test budget in `seed/constraintProvenance.test.ts`, and the two-core runner
+ * crossed the line. Twenty-five test files call one or the other. Hoisting the call into a
+ * `beforeAll` fixes one file; caching the loader fixes the class.
+ *
+ * The second half is what stops that trade being a bad one. Callers used to get a private copy and
+ * now share one object graph, so one `programs.sort()` in one test would silently reorder the
+ * corpus every later test in that file reads — a suite that runs faster and tells the truth less
+ * often. The result is deep-frozen, so that mutation throws at the offending line instead.
+ *
+ * BOTH ARE ASSERTED HERE RATHER THAN TRUSTED, because both are invisible when they break: delete
+ * the memo and everything still passes, just slower and closer to the timeout every time; delete
+ * the freeze and everything still passes until the day two tests in one file disagree about the
+ * corpus. Neither shows up as a red test on its own.
+ */
+describe('the loaders are built once per process, and what they return cannot be mutated', () => {
+  it('hands back the identical object graph on a second call, rather than re-parsing', async () => {
+    const [first, second] = [await loadCorpus(), await loadCorpus()];
+    expect(second).toBe(first);
+    expect(second.programs).toBe(first.programs);
+    expect(second.suppressedPrograms).toBe(first.suppressedPrograms);
+
+    const [rawFirst, rawSecond] = [await loadRawOpportunities(), await loadRawOpportunities()];
+    expect(rawSecond).toBe(rawFirst);
+    expect(rawSecond.bySource).toBe(rawFirst.bySource);
+
+    // ...and `loadCorpus` builds on the SAME raw load rather than a second parse of its own — the
+    // half of the saving that a memo on only one of the two would miss.
+    expect(first.programs.length).toBeGreaterThanOrEqual(150);
+    expect(rawFirst.bySource.length).toBeGreaterThan(0);
+  });
+
+  it('refuses every write a test could make to the shared corpus, at every depth', async () => {
+    const { programs } = await corpus();
+    const { bySource } = await loadRawOpportunities();
+    const program = programs.find((p) => p.constraints.length > 0);
+    if (program === undefined) throw new Error('no fixture record carries a constraint');
+    const raw = bySource.flatMap((s) => s.raws)[0];
+    if (raw === undefined) throw new Error('no fixture record was parsed');
+
+    // Frozen all the way down, not just at the top: the array, the record, the nested arrays and
+    // the specs inside them. A top-only freeze would refuse `programs.push` and wave through
+    // `programs[0].constraints[0].spec.min = 0`, which is the write that would actually lie.
+    for (const [what, value] of [
+      ['the corpus load', programs],
+      ['a program', program],
+      ['its constraints', program.constraints],
+      ['a constraint', program.constraints[0]],
+      ['its spec', program.constraints[0].spec],
+      ['its trust block', program.trust],
+      ['its tags', program.tags],
+      ['a raw opportunity', raw],
+      ['its rawFields', raw.rawFields],
+    ] as Array<[string, unknown]>) {
+      expect(Object.isFrozen(value), what).toBe(true);
+    }
+
+    // And frozen in the sense that matters — ESM is strict mode, so these THROW rather than
+    // failing silently, which is what makes the guard a guard and not a label.
+    expect(() => (programs as unknown as unknown[]).push(program)).toThrow(TypeError);
+    expect(() => (programs as unknown as unknown[]).sort()).toThrow(TypeError);
+    expect(() => {
+      (program as { name: string }).name = 'mutated';
+    }).toThrow(TypeError);
+    expect(() => {
+      (program.constraints[0] as { rawText: string }).rawText = 'mutated';
+    }).toThrow(TypeError);
+    expect(() => {
+      (raw.rawFields as Record<string, string>).injected = 'mutated';
+    }).toThrow(TypeError);
   });
 });

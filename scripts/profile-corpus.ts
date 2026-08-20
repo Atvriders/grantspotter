@@ -183,7 +183,7 @@ export interface RawLoad {
   skipped: Array<{ sourceId: string; why: string }>;
 }
 
-export async function loadRawOpportunities(): Promise<RawLoad> {
+async function buildRawOpportunities(): Promise<RawLoad> {
   const bySource: SourceRaws[] = [];
   const skipped: RawLoad['skipped'] = [];
 
@@ -251,7 +251,7 @@ export async function loadRawOpportunities(): Promise<RawLoad> {
  * tool reports what it left out instead of quietly shrinking or, as it did until this fix, quietly
  * inflating.
  */
-export async function loadCorpus(): Promise<CorpusLoad> {
+async function buildCorpus(): Promise<CorpusLoad> {
   const programs: Program[] = [];
   const suppressedPrograms: Program[] = [];
   const loaded: CorpusLoad['loaded'] = [];
@@ -297,6 +297,85 @@ export async function loadCorpus(): Promise<CorpusLoad> {
   }
 
   return { programs, suppressedPrograms, loaded, skipped, suppressed, belowAdjacency };
+}
+
+// ------------------------------------------------- the memo, and why it is safe
+
+/**
+ * BOTH LOADERS ABOVE ARE BUILT ONCE PER PROCESS. This is the fix for a whole class of CI timeout,
+ * not for the one test that happened to fail.
+ *
+ * MEASURED, on this repo, pinned to two cores with busy loops competing for them (the only way the
+ * failure reproduces — both versions pass in isolation, which is what made it look flaky rather
+ * than structural):
+ *
+ *     loadRawOpportunities   cold 1508 ms   warm  980 ms      <- re-read and re-parsed every capture
+ *     loadCorpus             cold 1879 ms   warm 1807 ms      <- and re-normalized every record
+ *
+ * Nothing was cached, so "warm" cost what "cold" cost. Twenty-five test files call one or both of
+ * these, several of them more than once, and vitest's default per-test budget is 5,000 ms. CI run
+ * 32411910577 went red on `seed/constraintProvenance.test.ts`, whose first fixture rule pays for
+ * BOTH loaders inside its own budget: 5,707 ms measured here under contention, against 5,000. It
+ * was the second failure of this exact shape — `spec-vs-sentence.test.ts`'s R1 was the first, and
+ * was fixed by hoisting `loadCorpus` into that one file's `beforeAll`. Hoisting per file treats a
+ * symptom per file. The loaders being uncached is the cause, so the memo lives here.
+ *
+ * WHY A MEMO IS SOUND HERE, AND WHERE IT WOULD NOT BE. Both loaders are pure functions of files
+ * that are COMMITTED — `fixtures/**` and the source registry — read through `readFileSync` at call
+ * time. Nothing in the suite rewrites either during a run: the two tests that build fixture trees
+ * (`scripts/generate-arrl-seed.test.ts`) and seed directories (`seed/import.test.ts`) both write
+ * into `mkdtempSync` roots under the OS temp dir and point the code under test at those, never at
+ * `REPO_ROOT`. Verified by grep over every `writeFileSync`/`mkdirSync`/`rmSync` in the tree. If a
+ * test ever does need to edit `fixtures/` and re-load, this memo becomes wrong and that test needs
+ * an explicit invalidation hook — it does not get to rely on the loader having been slow.
+ *
+ * The memo is PER PROCESS, and vitest isolates each test file in its own module registry, so it is
+ * in practice per test file: no state crosses a file boundary that did not cross one before.
+ */
+let rawLoadMemo: Promise<RawLoad> | undefined;
+let corpusMemo: Promise<CorpusLoad> | undefined;
+
+/**
+ * AND THE SHARED RESULT CANNOT BE MUTATED, which is the half of a memo that turns a slow suite
+ * into a lying one.
+ *
+ * Before the memo, most callers got a private copy; now every caller in a file shares one object
+ * graph. A single `programs.sort()` or `program.constraints.push(...)` anywhere would leak between
+ * tests and the suite would go green on state the previous test left behind. So the answer is not
+ * "the consumers were read and none of them mutate" — that is a claim with a shelf life of one
+ * commit. `Object.freeze`, applied to everything reachable, makes the mutation impossible: these
+ * modules are ESM and therefore strict, so a write to a frozen object THROWS at the offending line
+ * rather than being silently dropped.
+ *
+ * Reading the consumers came first and agreed: all twenty-five build their own arrays and push into
+ * those, `plant()` in `src/test/axesCorpora.ts` spreads rather than assigns, and every `.sort()` in
+ * them is on the result of a `.map()`/`.filter()`. The freeze is what keeps that true.
+ *
+ * `Program` and `RawOpportunity` are plain JSON-shaped records — no `Map`, `Set` or `Date` on
+ * either — so walking `Object.values` reaches everything, and `seen` keeps the walk finite where
+ * `normalizeRaw` hands several records the SAME module-level constant (`RESTRICTIONS_BY_SOURCE`,
+ * `AI_POLICY_BY_FUNDER`). Those constants are frozen too, which is correct and slightly wider than
+ * this file: they are shared by every record already, so anything that mutated one was corrupting
+ * its siblings before this change and only now says so.
+ */
+function deepFreeze<T>(value: T, seen: Set<unknown>): T {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  for (const inner of Object.values(value as Record<string, unknown>)) deepFreeze(inner, seen);
+  return Object.freeze(value);
+}
+
+/** {@link buildRawOpportunities}, once per process, frozen. See the note above. */
+export function loadRawOpportunities(): Promise<RawLoad> {
+  rawLoadMemo ??= buildRawOpportunities().then((load) => deepFreeze(load, new Set()));
+  return rawLoadMemo;
+}
+
+/** {@link buildCorpus}, once per process, frozen. See the note above. */
+export function loadCorpus(): Promise<CorpusLoad> {
+  corpusMemo ??= buildCorpus().then((load) => deepFreeze(load, new Set()));
+  return corpusMemo;
 }
 
 // ---------------------------------------------------------------- profiles

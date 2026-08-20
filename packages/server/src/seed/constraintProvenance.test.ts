@@ -730,17 +730,33 @@ describe('the fixture corpus, where a constraint is cut from the page rather tha
    * The capture each publishable fixture record was cut from, keyed the way `normalizeRaw` keys the
    * record itself — `programIdFor(sourceId, externalKey)`, the product's own minting function, not
    * a name or URL match that would quietly resolve to the wrong sibling.
+   *
+   * MEMOISED AND WARMED IN THE HOOK BELOW, because it is this describe's shared setup and not any
+   * one rule's work. `loadRawOpportunities()` under it is memoised at the source now (see the note
+   * beside the memo in `scripts/profile-corpus.ts` — that is what fixed CI run 32411910577), but
+   * the tokenising loop here is this file's own: it calls `words()` over every captured page, and
+   * two rules below read the result. Without the memo the second rule redoes it; without the warm,
+   * whichever rule runs first pays for it inside its own 5,000 ms budget. Neither is a thing to
+   * leave to test ordering, and neither is a reason to widen a timeout.
    */
-  async function pageByProgramId(): Promise<Map<string, string[]>> {
-    const { bySource } = await loadRawOpportunities();
-    const out = new Map<string, string[]>();
-    for (const source of bySource) {
-      for (const raw of source.raws) {
-        out.set(programIdFor(raw.sourceId, raw.externalKey), words(sourceTextOf(raw)));
+  let pagesMemo: Promise<Map<string, string[]>> | undefined;
+  function pageByProgramId(): Promise<Map<string, string[]>> {
+    pagesMemo ??= (async () => {
+      const { bySource } = await loadRawOpportunities();
+      const out = new Map<string, string[]>();
+      for (const source of bySource) {
+        for (const raw of source.raws) {
+          out.set(programIdFor(raw.sourceId, raw.externalKey), words(sourceTextOf(raw)));
+        }
       }
-    }
-    return out;
+      return out;
+    })();
+    return pagesMemo;
   }
+
+  beforeAll(async () => {
+    await pageByProgramId();
+  }, 180_000);
 
   it('pairs every publishable fixture record back to the capture it was cut from', async () => {
     const pages = await pageByProgramId();
